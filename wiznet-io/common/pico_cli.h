@@ -50,9 +50,11 @@ static inline void pico_cli_show(const pico_config_t *c, char *out, int outsz)
     k += snprintf(out + k, outsz - k, "mode=%s ", dserv_xmode_str(c->transport_mode));
 #endif
     k += snprintf(out + k, outsz - k,
-        "name=%s net.mode=%s net.ip=%u.%u.%u.%u dserv=%u.%u.%u.%u:%u obs.pin=%s sync.pin=%s wifi.ssid=%s wifi.pass=%s wifi.pm=%u mcp.en=%u oled.en=%u ble.en=%u pipe.en=%u applied=%u\r\n",
+        "name=%s net.mode=%s net.ip=%u.%u.%u.%u net.gw=%u.%u.%u.%u net.mask=%u.%u.%u.%u dserv=%u.%u.%u.%u:%u obs.pin=%s sync.pin=%s wifi.ssid=%s wifi.pass=%s wifi.pm=%u mcp.en=%u oled.en=%u ble.en=%u pipe.en=%u applied=%u\r\n",
         dserv_cfg_name(c), dserv_netmode_str(c->net_mode),
         c->net_ip[0], c->net_ip[1], c->net_ip[2], c->net_ip[3],
+        c->net_gw[0], c->net_gw[1], c->net_gw[2], c->net_gw[3],
+        c->net_sn[0], c->net_sn[1], c->net_sn[2], c->net_sn[3],
         c->dserv_ip[0], c->dserv_ip[1], c->dserv_ip[2], c->dserv_ip[3],
         dserv_cfg_port(c), obs, syn,   /* effective port (default when unset), not raw 0 */
         c->wifi_ssid[0] ? c->wifi_ssid : "(build)", c->wifi_pass[0] ? "set" : "(build)",
@@ -91,6 +93,10 @@ static inline void pico_cli_dump(const pico_config_t *c)
     if (c->net_mode == NET_MODE_STATIC) {
         printf("net mode static\r\n");
         printf("net ip %u.%u.%u.%u\r\n", c->net_ip[0], c->net_ip[1], c->net_ip[2], c->net_ip[3]);
+        if (c->net_gw[0] || c->net_gw[1] || c->net_gw[2] || c->net_gw[3])
+            printf("net gateway %u.%u.%u.%u\r\n", c->net_gw[0], c->net_gw[1], c->net_gw[2], c->net_gw[3]);
+        if (c->net_sn[0] || c->net_sn[1] || c->net_sn[2] || c->net_sn[3])
+            printf("net mask %u.%u.%u.%u\r\n", c->net_sn[0], c->net_sn[1], c->net_sn[2], c->net_sn[3]);
     }
     if (c->dserv_ip[0] || c->dserv_ip[1] || c->dserv_ip[2] || c->dserv_ip[3])
         printf("dserv ip %u.%u.%u.%u\r\n", c->dserv_ip[0], c->dserv_ip[1], c->dserv_ip[2], c->dserv_ip[3]);
@@ -341,6 +347,14 @@ static inline cli_action_t pico_cli_exec(pico_config_t *c, const char *line,
         c->net_mode = NET_MODE_STATIC;      /* setting a static IP implies static mode */
         c->applied_count++; snprintf(out, outsz, "OK net ip=%s mode=static (save+reboot to apply)\r\n", w); return CLI_OK;
     }
+    if (sscanf(line, "net gateway %23s", w) == 1) {   /* static gateway; 0.0.0.0 => auto (subnet .1) */
+        if (dserv_cfg__parse_ip(w, c->net_gw)) { snprintf(out, outsz, "ERR bad ip\r\n"); return CLI_ERR; }
+        c->applied_count++; snprintf(out, outsz, "OK net gateway=%s (save+reboot to apply)\r\n", w); return CLI_OK;
+    }
+    if (sscanf(line, "net mask %23s", w) == 1) {      /* static subnet mask; 0.0.0.0 => /24 */
+        if (dserv_cfg__parse_ip(w, c->net_sn)) { snprintf(out, outsz, "ERR bad mask\r\n"); return CLI_ERR; }
+        c->applied_count++; snprintf(out, outsz, "OK net mask=%s (save+reboot to apply)\r\n", w); return CLI_OK;
+    }
     if (sscanf(line, "obs pin %d", &n) == 1) {
         if (n < 0 || n >= PICO_NPINS) { snprintf(out, outsz, "ERR obs pin 0-%d (or 'obs off')\r\n", PICO_NPINS - 1); return CLI_ERR; }
         obs_mirror_set(c, n); c->applied_count++;
@@ -433,7 +447,7 @@ static inline cli_action_t pico_cli_exec(pico_config_t *c, const char *line,
     if (!strcmp(line, "help")) {
         snprintf(out, outsz,
             "cmds: show | dump | name NAME | desc TEXT | channel NAME | " PICO_CLI_HELP_XTRA
-            "net mode dhcp|static | net ip A.B.C.D |\r\n"
+            "net mode dhcp|static | net ip A.B.C.D | net gateway A.B.C.D | net mask A.B.C.D |\r\n"
             "      wifi ssid SSID | wifi pass PASS | wifi pm 0|1 | dserv ip A.B.C.D | dserv port N |\r\n"
             "      pin N mode out|in|in_pullup|off | pin N pulse US | pin N debounce MS |\r\n"
             "      pin N active_low 0|1 | label N TEXT|off | obs pin N | obs off |\r\n"

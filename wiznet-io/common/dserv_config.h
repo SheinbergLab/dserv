@@ -163,6 +163,16 @@ typedef struct {
     uint8_t  ain_group_decimate[PICO_NAGROUPS];        /* publish every Nth base scan (0/1 = every) */
     uint8_t  ain_group_batch[PICO_NAGROUPS];           /* continuous: scans per block (0/1 = per-scan) */
     uint8_t  ain_group_flags[PICO_NAGROUPS];           /* bit0 = average (boxcar mean) instead of drop */
+
+    /* v21: STATIC net gateway + subnet mask. net_mode=static previously set only
+     * net_ip and left the compiled 192.168.11.x default gateway -- off-subnet for
+     * any real static IP, which WEDGES the W6300 outbound path (it can't ARP a
+     * gateway that isn't on the wire, so even same-subnet connects fail). Zeroed
+     * => bn_apply_static derives the subnet's .1 gateway and a /24 mask; set them
+     * to override (a real gateway, or a direct link's own-subnet address).
+     * Additive tail => older saved blobs load these zeroed (auto-derive). */
+    uint8_t  net_gw[4];
+    uint8_t  net_sn[4];
 } pico_config_t;
 
 #define AIN_GROUP_FLAG_AVG  0x01u   /* ain_group_flags: decimate window -> boxcar mean, not drop */
@@ -455,6 +465,16 @@ static inline cfg_result_t dserv_cfg__config(pico_config_t *c, const char *k,
     if (strcmp(k, "net/ip") == 0) {
         char ip[24]; dserv_msg_copy_cstr(m, ip, sizeof ip);
         if (dserv_cfg__parse_ip(ip, c->net_ip) == 0) { c->applied_count++; return CFG_NET_IP; }
+        return CFG_UNKNOWN;
+    }
+    if (strcmp(k, "net/gateway") == 0) {   /* static gateway; 0.0.0.0 => auto-derive */
+        char ip[24]; dserv_msg_copy_cstr(m, ip, sizeof ip);
+        if (dserv_cfg__parse_ip(ip, c->net_gw) == 0) { c->applied_count++; return CFG_NET_IP; }
+        return CFG_UNKNOWN;
+    }
+    if (strcmp(k, "net/mask") == 0) {      /* static subnet mask; 0.0.0.0 => /24 */
+        char ip[24]; dserv_msg_copy_cstr(m, ip, sizeof ip);
+        if (dserv_cfg__parse_ip(ip, c->net_sn) == 0) { c->applied_count++; return CFG_NET_IP; }
         return CFG_UNKNOWN;
     }
     if (strcmp(k, "net/mode") == 0) {

@@ -112,6 +112,26 @@ static inline void bn_apply_static(const pico_config_t *cfg)
 {
     if (cfg->net_ip[0] || cfg->net_ip[1] || cfg->net_ip[2] || cfg->net_ip[3])
         memcpy(bn_netinfo.ip, cfg->net_ip, 4);      /* persisted static IP, else compiled default */
+
+    /* Subnet mask: persisted, else a /24 (the compiled default is already /24). */
+    if (cfg->net_sn[0] || cfg->net_sn[1] || cfg->net_sn[2] || cfg->net_sn[3])
+        memcpy(bn_netinfo.sn, cfg->net_sn, 4);
+    else { bn_netinfo.sn[0]=255; bn_netinfo.sn[1]=255; bn_netinfo.sn[2]=255; bn_netinfo.sn[3]=0; }
+
+    /* Gateway: persisted, else DERIVE the subnet's .1. The compiled default
+     * (192.168.11.1) is off-subnet for any real static IP, and the W6300 wedges
+     * its outbound path trying to ARP a gateway that isn't on the wire -- so even
+     * a same-subnet dserv never connects. A same-subnet .1 is the near-universal
+     * LAN gateway and is at worst harmless (on-wire); a direct-link box can set an
+     * explicit gateway (its own subnet works, and OTA to the internet needs the
+     * real one). */
+    if (cfg->net_gw[0] || cfg->net_gw[1] || cfg->net_gw[2] || cfg->net_gw[3]) {
+        memcpy(bn_netinfo.gw, cfg->net_gw, 4);
+    } else {
+        for (int i = 0; i < 4; i++) bn_netinfo.gw[i] = bn_netinfo.ip[i] & bn_netinfo.sn[i];
+        bn_netinfo.gw[3] |= 1;                      /* network .1 */
+    }
+
     bn_netinfo.dhcp   = NETINFO_STATIC;
 #if _WIZCHIP_ > W5500
     bn_netinfo.ipmode = NETINFO_STATIC_ALL;

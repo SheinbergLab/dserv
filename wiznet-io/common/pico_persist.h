@@ -23,7 +23,8 @@
 #include <string.h>
 
 #define PICO_PERSIST_MAGIC    0x57494F31u   /* "WIO1" */
-#define PICO_PERSIST_VERSION  20  /* v20: MCP3204 analog groups (mcp_rate + ain_group_*).
+#define PICO_PERSIST_VERSION  21  /* v21: static net gateway + subnet mask (net_gw/net_sn).
+                                   * v20: MCP3204 analog groups (mcp_rate + ain_group_*).
                                    * v19: channel (firmware update track, default dev).
                                    * v18: mcp_en (MCP3204 SPI analog-in).
                                    * v17: ble_latency (idle peripheral-latency target).
