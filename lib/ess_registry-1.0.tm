@@ -163,7 +163,69 @@ namespace eval ess::registry {
         # For now, POST works for our API since we handle both
         return [api_post $path $body {*}$args]
     }
-    
+
+    proc api_delete {path args} {
+        variable config
+
+        if {$config(url) eq ""} {
+            error "Registry URL not configured"
+        }
+
+        set url "$config(url)/api/v1/ess$path"
+        set timeout $config(timeout)
+
+        foreach {opt val} $args {
+            if {$opt eq "-timeout"} {
+                set timeout $val
+            }
+        }
+
+        set response [https_delete $url -timeout $timeout]
+        # DELETE endpoints commonly return an empty body on success; don't
+        # feed that to the JSON decoder.
+        if {$response eq ""} {
+            return {}
+        }
+        return [json_decode $response]
+    }
+
+    #=========================================================================
+    # Subject Operations (workgroup roster; registry is the source of truth)
+    #=========================================================================
+
+    # Names of the subjects in the configured workgroup (active only).
+    # Returns {} when no workgroup is configured or the registry is
+    # unreachable -- callers treat that as "keep the current list".
+    proc subject_names {} {
+        variable config
+        if {$config(workgroup) eq ""} { return {} }
+        if {[catch {api_get "/subjects?workgroup=$config(workgroup)"} subs]} {
+            return {}
+        }
+        return [lmap s $subs {dict get $s name}]
+    }
+
+    proc add_subject {name} {
+        variable config
+        set name [::ess::canonical_subject_name $name]
+        if {$config(workgroup) eq ""} {
+            error "Registry workgroup not configured"
+        }
+        api_post "/subjects?workgroup=$config(workgroup)" \
+            [dict create name $name active true]
+        return $name
+    }
+
+    proc remove_subject {name} {
+        variable config
+        set name [::ess::canonical_subject_name $name]
+        if {$config(workgroup) eq ""} {
+            error "Registry workgroup not configured"
+        }
+        api_delete "/subject/$config(workgroup)/$name"
+        return $name
+    }
+
     #=========================================================================
     # JSON Helpers (minimal implementation)
     #=========================================================================

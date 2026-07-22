@@ -1362,12 +1362,78 @@ namespace eval ess {
         dservSet ess/subject_ids $subject_ids
     }
 
-    proc add_subject {subj} {
-        variable subject_ids
-        if {[lsearch $subject_ids $subj] < 0} {
-            lappend subject_ids $subj
+    # Canonical form + validation rule for a subject id. Single source of
+    # truth shared by the local and registry paths (and by ess::registry).
+    proc canonical_subject_name {name} {
+        set name [string tolower [string trim $name]]
+        if {$name eq ""} {
+            error "subject name required"
         }
-        dservSet ess/subject_ids $subject_ids
+        if {![regexp {^[a-z0-9][a-z0-9_-]*$} $name]} {
+            error "invalid subject id \"$name\": must start with a letter or\
+                   digit and contain only letters, digits, _ or -"
+        }
+        return $name
+    }
+
+    # True when a registry workgroup is configured (registry is then the
+    # source of truth for the subject roster).
+    proc registry_active {} {
+        expr {[info exists ::ess::registry::config(workgroup)] &&
+              [set ::ess::registry::config(workgroup)] ne ""}
+    }
+
+    # Re-pull the workgroup's subject list from the registry into the local
+    # ess/subject_ids datapoint. No-op (keeps the current list) when no
+    # registry is configured or it is unreachable/empty. Returns 1 on refresh.
+    proc refresh_subjects {} {
+        if {![registry_active]} { return 0 }
+        if {[catch {::ess::registry::subject_names} names] || ![llength $names]} {
+            return 0
+        }
+        set_subjects {*}$names
+        return 1
+    }
+
+    # Add a subject. When a registry is configured this persists to it and
+    # re-pulls the authoritative list; otherwise it updates the local list.
+    # Validation/canonicalization is enforced here, not by callers.
+    proc add_subject {name} {
+        variable subject_ids
+        if {[registry_active]} {
+            set name [::ess::registry::add_subject $name]
+            refresh_subjects
+        } else {
+            set name [canonical_subject_name $name]
+            if {[lsearch -exact $subject_ids $name] < 0} {
+                lappend subject_ids $name
+                dservSet ess/subject_ids $subject_ids
+            }
+        }
+        return $name
+    }
+
+    # Remove a subject. Refuses to remove the currently selected subject.
+    # Registry-persisting when configured, else local-list only.
+    proc remove_subject {name} {
+        variable subject_ids
+        variable subject_id
+        set name [canonical_subject_name $name]
+        if {[info exists subject_id] &&
+            $name eq [string tolower [string trim $subject_id]]} {
+            error "cannot remove the currently selected subject \"$name\""
+        }
+        if {[registry_active]} {
+            ::ess::registry::remove_subject $name
+            refresh_subjects
+        } else {
+            set idx [lsearch -exact $subject_ids $name]
+            if {$idx >= 0} {
+                set subject_ids [lreplace $subject_ids $idx $idx]
+                dservSet ess/subject_ids $subject_ids
+            }
+        }
+        return $name
     }
 
     proc add_subjects {args} {

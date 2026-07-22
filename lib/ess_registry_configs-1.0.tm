@@ -51,25 +51,9 @@ namespace eval ess::registry {
         return [json_decode $response]
     }
     
-    proc api_delete {path args} {
-        variable config
-        
-        if {$config(url) eq ""} {
-            error "Registry URL not configured"
-        }
-        
-        set url "$config(url)/api/v1/ess$path"
-        set timeout $config(timeout)
-        
-        foreach {opt val} $args {
-            if {$opt eq "-timeout"} {
-                set timeout $val
-            }
-        }
-        
-        set response [https_delete $url -timeout $timeout]
-        return [json_decode $response]
-    }
+    # api_delete lives in the base ess_registry package (ess_registry-1.0.tm),
+    # which is always sourced before this extension. Kept there as the single
+    # definition so its empty-response handling can't drift between the two.
 
     #=========================================================================
     # Project Definition Operations

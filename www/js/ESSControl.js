@@ -94,6 +94,7 @@ class ESSControl {
             currentSystem: '',
             currentProtocol: '',
             currentVariant: '',
+            registryWorkgroup: '',
             essStatus: 'stopped',  // running, stopped, loading
             essRunning: false,     // true when ESS state machine is actively running
             params: {},
@@ -225,6 +226,7 @@ class ESSControl {
                                     <option value="">-- Select --</option>
                                 </select>
                             </div>
+                            <button id="ess-manage-subjects" class="ess-reload-btn" title="Manage Subjects">⚙</button>
                         </div>
                         
                         <!-- System -->
@@ -520,6 +522,7 @@ class ESSControl {
             
             // Setup tab elements
             subjectSelect: this.container.querySelector('#ess-subject-select'),
+            manageSubjects: this.container.querySelector('#ess-manage-subjects'),
             systemSelect: this.container.querySelector('#ess-system-select'),
             protocolSelect: this.container.querySelector('#ess-protocol-select'),
             variantSelect: this.container.querySelector('#ess-variant-select'),
@@ -637,7 +640,8 @@ class ESSControl {
             this.setVariant(e.target.value);
         });
         
-        // Reload buttons
+        // Manage subjects + reload buttons
+        this.elements.manageSubjects.addEventListener('click', () => this.showManageSubjectsModal());
         this.elements.reloadSystem.addEventListener('click', () => this.reloadSystem());
         this.elements.reloadProtocol.addEventListener('click', () => this.reloadProtocol());
         this.elements.reloadVariant.addEventListener('click', () => this.reloadVariant());
@@ -916,6 +920,10 @@ class ESSControl {
             this.updateIdentityHeader();
         });
         
+        this.dpManager.subscribe('ess/registry/workgroup', (data) => {
+            this.state.registryWorkgroup = data.value || '';
+        });
+        
         this.dpManager.subscribe('ess/systems', (data) => {
             this.updateSystems(data.value);
         });
@@ -1049,6 +1057,9 @@ class ESSControl {
         this.populateSelect(this.elements.subjectSelect, subjects, '-- Select Subject --');
         if (this.state.currentSubject) {
             this.updateSelectValue(this.elements.subjectSelect, this.state.currentSubject);
+        }
+        if (typeof this._manageSubjectsListSync === 'function') {
+            this._manageSubjectsListSync();
         }
     }
 
@@ -1227,6 +1238,7 @@ updateConfigRunButtons() {
     
     setControlsEnabled(enabled) {
         this.elements.subjectSelect.disabled = !enabled;
+        this.elements.manageSubjects.disabled = !enabled;
         this.elements.systemSelect.disabled = !enabled;
         this.elements.protocolSelect.disabled = !enabled;
         this.elements.variantSelect.disabled = !enabled;
@@ -1522,6 +1534,164 @@ updateConfigRunButtons() {
                 }
             }
         }
+    }
+    
+    /**
+     * Manage Subjects modal — add/remove via registry (ESS Tcl procs).
+     */
+    showManageSubjectsModal() {
+        let busy = false;
+        
+        const modal = document.createElement('div');
+        modal.className = 'ess-modal-overlay';
+        modal.innerHTML = `
+            <div class="ess-modal">
+                <div class="ess-modal-header">
+                    <span class="ess-modal-title">Manage Subjects</span>
+                    <button class="ess-modal-close" type="button">×</button>
+                </div>
+                <div class="ess-modal-body">
+                    <div class="ess-modal-section">
+                        <label class="ess-modal-label">Workgroup</label>
+                        <div class="ess-modal-value">${this.escapeHtml(this.state.registryWorkgroup || '—')}</div>
+                    </div>
+                    <div class="ess-subject-manage-status" id="ess-subject-manage-status" hidden>
+                        <span class="ess-subject-manage-spinner" aria-hidden="true"></span>
+                        <span class="ess-subject-manage-status-text"></span>
+                    </div>
+                    <div class="ess-modal-section">
+                        <label class="ess-modal-label">Subjects</label>
+                        <div class="ess-subject-manage-list" id="ess-subject-manage-list"></div>
+                    </div>
+                    <div class="ess-modal-section">
+                        <label class="ess-modal-label">Add Subject</label>
+                        <div class="ess-subject-manage-add">
+                            <input type="text" class="ess-modal-input" id="ess-subject-manage-input"
+                                   placeholder="Subject ID" autocomplete="off">
+                            <button class="ess-mini-btn" id="ess-subject-manage-add-btn" type="button">Add</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="ess-modal-footer">
+                    <button class="ess-modal-btn cancel" type="button">Close</button>
+                </div>
+            </div>
+        `;
+        
+        document.body.appendChild(modal);
+        
+        const listEl = modal.querySelector('#ess-subject-manage-list');
+        const inputEl = modal.querySelector('#ess-subject-manage-input');
+        const addBtn = modal.querySelector('#ess-subject-manage-add-btn');
+        const statusEl = modal.querySelector('#ess-subject-manage-status');
+        const statusTextEl = statusEl.querySelector('.ess-subject-manage-status-text');
+        const closeBtn = modal.querySelector('.ess-modal-close');
+        const cancelBtn = modal.querySelector('.ess-modal-btn.cancel');
+        
+        const setBusy = (isBusy, message = '') => {
+            busy = isBusy;
+            addBtn.disabled = isBusy;
+            inputEl.disabled = isBusy;
+            closeBtn.disabled = isBusy;
+            cancelBtn.disabled = isBusy;
+            listEl.classList.toggle('busy', isBusy);
+            addBtn.textContent = isBusy ? 'Working…' : 'Add';
+            if (isBusy) {
+                statusTextEl.textContent = message || 'Working…';
+                statusEl.hidden = false;
+            } else {
+                statusEl.hidden = true;
+                statusTextEl.textContent = '';
+            }
+        };
+        
+        const renderList = () => {
+            const subjects = this.state.subjects || [];
+            if (subjects.length === 0) {
+                listEl.innerHTML = '<div class="ess-modal-empty">No subjects</div>';
+                return;
+            }
+            listEl.innerHTML = subjects.map((name) => `
+                <div class="ess-subject-manage-item" data-name="${this.escapeAttr(name)}" title="Click to remove">
+                    <span class="ess-subject-manage-name">${this.escapeHtml(name)}</span>
+                    <span class="ess-subject-manage-remove">×</span>
+                </div>
+            `).join('');
+            
+            listEl.querySelectorAll('.ess-subject-manage-item').forEach(item => {
+                item.addEventListener('click', () => removeSubject(item.dataset.name));
+            });
+        };
+        
+        this._manageSubjectsListSync = renderList;
+        
+        // The ess API owns all the rules (validation, the "can't remove the
+        // current subject" invariant, registry-vs-local persistence). These
+        // handlers just invoke it and surface errors; the list re-renders
+        // itself when the ess/subject_ids datapoint updates.
+        const removeSubject = async (name) => {
+            if (busy || !name) return;
+            setBusy(true, `Removing "${name}"…`);
+            try {
+                await this.sendEssCommandAsync(`ess::remove_subject {${name}}`);
+                this.emit('log', { message: `Removed subject "${name}"`, level: 'info' });
+            } catch (e) {
+                this.emit('log', {
+                    message: `Failed to remove subject: ${e.message}`,
+                    level: 'error'
+                });
+            } finally {
+                setBusy(false);
+            }
+        };
+
+        const addSubject = async () => {
+            if (busy) return;
+            const name = inputEl.value.trim();
+            if (!name) return;
+            setBusy(true, `Adding "${name}"…`);
+            try {
+                await this.sendEssCommandAsync(`ess::add_subject {${name}}`);
+                inputEl.value = '';
+                this.emit('log', { message: `Added subject "${name}"`, level: 'info' });
+            } catch (e) {
+                this.emit('log', {
+                    message: `Failed to add subject: ${e.message}`,
+                    level: 'error'
+                });
+            } finally {
+                setBusy(false);
+                inputEl.focus();
+            }
+        };
+        
+        const closeModal = () => {
+            if (busy) return;
+            this._manageSubjectsListSync = null;
+            document.removeEventListener('keydown', onKeyDown);
+            modal.remove();
+        };
+        
+        const onKeyDown = (e) => {
+            if (e.key === 'Escape') closeModal();
+        };
+        
+        closeBtn.addEventListener('click', closeModal);
+        cancelBtn.addEventListener('click', closeModal);
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) closeModal();
+        });
+        addBtn.addEventListener('click', () => addSubject());
+        inputEl.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                addSubject();
+            }
+        });
+        document.addEventListener('keydown', onKeyDown);
+        
+        renderList();
+        inputEl.focus();
     }
     
     // ESS Commands
