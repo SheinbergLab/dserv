@@ -183,6 +183,7 @@
                                     <div class="ess-input-group">
                                         <label><input type="checkbox" id="eye-h-invert"> h</label>
                                         <label><input type="checkbox" id="eye-v-invert"> v</label>
+                                        <label title="swap H/V axes (stick mounted rotated)"><input type="checkbox" id="eye-swap"> swap</label>
                                         <button id="eye-recenter" class="ess-input-btn">Recenter</button>
                                     </div>
                                 </div>
@@ -298,6 +299,7 @@
                  vGain: document.getElementById('eye-v-gain'),
                  hInvert: document.getElementById('eye-h-invert'),
                  vInvert: document.getElementById('eye-v-invert'),
+                 swap: document.getElementById('eye-swap'),
                  recenterBtn: document.getElementById('eye-recenter')
              };
              
@@ -340,7 +342,11 @@
              this.elements.vInvert?.addEventListener('change', (e) => {
                  this.sendEmCommand(`::em::set_param invert_v ${e.target.checked ? 1 : 0}`);
              });
-             
+
+             this.elements.swap?.addEventListener('change', (e) => {
+                 this.sendEmCommand(`::em::set_param swap_axes ${e.target.checked ? 1 : 0}`);
+             });
+
              this.elements.recenterBtn?.addEventListener('click', () => {
                  this.sendEmCommand('::em::set_current_as_center');
              });
@@ -377,6 +383,9 @@
              }
              if (params.invert_v !== undefined && this.elements.vInvert) {
                  this.elements.vInvert.checked = !!parseInt(params.invert_v);
+             }
+             if (params.swap_axes !== undefined && this.elements.swap) {
+                 this.elements.swap.checked = !!parseInt(params.swap_axes);
              }
          }
          

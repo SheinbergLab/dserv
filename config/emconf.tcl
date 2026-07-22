@@ -93,6 +93,7 @@ namespace eval em {
         raw_center_v 0.0 \
         invert_h 0 \
         invert_v 0 \
+        swap_axes 0 \
         use_biquadratic 0 \
         bq_h_coeffs {0 0 0 0 0 0 0 0 0} \
         bq_v_coeffs {0 0 0 0 0 0 0 0 0}]
@@ -285,8 +286,11 @@ namespace eval em {
         set xy [::extio::ain_latest $data]     ;# newest scan -> {X Y} counts
         if { [llength $xy] < 2 } return
         lassign $xy raw_h raw_v
+        # stick orientation: swap CH0<->CH1 before any calibration, so center/
+        # scale/invert and set_current_as_center all act on the intended axes.
+        if { [dict get $settings swap_axes] } { lassign [list $raw_v $raw_h] raw_h raw_v }
         set cur_t [now]
-        set current_raw_h $raw_h               ;# feeds set_current_as_center
+        set current_raw_h $raw_h               ;# feeds set_current_as_center (post-swap)
         set current_raw_v $raw_v
 
         dict with settings {
