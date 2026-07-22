@@ -102,9 +102,28 @@ static void bn_dhcp_apply(void)
     getGWfromDHCP(bn_netinfo.gw);
     getSNfromDHCP(bn_netinfo.sn);
     getDNSfromDHCP(bn_netinfo.dns);
+
+    /* Gateway/mask sanity -- same guard as the static path (bn_apply_static): a
+     * minimal DHCP server can omit the mask (option 1) or gateway (option 3), or
+     * hand an off-subnet gateway, any of which leaves the W6300 unable to ARP its
+     * gateway and WEDGES the outbound path (box gets a lease + answers pings but
+     * never connects out). Backfill a /24 mask and the subnet's .1 gateway. */
+    if (!(bn_netinfo.sn[0] || bn_netinfo.sn[1] || bn_netinfo.sn[2] || bn_netinfo.sn[3])) {
+        bn_netinfo.sn[0]=255; bn_netinfo.sn[1]=255; bn_netinfo.sn[2]=255; bn_netinfo.sn[3]=0;
+    }
+    { int gw_ok = (bn_netinfo.gw[0] || bn_netinfo.gw[1] || bn_netinfo.gw[2] || bn_netinfo.gw[3]);
+      for (int i = 0; gw_ok && i < 4; i++)
+          if ((bn_netinfo.gw[i] & bn_netinfo.sn[i]) != (bn_netinfo.ip[i] & bn_netinfo.sn[i])) gw_ok = 0;
+      if (!gw_ok) {
+          for (int i = 0; i < 4; i++) bn_netinfo.gw[i] = bn_netinfo.ip[i] & bn_netinfo.sn[i];
+          bn_netinfo.gw[3] |= 1;                     /* network .1 */
+      }
+    }
+
     network_initialize(bn_netinfo);
     bn_leased = 1;
-    printf("dhcp: leased %u.%u.%u.%u\n", ip[0], ip[1], ip[2], ip[3]);
+    printf("dhcp: leased %u.%u.%u.%u gw %u.%u.%u.%u\n", ip[0], ip[1], ip[2], ip[3],
+           bn_netinfo.gw[0], bn_netinfo.gw[1], bn_netinfo.gw[2], bn_netinfo.gw[3]);
 }
 static void bn_dhcp_conflict(void) { /* keep going; next DHCP_run re-discovers */ }
 
