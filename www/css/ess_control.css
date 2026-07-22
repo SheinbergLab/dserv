@@ -2131,6 +2131,64 @@ select.ess-param-select {
     border-color: var(--ess-accent);
 }
 
+/* Sound controls: mute button (task sounds) + volume button -> slider popup */
+.ess-mute-btn {
+    padding: 4px 6px;
+    flex-shrink: 0;
+}
+
+.ess-mute-btn.muted {
+    color: var(--ess-error, #e05555);
+    border-color: var(--ess-error, #e05555);
+}
+
+.ess-volume-control {
+    position: relative;
+    display: inline-flex;
+    flex-shrink: 0;
+}
+
+.ess-volume-btn {
+    padding: 4px 6px;
+}
+
+.ess-volume-popup {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    z-index: 50;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 8px;
+    background: var(--ess-bg-panel);
+    border: 1px solid var(--ess-border);
+    border-radius: 5px;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+}
+
+.ess-volume-popup[hidden] {
+    display: none;
+}
+
+.ess-volume-pct {
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--ess-text-primary);
+    font-variant-numeric: tabular-nums;
+}
+
+/* Vertical master-level slider; bottom = 0 = mute everything */
+.ess-master-gain-vert {
+    writing-mode: vertical-lr;
+    direction: rtl;
+    width: 24px;
+    height: 110px;
+    cursor: pointer;
+    accent-color: var(--ess-accent);
+}
+
 .ess-mini-btn.close:hover:not(:disabled) {
     color: var(--ess-error);
     border-color: var(--ess-error);

@@ -4716,6 +4716,116 @@ namespace eval ess {
     proc sound_set_volume { volume channel } {
 		send sound "soundVolume $volume $channel"
     }
+
+    # ---- feedback volume + master gain --------------------------------------
+    # Sounds fall into two roles. FEEDBACK sounds (channels 0-6: prestim beep,
+    # reward chime, buzz, letgo warning, ...) pace the experiment and can be
+    # silenced in environments where they don't make sense (e.g. housing
+    # rooms). STIMULUS sounds -- the experimental variable in a sound-training
+    # system -- live on channels 7+ and are deliberately NOT governed here, so
+    # muting feedback never touches them.
+    #
+    # MASTER GAIN is the overall output level (soundGain, 0.0-1.0) applied by
+    # the sound module across both backends, independent of the per-channel
+    # MIDI mix -- an overall "how loud is this rig" knob. 1.0 == prior loudness.
+    #
+    # Both are persisted per box via settingsdb (subsystem "sound", one dict)
+    # and re-applied by sound_init, so they survive dserv restarts and system
+    # reloads without wrapping any sound_play call site.
+    variable feedback_volume 127
+    variable master_gain 1.0
+    variable feedback_channels {0 1 2 3 4 5 6}
+
+    # Persist the current sound settings as one opaque dict under "sound".
+    proc sound_persist_settings {} {
+		variable feedback_volume
+		variable master_gain
+		catch {
+			::settingsdb::save sound \
+				[dict create feedback_volume $feedback_volume master_gain $master_gain]
+		}
+    }
+
+    # Push feedback_volume (MIDI CC7) to the feedback channels and publish it.
+    # The single apply point for both boot and live changes.
+    proc sound_apply_feedback_volume {} {
+		variable feedback_volume
+		variable feedback_channels
+		foreach ch $feedback_channels { sound_set_volume $feedback_volume $ch }
+		dservSet ess/sound/feedback_volume $feedback_volume
+    }
+
+    # Set + persist + apply. 0 = muted, 127 = full. Callable from the GUI,
+    # dservctl, or a system; the rule lives here, not at the call sites.
+    proc sound_set_feedback_volume { volume } {
+		variable feedback_volume
+		if {![string is integer -strict $volume] || $volume < 0 || $volume > 127} {
+			error "feedback volume must be an integer 0-127"
+		}
+		set feedback_volume $volume
+		sound_persist_settings
+		sound_apply_feedback_volume
+		return $volume
+    }
+
+    # Convenience toggle for a GUI mute control.
+    proc sound_mute_feedback { {muted 1} } {
+		return [sound_set_feedback_volume [expr {$muted ? 0 : 127}]]
+    }
+
+    proc sound_get_feedback_volume {} {
+		variable feedback_volume
+		dservTouch ess/sound/feedback_volume
+		return $feedback_volume
+    }
+
+    # Push master_gain to the sound module and publish it.
+    proc sound_apply_master_gain {} {
+		variable master_gain
+		send sound "soundGain $master_gain"
+		dservSet ess/sound/master_gain $master_gain
+    }
+
+    # Set + persist + apply the overall output level (0.0 silent .. 1.0 full).
+    proc sound_set_master_gain { level } {
+		variable master_gain
+		if {![string is double -strict $level] || $level < 0.0 || $level > 1.0} {
+			error "master gain must be a number 0.0-1.0"
+		}
+		set master_gain $level
+		sound_persist_settings
+		sound_apply_master_gain
+		return $level
+    }
+
+    proc sound_get_master_gain {} {
+		variable master_gain
+		dservTouch ess/sound/master_gain
+		return $master_gain
+    }
+
+    # Load persisted sound settings at boot (defaults if none stored). Only
+    # sets the values + datapoints; the synth is (re)programmed by sound_init.
+    proc sound_restore_settings {} {
+		variable feedback_volume
+		variable master_gain
+		set stored ""
+		catch { set stored [::settingsdb::load sound] }
+		# Tolerate a missing/legacy value: treat anything that isn't a dict as none.
+		if {[catch {dict size $stored}]} { set stored {} }
+		if {[dict exists $stored feedback_volume]} {
+			set v [dict get $stored feedback_volume]
+			if {[string is integer -strict $v]} { set feedback_volume $v }
+		}
+		if {[dict exists $stored master_gain]} {
+			set g [dict get $stored master_gain]
+			if {[string is double -strict $g]} { set master_gain $g }
+		}
+		dservSet ess/sound/feedback_volume $feedback_volume
+		dservSet ess/sound/master_gain $master_gain
+		return [list feedback_volume $feedback_volume master_gain $master_gain]
+    }
+
     proc sound_init {} {
 		sound_reset
 		sound_set_voice 81 0 0
@@ -4725,7 +4835,8 @@ namespace eval ess {
 		sound_set_voice 21 0 4
 		sound_set_voice 8 0 5
 		sound_set_voice 113 100 6
-		foreach i "0 1 2 3 4 5 6" { sound_set_volume 127 $i }
+		sound_apply_master_gain
+		sound_apply_feedback_volume
     }
 }
 

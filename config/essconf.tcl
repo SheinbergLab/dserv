@@ -42,8 +42,16 @@ package require ess
 package require ess_registry
 package require ess_validation
 package require ess_sync
+package require settingsdb   ;# persist stable per-box settings across restarts
 
 ess::registry::init_from_dserv
+
+# Per-box settings store for the ess subprocess (separate file from em's
+# calibration.db to avoid cross-thread sqlite contention). Restore the
+# persisted sound settings (feedback mute + master gain) so they survive
+# restarts; sound_init re-applies them to the synth on each system load.
+settingsdb::init [file join $dspath db settings.db]
+ess::sound_restore_settings
 
 # Convenience control aliases so bare verbs work over the wire,
 # e.g. "dservctl ess reset" instead of "dservctl ess ess::reset".

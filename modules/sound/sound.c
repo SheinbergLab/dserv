@@ -190,6 +190,7 @@ static int snd_control(sound_info_t *, char control, char data, char channel);
 static int snd_program(sound_info_t *, char program, char bank, char ch_set);
 static int snd_reset(sound_info_t *);
 static int snd_volume(sound_info_t *, char volume, char channel);
+static int snd_master_gain(sound_info_t *, double level);
 
 /**************************************************************
  *
@@ -340,8 +341,54 @@ static int snd_reset(sound_info_t *info)
       n = 1;
     }
   }
-  
+
   return n;
+}
+
+/**************************************************************
+ *
+ * FUNCTION
+ *   snd_master_gain
+ *
+ * DESCRIPTION
+ *   Set the overall output level, independent of the per-channel MIDI
+ *   volumes. `level` is normalized 0.0 (silent) .. 1.0 (full). 1.0
+ *   reproduces prior behavior on both backends (FluidSynth's default gain /
+ *   the hardware's max master volume), so values below 1.0 attenuate the
+ *   whole rig -- e.g. to turn a setup down for a housing room without
+ *   touching the experiment's per-channel mix.
+ *
+ **************************************************************/
+
+/* FluidSynth gain corresponding to level 1.0. Matches FluidSynth's own
+ * default synth.gain, so a master of 1.0 leaves loudness unchanged from
+ * before this control existed. Raise it if a rig needs more headroom. */
+#define SND_FLUID_FULL_GAIN 0.2
+
+static int snd_master_gain(sound_info_t *info, double level)
+{
+  int result = 0;
+
+  if (level < 0.0) level = 0.0;
+  if (level > 1.0) level = 1.0;
+
+  if (info->mode & SOUND_MODE_HARDWARE) {
+    /* Universal Real Time SysEx: Master Volume (14-bit, LSB then MSB) */
+    int v = (int)(level * 16383.0 + 0.5);
+    char master_volume[] = { 0xf0, 0x7f, 0x7f, 0x04, 0x01,
+      (char)(v & 0x7f), (char)((v >> 7) & 0x7f), 0xf7 };
+    if (info->midi_fd >= 0)
+      result = write(info->midi_fd, master_volume, sizeof(master_volume));
+  }
+
+  if (info->mode & SOUND_MODE_SOFTWARE) {
+    if (info->synth) {
+      fluid_synth_set_gain(info->synth, (float)(level * SND_FLUID_FULL_GAIN));
+      result = 1;
+    }
+  }
+
+  return result;
 }
 
 /**************************************************************
@@ -644,7 +691,26 @@ static int sound_volume_command (ClientData data, Tcl_Interp *interp,
     return TCL_ERROR;
   
   snd_volume(info, volume, channel);
-  
+
+  return TCL_OK;
+}
+
+static int sound_gain_command (ClientData data, Tcl_Interp *interp,
+			       int objc, Tcl_Obj *objv[])
+{
+  sound_info_t *info = (sound_info_t *) data;
+
+  double level;
+  if (objc != 2) {
+    Tcl_WrongNumArgs(interp, 1, objv, "level(0.0-1.0)");
+    return TCL_ERROR;
+  }
+
+  if (Tcl_GetDoubleFromObj(interp, objv[1], &level) != TCL_OK)
+    return TCL_ERROR;
+
+  snd_master_gain(info, level);
+
   return TCL_OK;
 }
 
@@ -970,6 +1036,10 @@ EXPORT(int,Dserv_sound_Init) (Tcl_Interp *interp)
 		       (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateObjCommand(interp, "soundVolume",
 		       (Tcl_ObjCmdProc *) sound_volume_command,
+		       (ClientData) info,
+		       (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateObjCommand(interp, "soundGain",
+		       (Tcl_ObjCmdProc *) sound_gain_command,
 		       (ClientData) info,
 		       (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateObjCommand(interp, "soundListAlsaDevices",

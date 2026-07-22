@@ -97,6 +97,8 @@ class ESSControl {
             registryWorkgroup: '',
             essStatus: 'stopped',  // running, stopped, loading
             essRunning: false,     // true when ESS state machine is actively running
+            feedbackVolume: 127,   // ess/sound/feedback_volume; 0 = feedback muted
+            masterGain: 1.0,       // ess/sound/master_gain; overall output level 0-1
             params: {},
             variantInfo: null,
             currentDatafile: '',
@@ -187,6 +189,14 @@ class ESSControl {
                         <div class="ess-status-spacer"></div>
                         <button id="ess-btn-juice" class="ess-mini-btn juice">Juice</button>
                         <input type="number" id="ess-juice-amount" class="ess-juice-input" value="0.5" min="0.1" max="5" step="0.1" title="Juice amount (sec)">
+                        <button id="ess-btn-mute" class="ess-mini-btn ess-mute-btn" title="Mute task sounds">🔊</button>
+                        <div class="ess-volume-control">
+                            <button id="ess-btn-volume" class="ess-mini-btn ess-volume-btn" title="Sound level">🎚️</button>
+                            <div class="ess-volume-popup" id="ess-volume-popup" hidden>
+                                <span class="ess-volume-pct" id="ess-volume-pct">100%</span>
+                                <input type="range" id="ess-master-gain" class="ess-master-gain-vert" min="0" max="100" step="1" value="100" title="Sound level">
+                            </div>
+                        </div>
                     </div>
                 </div>
                 
@@ -517,6 +527,11 @@ class ESSControl {
             btnStop: this.container.querySelector('#ess-btn-stop'),
             btnJuice: this.container.querySelector('#ess-btn-juice'),
             juiceAmount: this.container.querySelector('#ess-juice-amount'),
+            muteBtn: this.container.querySelector('#ess-btn-mute'),
+            volumeBtn: this.container.querySelector('#ess-btn-volume'),
+            volumePopup: this.container.querySelector('#ess-volume-popup'),
+            volumePct: this.container.querySelector('#ess-volume-pct'),
+            masterGain: this.container.querySelector('#ess-master-gain'),
             inObsIndicator: this.container.querySelector('#ess-in-obs-indicator'),
             obsDisplay: this.container.querySelector('#ess-obs-display'),
             
@@ -661,6 +676,21 @@ class ESSControl {
         
         // Juice button
         this.elements.btnJuice.addEventListener('click', () => this.giveJuice());
+
+        // Two separate single-purpose controls: a mute button (task sounds)
+        // and a volume button that opens a vertical master-level slider popup.
+        this.elements.muteBtn.addEventListener('click', () =>
+            this.setFeedbackMute(this.state.feedbackVolume !== 0));
+        this.elements.volumeBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.toggleVolumePopup();
+        });
+        // Live % label while dragging; commit (send) only on release
+        this.elements.masterGain.addEventListener('input', (e) => {
+            this.elements.volumePct.textContent = `${e.target.value}%`;
+        });
+        this.elements.masterGain.addEventListener('change', (e) => this.setMasterGain(e.target.value));
+        this.elements.volumePopup.addEventListener('click', (e) => e.stopPropagation());
         
         // File buttons
         this.elements.btnFileOpen.addEventListener('click', () => {
@@ -923,7 +953,19 @@ class ESSControl {
         this.dpManager.subscribe('ess/registry/workgroup', (data) => {
             this.state.registryWorkgroup = data.value || '';
         });
-        
+
+        this.dpManager.subscribe('ess/sound/feedback_volume', (data) => {
+            const v = parseInt(data.value, 10);
+            this.state.feedbackVolume = isNaN(v) ? 127 : v;
+            this.updateVolumeUI();
+        });
+
+        this.dpManager.subscribe('ess/sound/master_gain', (data) => {
+            const g = parseFloat(data.value);
+            this.state.masterGain = isNaN(g) ? 1.0 : g;
+            this.updateVolumeUI();
+        });
+
         this.dpManager.subscribe('ess/systems', (data) => {
             this.updateSystems(data.value);
         });
@@ -1743,7 +1785,63 @@ updateConfigRunButtons() {
         const amount = this.elements.juiceAmount.value || 50;
         this.sendCommand(`send juicer reward ${amount}`);
     }
-    
+
+    // The ess API owns all sound policy (validation, persistence, which
+    // channels are feedback vs stimulus); these handlers just invoke it and
+    // let the ess/sound/* datapoints drive the UI.
+
+    toggleVolumePopup() {
+        if (this.elements.volumePopup.hidden) {
+            this.updateVolumeUI();          // sync slider to current state
+            this.elements.volumePopup.hidden = false;
+            this._volumeOutside = () => this.closeVolumePopup();
+            this._volumeKey = (e) => { if (e.key === 'Escape') this.closeVolumePopup(); };
+            document.addEventListener('click', this._volumeOutside);
+            document.addEventListener('keydown', this._volumeKey);
+        } else {
+            this.closeVolumePopup();
+        }
+    }
+
+    closeVolumePopup() {
+        this.elements.volumePopup.hidden = true;
+        document.removeEventListener('click', this._volumeOutside);
+        document.removeEventListener('keydown', this._volumeKey);
+    }
+
+    // Overall output level, 0-100% from the slider -> 0.0-1.0 for the ess API.
+    setMasterGain(percent) {
+        const level = Math.max(0, Math.min(100, parseInt(percent, 10) || 0)) / 100;
+        this.sendEssCommandAsync(`ess::sound_set_master_gain ${level.toFixed(3)}`)
+            .catch((e) => this.emit('log', { message: `Master gain failed: ${e.message}`, level: 'error' }));
+    }
+
+    // Mute task/pacing sounds only (stimulus channels unaffected).
+    setFeedbackMute(muted) {
+        this.sendEssCommandAsync(`ess::sound_mute_feedback ${muted ? 1 : 0}`)
+            .catch((e) => this.emit('log', { message: `Sound mute failed: ${e.message}`, level: 'error' }));
+    }
+
+    // Reflect ess/sound/* state. Mute button = task sounds on/off; the volume
+    // button/popup = overall level. Two separate single-purpose controls.
+    updateVolumeUI() {
+        const mute = this.elements.muteBtn;
+        if (mute) {
+            const muted = this.state.feedbackVolume === 0;
+            mute.textContent = muted ? '🔇' : '🔊';
+            mute.classList.toggle('muted', muted);
+            mute.title = muted ? 'Task sounds muted — click to unmute'
+                               : 'Mute task sounds (pacing/reward; stimulus unaffected)';
+        }
+        const pct = Math.round(this.state.masterGain * 100);
+        if (this.elements.volumeBtn) this.elements.volumeBtn.title = `Sound level ${pct}%`;
+        // Don't fight the user while they're dragging the slider
+        if (this.elements.masterGain && document.activeElement !== this.elements.masterGain) {
+            this.elements.masterGain.value = pct;
+        }
+        if (this.elements.volumePct) this.elements.volumePct.textContent = `${pct}%`;
+    }
+
     openDatafile() {
         this.sendCommand('ess::file_open [ess::file_suggest]');
         this.emit('log', { message: 'Opening datafile...', level: 'info' });
