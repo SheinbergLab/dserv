@@ -8,7 +8,12 @@ package require yajltcl
 package require math::linearalgebra
 
 tcl::tm::add $dspath/lib
-package require extio   ;# decode extio state/ain blocks (analog eye source)
+package require extio       ;# decode extio state/ain blocks (analog eye source)
+package require settingsdb  ;# persist stable eye calibration across dserv restarts
+
+# Calibration store (override em_caldb_path before this file loads to relocate).
+if {![info exists em_caldb_path]} { set em_caldb_path [file join $dspath db calibration.db] }
+settingsdb::init $em_caldb_path
 
 # disable exit
 proc exit {args} { error "exit not available for this subprocess" }
@@ -110,6 +115,25 @@ namespace eval em {
         variable settings
         dict set settings $param_name $value
         update_settings
+        save_calibration        ;# stable per-setup values persist immediately
+    }
+
+    # Persist / restore the whole calibration dict (opaque to settingsdb). Load
+    # MERGES over the compiled defaults, so adding a new setting key later still
+    # reads an old db cleanly (default fills the gap). Per-rig profile "default".
+    variable cal_profile default
+    proc save_calibration {} {
+        variable settings; variable cal_profile
+        catch { ::settingsdb::save eye $settings $cal_profile }
+    }
+    proc load_calibration {} {
+        variable settings; variable cal_profile
+        set stored [::settingsdb::load eye $cal_profile]
+        if { $stored ne "" } {
+            set settings [dict merge $settings $stored]
+            update_settings
+            puts "em: eye calibration restored (profile $cal_profile)"
+        }
     }
     
     proc set_scale_h {s} { set_param scale_h $s }
@@ -286,6 +310,9 @@ namespace eval em {
 
     update_settings
 }
+
+# restore any saved calibration for this rig (overrides the compiled defaults)
+em::load_calibration
 
 dservAddExactMatch eyetracking/virtual
 dpointSetScript    eyetracking/virtual em::process_virtual
