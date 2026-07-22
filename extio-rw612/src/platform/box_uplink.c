@@ -1,0 +1,130 @@
+/*
+ * box_uplink.c -- uplink arbiter + the eth/usb transport adapters.
+ */
+#include "box_uplink.h"
+#include "box_net_eth.h"
+#include "box_net_usb.h"
+
+#include <zephyr/kernel.h>
+#include <zephyr/drivers/gpio.h>
+
+/* ---- transport adapters (wrap the box_net_* backends into the vtable) ---- */
+
+static int u_usb_init(const box_config_t *c)      { (void) c; return box_net_usb_init(); }
+static int u_usb_available(void)                  { return 1; }        /* the always-there fallback */
+static int u_usb_connect(const box_config_t *c)   { (void) c; return 0; } /* enumeration is implicit */
+static int u_usb_connected(void)                  { return box_net_usb_reading(); } /* host draining (DTR) */
+static int u_usb_poll(uint8_t *b, int m)          { return box_net_usb_server_poll(b, m); }
+static int u_usb_send(const uint8_t *b, int l)    { return box_net_usb_client_send(b, l); }
+static int u_usb_register(const box_config_t *c)  { (void) c; return 0; } /* host module owns forwarding (v1) */
+
+static const box_uplink_if uplink_usb = {
+	.name = "usb", .init = u_usb_init, .available = u_usb_available,
+	.connect = u_usb_connect, .connected = u_usb_connected,
+	.poll = u_usb_poll, .send = u_usb_send, .self_register = u_usb_register,
+};
+
+static int u_eth_init(const box_config_t *c)      { (void) c; return box_net_eth_init(); }
+static int u_eth_available(void)                  { return box_net_eth_link(); }   /* PHY carrier */
+static int u_eth_connect(const box_config_t *c)   { return box_net_eth_connect(c->dserv_ip, dserv_cfg_port(c)); }
+static int u_eth_connected(void)                  { return box_net_eth_connected(); }
+static int u_eth_poll(uint8_t *b, int m)          { return box_net_eth_poll(b, m); }
+static int u_eth_send(const uint8_t *b, int l)    { return box_net_eth_send(b, l); }
+static int u_eth_register(const box_config_t *c)  { (void) c; return 0; } /* %reg/%match handshake: TODO */
+
+static const box_uplink_if uplink_eth = {
+	.name = "eth", .init = u_eth_init, .available = u_eth_available,
+	.connect = u_eth_connect, .connected = u_eth_connected,
+	.poll = u_eth_poll, .send = u_eth_send, .self_register = u_eth_register,
+};
+
+/* ---- arbiter state ---- */
+
+static const box_uplink_if *active;
+#define ETH_PROMOTE_PASSES 20            /* debounce: carrier must hold before we pick eth */
+static int eth_streak;
+
+/* Physical mode strap (authoritative, overrides the persisted mode). Wired by a
+ * board via a "mode-strap" devicetree alias; absent by default -> no override, so
+ * a persisted eth + no cable can't wedge boot (the extio GP28 lesson). Open/high
+ * = honor the persisted/auto policy; pulled low = force Ethernet. */
+#if DT_NODE_EXISTS(DT_ALIAS(mode_strap))
+static const struct gpio_dt_spec mode_strap = GPIO_DT_SPEC_GET(DT_ALIAS(mode_strap), gpios);
+static uint8_t strap_override(uint8_t persisted)
+{
+	if (!gpio_is_ready_dt(&mode_strap)) {
+		return persisted;
+	}
+	gpio_pin_configure_dt(&mode_strap, GPIO_INPUT);
+	return gpio_pin_get_dt(&mode_strap) ? XMODE_ETH : persisted;
+}
+#else
+static uint8_t strap_override(uint8_t persisted) { return persisted; }
+#endif
+
+/* Which uplink the policy wants right now. */
+static const box_uplink_if *desired(const box_config_t *cfg)
+{
+	uint8_t mode = strap_override(cfg->transport_mode);
+
+	if (mode == XMODE_ETH) {
+		return &uplink_eth;
+	}
+	if (mode == XMODE_USB) {
+		return &uplink_usb;
+	}
+	/* AUTO: Ethernet when carrier holds (debounced), else USB. */
+	if (uplink_eth.available()) {
+		if (eth_streak < ETH_PROMOTE_PASSES) {
+			eth_streak++;
+		}
+	} else {
+		eth_streak = 0;
+	}
+	return (eth_streak >= ETH_PROMOTE_PASSES) ? &uplink_eth : &uplink_usb;
+}
+
+int box_uplink_init(const box_config_t *cfg)
+{
+	int e1 = uplink_eth.init(cfg);
+	int e2 = uplink_usb.init(cfg);
+	active = NULL;
+	eth_streak = 0;
+	box_uplink_service(cfg);
+	return (e1 == 0 || e2 == 0) ? 0 : -1;   /* at least one transport up */
+}
+
+void box_uplink_service(const box_config_t *cfg)
+{
+	const box_uplink_if *want = desired(cfg);
+
+	if (want != active) {
+		active = want;
+		active->connect(cfg);
+		if (active->connected()) {
+			active->self_register(cfg);
+		}
+		return;
+	}
+	/* same uplink: reconnect a dropped session (eth) and re-announce. */
+	if (active && !active->connected()) {
+		if (active->connect(cfg) == 0 && active->connected()) {
+			active->self_register(cfg);
+		}
+	}
+}
+
+int box_uplink_poll(uint8_t *buf, int max)
+{
+	return active ? active->poll(buf, max) : 0;
+}
+
+int box_uplink_send(const uint8_t *buf, int len)
+{
+	return active ? active->send(buf, len) : -1;
+}
+
+const char *box_uplink_active_name(void)
+{
+	return active ? active->name : "none";
+}

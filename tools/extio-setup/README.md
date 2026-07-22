@@ -105,3 +105,35 @@ to flash**.
   frames (`%reg … 1`), so `parseFrame` and the event pipeline are shared.
 - Fleet view (all boxes on a rig at once) can build on the dserv driver; today
   it shows one selected box.
+
+## RW612 backend (planned — for the NXP universal hub)
+
+Target: drive the Zephyr-based `extio-rw612` box (see `extio-rw612/README.md`,
+`../../wiznet-io/BENCH_NXP.md`) from this same tool. Assessment (2026-07-22):
+~2/3 of the tool is reusable as-is because it rides the **frozen wire contract**
+and the **shared `box_cli`** — only flashing/OTA and USB identity are Pico2-bound.
+
+**Reusable unchanged** (rides the frozen protocol):
+- `dserv.go` — datapoint parsing (`extio/<box>/state/…`); byte-identical on RW612.
+- `serial.go` `Link`/`Exec` — the RW612 box runs the same CLI over its console CDC.
+- `api.go` / `data.go` / `assign.go` / `web/` — management UI, config, dump/apply.
+
+**Needs an RW612 path:**
+1. **Flash backend (replaces `flash.go`).** `flash.go` is pure RP2350: `bootsel`
+   → `RPI-RP2` mass-storage → copy `.uf2` (`INFO_UF2.TXT`). RW612 flashes over
+   **MCU-Link (CMSIS-DAP) / J-Link / `west flash`** with a `.bin`/`.elf`. Build a
+   `flash_rw612.go` that shells to the probe tool (or `west flash`) instead.
+2. **OTA via mcumgr, not the bespoke shelf.** Do NOT port the Pico A/B+TBYB OTA
+   (`OTA.md`) — Zephyr gives **MCUboot + mcumgr (SMP)** for free. The update
+   backend should be an **mcumgr SMP client** (Go SMP libs exist); `shelf.go`'s
+   `.uf2` model is replaced by signed MCUboot images. Big simplification.
+3. **USB identity.** `serial.go listBoxPorts` keys on `2e8a:100b` (RP2350). Add
+   the RW612 box's VID/PID (placeholder `2fe3:0002` in `box_usbd.c` today —
+   finalize a real allocation before wiring this).
+4. **`api.go` firmware glob** — `*.uf2` → the RW612 image extension.
+5. **Discovery** — `discover.go` is transport-agnostic on the tool side; it works
+   once the RW612 firmware emits the same LAN beacon (a firmware feature to port).
+
+**Sequencing:** after the FRDM-RW612 validates `extio-rw612` blocks #2–6 on
+silicon and block #7 (analog) lands, and after the RW612 USB identity is
+finalized. The work is an *additive backend* behind the existing UI, not a rewrite.

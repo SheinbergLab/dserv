@@ -7,6 +7,17 @@ digital I/O over Ethernet and receive locally-timestamped input events.
 
 Board: **W6300-EVB-Pico2**. Debugger: **SEGGER J-Link EDU** (SWD + RTT).
 
+## Companion documents
+
+| Doc | What |
+|-----|------|
+| [BLE.md](BLE.md)         | Frozen `d5e7000x` GATT radio contract + Pico 2 W receiver / handheld design — **canonical for the wireless pipe** |
+| [NORDIC.md](NORDIC.md)   | Battery BLE peripheral tier on Nordic nRF54L15 (assessment) — the peripheral side of the role split |
+| [BENCH_NXP.md](BENCH_NXP.md) | NXP RW612 as a **universal extio hub** (USB-HS + Ethernet + BLE + Wi-Fi) + RT1186 streaming-DAQ eval; D1–D10 benchmark plan vs the W6300 baselines |
+| [OTA.md](OTA.md)         | Over-the-air update model (agent broker, A/B + TBYB, watchdog rollback) |
+| [PINMAP.md](PINMAP.md)   | Canonical pin table across board variants |
+| [TESTING.md](TESTING.md) | Test/validation harness notes |
+
 ## Layout
 
 | Path | What |
