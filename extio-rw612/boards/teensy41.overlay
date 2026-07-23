@@ -1,0 +1,40 @@
+/*
+ * extio-rw612 on a PJRC Teensy 4.1 (i.MX RT1062) -- the wired test system.
+ *
+ * The RT1062 drives the same NXP peripherals through the same Zephyr drivers as
+ * the RW612: `nxp,enet` + `nxp,enet-ptp-clock` for Ethernet/1588, and a USB-HS
+ * device controller. Teensy 4.1's board DTS already enables ENET with a
+ * ti,dp83825 PHY (RMII) -- add a magjack and it's a wired extio box.
+ *
+ * NOTE: no radio on Teensy, so block #6's BLE ingress is excluded (see
+ * boards/teensy41.conf -- no CONFIG_BT). Everything else builds.
+ */
+/ {
+	aliases {
+		box-gpio-port     = &gpio2;   /* box pin n -> gpio2.n (3 = board LED) */
+		box-pulse-counter = &gpt2;    /* hardware box-timed pulse             */
+	};
+};
+
+/* GPT2 as the Zephyr counter behind the box-timed DO pulse (the RT1062's
+ * equivalent of the RW612's CTIMER). */
+&gpt2 {
+	status = "okay";
+};
+
+/* The ENET IEEE-1588 clock is `disabled` in the RT1060 SoC dtsi exactly as it is
+ * on the RW612 -- enable it so PTP_CLOCK_NXP_ENET instantiates the clock. */
+&enet_ptp_clock {
+	status = "okay";
+};
+
+/* Same two CDC-ACM instances as the RW612 build: the binary frame pipe
+ * (data + config) and the human text console. */
+&zephyr_udc0 {
+	cdc_acm_data: cdc_acm_uart0 {
+		compatible = "zephyr,cdc-acm-uart";
+	};
+	cdc_acm_console: cdc_acm_uart1 {
+		compatible = "zephyr,cdc-acm-uart";
+	};
+};

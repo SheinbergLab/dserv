@@ -19,17 +19,27 @@
 #include "box_persist.h"
 #include "box_gpio.h"
 #include "box_net_usb.h"
+#include "box_uplink.h"
+#if defined(CONFIG_NETWORKING)
 #include "box_net_eth.h"
 #include "box_ptp.h"
-#include "box_uplink.h"
+#endif
+#if defined(CONFIG_BT)
 #include "box_ble.h"
+#endif
 
 static box_config_t   cfg;
 static dserv_framer_t rx_framer;
 
-/* FRDM-RW612: box pin n -> hsgpio0.n, so these land on real board hardware. */
+/* Demo pins, per board. box pin n -> <box-gpio-port>.n (see box_gpio.h), so
+ * these land on real hardware on each target. */
+#if defined(CONFIG_BOARD_FRDM_RW612)
 #define LED_PIN  12   /* hsgpio0.12 = user LED (active low physically) */
 #define BTN_PIN  11   /* hsgpio0.11 = User SW2 (active low, pull-up)    */
+#else                 /* Teensy 4.x: board LED is gpio2.3 */
+#define LED_PIN  3    /* gpio2.3 = on-board LED                         */
+#define BTN_PIN  4    /* gpio2.4 = a free pin for a test button         */
+#endif
 
 /* One inbound 128-byte frame (config/cmd/ess-in_obs) from the host module:
  * dispatch it into the config, and run any GPIO command it produced. */
@@ -129,6 +139,7 @@ int main(void)
 	box_uplink_init(&cfg);          /* brings up both transports; picks the active one */
 	dserv_framer_reset(&rx_framer);
 
+#if defined(CONFIG_NETWORKING)
 	/* one-shot status: DHCP lease (if eth came up) + the PTP hardware clock */
 	uint8_t ip[4];
 	if (box_net_eth_wait_ip(ip, 5000)) {
@@ -139,8 +150,12 @@ int main(void)
 	}
 	printk("PTP hw clock: ready=%d  now=%llu ns\n",
 	       (int) box_ptp_ready(), (unsigned long long) box_ptp_now_ns());
+#else
+	printk("no Ethernet on this board -- USB-only uplink\n");
+#endif
 	printk("active uplink: %s\n", box_uplink_active_name());
 
+#if defined(CONFIG_BT)
 	/* ---- block #6 (ingress): multi-peripheral BLE central ---- */
 	if (box_ble_init() == 0) {
 		printk("BLE central up; scanning for d5e7000x peripherals (max %d)\n\n",
@@ -148,6 +163,9 @@ int main(void)
 	} else {
 		printk("BLE init failed (continuing wired-only)\n\n");
 	}
+#else
+	printk("no radio on this board -- BLE ingress disabled\n\n");
+#endif
 
 	/* ---- converged box service loop (blocks #2-6 together) ----
 	 * arbitrate the uplink; inbound frames -> dispatch -> GPIO; local DI, BLE
@@ -177,12 +195,14 @@ int main(void)
 			box_uplink_send(f, DSERV_MSG_LEN);
 		}
 
+#if defined(CONFIG_BT)
 		/* BLE ingress: each peripheral's frame is already source-stamped
 		 * (extio/<client>/...); relay it out the active uplink verbatim. */
 		uint8_t bframe[DSERV_MSG_LEN];
 		while (box_ble_poll(bframe)) {
 			box_uplink_send(bframe, DSERV_MSG_LEN);
 		}
+#endif
 
 		if (k_uptime_get() >= next_wd) {
 			next_wd += 1000;

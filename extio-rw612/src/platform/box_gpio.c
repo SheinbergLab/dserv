@@ -10,12 +10,21 @@
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/counter.h>
 
-/* ---- devices (devicetree) ----
- * box pin n -> hsgpio0.n. One controller for now; hsgpio1 is a future overlay
- * remap (the flat wire index is preserved either way). ctimer1 is the hardware
- * pulse timer (ctimer0 is already claimed by the board). */
-static const struct device *port;         /* hsgpio0 */
-static const struct device *pulse_ctr;     /* ctimer1 as a Zephyr counter */
+/* ---- devices (devicetree aliases, resolved per board) ----
+ * box pin n -> <box-gpio-port>.n, so the flat wire index is preserved on every
+ * board. Each board's overlay supplies two aliases:
+ *   box-gpio-port      GPIO controller carrying the box's DO/DI pins
+ *   box-pulse-counter  hardware counter for the non-blocking box-timed pulse
+ * (RW612: hsgpio0 + ctimer1.  Teensy 4.x: gpio2 + gpt2.) */
+#if !DT_NODE_EXISTS(DT_ALIAS(box_gpio_port))
+#error "board overlay must define the 'box-gpio-port' alias"
+#endif
+#if !DT_NODE_EXISTS(DT_ALIAS(box_pulse_counter))
+#error "board overlay must define the 'box-pulse-counter' alias"
+#endif
+
+static const struct device *port;          /* box-gpio-port     */
+static const struct device *pulse_ctr;     /* box-pulse-counter */
 
 #define BOX_PULSE_NCH 4                    /* CTIMER match channels for concurrent pulses */
 static uint8_t  pulse_nch;                 /* min(BOX_PULSE_NCH, counter channels) */
@@ -96,12 +105,12 @@ static void pulse_expired(const struct device *dev, uint8_t chan,
 
 int box_gpio_init(void)
 {
-	port = DEVICE_DT_GET(DT_NODELABEL(hsgpio0));
+	port = DEVICE_DT_GET(DT_ALIAS(box_gpio_port));
 	if (!device_is_ready(port)) {
 		return -1;
 	}
 
-	pulse_ctr = DEVICE_DT_GET(DT_NODELABEL(ctimer1));
+	pulse_ctr = DEVICE_DT_GET(DT_ALIAS(box_pulse_counter));
 	if (device_is_ready(pulse_ctr)) {
 		uint8_t n = counter_get_num_of_channels(pulse_ctr);
 		pulse_nch = n < BOX_PULSE_NCH ? n : BOX_PULSE_NCH;

@@ -8,6 +8,10 @@
  * alarm pool.
  */
 / {
+	aliases {
+		box-gpio-port     = &hsgpio0;   /* box pin n -> hsgpio0.n (12 = user LED) */
+		box-pulse-counter = &ctimer1;   /* hardware box-timed pulse               */
+	};
 };
 
 &ctimer1 {

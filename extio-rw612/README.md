@@ -10,6 +10,29 @@ against the shipping W6300 baselines live in [`../wiznet-io/BENCH_NXP.md`](../wi
 untouched. Once RW612 proves out, the shared core here and there collapses into a
 single `extio-core/` (see BENCH_NXP.md §D7).
 
+## Boards
+
+The same source builds for three targets. The Teensy 4.x boards are **test
+systems**: the i.MX RT1062 drives Ethernet/1588 through the *same* Zephyr drivers
+as the RW612 (`nxp,enet`, `nxp,enet-ptp-clock`) and is USB-HS, so blocks #2–#5
+plus the uplink arbiter can be validated on hardware today.
+
+| Board | Uplinks | BLE | Role |
+|-------|---------|-----|------|
+| `frdm_rw612` | USB-HS + Ethernet(+PTP) | ✅ multi-peripheral | the real target |
+| `teensy41`   | USB-HS + Ethernet(+PTP) | ✗ no radio | **wired test system** — native IP stack vs the W6300's hardware offload |
+| `teensy40`   | USB-HS only | ✗ no radio | **USB test system** — USB-HS vs the Pico 2's USB-FS |
+
+Board differences live entirely in `boards/<board>.{overlay,conf}`: two devicetree
+aliases (`box-gpio-port`, `box-pulse-counter`) point the platform layer at each
+SoC's GPIO controller and hardware counter, and per-board `.conf` files gate the
+networking and Bluetooth subsystems. No `#ifdef`s in the transport code — the
+uplink arbiter simply has one candidate instead of two on a USB-only board.
+
+**Caveat:** the RT1062 is a Cortex-M7 @600 MHz vs the RW612's M33 @260 MHz, so
+Teensy numbers are a *functional* validation and a second data point, **not** a
+performance proxy for the RW612.
+
 ## What's the same, what's new
 
 The **portable core** is forked verbatim from `wiznet-io/`, with the leaked
@@ -90,13 +113,24 @@ Toolchain: Zephyr (mainline) + `arm-zephyr-eabi` SDK, installed under
 ```sh
 source ~/zephyrproject/.venv/bin/activate
 export ZEPHYR_BASE=~/zephyrproject/zephyr
+cd /Users/sheinb/src/dserv/extio-rw612
 
-west build -b frdm_rw612 /Users/sheinb/src/dserv/extio-rw612 --pristine   # the target
-west flash                                                                # via on-board MCU-Link
+west build -b frdm_rw612 . --pristine    # the target
+west flash                               # via the on-board MCU-Link
 
-# native_sim (host-runnable main.c) requires Linux — Zephyr's POSIX arch
-# refuses macOS. On macOS, use tools/box_sim.c below for host testing.
+west build -b teensy41 . --pristine      # wired test system (add a magjack)
+west build -b teensy40 . --pristine      # USB-only test system
+west flash                               # teensy runner; press the board's
+                                         # program button when it waits
 ```
+
+Teensy flashing needs `teensy_loader_cli` (`brew install teensy_loader_cli`);
+the build emits `build/zephyr/zephyr.hex`, which is what the loader wants.
+BLE on `frdm_rw612` additionally needs `west blobs fetch hal_nxp` (accept NXP's
+controller-firmware license).
+
+`native_sim` (host-runnable `main.c`) requires Linux — Zephyr's POSIX arch
+refuses macOS. On macOS use `tools/box_sim.c` below for host testing.
 
 ## Host-side core check (no Zephyr)
 

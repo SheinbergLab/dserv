@@ -2,8 +2,10 @@
  * box_uplink.c -- uplink arbiter + the eth/usb transport adapters.
  */
 #include "box_uplink.h"
-#include "box_net_eth.h"
 #include "box_net_usb.h"
+#if defined(CONFIG_NETWORKING)
+#include "box_net_eth.h"
+#endif
 
 #include <zephyr/kernel.h>
 #include <zephyr/drivers/gpio.h>
@@ -24,6 +26,10 @@ static const box_uplink_if uplink_usb = {
 	.poll = u_usb_poll, .send = u_usb_send, .self_register = u_usb_register,
 };
 
+/* Ethernet is only present on boards with a MAC+PHY (frdm_rw612, teensy41).
+ * A USB-only board (teensy40) compiles this out and the arbiter simply has one
+ * candidate -- the policy code below is unchanged either way. */
+#if defined(CONFIG_NETWORKING)
 static int u_eth_init(const box_config_t *c)      { (void) c; return box_net_eth_init(); }
 static int u_eth_available(void)                  { return box_net_eth_link(); }   /* PHY carrier */
 static int u_eth_connect(const box_config_t *c)   { return box_net_eth_connect(c->dserv_ip, dserv_cfg_port(c)); }
@@ -37,6 +43,7 @@ static const box_uplink_if uplink_eth = {
 	.connect = u_eth_connect, .connected = u_eth_connected,
 	.poll = u_eth_poll, .send = u_eth_send, .self_register = u_eth_register,
 };
+#endif /* CONFIG_NETWORKING */
 
 /* ---- arbiter state ---- */
 
@@ -65,6 +72,10 @@ static uint8_t strap_override(uint8_t persisted) { return persisted; }
 /* Which uplink the policy wants right now. */
 static const box_uplink_if *desired(const box_config_t *cfg)
 {
+#if !defined(CONFIG_NETWORKING)
+	ARG_UNUSED(cfg);
+	return &uplink_usb;                     /* USB-only board: one candidate */
+#else
 	uint8_t mode = strap_override(cfg->transport_mode);
 
 	if (mode == XMODE_ETH) {
@@ -82,16 +93,19 @@ static const box_uplink_if *desired(const box_config_t *cfg)
 		eth_streak = 0;
 	}
 	return (eth_streak >= ETH_PROMOTE_PASSES) ? &uplink_eth : &uplink_usb;
+#endif
 }
 
 int box_uplink_init(const box_config_t *cfg)
 {
-	int e1 = uplink_eth.init(cfg);
-	int e2 = uplink_usb.init(cfg);
+	int ok = (uplink_usb.init(cfg) == 0);
+#if defined(CONFIG_NETWORKING)
+	ok |= (uplink_eth.init(cfg) == 0);
+#endif
 	active = NULL;
 	eth_streak = 0;
 	box_uplink_service(cfg);
-	return (e1 == 0 || e2 == 0) ? 0 : -1;   /* at least one transport up */
+	return ok ? 0 : -1;                     /* at least one transport up */
 }
 
 void box_uplink_service(const box_config_t *cfg)
