@@ -137,9 +137,49 @@ the pin, publishes `state/in_obs`).
 
 - [ ] **OTA.** The Pico's A/B + TBYB scheme does not port; RW612 wants
       MCUboot + mcumgr over the live link. Different mechanism, not a translation.
-- [ ] **Persistence.** Written (`box_flash.h`, NVS + SD-FAT backends) but
-      validated on **no** board: both Teensy backends hard-fault at boot (XIP
-      FlexSPI NOR re-init; usdhc/SD stack). RW612 NVS is the mature path.
+- [x] **Persistence — SD-FAT backend WORKS on teensy41 (2026-07-23).** Previously
+      written off as "the usdhc/SD stack hard-faults at driver init = immature
+      Teensy peripheral support". **That was wrong.** With a boot log finally
+      visible, the crash is a plain **main-thread stack overflow**: MPU fault,
+      `pc`/`xpsr` full of Zephyr's `0xaa` stack-fill sentinel.
+      `box_flash_init()` mounts FATFS from `main()`, and FATFS + disk + SDMMC put
+      sector buffers and filesystem structs on the caller's stack — far past the
+      4096 default. `CONFIG_MAIN_STACK_SIZE=8192` fixes it.
+      Verified end to end: `cmd/save` writes `/SD:/extio.cfg`, and the next boot
+      loads it (the first-boot `E: file open error (-2)` = ENOENT disappears).
+      Two config fixes were needed together — the stack size AND
+      `CONFIG_DISK_DRIVERS=y` (see below), which is why earlier attempts failed
+      in two different ways at once.
+- [ ] **Persistence — NVS/FlexSPI backend still unproven.** The XIP-flash-write
+      hazard is a different mechanism and may well be real, but it was diagnosed
+      under the same blindness that produced the wrong SD verdict. Re-test it
+      with the boot log attached before trusting the old conclusion.
+      RW612 NVS remains the mature path and is still unvalidated on hardware.
+
+### Boot-log channel (how the SD crash was finally seen)
+
+A pre-USB fault is invisible over the box's own CDC by definition, and Zephyr's
+fatal handler prints through `LOG_ERR` — so with `CONFIG_LOG=n` a hard fault
+produces **nothing at all**. That combination is what made this look like a
+mysterious "board stops enumerating".
+
+Wiring (Teensy 4.1, `zephyr,console = &lpuart6`, 115200 8N1):
+
+| USB-serial adapter | Teensy 4.1 |
+|---|---|
+| RX (**green** on the cable used here — verify yours) | **pin 1** (TX, `AD_B0_02`) |
+| GND | GND |
+| TX, VCC | leave disconnected |
+
+* Read-only needs just those two wires; skipping TX also sidesteps the 3.3 V
+  question (the RT1062 is **not** 5 V tolerant).
+* **Verify the adapter first** with a loopback (short its RX+TX, echo a string).
+  A PL2303**HXA** (`0x067B:0x2303`, `bcdDevice 0x0300`) enumerates and opens on
+  macOS but moves no data — it cost an hour here. A genuine FTDI FT232R
+  (`0x0403:0x6001`) works.
+* Add `CONFIG_LOG=y` + `CONFIG_LOG_MODE_MINIMAL=y` to see faults at all. Note
+  `CONFIG_LOG=y` also makes CDC-ACM extremely chatty at INFO level (~86 KB in
+  55 s) — fine for debugging, turn it down otherwise.
       On the Teensy 4.1 SD attempt specifically — devicetree is NOT the problem:
       `teensy41.dts` already supplies `usdhc1` with four pinctrl states and a
       `zephyr,sdmmc-disk` child (`disk-name = "SD"`). But our commented-out
