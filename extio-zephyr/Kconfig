@@ -1,0 +1,12 @@
+# extio-zephyr app-level Kconfig overrides.
+# Sourced by the Zephyr build before the upstream defaults, so a `default` here
+# wins for promptless symbols.
+
+# Disable the CDC-ACM echo-mitigation first-TX delay (default 100 ms). It is a
+# Linux-tty ECHO workaround absent in TinyUSB; on macOS the stall on the first
+# echoed byte drops interactive terminals mid-keystroke. We don't dump a boot
+# log to a tty, so 0 is safe.
+config USBD_CDC_ACM_TX_DELAY_MS
+	default 0
+
+source "Kconfig.zephyr"

@@ -23,7 +23,7 @@
 static const struct device *con;
 
 RING_BUF_DECLARE(con_rx, 256);
-RING_BUF_DECLARE(con_tx, 1024);
+RING_BUF_DECLARE(con_tx, 2048);
 
 /* CDC console ISR: RX -> con_rx, drain con_tx -> TX FIFO. */
 static void con_isr(const struct device *dev, void *user)
@@ -56,7 +56,17 @@ void box_console_write(const char *s)
 	if (!con) {
 		return;
 	}
-	(void) ring_buf_put(&con_tx, (const uint8_t *) s, (uint32_t) strlen(s));
+	/* Translate a bare '\n' to '\r\n' so a raw terminal returns to column 0
+	 * (box_cli already emits '\r\n'; the '\r' guard avoids doubling those). */
+	char prev = 0;
+	for (const char *p = s; *p; p++) {
+		if (*p == '\n' && prev != '\r') {
+			(void) ring_buf_put(&con_tx, (const uint8_t *) "\r\n", 2);
+		} else {
+			(void) ring_buf_put(&con_tx, (const uint8_t *) p, 1);
+		}
+		prev = *p;
+	}
 	uart_irq_tx_enable(con);
 }
 
@@ -132,27 +142,59 @@ static void run_line(box_config_t *cfg, const char *line)
 	}
 }
 
-void box_console_service(box_config_t *cfg)
+/* Batch echo per chunk: fast typing must not turn into a burst of 1-byte USB
+ * packets (that stresses the host CDC driver -- it dropped a macOS `screen`
+ * session mid-type). We build up the echo for a whole RX chunk and write it in
+ * as few calls as possible, flushing before a command's own output. */
+static char ech[192];
+static int  ech_n;
+static void echo_flush(void)
 {
-	uint8_t c;
-	while (ring_buf_get(&con_rx, &c, 1) == 1) {
-		if (c == '\r' || c == '\n') {
-			box_console_write("\r\n");
-			if (line_len > 0) {
-				line_buf[line_len] = '\0';
-				run_line(cfg, line_buf);
-			}
-			line_len = 0;
-			box_console_write("> ");
-		} else if (c == 0x08 || c == 0x7f) {          /* backspace / DEL */
-			if (line_len > 0) {
-				line_len--;
-				box_console_write("\b \b");
-			}
-		} else if (line_len < (int) sizeof(line_buf) - 1) {
-			line_buf[line_len++] = (char) c;
-			char echo[2] = { (char) c, '\0' };
-			box_console_write(echo);              /* echo (extio-setup skips it) */
-		}
+	if (ech_n > 0) {
+		ech[ech_n] = '\0';
+		box_console_write(ech);
+		ech_n = 0;
 	}
 }
+static void echo_puts(const char *s)
+{
+	while (*s && ech_n < (int) sizeof(ech) - 1) {
+		ech[ech_n++] = *s++;
+	}
+	if (*s) {                     /* buffer full -> flush and continue */
+		echo_flush();
+		box_console_write(s);
+	}
+}
+
+void box_console_service(box_config_t *cfg)
+{
+	uint8_t chunk[64];
+	uint32_t got;
+	while ((got = ring_buf_get(&con_rx, chunk, sizeof chunk)) > 0) {
+		for (uint32_t i = 0; i < got; i++) {
+			uint8_t c = chunk[i];
+			if (c == '\r' || c == '\n') {
+				echo_puts("\r\n");
+				echo_flush();                 /* flush echo before the reply */
+				if (line_len > 0) {
+					line_buf[line_len] = '\0';
+					run_line(cfg, line_buf);
+				}
+				line_len = 0;
+				box_console_write("> ");
+			} else if (c == 0x08 || c == 0x7f) {  /* backspace / DEL */
+				if (line_len > 0) {
+					line_len--;
+					echo_puts("\b \b");
+				}
+			} else if (line_len < (int) sizeof(line_buf) - 1) {
+				line_buf[line_len++] = (char) c;
+				char e[2] = { (char) c, '\0' };
+				echo_puts(e);
+			}
+		}
+		echo_flush();   /* one write for the whole chunk's remaining echo */
+	}
+}
+
