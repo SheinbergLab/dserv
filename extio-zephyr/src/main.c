@@ -21,7 +21,7 @@
 #include "dserv_config.h"
 #include "box_persist.h"
 #include "box_gpio.h"
-#if defined(CONFIG_NVS)
+#if defined(BOX_HAVE_PERSIST)
 #include "box_flash.h"
 #endif
 #include "box_net_usb.h"
@@ -64,7 +64,7 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 	} else if (r == CFG_PIN_MODE) {
 		box_gpio_apply_config(&cfg);          /* re-apply on a pin mode change */
 	} else if (r == CFG_SAVE) {
-#if defined(CONFIG_NVS)
+#if defined(BOX_HAVE_PERSIST)
 		/* Persist the whole config blob so it survives reboot/power-cycle. */
 		uint8_t blob[BOX_PERSIST_BLOB_MAX];
 		uint32_t n = box_persist_serialize(&cfg, blob, sizeof blob);
@@ -155,8 +155,8 @@ int main(void)
 	printk("persist round-trip             -> %-9s %u bytes, applied_count=%u\n",
 	       ok == 0 ? "ok" : "FAIL", n, restored.applied_count);
 
-#if defined(CONFIG_NVS)
-	/* NVS mount + load (boards where flash writes are safe -- RW612). */
+#if defined(BOX_HAVE_PERSIST)
+	/* Mount the settings store (NVS on RW612, SD-card FAT on Teensy 4.1). */
 	if (box_flash_init() == 0) {
 		uint8_t lb[BOX_PERSIST_BLOB_MAX];
 		int ln = box_flash_load(lb, sizeof lb);
@@ -165,10 +165,10 @@ int main(void)
 			box_gpio_apply_config(&cfg);   /* apply the loaded pin map/name */
 		}
 	}
-	printk("persist store (NVS)            -> config %s\n",
+	printk("persist store                  -> config %s\n",
 	       cfg_loaded ? "LOADED from flash" : "fresh (defaults)");
 #else
-	printk("persist store                  -> none on this board (no NVS)\n");
+	printk("persist store                  -> none on this board\n");
 #endif
 
 	/* the box's datapoint identity */

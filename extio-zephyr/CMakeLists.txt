@@ -18,9 +18,16 @@ target_sources(app PRIVATE
 	src/platform/box_uplink.c      # block #6: uplink arbiter
 )
 
-# Persistent settings (NVS): only where flash writes are safe (not Teensy XIP).
+# Persistent settings -- exactly one box_flash backend behind box_flash.h:
+#   NVS on internal flash        (RW612; flash writes are safe)
+#   FAT file on the SD card      (Teensy 4.1; XIP-safe -- separate device)
+# BOX_HAVE_PERSIST tells main.c that box_flash_* is available.
 if(CONFIG_NVS)
 	target_sources(app PRIVATE src/platform/box_flash.c)
+	target_compile_definitions(app PRIVATE BOX_HAVE_PERSIST=1)
+elseif(CONFIG_FILE_SYSTEM)
+	target_sources(app PRIVATE src/platform/box_flash_sd.c)
+	target_compile_definitions(app PRIVATE BOX_HAVE_PERSIST=1)
 endif()
 
 # Ethernet + PTP: frdm_rw612 and teensy41 (teensy40 has no PHY).
