@@ -39,6 +39,17 @@ proc extio_find_data_port {} {
         # client (IODialinDevice) appears under it, accept only ttys belonging
         # to an "extio USB box" -- the handheld's product is "dserv handheld"
         # by design (no match). Data CDC = the *3 tty (console = *1).
+        #
+        # Cheap guard before the expensive one: ioreg costs ~40 ms here (10 ms
+        # of ioreg plus fork/exec from a process with 20+ threads), and the 2 s
+        # hot-swap poll pays it forever even with nothing plugged in -- 3.3% of
+        # this interpreter's thread, in a 67 ms block that stalls anything
+        # queued behind it. Every path below needs a /dev/cu.usbmodem* to exist
+        # (ioreg reports the tty.* twin of exactly those), so an empty glob
+        # means there is nothing to identify. Identity-first behaviour is
+        # unchanged whenever a device is actually present. Linux is already
+        # cheap (a by-id glob, no exec) and needs no equivalent.
+        if { ![llength [glob -nocomplain /dev/cu.usbmodem*]] } { return "" }
         if { ![catch { exec ioreg -r -c IOUSBHostDevice -l -w0 } out] } {
             set product ""; set best ""
             foreach line [split $out \n] {
@@ -513,6 +524,8 @@ proc extio_ota_push_shelf {box {channel dev} {version ""}} {
 # never grabs the handheld). Data CDC = the *3 tty (console = *1).
 proc extio_find_handheld_port {} {
     if { $::tcl_platform(os) eq "Darwin" } {
+        # same cheap guard as extio_find_data_port (see there for why)
+        if { ![llength [glob -nocomplain /dev/cu.usbmodem*]] } { return "" }
         if { ![catch { exec ioreg -r -c IOUSBHostDevice -l -w0 } out] } {
             set product ""; set best ""
             foreach line [split $out \n] {
