@@ -49,6 +49,13 @@ static dserv_framer_t rx_framer;
 #define BTN_PIN  4    /* gpio2.4 = a free pin for a test button         */
 #endif
 
+/* The rig's obs begin/end edge. The host module forwards this to EVERY box
+ * (config/extioconf.tcl: dservAddMatch ess/in_obs -> usbio_forward), and unlike
+ * everything else inbound it is NOT an extio/<name>/... key -- so dserv_dispatch
+ * never matches it and it must be handled before the dispatch, exactly as the
+ * Pico's frame handler does. */
+#define BOX_SYNC_DP "ess/in_obs"
+
 /* One inbound 128-byte frame (config/cmd/ess-in_obs) from the host module:
  * dispatch it into the config, and run any GPIO command it produced. */
 static void on_usb_frame(const uint8_t *frame, void *ud)
@@ -58,12 +65,41 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 	if (dserv_msg_parse(frame, &m) != 0) {
 		return;
 	}
+
+	if (dserv_msg_name_eq(&m, BOX_SYNC_DP)) {
+		int obs = (int) dserv_msg_as_long(&m);
+
+		/* drive the obs-mirror output (LED / scope trace) */
+		box_gpio_obs_mirror(&cfg, obs);
+
+		/* publish the box's OWN live copy, so obs state is visible per-box in
+		 * dserv without a scope -- honest, since it only updates when THIS box
+		 * actually received the edge. */
+		uint8_t of[DSERV_MSG_LEN];
+		char onm[80];
+		dserv_state_name(&cfg, onm, sizeof onm, "in_obs");
+		dserv_msg_int(of, onm, m.timestamp, obs);
+		box_uplink_send(of, DSERV_MSG_LEN);
+
+		/* NOTE: the Pico additionally snaps its clock off this frame (dserv
+		 * timestamp + hardware sync-edge anchor) and uses it as the beginobs
+		 * epoch for GPIO_OP_SCHED_PULSE/SCHED_TIMER. That clock machinery is
+		 * NOT ported yet -- this mirror is accurate to frame arrival only. */
+		return;
+	}
+
 	gpio_cmd_t cmd;
 	cfg_result_t r = dserv_dispatch(&cfg, &m, &cmd);
 	if (r == CFG_GPIO && cmd.op != GPIO_OP_NONE) {
 		box_gpio_exec(&cfg, &cmd);            /* immediate DO set/pulse */
-	} else if (r == CFG_PIN_MODE) {
-		box_gpio_apply_config(&cfg);          /* re-apply on a pin mode change */
+	} else if (r == CFG_PIN_MODE || r == CFG_OBS_PIN || r == CFG_SYNC_PIN ||
+		   r == CFG_ACTIVE_LOW || r == CFG_DEBOUNCE) {
+		/* ANY change to the pin map has to be pushed to the hardware. Notably
+		 * obs/sync pins are claimed (as output / edge-latched input) only by
+		 * apply_config -- without this, `config/obs/pin` set the config but
+		 * left the pin unclaimed, so the mirror drove nothing. The console CLI
+		 * path already re-applied (CLI_PIN); the datapoint path did not. */
+		box_gpio_apply_config(&cfg);
 	} else if (r == CFG_SAVE) {
 #if defined(BOX_HAVE_PERSIST)
 		/* Persist the whole config blob so it survives reboot/power-cycle. */
