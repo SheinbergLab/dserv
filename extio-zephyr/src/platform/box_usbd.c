@@ -22,7 +22,12 @@ USBD_DEVICE_DEFINE(box_ctx, DEVICE_DT_GET(DT_NODELABEL(zephyr_udc0)),
 
 USBD_DESC_LANG_DEFINE(box_lang);
 USBD_DESC_MANUFACTURER_DEFINE(box_mfr, "dserv");
-USBD_DESC_PRODUCT_DEFINE(box_product, "extio box");
+/* MUST stay exactly "extio USB box": the dserv host module identifies a box by
+ * this string (config/extioconf.tcl, extio_find_data_port) and opens NOTHING it
+ * cannot positively identify. Get it wrong and macOS falls through to a
+ * "highest cu.usbmodem" heuristic that grabs the CONSOLE instead -- which is
+ * exactly what shredded our console for a day (see README "Console status"). */
+USBD_DESC_PRODUCT_DEFINE(box_product, "extio USB box");
 USBD_DESC_SERIAL_NUMBER_DEFINE(box_sn);        /* from HWINFO device id */
 
 USBD_DESC_CONFIG_DEFINE(box_fs_desc, "extio FS");

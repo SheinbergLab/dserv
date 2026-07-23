@@ -27,11 +27,14 @@
  * slot). This board is the minimal USB-HS test system; persistence is on the
  * RW612 (NVS) and, for the 4.1, optionally the SD card. */
 
+/* console FIRST, data SECOND -- instance order sets USB interface numbering, and
+ * the dserv host module expects the data pipe at if02 / the *3 tty. See the note
+ * in teensy41.overlay and README "Console status". */
 &zephyr_udc0 {
-	cdc_acm_data: cdc_acm_uart0 {
+	cdc_acm_console: cdc_acm_uart0 {
 		compatible = "zephyr,cdc-acm-uart";
 	};
-	cdc_acm_console: cdc_acm_uart1 {
+	cdc_acm_data: cdc_acm_uart1 {
 		compatible = "zephyr,cdc-acm-uart";
 	};
 };

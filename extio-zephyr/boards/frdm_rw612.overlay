@@ -35,17 +35,22 @@
 
 /*
  * Two USB CDC-ACM instances on the HS device controller (block #4):
- *   cdc_acm_data    -- the binary 128-byte dserv frame pipe (data + config)
- *   cdc_acm_console -- the human text console / bootstrap CLI
+ *   cdc_acm_console -- the human text console / bootstrap CLI   (if00 / *1 tty)
+ *   cdc_acm_data    -- the binary 128-byte dserv frame pipe     (if02 / *3 tty)
  * This is the "config alongside the data pump" split: both channels are the same
  * USB primitive, differentiated by role. The frame pipe can later move to raw
  * vendor bulk endpoints without touching the box logic (see BENCH_NXP.md D1/D2).
+ *
+ * ORDER IS PART OF THE CONTRACT -- console FIRST, data SECOND. Instance order
+ * sets USB interface numbering, and the dserv host module finds the data pipe at
+ * if02 on Linux (`*extio*if02*`) and the *3 tty on macOS. Declaring data first
+ * makes dserv open the CONSOLE, steal its bytes, and reopen it every 2 s.
  */
 &zephyr_udc0 {
-	cdc_acm_data: cdc_acm_uart0 {
+	cdc_acm_console: cdc_acm_uart0 {
 		compatible = "zephyr,cdc-acm-uart";
 	};
-	cdc_acm_console: cdc_acm_uart1 {
+	cdc_acm_data: cdc_acm_uart1 {
 		compatible = "zephyr,cdc-acm-uart";
 	};
 };

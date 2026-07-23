@@ -41,13 +41,19 @@
 	status = "okay";
 };
 
-/* Same two CDC-ACM instances as the RW612 build: the binary frame pipe
- * (data + config) and the human text console. */
+/* Same two CDC-ACM instances as the RW612 build: the human text console and the
+ * binary frame pipe (data + config).
+ *
+ * ORDER IS PART OF THE CONTRACT -- console FIRST, data SECOND. Instance order
+ * sets USB interface numbering, and the dserv host module looks for the data
+ * pipe at if02 on Linux (`*extio*if02*`) and the *3 tty on macOS. Declare data
+ * first and dserv opens the CONSOLE instead, steals its bytes, and reopens it
+ * every 2 s -- see README "Console status". */
 &zephyr_udc0 {
-	cdc_acm_data: cdc_acm_uart0 {
+	cdc_acm_console: cdc_acm_uart0 {
 		compatible = "zephyr,cdc-acm-uart";
 	};
-	cdc_acm_console: cdc_acm_uart1 {
+	cdc_acm_data: cdc_acm_uart1 {
 		compatible = "zephyr,cdc-acm-uart";
 	};
 };

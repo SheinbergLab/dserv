@@ -132,43 +132,54 @@ controller-firmware license).
 `native_sim` (host-runnable `main.c`) requires Linux — Zephyr's POSIX arch
 refuses macOS. On macOS use `tools/box_sim.c` below for host testing.
 
-## Console status — USB CDC console is BROKEN on Teensy (RT1062)
+## Console status — USB identity MUST match, or dserv eats the console
 
-The management console (Zephyr Shell over the console CDC, `zephyr,shell-uart`)
-is **not usable on either Teensy** as of 2026-07-23. Output is shredded — bytes
-silently dropped mid-write, mangled ANSI escapes, truncated responses — and host
-terminals then drop the port. It reproduces identically on macOS and on Linux
-(`picocom` on a Pi), so it is not a host-side or terminal problem.
+The USB console is fine. It looked catastrophically broken for a day — shredded
+output, mangled ANSI escapes, truncated `show`, terminals dropping — on **both**
+macOS and Linux. **The cause was a second process on the port: dserv's own
+`extio` subprocess.** Nothing was wrong with the CDC stack, the shell, the
+buffers, or the firmware.
 
-**This is below our code.** The stock Zephyr sample
-`samples/subsys/shell/shell_module` built untouched for `teensy41` with its own
-`usb.overlay` + `overlay-usb.conf` — one CDC-ACM, upstream defaults, zero extio
-code — reproduces the same shredding and disconnects. The fault is in
-`device_next` CDC-ACM or the RT1062 UDC driver. Repro:
+The chain, worth understanding because it is a trap for any new box:
 
-```sh
-cd $ZEPHYR_BASE/samples/subsys/shell/shell_module
-west build -b teensy41 . --pristine -- \
-    -DEXTRA_DTC_OVERLAY_FILE=usb.overlay -DEXTRA_CONF_FILE=overlay-usb.conf
-```
+1. The box advertised USB product string `"extio box"`.
+2. The dserv host module (`config/extioconf.tcl`, `extio_find_data_port`) matches
+   the box identity **exactly**: `$product eq "extio USB box"`. Ours failed.
+3. On macOS it then falls back to a heuristic — highest `cu.usbmodem` — which is
+   the **console** CDC, not the data pipe.
+4. `extio_service` opened it, read it, and reopened it on a 2 s hot-swap poll.
+   Stolen bytes look exactly like shredding; the reopen looks exactly like a
+   disconnect.
 
-Things that look like the cause but are NOT: the shell backend's 8-byte TX ring,
-the 30-byte print chunk, `USBD_CDC_ACM_WORKQUEUE`, and the two-CDC split. All
-were tried; the stock single-CDC sample fails with every one of them at default.
-Do **not** override `USBD_CDC_ACM_TX_DELAY_MS` to 0 — see the app `Kconfig`; that
-makes it worse by adding a host-echo feedback storm on top.
+Linux reproduced it for the same reason from the other end: the by-id glob is
+`*extio*if02*`, and our two CDC instances were declared in the wrong order, so
+`if02` was the console.
 
-What still works, and what to do instead:
+**Two invariants keep this fixed. Do not break either:**
 
-* **The data CDC (frame pipe) is unaffected and reliable.** It survives the same
-  byte loss because the framer resyncs on `>` and discards junk. Configure a
-  Teensy box from dserv over `extio/<name>/config/...` datapoints — everything
-  the console CLI does is reachable that way.
-* On Teensy, `zephyr,console` still points at **lpuart6 (pins 0/1)**, so a
-  USB-serial adapter gives a robust console if one is actually needed.
-* **Unknown on `frdm_rw612`** — different silicon, different UDC driver. The
-  console must be re-tested there before any conclusion is drawn for the target
-  board; that is the board the console actually has to work on.
+* **Product string is exactly `"extio USB box"`** (`src/platform/box_usbd.c`).
+  The host module deliberately opens nothing it cannot positively identify —
+  that strictness is why a stray heuristic once opened a juicer pump.
+* **CDC order is console FIRST, data SECOND** in every `boards/*.overlay`.
+  Instance order sets USB interface numbering; the host expects the data pipe at
+  `if02` (Linux) / the `*3` tty (macOS).
+
+Diagnosing a repeat: `lsof /dev/cu.usbmodem*` (macOS) or `lsof /dev/ttyACM*`
+(Linux) while a terminal is open. A second holder is the answer. Killing dserv
+and watching the console go clean is the decisive test — do that **first**, well
+before suspecting the USB stack.
+
+Blind alleys from that day, recorded so nobody re-walks them: the shell backend's
+8-byte TX ring and 30-byte print chunk, `USBD_CDC_ACM_WORKQUEUE`, the two-CDC
+split, and hand-rolled-console-vs-Shell. All were changed and reverted; none
+mattered. The stock `samples/subsys/shell/shell_module` built for `teensy41` also
+"failed", which looked like proof of an upstream bug — it was not: with a single
+CDC port, dserv's fallback grabbed **the shell itself**. That test ruled out our
+firmware, never the host.
+
+One override that IS real: do **not** set `USBD_CDC_ACM_TX_DELAY_MS=0` — see the
+app `Kconfig`. It removes the window a host tty needs to turn ECHO off, so the
+banner is reflected into our own RX and the console answers itself.
 
 ## Host-side core check (no Zephyr)
 
