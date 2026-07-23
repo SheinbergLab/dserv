@@ -4,6 +4,7 @@
  */
 #include "box_net_usb.h"
 #include "box_usbd.h"
+#include "box_event.h"
 
 #include <zephyr/kernel.h>
 #include <zephyr/drivers/uart.h>
@@ -26,6 +27,7 @@ static void data_isr(const struct device *dev, void *user)
 			int n = uart_fifo_read(dev, tmp, sizeof tmp);
 			if (n > 0) {
 				(void) ring_buf_put(&rx_rb, tmp, (uint32_t) n);
+				box_event_signal();   /* inbound frame bytes: wake the loop */
 			}
 		}
 		if (uart_irq_tx_ready(dev)) {

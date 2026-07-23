@@ -23,6 +23,7 @@
 #include "box_gpio.h"
 #include "box_net_usb.h"
 #include "box_uplink.h"
+#include "box_event.h"
 #if defined(CONFIG_NETWORKING)
 #include "box_net_eth.h"
 #include "box_ptp.h"
@@ -229,7 +230,10 @@ int main(void)
 			box_uplink_send(f, DSERV_MSG_LEN);
 		}
 
-		k_msleep(1);
+		/* Block until an ISR has work for us (CDC RX / DI edge), or the
+		 * watchdog tick is due. Replaces a flat k_msleep(1) that added up to
+		 * 1 ms to BOTH halves of every round trip. */
+		box_event_wait(K_MSEC(1));
 	}
 	return 0;
 }

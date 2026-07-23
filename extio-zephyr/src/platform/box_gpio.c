@@ -4,6 +4,7 @@
  * pulse, gpio_callback DI capture) and how it differs from pico_gpio.h.
  */
 #include "box_gpio.h"
+#include "box_event.h"
 
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
@@ -64,6 +65,7 @@ static void di_isr(const struct device *dev, struct gpio_callback *cb,
 	ARG_UNUSED(dev);
 	ARG_UNUSED(cb);
 	uint64_t t = now_us();
+	bool woke = false;
 
 	for (int i = 0; i < BOX_NPINS; i++) {
 		if (!(pins & BIT(i))) {
@@ -79,6 +81,10 @@ static void di_isr(const struct device *dev, struct gpio_callback *cb,
 			di_unsettled[i] = 1;
 		}
 		di_last_edge_us[i] = t;
+		woke = true;
+	}
+	if (woke) {
+		box_event_signal();          /* wake the service loop now, don't wait for a poll */
 	}
 }
 
