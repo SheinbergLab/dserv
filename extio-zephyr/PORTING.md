@@ -151,8 +151,20 @@ the pin, publishes `state/in_obs`).
       hard fault (`CONFIG_SDHC=y` still builds the usdhc controller, where init
       died), so fix both before retrying. And add `CONFIG_LOG=y`: that crash was
       debugged blind, and a pre-USB fault is only visible on **lpuart6 (pins
-      0/1)** via a USB-serial adapter — the one job that adapter is worth buying
-      for.
+      0/1)** via a USB-serial adapter — the one job that adapter is worth having
+      for (needs header pins soldered on this Teensy).
+      **Ruled out — do not re-chase:** `teensy41.dts` sets no card-detect method
+      (`cd-gpios` / `detect-cd` / `detect-dat3` all absent), which looks
+      suspicious but is benign — `imx_usdhc_get_card_present()` falls through to
+      `data->card_present = true`, i.e. "assume a card is there".
+      Also note Zephyr's `nxp,imx-usdhc` binding is NOT the Linux/NXP-SDK one:
+      `cd-gpios`, `pwr-gpios`, `sd-gpios`, `no-1-8-v`, `detect-cd`,
+      `detect-dat3` are valid; **`wp-gpios` and `bus-width` are not**, the label
+      is `pinmux_usdhc1` (not `pinctrl_usdhc1`), it wants FOUR speed-dependent
+      pinctrl states, and the `mmc { compatible = "zephyr,sdmmc-disk"; }` child
+      is what the filesystem actually mounts. Pasting an SDK-style usdhc node
+      here will not work.
+      **Cause of the hard fault: still unknown.**
 - [ ] **Watchdog.** `wdt 0|1|test` is advertised in CLI help with no platform
       handler behind it. Zephyr has its own WDT subsystem — do not transliterate
       the Pico's dual-core scheme.
