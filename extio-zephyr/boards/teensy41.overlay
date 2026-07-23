@@ -36,9 +36,35 @@
  * future investigation, not wired here. */
 
 /* The ENET IEEE-1588 clock is `disabled` in the RT1060 SoC dtsi exactly as it is
- * on the RW612 -- enable it so PTP_CLOCK_NXP_ENET instantiates the clock. */
+ * on the RW612 -- enable it so PTP_CLOCK_NXP_ENET instantiates the clock.
+ *
+ * pinctrl is REQUIRED, not optional: ptp_clock_nxp_enet_init()'s only failure
+ * path is pinctrl_apply_state(PINCTRL_STATE_DEFAULT), so a bare status="okay"
+ * (no default state) fails init and device_is_ready() reports false -- which is
+ * what `ptp_ready=0` was. Mirrors the RT1060 EVK, same SoC family.
+ *
+ * The 1588 EVENT pads are for external timestamp capture/trigger, which we do
+ * not use -- they are here to give the driver a valid state to apply. They land
+ * on Teensy pins 14/15 (AD_B1_02/03), otherwise LPUART2, which this box does not
+ * use (our hardware console is lpuart6 on pins 0/1). Claiming them costs those
+ * two pins for UART duty; they remain usable as plain GPIO for box pins.
+ */
+&pinctrl {
+	pinmux_ptp: pinmux_ptp {
+		group0 {
+			pinmux = <&iomuxc_gpio_ad_b1_02_enet_1588_event2_out>,
+				 <&iomuxc_gpio_ad_b1_03_enet_1588_event2_in>;
+			drive-strength = "r0-6";
+			slew-rate = "slow";
+			nxp,speed = "100-mhz";
+		};
+	};
+};
+
 &enet_ptp_clock {
 	status = "okay";
+	pinctrl-0 = <&pinmux_ptp>;
+	pinctrl-names = "default";
 };
 
 /* Same two CDC-ACM instances as the RW612 build: the human text console and the

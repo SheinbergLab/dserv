@@ -49,41 +49,51 @@ Verify a claim before trusting it; this list was accurate the day it was written
       `wdt` because the grammar is shared with the Pico, but nothing implements
       them here — they accept a command and do nothing.
 
-## PTP — a specific lead, not a mystery
+## PTP — SOLVED on teensy41; a real risk on frdm_rw612
 
-`ptp_ready=0` is almost certainly **not** a silicon or clock-source problem. The
-driver's init has exactly one failure path:
+**`ptp_ready=0` was a missing `pinctrl-0`, not silicon and not a clock source.**
+`ptp_clock_nxp_enet_init()` has exactly one failure path:
 
 ```c
 ret = pinctrl_apply_state(config->pincfg, PINCTRL_STATE_DEFAULT);
 if (ret) return ret;          /* -> device_is_ready() == false */
 ```
 
-Our overlay enables the node with a bare `status = "okay"` and no pinctrl, so the
-default state does not exist and init fails. The **RT1060 EVK — same SoC family
-as Teensy 4.1 —** supplies one:
+Enabling the node with a bare `status = "okay"` leaves no default state, so init
+fails — which is why it presented as "device not ready" rather than "clock reads
+zero". The RT1060 EVK (same SoC family as Teensy 4.1) supplies one; copying that
+pattern into `boards/teensy41.overlay` fixed it.
 
-```dts
-&enet_ptp_clock {
-	status = "okay";
-	pinctrl-0 = <&pinmux_ptp>;      /* GPIO_AD_B1_02 1588_event2_out */
-	pinctrl-names = "default";      /* GPIO_AD_B1_03 1588_event2_in  */
-};
-```
+**Fixed and verified 2026-07-23 on teensy41:** boot banner reports
+`PTP hw clock: ready=1`, and `extio/box/state/ptp/ns` advances ~1 s per second.
+Pads are `AD_B1_02`/`AD_B1_03` = Teensy pins 14/15 (otherwise LPUART2, unused
+here — our hardware console is lpuart6 on pins 0/1).
 
-- [ ] Add a `pinmux_ptp` group to `boards/teensy41.overlay`. **Unverified:**
-      whether those two pads are broken out and free on a Teensy 4.1 — check
-      before assuming. The 1588 *event* pins are only needed for external
-      trigger/capture, but the driver applies pinctrl unconditionally, so some
-      valid state must exist.
+Caveat on accuracy: `ptp/ns` is published only once per second, so comparing two
+samples against a host clock cannot resolve ppm-level rate error — the
+quantization dwarfs it. All that is established is that the clock runs at roughly
+the right speed. Real rate measurement needs on-box sampling (the echo/sync
+machinery), not 1 Hz datapoints.
+
+- [ ] **frdm_rw612 will very likely hit the SAME failure, with no easy fix.** Its
+      `enet_ptp_clock` node carries no pinctrl, the board never mentions PTP, and
+      **no `1588` pinmux entries exist anywhere in the RW612 dts or board
+      pinctrl** — yet it is the same driver with the same unconditional
+      `pinctrl_apply_state`. So there is nothing valid to point `pinctrl-0` at.
+      Options, in order of preference: confirm from the RW612 reference manual
+      whether 1588 event pads exist and add the pinmux entries; or carry a small
+      patch making the default pinctrl state optional in the driver (the 1588
+      event pins are genuinely optional hardware) — `wiznet-io/patches/` is the
+      precedent for a locally-applied Zephyr patch; or upstream that fix. Settle
+      this early — PTP is a headline reason the RW612 was chosen.
 - [ ] `CONFIG_PTP_CLOCK_SHELL=y` (from `samples/net/ptp`) adds shell commands to
-      read/adjust the clock directly — a real diagnostic now that the console
+      read/adjust the clock directly — a useful diagnostic now that the console
       works.
 - [ ] `CONFIG_PTP=y` is the full PTP protocol stack. Not needed for the local
       free-running clock; needed for actual sync against the i.MX95 partner.
 
 Keep the distinction that matters: a local free-running clock needs no peer and
-*should* tick; sync/discipline needs a grandmaster.
+*should* tick (it now does); sync/discipline needs a grandmaster.
 
 ---
 
