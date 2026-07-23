@@ -29,11 +29,32 @@
 	status = "okay";
 };
 
-/* No settings storage on the Teensy: it XIP-executes from its only flash, and
- * enabling the FlexSPI NOR driver to write it re-inits that controller and
- * hard-faults at boot. Persistence lives on the RW612 (separate storage). A
- * Teensy recipe (code-partition + XIP-safe flash, per the RT1060 EVK) is a
- * future investigation, not wired here. */
+/* Settings storage: NVS needs a `storage_partition`, which the teensy4 board does
+ * not define. Carve the last 64 KB of the 8 MB W25Q64, far past the ~230 KB app
+ * image. box_flash.c resolves it via DT_MTD_FROM_FIXED_PARTITION, hence the
+ * `fixed-partitions` parent.
+ *
+ * Writing the flash the chip XIP-executes from IS the hazard that made this look
+ * unworkable for a while -- but CONFIG_FLASH_MCUX_FLEXSPI_XIP=y (enabled
+ * automatically by the RT10xx SoC defconfig) relocates the erase/write path to
+ * ITCM, and it is validated on hardware. The old "hard-faults at boot" verdict
+ * was actually a main-thread stack overflow; see PORTING.md.
+ *
+ * NOT verified: whether HalfKay full-chip-erases on reflash, which would wipe
+ * saved settings on every REFLASH (surviving reboots is what persistence means
+ * here, and that IS verified). */
+&w25q64jvxgim {
+	partitions {
+		compatible = "fixed-partitions";
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		storage_partition: partition@7f0000 {
+			label = "storage";
+			reg = <0x007f0000 DT_SIZE_K(64)>;
+		};
+	};
+};
 
 /* The ENET IEEE-1588 clock is `disabled` in the RT1060 SoC dtsi exactly as it is
  * on the RW612 -- enable it so PTP_CLOCK_NXP_ENET instantiates the clock.
