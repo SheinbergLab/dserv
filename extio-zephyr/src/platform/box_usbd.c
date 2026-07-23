@@ -22,7 +22,7 @@ USBD_DEVICE_DEFINE(box_ctx, DEVICE_DT_GET(DT_NODELABEL(zephyr_udc0)),
 
 USBD_DESC_LANG_DEFINE(box_lang);
 USBD_DESC_MANUFACTURER_DEFINE(box_mfr, "dserv");
-USBD_DESC_PRODUCT_DEFINE(box_product, "extio-rw612");
+USBD_DESC_PRODUCT_DEFINE(box_product, "extio box");
 USBD_DESC_SERIAL_NUMBER_DEFINE(box_sn);        /* from HWINFO device id */
 
 USBD_DESC_CONFIG_DEFINE(box_fs_desc, "extio FS");

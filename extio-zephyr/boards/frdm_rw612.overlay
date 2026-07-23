@@ -1,5 +1,5 @@
 /*
- * extio-rw612 devicetree overlay for the FRDM-RW612.
+ * extio-zephyr devicetree overlay for the FRDM-RW612.
  *
  * Enable ctimer1 as the hardware pulse timer for box_gpio's non-blocking,
  * box-timed DO pulses (ctimer0 is already claimed by the board). The Zephyr

@@ -1,5 +1,5 @@
 /*
- * extio-rw612 on a PJRC Teensy 4.1 (i.MX RT1062) -- the wired test system.
+ * extio-zephyr on a PJRC Teensy 4.1 (i.MX RT1062) -- the wired test system.
  *
  * The RT1062 drives the same NXP peripherals through the same Zephyr drivers as
  * the RW612: `nxp,enet` + `nxp,enet-ptp-clock` for Ethernet/1588, and a USB-HS
@@ -13,6 +13,13 @@
 	aliases {
 		box-gpio-port     = &gpio2;   /* box pin n -> gpio2.n (3 = board LED) */
 		box-pulse-counter = &gpt2;    /* hardware box-timed pulse             */
+	};
+
+	chosen {
+		/* Console/CLI on the box's own USB console CDC rather than lpuart6
+		 * (Teensy pins 0/1) -- a deployed box is diagnosable over the same
+		 * cable that carries its frames, no UART adapter needed. */
+		zephyr,console = &cdc_acm_console;
 	};
 };
 

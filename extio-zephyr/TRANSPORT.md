@@ -1,4 +1,4 @@
-# TRANSPORT.md — uplink arbitration for the extio-rw612 hub
+# TRANSPORT.md — uplink arbitration for the extio-zephyr hub
 
 **Status: design, 2026-07-22, pre-block-#6.** Written because the RW612 can run
 USB, Ethernet, and BLE *simultaneously* (unlike the Pico "dual" build, which was

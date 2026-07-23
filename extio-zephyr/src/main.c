@@ -1,18 +1,21 @@
 /*
- * extio-rw612 -- Zephyr application entry.
+ * extio-zephyr -- Zephyr application entry: the converged extio box.
  *
- * Building block #2: prove the portable core (forked verbatim from wiznet-io,
- * pico_* renamed to box_*) compiles and RUNS under the Zephyr toolchain, first
- * on native_sim, then on the FRDM-RW612 board. This is the on-target twin of
- * tools/box_sim.c --selftest: build datapoint frames, dispatch them into a
- * box_config_t, exercise a gpio command, and round-trip persist -- all with
- * zero platform dependencies beyond printk.
+ * Boot order matters: GPIO and the uplink come up BEFORE any printk, because on
+ * boards whose console is the box's own USB CDC (boards/*.overlay) anything
+ * printed before enumeration is dropped. After a settle delay we run the core
+ * smoke test (the on-target twin of tools/box_sim.c --selftest), then enter the
+ * service loop.
  *
- * The transport/GPIO/flash platform layer (src/platform/) is deliberately NOT
- * wired yet; that is building block #3+ (USB-HS, Ethernet+PTP, BLE, GAU ADC).
+ * The loop is the whole box in one place: arbitrate the uplink (USB / Ethernet
+ * by carrier), dispatch inbound frames to config + GPIO, and publish local DI,
+ * BLE ingress, and a 1 Hz watchdog out whichever uplink is active. Subsystems
+ * absent on a given board (Ethernet on teensy40, BLE on any Teensy) are
+ * compiled out via CONFIG_NETWORKING / CONFIG_BT -- see boards/<board>.conf.
  */
 #include <zephyr/kernel.h>
 #include <zephyr/version.h>
+#include <zephyr/sys/reboot.h>
 #include <stdio.h>
 
 #include "dserv_config.h"
@@ -56,6 +59,21 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 		box_gpio_exec(&cfg, &cmd);            /* immediate DO set/pulse */
 	} else if (r == CFG_PIN_MODE) {
 		box_gpio_apply_config(&cfg);          /* re-apply on a pin mode change */
+	} else if (r == CFG_REBOOT) {
+		/* Warm reset: the firmware restarts. Portable on every board. NOTE this
+		 * does NOT enter the bootloader -- see CFG_BOOTSEL below. */
+		printk("cmd/reboot -> warm reset\n");
+		k_msleep(100);                        /* let the console drain */
+		sys_reboot(SYS_REBOOT_WARM);
+	} else if (r == CFG_BOOTSEL) {
+		/* Program-mode entry is board-specific and NOT universally reachable:
+		 *   RP2350   reset_usb_boot() -- trivial (the Pico's `bootsel`)
+		 *   Teensy   bootloader is a separate chip watching the Program button;
+		 *            Teensyduino's handshake is not exposed by Zephyr
+		 *   RW612    moot -- MCUboot + mcumgr does DFU over the live link
+		 * Report honestly rather than silently doing nothing. */
+		printk("cmd/bootsel -> not supported on this board; "
+		       "press the Program button to enter the bootloader\n");
 	}
 }
 
@@ -74,23 +92,39 @@ int main(void)
 	gpio_cmd_t cmd;
 	cfg_result_t r;
 
-	printk("\n=== extio-rw612 core smoke test (Zephyr %s) ===\n", KERNEL_VERSION_STRING);
+	/* Bring the platform up BEFORE any printk. On boards whose console is the
+	 * box's own USB CDC (see boards/*.overlay), output produced before the
+	 * device enumerates is lost -- so init GPIO (so inbound commands can act
+	 * immediately), then the uplink, then give the host a moment to open the
+	 * console port before we start talking. */
+	if (box_gpio_init() != 0) {
+		/* nothing to print to yet; the LED demo below simply won't run */
+	}
+	cfg.pin_mode[LED_PIN] = 1;   /* output    */
+	cfg.pin_mode[BTN_PIN] = 3;   /* in_pullup */
+	box_gpio_apply_config(&cfg);
+
+	box_uplink_init(&cfg);       /* USB (and Ethernet where present) up */
+	dserv_framer_reset(&rx_framer);
+	k_msleep(2000);              /* let the host enumerate + open the console */
+
+	printk("\n=== extio core smoke test (Zephyr %s) ===\n", KERNEL_VERSION_STRING);
 
 	/* config datapoint: set pin 5 to output */
-	dserv_msg_int(f, "extio/pico/config/pin/5/mode", 0, 1);
+	dserv_msg_int(f, "extio/box/config/pin/5/mode", 0, 1);
 	r = feed(f, &cmd);
 	printk("apply config/pin/5/mode=out    -> %-9s pin_mode[5]=%u\n",
 	       dserv_cfg_result_str(r), cfg.pin_mode[5]);
 
 	/* config datapoint: string-typed dserv IP */
-	dserv_msg_string(f, "extio/pico/config/dserv/ip", 0, "192.168.11.1");
+	dserv_msg_string(f, "extio/box/config/dserv/ip", 0, "192.168.11.1");
 	r = feed(f, &cmd);
 	printk("apply config/dserv/ip          -> %-9s %u.%u.%u.%u\n",
 	       dserv_cfg_result_str(r), cfg.dserv_ip[0], cfg.dserv_ip[1],
 	       cfg.dserv_ip[2], cfg.dserv_ip[3]);
 
 	/* transient command: box-timed pulse on pin 6 -> a gpio_cmd for the platform */
-	dserv_msg_int(f, "extio/pico/cmd/do/6/pulse_us", 0, 500);
+	dserv_msg_int(f, "extio/box/cmd/do/6/pulse_us", 0, 500);
 	r = feed(f, &cmd);
 	printk("apply cmd/do/6/pulse_us=500    -> %-9s op=%d pin=%u value=%u\n",
 	       dserv_cfg_result_str(r), cmd.op, cmd.pin, cmd.value);
@@ -111,33 +145,16 @@ int main(void)
 
 	printk("=== codec smoke test done ===\n\n");
 
-	/* ---- block #3: real GPIO on the FRDM-RW612 ---- */
-	printk("=== box_gpio hardware test ===\n");
-	if (box_gpio_init() != 0) {
-		printk("box_gpio_init FAILED (gpio/counter device not ready)\n");
-		return 0;
-	}
+	/* ---- block #3: GPIO (already initialised above, before the console) ---- */
+	printk("gpio: pin %d=out (LED), pin %d=in_pullup\n", LED_PIN, BTN_PIN);
 
-	/* Configure LED pin as output, button pin as pulled-up input, via the same
-	 * config path the host uses -- then hand the config to the platform layer. */
-	cfg.pin_mode[LED_PIN] = 1;   /* output   */
-	cfg.pin_mode[BTN_PIN] = 3;   /* in_pullup */
-	box_gpio_apply_config(&cfg);
-	printk("configured hsgpio0.%d=out (LED), hsgpio0.%d=in_pullup (SW2)\n",
-	       LED_PIN, BTN_PIN);
-
-	/* Boot heartbeat: three hardware-timed LED pulses (CTIMER drops each edge). */
+	/* Boot heartbeat: three hardware-timed LED pulses (the hardware counter
+	 * drops each falling edge, not software). */
 	gpio_cmd_t pulse = { .op = GPIO_OP_PULSE, .pin = LED_PIN, .value = 120000 };
 	for (int i = 0; i < 3; i++) {
 		box_gpio_exec(&cfg, &pulse);
 		k_msleep(250);
 	}
-	printk("=== box_gpio ready ===\n\n");
-
-	/* ---- blocks #4-6: transports behind the uplink arbiter ---- */
-	printk("=== box_uplink (USB + Ethernet, arbitrated) ===\n");
-	box_uplink_init(&cfg);          /* brings up both transports; picks the active one */
-	dserv_framer_reset(&rx_framer);
 
 #if defined(CONFIG_NETWORKING)
 	/* one-shot status: DHCP lease (if eth came up) + the PTP hardware clock */

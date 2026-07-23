@@ -108,7 +108,7 @@ to flash**.
 
 ## RW612 backend (planned — for the NXP universal hub)
 
-Target: drive the Zephyr-based `extio-rw612` box (see `extio-rw612/README.md`,
+Target: drive the Zephyr-based `extio-zephyr` box (see `extio-zephyr/README.md`,
 `../../wiznet-io/BENCH_NXP.md`) from this same tool. Assessment (2026-07-22):
 ~2/3 of the tool is reusable as-is because it rides the **frozen wire contract**
 and the **shared `box_cli`** — only flashing/OTA and USB identity are Pico2-bound.
@@ -134,6 +134,6 @@ and the **shared `box_cli`** — only flashing/OTA and USB identity are Pico2-bo
 5. **Discovery** — `discover.go` is transport-agnostic on the tool side; it works
    once the RW612 firmware emits the same LAN beacon (a firmware feature to port).
 
-**Sequencing:** after the FRDM-RW612 validates `extio-rw612` blocks #2–6 on
+**Sequencing:** after the FRDM-RW612 validates `extio-zephyr` blocks #2–6 on
 silicon and block #7 (analog) lands, and after the RW612 USB identity is
 finalized. The work is an *additive backend* behind the existing UI, not a rewrite.

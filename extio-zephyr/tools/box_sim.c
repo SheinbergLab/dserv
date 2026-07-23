@@ -104,11 +104,11 @@ static int run_selftest(void)
     memset(&g_cfg, 0, sizeof g_cfg);
     printf("selftest: build -> frame -> apply (no network)\n");
 
-    dserv_msg_int   (f, "extio/pico/config/pin/5/mode", 0, 1);      dserv_framer_feed(&fr, f, DSERV_MSG_LEN, on_frame, 0);
-    dserv_msg_int   (f, "extio/pico/config/pin/5/pulse_us", 0, 250);dserv_framer_feed(&fr, f, DSERV_MSG_LEN, on_frame, 0);
-    dserv_msg_string(f, "extio/pico/config/dserv/ip", 0, "192.168.11.1"); dserv_framer_feed(&fr, f, DSERV_MSG_LEN, on_frame, 0);
-    dserv_msg_int   (f, "extio/pico/config/dserv/port", 0, 4620);   dserv_framer_feed(&fr, f, DSERV_MSG_LEN, on_frame, 0);
-    dserv_msg_int   (f, "extio/pico/cmd/save", 0, 1);            dserv_framer_feed(&fr, f, DSERV_MSG_LEN, on_frame, 0);
+    dserv_msg_int   (f, "extio/box/config/pin/5/mode", 0, 1);      dserv_framer_feed(&fr, f, DSERV_MSG_LEN, on_frame, 0);
+    dserv_msg_int   (f, "extio/box/config/pin/5/pulse_us", 0, 250);dserv_framer_feed(&fr, f, DSERV_MSG_LEN, on_frame, 0);
+    dserv_msg_string(f, "extio/box/config/dserv/ip", 0, "192.168.11.1"); dserv_framer_feed(&fr, f, DSERV_MSG_LEN, on_frame, 0);
+    dserv_msg_int   (f, "extio/box/config/dserv/port", 0, 4620);   dserv_framer_feed(&fr, f, DSERV_MSG_LEN, on_frame, 0);
+    dserv_msg_int   (f, "extio/box/cmd/save", 0, 1);            dserv_framer_feed(&fr, f, DSERV_MSG_LEN, on_frame, 0);
 
     int ok = g_cfg.pin_mode[5] == 1 && g_cfg.do_pulse_us[5] == 250
           && g_cfg.dserv_ip[3] == 1 && g_cfg.dserv_port == 4620
@@ -160,7 +160,7 @@ static int run_watchdog(const char *host, int port)
 
     uint8_t f[DSERV_MSG_LEN];
     for (int i = 0;; i++) {
-        dserv_msg_int(f, "extio/pico/state/watchdog", 0, i);
+        dserv_msg_int(f, "extio/box/state/watchdog", 0, i);
         if (write(fd, f, DSERV_MSG_LEN) != DSERV_MSG_LEN) { perror("write"); break; }
         printf("  watchdog %d\n", i);
         struct timespec ts = { .tv_sec = 1, .tv_nsec = 0 }; nanosleep(&ts, NULL);
@@ -180,11 +180,11 @@ static int run_send_config(const char *host, int port)
     if (connect(fd, (struct sockaddr *)&d, sizeof d) != 0) { perror("connect"); return 1; }
 
     uint8_t f[DSERV_MSG_LEN];
-    dserv_msg_int   (f, "extio/pico/config/pin/6/mode", 0, 3);      write(fd, f, DSERV_MSG_LEN);
-    dserv_msg_int   (f, "extio/pico/config/pin/6/pulse_us", 0, 750);write(fd, f, DSERV_MSG_LEN);
-    dserv_msg_string(f, "extio/pico/config/dserv/ip", 0, "10.0.0.5"); write(fd, f, DSERV_MSG_LEN);
-    dserv_msg_int   (f, "extio/pico/config/dserv/port", 0, 4620);   write(fd, f, DSERV_MSG_LEN);
-    dserv_msg_int   (f, "extio/pico/cmd/save", 0, 1);            write(fd, f, DSERV_MSG_LEN);
+    dserv_msg_int   (f, "extio/box/config/pin/6/mode", 0, 3);      write(fd, f, DSERV_MSG_LEN);
+    dserv_msg_int   (f, "extio/box/config/pin/6/pulse_us", 0, 750);write(fd, f, DSERV_MSG_LEN);
+    dserv_msg_string(f, "extio/box/config/dserv/ip", 0, "10.0.0.5"); write(fd, f, DSERV_MSG_LEN);
+    dserv_msg_int   (f, "extio/box/config/dserv/port", 0, 4620);   write(fd, f, DSERV_MSG_LEN);
+    dserv_msg_int   (f, "extio/box/cmd/save", 0, 1);            write(fd, f, DSERV_MSG_LEN);
     printf("sent 5 config frames to %s:%d\n", host, port);
     close(fd);
     return 0;
@@ -228,9 +228,9 @@ static void pty_on_frame(const uint8_t *frame, void *ud)
         int64_t  bus = (int64_t) pty_now_us();      /* our "box" receipt time */
         int64_t  off = (int64_t) dus - bus;
         uint8_t f[DSERV_MSG_LEN];
-        dserv_msg_int64(f, "extio/pico/state/sync/dserv_us", dus, (int64_t) dus); if (write(fd, f, DSERV_MSG_LEN)) {}
-        dserv_msg_int64(f, "extio/pico/state/sync/box_us",   dus, bus);           if (write(fd, f, DSERV_MSG_LEN)) {}
-        dserv_msg_int64(f, "extio/pico/state/sync/offset_us",dus, off);           if (write(fd, f, DSERV_MSG_LEN)) {}
+        dserv_msg_int64(f, "extio/box/state/sync/dserv_us", dus, (int64_t) dus); if (write(fd, f, DSERV_MSG_LEN)) {}
+        dserv_msg_int64(f, "extio/box/state/sync/box_us",   dus, bus);           if (write(fd, f, DSERV_MSG_LEN)) {}
+        dserv_msg_int64(f, "extio/box/state/sync/offset_us",dus, off);           if (write(fd, f, DSERV_MSG_LEN)) {}
     }
     on_frame(frame, 0);                             /* normal config/cmd dispatch + logging */
 }
@@ -261,13 +261,13 @@ static int run_pty(void)
         time_t now = time(NULL);
         if (now != last) {                                   /* ~1 Hz watchdog outbound */
             last = now;
-            dserv_msg_int(f, "extio/pico/state/watchdog", 0, wd++);
+            dserv_msg_int(f, "extio/box/state/watchdog", 0, wd++);
             if (write(mfd, f, DSERV_MSG_LEN)) {}
             /* mimic -DBOX_USB_FORWARD_REGISTER: declare our forwards so modules/usbio
              * auto-wires them (ip/port are ignored over USB). */
             const char *reg = "%match 0.0.0.0 0 ess/in_obs 1\n"
-                              "%match 0.0.0.0 0 extio/pico/config/* 1\n"
-                              "%match 0.0.0.0 0 extio/pico/cmd/* 1\n";
+                              "%match 0.0.0.0 0 extio/box/config/* 1\n"
+                              "%match 0.0.0.0 0 extio/box/cmd/* 1\n";
             if (write(mfd, reg, strlen(reg))) {}
         }
         struct timespec s = { .tv_sec = 0, .tv_nsec = 2 * 1000 * 1000 }; nanosleep(&s, NULL);

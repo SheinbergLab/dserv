@@ -1,4 +1,4 @@
-# extio-rw612 — unified extio hub on NXP RW612 (Zephyr)
+# extio-zephyr — unified extio hub on NXP RW612 (Zephyr)
 
 A **converged extio box** on the NXP RW612 SoC: USB-HS + Ethernet(+PTP) + BLE +
 Wi-Fi in one part, running Zephyr. Intended to fold three current threads into
@@ -113,7 +113,7 @@ Toolchain: Zephyr (mainline) + `arm-zephyr-eabi` SDK, installed under
 ```sh
 source ~/zephyrproject/.venv/bin/activate
 export ZEPHYR_BASE=~/zephyrproject/zephyr
-cd /Users/sheinb/src/dserv/extio-rw612
+cd /Users/sheinb/src/dserv/extio-zephyr
 
 west build -b frdm_rw612 . --pristine    # the target
 west flash                               # via the on-board MCU-Link

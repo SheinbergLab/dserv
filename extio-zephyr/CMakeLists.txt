@@ -1,4 +1,4 @@
-# extio-rw612 -- Zephyr application (freestanding; builds against $ZEPHYR_BASE).
+# extio-zephyr -- Zephyr application (freestanding; builds against $ZEPHYR_BASE).
 #
 #   west build -b native_sim  <this-dir>     # host smoke test, no board
 #   west build -b frdm_rw612  <this-dir>     # the target
@@ -6,7 +6,7 @@
 cmake_minimum_required(VERSION 3.20.0)
 
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
-project(extio_rw612 LANGUAGES C)
+project(extio_zephyr LANGUAGES C)
 
 # Common to every board: core + GPIO + USB transport + the uplink arbiter.
 target_sources(app PRIVATE

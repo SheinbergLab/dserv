@@ -2,7 +2,7 @@
  * dserv_config.h -- hardware-independent dispatch of the box's datapoints.
  *
  * Every datapoint the box cares about lives under a CONFIGURABLE device name
- * (default "pico"), so multiple boxes coexist on one dserv (e.g. "io1", "rig2").
+ * (default "box"), so multiple boxes coexist on one dserv (e.g. "io1", "rig2").
  * The name is persisted config; set it over the USB CLI (`name io1`) or via the
  * datapoint <name>/config/name. dserv relays <name>/config/(keys) and <name>/gpio/(keys)
  * to the box (%reg ... 1 + matches).
@@ -57,7 +57,7 @@
 #define BOX_CLASS "extio"
 
 typedef struct {
-    char     name[BOX_NAME_MAX];       /* device name (within BOX_CLASS/); "" => "pico" */
+    char     name[BOX_NAME_MAX];       /* device name (within BOX_CLASS/); "" => "box" */
     uint8_t  pin_mode[BOX_NPINS];      /* 0 unset, 1 out, 2 in, 3 in_pullup  */
     uint32_t do_pulse_us[BOX_NPINS];
     uint8_t  net_ip[4];
@@ -228,7 +228,7 @@ static inline void dserv_state_name(const box_config_t *c, char *buf, int sz,
                                     const char *leaf);
 
 static inline const char *dserv_cfg_name(const box_config_t *c)
-{ return c->name[0] ? c->name : "pico"; }
+{ return c->name[0] ? c->name : "box"; }
 
 static inline uint16_t dserv_cfg_port(const box_config_t *c)
 { return c->dserv_port ? c->dserv_port : DSERV_DEFAULT_PORT; }
