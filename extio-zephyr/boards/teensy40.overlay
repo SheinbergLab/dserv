@@ -27,6 +27,32 @@
  * slot). This board is the minimal USB-HS test system; persistence is on the
  * RW612 (NVS) and, for the 4.1, optionally the SD card. */
 
+/* Settings storage: NVS needs a `storage_partition`, which the teensy4 board does
+ * not define. Carve the last 32 KB of the 2 MB W25Q16, far past the ~114 KB app.
+ *
+ * 32 KB = EIGHT 4096-byte sectors. NVS requires a MINIMUM OF TWO (nvs_mount:
+ * `sector_count < 2` -> -EINVAL) because garbage collection moves still-valid
+ * entries into the next sector before erasing the previous one -- a single
+ * sector has nowhere to move them. Eight is generous on a 2 MB part and gives
+ * real wear headroom: the config blob is ~1076 bytes, so a 4 KB sector holds
+ * only ~3 saves before GC.
+ *
+ * Writing the flash the chip XIP-executes from is safe here because
+ * CONFIG_FLASH_MCUX_FLEXSPI_XIP=y (enabled automatically by the RT10xx SoC
+ * defconfig) relocates the erase/write path to ITCM. See PORTING.md. */
+&w25q16jvuxim {
+	partitions {
+		compatible = "fixed-partitions";
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		storage_partition: partition@1f8000 {
+			label = "storage";
+			reg = <0x001f8000 DT_SIZE_K(32)>;
+		};
+	};
+};
+
 /* console FIRST, data SECOND -- instance order sets USB interface numbering, and
  * the dserv host module expects the data pipe at if02 / the *3 tty. See the note
  * in teensy41.overlay and README "Console status". */
