@@ -117,12 +117,10 @@ int main(void)
 	printk("apply config/pin/5/mode=out    -> %-9s pin_mode[5]=%u\n",
 	       dserv_cfg_result_str(r), cfg.pin_mode[5]);
 
-	/* config datapoint: string-typed dserv IP */
-	dserv_msg_string(f, "extio/box/config/dserv/ip", 0, "192.168.11.1");
-	r = feed(f, &cmd);
-	printk("apply config/dserv/ip          -> %-9s %u.%u.%u.%u\n",
-	       dserv_cfg_result_str(r), cfg.dserv_ip[0], cfg.dserv_ip[1],
-	       cfg.dserv_ip[2], cfg.dserv_ip[3]);
+	/* No demo dserv target: leaving dserv_ip unset keeps eth from claiming the
+	 * uplink (it needs a configured target), so a bench box stays on USB and
+	 * reachable. A real box gets its target from persisted config / the console
+	 * CLI (a later block). */
 
 	/* transient command: box-timed pulse on pin 6 -> a gpio_cmd for the platform */
 	dserv_msg_int(f, "extio/box/cmd/do/6/pulse_us", 0, 500);
@@ -228,6 +226,50 @@ int main(void)
 			dserv_state_name(&cfg, name, sizeof name, "watchdog");
 			dserv_msg_int(f, name, 0, watchdog++);
 			box_uplink_send(f, DSERV_MSG_LEN);
+
+			/* box status as datapoints -- observable any time over the active
+			 * uplink, not just at boot: active transport, and (where present)
+			 * the Ethernet link/lease and the PTP hardware clock. */
+			dserv_state_name(&cfg, name, sizeof name, "uplink");
+			dserv_msg_string(f, name, 0, box_uplink_active_name());
+			box_uplink_send(f, DSERV_MSG_LEN);
+#if defined(CONFIG_NETWORKING)
+			dserv_state_name(&cfg, name, sizeof name, "net/link");
+			dserv_msg_int(f, name, 0, box_net_eth_link());
+			box_uplink_send(f, DSERV_MSG_LEN);
+
+			uint8_t ip[4];
+			if (box_net_eth_get_ip(ip)) {
+				char ips[16];
+				snprintf(ips, sizeof ips, "%u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]);
+				dserv_state_name(&cfg, name, sizeof name, "net/ip");
+				dserv_msg_string(f, name, 0, ips);
+				box_uplink_send(f, DSERV_MSG_LEN);
+			}
+			dserv_state_name(&cfg, name, sizeof name, "ptp/ns");
+			dserv_msg_int64(f, name, 0, (int64_t) box_ptp_now_ns());
+			box_uplink_send(f, DSERV_MSG_LEN);
+#endif
+
+			/* Also print status to the always-on console every 2 s -- the one
+			 * channel independent of which data uplink is active, so a bench box
+			 * with no dserv is still fully observable. */
+			if ((watchdog & 1) == 0) {
+#if defined(CONFIG_NETWORKING)
+				uint8_t sip[4];
+				int leased = box_net_eth_get_ip(sip);
+				printk("status: uplink=%s eth_link=%d ip=%u.%u.%u.%u "
+				       "ptp_ready=%d ptp=%llu ns\n",
+				       box_uplink_active_name(), box_net_eth_link(),
+				       leased ? sip[0] : 0, leased ? sip[1] : 0,
+				       leased ? sip[2] : 0, leased ? sip[3] : 0,
+				       (int) box_ptp_ready(),
+				       (unsigned long long) box_ptp_now_ns());
+#else
+				printk("status: uplink=%s wd=%d\n",
+				       box_uplink_active_name(), watchdog);
+#endif
+			}
 		}
 
 		/* Block until an ISR has work for us (CDC RX / DI edge), or the

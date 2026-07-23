@@ -27,6 +27,10 @@ int box_net_eth_link(void);
 /* 1 iff a dserv TCP session is currently open. */
 int box_net_eth_connected(void);
 
+/* Non-blocking current IPv4 address. Fills out[4] and returns 1 if a lease is
+ * held, else 0. (box_net_eth_wait_ip blocks; this just samples.) */
+int box_net_eth_get_ip(uint8_t out[4]);
+
 /* Open a TCP connection to dserv (blocking connect, then non-blocking I/O). 0 ok. */
 int box_net_eth_connect(const uint8_t dserv_ip[4], uint16_t port);
 

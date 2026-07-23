@@ -31,7 +31,19 @@ static const box_uplink_if uplink_usb = {
  * candidate -- the policy code below is unchanged either way. */
 #if defined(CONFIG_NETWORKING)
 static int u_eth_init(const box_config_t *c)      { (void) c; return box_net_eth_init(); }
-static int u_eth_available(void)                  { return box_net_eth_link(); }   /* PHY carrier */
+/* Eth counts as a usable uplink only with BOTH carrier AND a configured dserv
+ * target -- otherwise it publishes into the void, so we stay on USB and the box
+ * remains reachable/observable (also the sane bench default with no dserv). The
+ * target is set over the console CLI or persisted config. cfg is captured at
+ * init since the vtable's available() takes no args. */
+static const box_config_t *eth_cfg;
+static int u_eth_available(void)
+{
+	int has_target = eth_cfg &&
+		(eth_cfg->dserv_ip[0] | eth_cfg->dserv_ip[1] |
+		 eth_cfg->dserv_ip[2] | eth_cfg->dserv_ip[3]);
+	return box_net_eth_link() && has_target;
+}
 static int u_eth_connect(const box_config_t *c)   { return box_net_eth_connect(c->dserv_ip, dserv_cfg_port(c)); }
 static int u_eth_connected(void)                  { return box_net_eth_connected(); }
 static int u_eth_poll(uint8_t *b, int m)          { return box_net_eth_poll(b, m); }
@@ -100,6 +112,7 @@ int box_uplink_init(const box_config_t *cfg)
 {
 	int ok = (uplink_usb.init(cfg) == 0);
 #if defined(CONFIG_NETWORKING)
+	eth_cfg = cfg;
 	ok |= (uplink_eth.init(cfg) == 0);
 #endif
 	active = NULL;
