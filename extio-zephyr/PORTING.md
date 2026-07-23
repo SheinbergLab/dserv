@@ -128,10 +128,20 @@ Keep the distinction that matters: a local free-running clock needs no peer and
       **Not yet exercised:** a real multi-pin chord (two switches closing ms
       apart → one atomic bitmask). Needs a second output jumpered to a second
       input — the single-pin case cannot produce a multi-bit mask.
-- [ ] **Clock sync** — `src/core/box_clock.h`, zero callers. All six `sync/*`
-      keys missing (`box_us`, `dserv_us`, `offset_us`, `rate_ppb`, `source`,
-      `transport_us`). This is the sub-ms obs timeline validated on the W6300,
-      and it gates the next two items.
+- [x] **Clock sync — DONE 2026-07-23** (commit d5f8811). Every `ess/in_obs` edge
+      anchors `box_clock`; all published event times go through `event_stamp()`.
+      Hardware TTL edge preferred over frame arrival (250 ms recency gate), and
+      only hw anchors are trusted to teach the crystal rate — a box with no TTL
+      degrades to offset-only, as designed. All six `sync/*` keys publish.
+      Validated on teensy40: sw path 7 anchors (`source="sw"`, no rate learned —
+      correct); hw path 8 anchors with a TTL leading the frame (`source="hw"`,
+      `transport_us` published, rate learning engaged).
+      **Rate accuracy NOT verified.** The synthetic TTL is a separate `dservctl`
+      call, so `transport_us` swings 9.6–15.6 ms and the learned `rate_ppb` is
+      ~1000 ppm of test noise bounded only by the ±500 ppm clamp. Needs a real
+      rig TTL (deterministic relative to the obs event) to measure properly.
+      Gotcha: `dservctl listen --jsonl` renders negative ints as unsigned;
+      `dservGet` is correct.
 - [ ] **Scheduled events** — `box_gpio_exec` handles only `GPIO_OP_SET` and
       `GPIO_OP_PULSE`. `GPIO_OP_SCHED_PULSE` and `GPIO_OP_SCHED_TIMER` (fire at
       beginobs + N µs) are parsed by the core and then silently dropped. Needs
