@@ -29,6 +29,12 @@
 	status = "okay";
 };
 
+/* No settings storage on the Teensy: it XIP-executes from its only flash, and
+ * enabling the FlexSPI NOR driver to write it re-inits that controller and
+ * hard-faults at boot. Persistence lives on the RW612 (separate storage). A
+ * Teensy recipe (code-partition + XIP-safe flash, per the RT1060 EVK) is a
+ * future investigation, not wired here. */
+
 /* The ENET IEEE-1588 clock is `disabled` in the RT1060 SoC dtsi exactly as it is
  * on the RW612 -- enable it so PTP_CLOCK_NXP_ENET instantiates the clock. */
 &enet_ptp_clock {

@@ -18,6 +18,11 @@ target_sources(app PRIVATE
 	src/platform/box_uplink.c      # block #6: uplink arbiter
 )
 
+# Persistent settings (NVS): only where flash writes are safe (not Teensy XIP).
+if(CONFIG_NVS)
+	target_sources(app PRIVATE src/platform/box_flash.c)
+endif()
+
 # Ethernet + PTP: frdm_rw612 and teensy41 (teensy40 has no PHY).
 if(CONFIG_NETWORKING)
 	target_sources(app PRIVATE

@@ -23,6 +23,10 @@
 	status = "okay";
 };
 
+/* No settings storage on the Teensy 4.0 (XIP-from-flash write hazard, and no SD
+ * slot). This board is the minimal USB-HS test system; persistence is on the
+ * RW612 (NVS) and, for the 4.1, optionally the SD card. */
+
 &zephyr_udc0 {
 	cdc_acm_data: cdc_acm_uart0 {
 		compatible = "zephyr,cdc-acm-uart";

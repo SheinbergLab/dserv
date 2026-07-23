@@ -2,7 +2,7 @@
  * extio-zephyr -- Zephyr application entry: the converged extio box.
  *
  * Boot order matters: GPIO and the uplink come up BEFORE any printk, because on
- * boards whose console is the box's own USB CDC (boards/*.overlay) anything
+ * boards whose console is the box's own USB CDC (the board overlays) anything
  * printed before enumeration is dropped. After a settle delay we run the core
  * smoke test (the on-target twin of tools/box_sim.c --selftest), then enter the
  * service loop.
@@ -21,6 +21,9 @@
 #include "dserv_config.h"
 #include "box_persist.h"
 #include "box_gpio.h"
+#if defined(CONFIG_NVS)
+#include "box_flash.h"
+#endif
 #include "box_net_usb.h"
 #include "box_uplink.h"
 #include "box_event.h"
@@ -60,6 +63,16 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 		box_gpio_exec(&cfg, &cmd);            /* immediate DO set/pulse */
 	} else if (r == CFG_PIN_MODE) {
 		box_gpio_apply_config(&cfg);          /* re-apply on a pin mode change */
+	} else if (r == CFG_SAVE) {
+#if defined(CONFIG_NVS)
+		/* Persist the whole config blob so it survives reboot/power-cycle. */
+		uint8_t blob[BOX_PERSIST_BLOB_MAX];
+		uint32_t n = box_persist_serialize(&cfg, blob, sizeof blob);
+		int rc = box_flash_save(blob, n);
+		printk("cmd/save -> %s (%u bytes)\n", rc == 0 ? "ok" : "FAILED", n);
+#else
+		printk("cmd/save -> no persistence on this board\n");
+#endif
 	} else if (r == CFG_REBOOT) {
 		/* Warm reset: the firmware restarts. Portable on every board. NOTE this
 		 * does NOT enter the bootloader -- see CFG_BOOTSEL below. */
@@ -93,16 +106,22 @@ int main(void)
 	gpio_cmd_t cmd;
 	cfg_result_t r;
 
+	/* NOTE: NVS mount is deferred until AFTER the console is up (below) so a
+	 * flash fault/hang is visible rather than silent -- an XIP-from-flash erase
+	 * on the RT1062 is a known hazard. Demo pins for now; a loaded config
+	 * re-applies after the mount. */
+	int cfg_loaded = 0;
+	cfg.pin_mode[LED_PIN] = 1;   /* demo output   */
+	cfg.pin_mode[BTN_PIN] = 3;   /* demo in_pullup */
+
 	/* Bring the platform up BEFORE any printk. On boards whose console is the
-	 * box's own USB CDC (see boards/*.overlay), output produced before the
+	 * box's own USB CDC (see the board overlays), output produced before the
 	 * device enumerates is lost -- so init GPIO (so inbound commands can act
 	 * immediately), then the uplink, then give the host a moment to open the
 	 * console port before we start talking. */
 	if (box_gpio_init() != 0) {
 		/* nothing to print to yet; the LED demo below simply won't run */
 	}
-	cfg.pin_mode[LED_PIN] = 1;   /* output    */
-	cfg.pin_mode[BTN_PIN] = 3;   /* in_pullup */
 	box_gpio_apply_config(&cfg);
 
 	box_uplink_init(&cfg);       /* USB (and Ethernet where present) up */
@@ -135,6 +154,22 @@ int main(void)
 	int ok = box_persist_deserialize(blob, n, &restored);
 	printk("persist round-trip             -> %-9s %u bytes, applied_count=%u\n",
 	       ok == 0 ? "ok" : "FAIL", n, restored.applied_count);
+
+#if defined(CONFIG_NVS)
+	/* NVS mount + load (boards where flash writes are safe -- RW612). */
+	if (box_flash_init() == 0) {
+		uint8_t lb[BOX_PERSIST_BLOB_MAX];
+		int ln = box_flash_load(lb, sizeof lb);
+		cfg_loaded = (ln > 0 && box_persist_deserialize(lb, (uint32_t) ln, &cfg) == 0);
+		if (cfg_loaded) {
+			box_gpio_apply_config(&cfg);   /* apply the loaded pin map/name */
+		}
+	}
+	printk("persist store (NVS)            -> config %s\n",
+	       cfg_loaded ? "LOADED from flash" : "fresh (defaults)");
+#else
+	printk("persist store                  -> none on this board (no NVS)\n");
+#endif
 
 	/* the box's datapoint identity */
 	char pfx[64];
