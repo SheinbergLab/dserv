@@ -104,10 +104,20 @@ Keep the distinction that matters: a local free-running clock needs no peer and
       `sync_pin`, `transport`, `dserv`, `ip`, `uptime_us`. This is how a host
       learns what a box *is*, and what drives extio-setup and the fleet page.
       Cheapest large win — no dependencies.
-- [ ] **DI groups (chords)** — `src/core/box_group.h`, zero callers. Per-group
-      settle/quiet, onset-stamped edges, announced pin lists. This is the
-      joystick/button API behind `ess-2.0.tm joystick_dir`, so it is a real
-      functional gap for experiments.
+- [x] **DI groups (chords) — DONE 2026-07-23** (commit f7d914d). `box_group.h`
+      wired into the service loop: `group_feed` per debounced edge, `group_poll`
+      every pass (settle windows expire BETWEEN edges), publishing
+      `state/group/<label>` stamped at the episode ONSET. `quiet` groups replace
+      the per-pin event instead of doubling it. New platform hooks
+      `box_gpio_now_us()` and `box_gpio_read_di_levels()` (the latter seeds
+      `group_reset`, so a switch held at configure time is the baseline, not a
+      phantom edge). Validated on teensy40 with a phys13→phys12 jumper: 6 edges →
+      6 chords sharing their DI timestamps; `quiet 1` → 0 DI events, 6 chords.
+      Fixed on the way: `main.c` published the RAW DI level, so `active_low` was
+      a no-op on the wire; now publishes `di_logical()` like the Pico.
+      **Not yet exercised:** a real multi-pin chord (two switches closing ms
+      apart → one atomic bitmask). Needs a second output jumpered to a second
+      input — the single-pin case cannot produce a multi-bit mask.
 - [ ] **Clock sync** — `src/core/box_clock.h`, zero callers. All six `sync/*`
       keys missing (`box_us`, `dserv_us`, `offset_us`, `rate_ppb`, `source`,
       `transport_us`). This is the sub-ms obs timeline validated on the W6300,
