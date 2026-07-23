@@ -18,11 +18,28 @@ Verify a claim before trusting it; this list was accurate the day it was written
 
 ## Open bugs (not ports — these are broken now)
 
-- [ ] **`config/obs/pin` does not apply via DATAPOINT** (console `obs pin 3`
-      works). Same config, two paths, and the datapoint path is the one dserv and
-      extio-setup use. Suspect the other `config/*` keys share the fault —
-      `cmd/*` forwarding is known good (`cmd/do/3` drives the LED). Fix first:
-      it silently undermines every remote-config feature.
+- [ ] **Config set while a box is unreachable is silently lost.** Filed first as
+      "`config/obs/pin` doesn't apply via datapoint", but the parse and dispatch
+      are fine (`config/obs/pin` → `dserv_cfg__config("obs/pin")` →
+      `obs_mirror_set`), and the host wires `config/*` and `cmd/*` through the
+      same proc. Two real gaps, neither a firmware bug:
+      * **Post-reboot/flash race.** `extio_discover` wires forwards only once a
+        box's watchdog ADVANCES, and the box sleeps 2 s at boot before it
+        publishes anything. Anything set in that window is dropped on the floor.
+      * **Reboot divergence.** A datapoint is a COMMAND CHANNEL, not a status
+        mirror. dserv never deletes datapoints, so `extio/<box>/config/*` still
+        reads back the old value after the box has rebooted and lost it — the
+        host looks configured while the box is not. Acute on Teensy, which has no
+        persistence at all, so EVERY reboot wipes the box's config.
+      Useful fact: `Dataserver::trigger()` fires on every set with no value
+      comparison, so re-pushing the SAME value does reach the box — manual
+      recovery is just setting it again.
+      The principled fix is **manifest announce** (Tier 1): a box that announces
+      its live config on connect makes the divergence visible instead of silent.
+      A host-side auto-re-push when `extio_discover` newly wires a box would
+      auto-heal this, but it is a POLICY change — for a box with working
+      persistence it would clobber a `save`d config with dserv's stale values —
+      and it touches the deployed module shared with production Pico boxes.
 - [ ] **Data pipe: loss-free or merely loss-tolerant?** The framer resyncs on `>`
       and discards junk, so dropped frames would be invisible. The watchdog
       counter is a sequence marker — capture a few minutes with
