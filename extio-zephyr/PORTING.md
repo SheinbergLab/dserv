@@ -99,11 +99,21 @@ Keep the distinction that matters: a local free-running clock needs no peer and
 
 ## Tier 1 — box functionality rigs depend on
 
-- [ ] **Manifest / self-description announce.** Nothing is published: `board`,
-      `fw`, `build`, `boot`, `desc`, `channel`, `pins/in`, `pins/out`, `obs_pin`,
-      `sync_pin`, `transport`, `dserv`, `ip`, `uptime_us`. This is how a host
-      learns what a box *is*, and what drives extio-setup and the fleet page.
-      Cheapest large win — no dependencies.
+- [x] **Manifest / self-description announce — DONE 2026-07-23** (commit
+      ae7c9c5). `src/box_announce.{h,c}`: identity (`transport`, `board`,
+      `build`, `fw`, `boot` from hwinfo reset cause, `channel`, `ip`), manifest
+      (`desc`, `pins/in`, `pins/out`, `obs_pin`, `sync_pin`, `mcp_en`,
+      `oled_en`, `label/<n>`, `group/<name>/{pins,settle_ms,quiet,idx}`), and
+      current DI + chord levels. **6 state keys → 31 on teensy40.**
+      Fires on `BOX_NET_RESET` (a host opening the pipe); the manifest half
+      re-fires on any label/desc/group or pin-map edit.
+      Ghost avoidance is part of the contract, since dserv retains datapoints
+      forever: obs/sync pin publish `-1` when off, a cleared label re-publishes
+      `""` exactly once (published-mask), a disabled pin drops out of
+      `pins/in|out`.
+      Still absent vs the Pico's 39: the `sync/*` and `echo/*` clock keys (need
+      clock sync), `ain/*` (needs analog), `ota/*`, and the BLE/battery keys.
+      `uptime_us` and a `dserv` target key are easy follow-ons.
 - [x] **DI groups (chords) — DONE 2026-07-23** (commit f7d914d). `box_group.h`
       wired into the service loop: `group_feed` per debounced edge, `group_poll`
       every pass (settle windows expire BETWEEN edges), publishing
