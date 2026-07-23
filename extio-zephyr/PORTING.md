@@ -150,11 +150,30 @@ the pin, publishes `state/in_obs`).
       Two config fixes were needed together — the stack size AND
       `CONFIG_DISK_DRIVERS=y` (see below), which is why earlier attempts failed
       in two different ways at once.
-- [ ] **Persistence — NVS/FlexSPI backend still unproven.** The XIP-flash-write
-      hazard is a different mechanism and may well be real, but it was diagnosed
-      under the same blindness that produced the wrong SD verdict. Re-test it
-      with the boot log attached before trusting the old conclusion.
-      RW612 NVS remains the mature path and is still unvalidated on hardware.
+- [x] **Persistence — NVS/FlexSPI backend ALSO WORKS on teensy41 (2026-07-23).**
+      Re-tested with the boot log attached: **no crash, USB enumerates, and
+      `obs.pin=7` survives a reboot** — i.e. NVS writes the same QSPI flash the
+      chip XIP-executes from, successfully. The old "re-inits the controller and
+      hard-faults at boot" verdict does not reproduce.
+      **Both persistence verdicts were the SAME bug**: NVS also mounts from
+      `main()`, so it overflowed the 4096 stack exactly like FATFS did. This test
+      inherited `CONFIG_MAIN_STACK_SIZE=8192` from `boards/teensy41.conf` (board
+      confs are auto-merged) and simply worked. `CONFIG_FLASH_MCUX_FLEXSPI_XIP=y`
+      is enabled automatically by the RT10xx SoC defconfig, so the XIP-safe path
+      was never missing.
+      Needs a `storage_partition`, which teensy4 does not define — the test
+      overlay carved the last 64 KB of the 8 MB W25Q64:
+      `partition@7f0000 { label = "storage"; reg = <0x007f0000 DT_SIZE_K(64)>; }`
+      under a `compatible = "fixed-partitions"` parent (box_flash.c uses
+      `DT_MTD_FROM_FIXED_PARTITION`).
+      **Not yet checked:** whether `teensy_loader_cli`/HalfKay full-chip-erases,
+      which would wipe saved config on every REFLASH (surviving reboots — what
+      was tested — is the functional requirement).
+      **Open choice:** NVS needs no SD card and would work on **teensy40** too,
+      and it exercises the same `box_flash.c` the RW612 will use — a real bench
+      advantage. SD is architecturally safer (separate device, no XIP write).
+      Teensy currently ships the SD backend; NVS was validated from a scratch
+      config and is NOT committed.
 
 ### Boot-log channel (how the SD crash was finally seen)
 
