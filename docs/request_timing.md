@@ -151,7 +151,28 @@ missing. Both bias rho downward — treat a headless number as a floor.
 Conversely the virtual subject never pauses or disengages, which biases
 trial rate *upward*; that direction is conservative for a headroom test.
 
-## Baseline: macOS, M-series, 2026-07-22
+**`virtual_subject.tcl` is not in the .deb.** It is an example, so a
+packaged install has no copy under `$DSPATH/config`. Copy it next to the
+harness (`scp config/virtual_subject.tcl <host>:~/timing/`);
+`run_virtual_session.sh` looks there second.
+
+**Paths passed to `source` must be absolute.** They are evaluated inside
+dserv, which resolves relative paths against ITS cwd, not the calling
+script's — so `./virtual_subject.tcl` silently fails to load even when it
+sits right next to the script that named it.
+
+**`dservctl` exits 0 even when the Tcl it sent raises.** Its return code
+proves nothing, so it must not gate anything and must not be left bare
+under `set -e` (which will kill a script with no message at all). Probe
+for the effect you wanted instead — `run_virtual_session.sh` checks
+`expr 6*7` against `42`.
+
+**Check where stim2 actually runs.** Production rigs point at a remote
+stim2 host, all-in-one trainers run it locally. The `ess` blocking
+numbers mean completely different things in the two topologies (see
+below), so record which one you measured.
+
+## First baseline: macOS, M-series, 2026-07-22
 
 dserv with 21 interpreters, `pursuit/ballistic/ballistic_detect`,
 virtual subject, 250 Hz virtual eye, stim running.
@@ -184,14 +205,82 @@ What the tails actually were, once attributed:
   66.8 ms → 0.9 ms, rho 0.033 → 0.0005. Linux was never affected (a
   by-id glob, no exec).
 
-### Conclusion drawn
+## Cross-platform results, 2026-07-23
 
-The concern that motivated the exercise — CPU-bound Tcl throughput on a
-slower core — turned out to be a rounding error. What consumes wall-clock
-is *waiting*: on stim's frame, on device I/O, on the scheduler. None of
-that scales with core speed. The platform risk therefore sits with the
-GPU and display pipeline (ESS is frame-gated by stim) and with OS/RT
-tuning, not with the A55.
+Same paradigm, same virtual subject, same 250 Hz eye, `performance`
+governor everywhere. 300 s windows, ~55 trials each.
 
-Re-run this on the Pi 5 for the comparison baseline before trusting that
-conclusion on new hardware.
+| host | SoC | stim2 |
+|---|---|---|
+| Mac | Apple M-series | local |
+| pi4dev | Pi 4, Cortex-A72 @1.8 GHz | local |
+| rpi500 | Pi 500, Cortex-A76 | **remote (separate host)** |
+
+### Real interpreter work — the clean CPU comparison
+
+Labels with no blocking in them. This is what scales with core speed.
+
+| label | Mac | pi4 (A72) | rpi500 (A76) | A72/A76 |
+|---|---|---|---|---|
+| `dpoint_set eventlog/events` | 13.5 us | 15.5 us | **9.4 us** | 1.65x |
+| `dpoint_script pursuit/coh_event` | 185.8 us | 230.0 us | **143.5 us** | 1.60x |
+| `dpoint_script proc/windows/status` | 90.6 us | 118.6 us | **82.9 us** | 1.43x |
+| `dpoint_script timer/2` | 1354 us | 1173 us | **691 us** | 1.70x |
+
+**A72 -> A76 is ~1.5x**, and the A76 beats the Mac on every one. Use this
+as the calibration point when reasoning about an A55.
+
+### Blocking on stim — depends entirely on topology
+
+| host | stim2 | `timer/0` mean | `button_simulate` mean | `ess` rho |
+|---|---|---|---|---|
+| Mac | local | 10,143 us | 14,610 us | 0.0155 |
+| pi4 | local | 18,212 us | 27,224 us | **0.0286** |
+| rpi500 | remote | 9,340 us | 14,702 us | **0.0150** |
+
+rpi500's *remote* stim is twice as fast as pi4's *local* stim: a network
+round-trip to a box with a real GPU costs less than rendering locally on
+weak graphics. Local rendering roughly doubles both the blocking time and
+`ess` rho.
+
+Note rpi500 carries MORE real traffic than pi4 — `slider` and `ain` at
+250 req/s each from actual hardware — and still shows lower rho
+throughout.
+
+### Linux tails are far better than macOS
+
+The ~40 ms stalls in the macOS baseline were the OS, as suspected:
+
+| handler (mean ~45 us) | Mac max | pi4 max | rpi500 max |
+|---|---|---|---|
+| `virtual_eye` `virtualeyeTimer/0` | 43,636 us | **780 us** | **152 us** |
+| `em` `eyetracking/virtual` | 52,978 us | **601 us** | **233 us** |
+
+~900x outliers on macOS, ~5-18x on Linux. Do not read macOS tail numbers
+as representative of a rig.
+
+## Conclusions
+
+Utilization is not the constraint anywhere: max rho was 0.033 (macOS,
+before the extio fix), 0.0286 (pi4) and 0.0164 (rpi500). Even a 2019 A72
+leaves `ess` ~25x of headroom before the queueing knee.
+
+The concern that motivated all this — CPU-bound Tcl throughput on a
+slower core — is a rounding error. Real interpreter work moved only
+~1.5x across two CPU generations. What consumes wall-clock is *waiting*.
+
+**The i.MX95 question therefore splits by deployment:**
+
+- **Production rigs (remote stim2).** The host never renders, so the
+  Mali-G310 is irrelevant and so is the stim2 DRM/KMS work. Only the
+  interpreter column matters, and an A55 near or below the A72 still
+  leaves comfortable margin. This looks like a safe swap.
+- **All-in-one trainers (local stim2).** The GPU dominates: local
+  rendering on weak graphics doubled both blocking time and `ess` rho.
+  Here the Mali-G310 question is live, and the DRM/KMS port attacks
+  exactly this number by removing the compositor from the present path.
+
+Still to measure: an actual trainer (pi4dev is a dev box, not a trainer),
+and a trainer re-measured after the DRM/KMS port. If that pulls local
+blocking from ~18 ms toward the ~9 ms offloaded figure, the trainer case
+stops being GPU-bound too.

@@ -24,11 +24,40 @@ NAME=${NAME:-timing_run}
 
 case "$1" in
 start)
-    echo "spawning virtual_subject..."
-    dservctl -c "subprocess virtual_subject \"source $DSPATH/config/virtual_subject.tcl\"" >/dev/null
-    sleep 1
-    [ "$(dservctl virtual_subject 'expr 6*7')" = "42" ] || {
-        echo "virtual_subject did not come up" >&2; exit 1; }
+    # virtual_subject.tcl is an EXAMPLE and is NOT shipped in the .deb, so on a
+    # packaged install it will not be under $DSPATH/config. Fall back to a copy
+    # sitting next to this script (scp it across with the harness).
+    # virtual_subject.tcl is an EXAMPLE and is NOT shipped in the .deb, so on a
+    # packaged install it will not be under $DSPATH/config. Fall back to a copy
+    # next to this script (scp it across with the harness).
+    #
+    # The path MUST be absolute: `source` is evaluated inside dserv, which
+    # resolves relative paths against ITS cwd, not this script's.
+    HERE=$(cd "$(dirname "$0")" && pwd)
+    VSUBJ="$DSPATH/config/virtual_subject.tcl"
+    [ -f "$VSUBJ" ] || VSUBJ="$HERE/virtual_subject.tcl"
+    [ -f "$VSUBJ" ] || {
+        echo "virtual_subject.tcl not found (looked in $DSPATH/config and $HERE)." >&2
+        echo "Copy it from the repo: scp config/virtual_subject.tcl <host>:$HERE/" >&2
+        exit 1; }
+
+    if [ "$(dservctl virtual_subject 'expr 6*7' 2>&1)" = "42" ]; then
+        echo "virtual_subject already running -- re-sourcing $VSUBJ"
+        dservctl virtual_subject "source $VSUBJ" >/dev/null 2>&1 || true
+    else
+        echo "spawning virtual_subject from $VSUBJ ..."
+        # dservctl exits 0 even when the Tcl it sent raises, so its return code
+        # proves nothing and must not gate anything -- the probe below is the
+        # real check. Hence the `|| true`, which also keeps `set -e` from
+        # killing the script here without printing anything.
+        dservctl -c "subprocess virtual_subject \"source $VSUBJ\"" >/dev/null 2>&1 || true
+        sleep 1
+        if [ "$(dservctl virtual_subject 'expr 6*7' 2>&1)" != "42" ]; then
+            echo "virtual_subject did not come up. dserv said:" >&2
+            dservctl -c "subprocess virtual_subject \"source $VSUBJ\"" 2>&1 | head -3 >&2
+            exit 1
+        fi
+    fi
 
     echo "loading $SYS/$PROTO/$VARIANT..."
     dservctl ess "::ess::load_system $SYS $PROTO $VARIANT" >/dev/null
