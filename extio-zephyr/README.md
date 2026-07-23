@@ -65,6 +65,10 @@ peripherals. Only C identifiers changed.
 
 ## Building blocks (roadmap)
 
+> For what the Pico box does that this port does **not** yet — the remaining
+> feature gap, the open bugs, and a specific lead on `ptp_ready=0` — see
+> **[PORTING.md](PORTING.md)**.
+
 1. **[done] Fork + clean the core** — `pico_*`→`box_*`, verified by the forked
    `tools/box_sim.c --selftest` (compiles with plain `cc`, selftest passes).
 2. **[done] Core under Zephyr** — `src/main.c` smoke test cross-builds clean for
