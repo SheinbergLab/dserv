@@ -140,6 +140,19 @@ the pin, publishes `state/in_obs`).
 - [ ] **Persistence.** Written (`box_flash.h`, NVS + SD-FAT backends) but
       validated on **no** board: both Teensy backends hard-fault at boot (XIP
       FlexSPI NOR re-init; usdhc/SD stack). RW612 NVS is the mature path.
+      On the Teensy 4.1 SD attempt specifically — devicetree is NOT the problem:
+      `teensy41.dts` already supplies `usdhc1` with four pinctrl states and a
+      `zephyr,sdmmc-disk` child (`disk-name = "SD"`). But our commented-out
+      config in `boards/teensy41.conf` is **doubly wrong**: `DISK_DRIVER_SDMMC`
+      lives in `drivers/disk/Kconfig.sdmmc`, which is sourced INSIDE
+      `if DISK_DRIVERS`, so `CONFIG_DISK_DRIVER_SDMMC=y` without
+      `CONFIG_DISK_DRIVERS=y` (which `samples/subsys/fs/fatfs_fstab` sets first)
+      is inert — the SD disk driver was never built. That does not explain the
+      hard fault (`CONFIG_SDHC=y` still builds the usdhc controller, where init
+      died), so fix both before retrying. And add `CONFIG_LOG=y`: that crash was
+      debugged blind, and a pre-USB fault is only visible on **lpuart6 (pins
+      0/1)** via a USB-serial adapter — the one job that adapter is worth buying
+      for.
 - [ ] **Watchdog.** `wdt 0|1|test` is advertised in CLI help with no platform
       handler behind it. Zephyr has its own WDT subsystem — do not transliterate
       the Pico's dual-core scheme.
