@@ -11,6 +11,7 @@ project(extio_zephyr LANGUAGES C)
 # Common to every board: core + GPIO + USB transport + the uplink arbiter.
 target_sources(app PRIVATE
 	src/main.c
+	src/box_announce.c             # the box describing itself to dserv
 	src/platform/box_gpio.c        # block #3: GPIO + hardware-counter pulse
 	src/platform/box_console.c     # two-way CLI over the USB console CDC
 	src/platform/box_usbd.c        # block #4: USB device (device_next) context

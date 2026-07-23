@@ -22,6 +22,7 @@
 #include "box_persist.h"
 #include "box_gpio.h"
 #include "box_group.h"
+#include "box_announce.h"
 #include "box_console.h"
 #if defined(BOX_HAVE_PERSIST)
 #include "box_flash.h"
@@ -122,10 +123,14 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 	cfg_result_t r = dserv_dispatch(&cfg, &m, &cmd);
 	if (r == CFG_GPIO && cmd.op != GPIO_OP_NONE) {
 		box_gpio_exec(&cfg, &cmd);            /* immediate DO set/pulse */
-	} else if (r == CFG_GROUP) {
-		/* group/label/desc change: the member map moved, so reseed the
-		 * chord machines from the pins' current levels. */
-		groups_resync();
+	} else if (r == CFG_GROUP || r == CFG_LABEL || r == CFG_DESC) {
+		/* group/label/desc change: reseed the chord machines from the
+		 * pins' current levels, and re-announce so the edit reaches
+		 * consumers without waiting for a reconnect. */
+		if (r == CFG_GROUP) {
+			groups_resync();
+		}
+		box_announce_manifest(&cfg);
 	} else if (r == CFG_PIN_MODE || r == CFG_OBS_PIN || r == CFG_SYNC_PIN ||
 		   r == CFG_ACTIVE_LOW || r == CFG_DEBOUNCE) {
 		/* ANY change to the pin map has to be pushed to the hardware. Notably
@@ -135,6 +140,7 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 		 * path already re-applied (CLI_PIN); the datapoint path did not. */
 		box_gpio_apply_config(&cfg);
 		groups_resync();          /* DI levels may have changed meaning */
+		box_announce_manifest(&cfg);   /* pins/in|out, obs_pin, sync_pin moved */
 	} else if (r == CFG_SAVE) {
 #if defined(BOX_HAVE_PERSIST)
 		/* Persist the whole config blob so it survives reboot/power-cycle. */
@@ -307,6 +313,9 @@ int main(void)
 		int n = box_uplink_poll(rx, sizeof rx);
 		if (n == BOX_NET_RESET) {
 			dserv_framer_reset(&rx_framer);
+			/* A host just opened the pipe. dserv only learns what it is
+			 * told while listening, so describe the box now. */
+			box_announce_burst(&cfg, groups);
 		} else if (n > 0) {
 			dserv_framer_feed(&rx_framer, rx, (uint32_t) n, on_usb_frame, NULL);
 		}
