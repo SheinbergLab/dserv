@@ -47,6 +47,16 @@ int box_gpio_poll_di(const box_config_t *c, box_di_event_t *out);
 /* Drive the obs-mirror output to the box's live copy of ess/in_obs (no-op off). */
 void box_gpio_obs_mirror(const box_config_t *c, int obs);
 
+/* The box's monotonic microsecond clock -- the SAME source that stamps
+ * box_di_event_t.t_us, so callers can compare against DI event times (the DI
+ * chord-settle windows in box_group.h need exactly that). */
+uint64_t box_gpio_now_us(void);
+
+/* Current LOGICAL level of each configured DI pin, indexed by box pin number
+ * (active_low already applied); non-DI pins read 0. Used to seed the DI group
+ * state machines so a switch already held at boot is not reported as an edge. */
+void box_gpio_read_di_levels(const box_config_t *c, uint8_t levels[BOX_NPINS]);
+
 /* Latched hardware obs-sync edge time in microseconds (box clock).
  * rising=1 -> begin_obs edge, rising=0 -> end_obs edge. 0 if none seen. */
 uint64_t box_gpio_sync_edge_us(int rising);

@@ -21,6 +21,7 @@
 #include "dserv_config.h"
 #include "box_persist.h"
 #include "box_gpio.h"
+#include "box_group.h"
 #include "box_console.h"
 #if defined(BOX_HAVE_PERSIST)
 #include "box_flash.h"
@@ -38,6 +39,35 @@
 
 static box_config_t   cfg;
 static dserv_framer_t rx_framer;
+static group_rt_t     groups[BOX_NGROUPS];   /* DI chord-settle state machines */
+
+/* Publish one settled chord: extio/<name>/state/group/<label>, value = the
+ * member bitmask (bit i = i-th LOWEST member pin, the order the manifest
+ * announces), stamped at the episode's onset edge. */
+static void publish_group(int g, uint8_t bits, uint64_t t_us)
+{
+	uint8_t f[DSERV_MSG_LEN];
+	char gn[BOX_LABEL_MAX + 4], leaf[40], nm[80];
+
+	dserv_group_name(&cfg, g, gn, sizeof gn);
+	snprintf(leaf, sizeof leaf, "group/%s", gn);
+	dserv_state_name(&cfg, nm, sizeof nm, leaf);
+	dserv_msg_int(f, nm, t_us, bits);
+	box_uplink_send(f, DSERV_MSG_LEN);
+}
+
+/* (Re)seed every group from the pins' CURRENT logical levels, so a switch
+ * already held when a group is (re)configured is the baseline rather than a
+ * phantom edge. Call after any change to the group/pin map. */
+static void groups_resync(void)
+{
+	uint8_t levels[BOX_NPINS];
+
+	box_gpio_read_di_levels(&cfg, levels);
+	for (int g = 0; g < BOX_NGROUPS; g++) {
+		group_reset(&groups[g], &cfg, g, levels);
+	}
+}
 
 /* Demo pins, per board. box pin n -> <box-gpio-port>.n (see box_gpio.h), so
  * these land on real hardware on each target. */
@@ -92,6 +122,10 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 	cfg_result_t r = dserv_dispatch(&cfg, &m, &cmd);
 	if (r == CFG_GPIO && cmd.op != GPIO_OP_NONE) {
 		box_gpio_exec(&cfg, &cmd);            /* immediate DO set/pulse */
+	} else if (r == CFG_GROUP) {
+		/* group/label/desc change: the member map moved, so reseed the
+		 * chord machines from the pins' current levels. */
+		groups_resync();
 	} else if (r == CFG_PIN_MODE || r == CFG_OBS_PIN || r == CFG_SYNC_PIN ||
 		   r == CFG_ACTIVE_LOW || r == CFG_DEBOUNCE) {
 		/* ANY change to the pin map has to be pushed to the hardware. Notably
@@ -100,6 +134,7 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 		 * left the pin unclaimed, so the mirror drove nothing. The console CLI
 		 * path already re-applied (CLI_PIN); the datapoint path did not. */
 		box_gpio_apply_config(&cfg);
+		groups_resync();          /* DI levels may have changed meaning */
 	} else if (r == CFG_SAVE) {
 #if defined(BOX_HAVE_PERSIST)
 		/* Persist the whole config blob so it survives reboot/power-cycle. */
@@ -201,6 +236,7 @@ int main(void)
 		cfg_loaded = (ln > 0 && box_persist_deserialize(lb, (uint32_t) ln, &cfg) == 0);
 		if (cfg_loaded) {
 			box_gpio_apply_config(&cfg);   /* apply the loaded pin map/name */
+			groups_resync();               /* seed chords from real pin state */
 		}
 	}
 	box_console_printf("persist store                  -> config %s\n",
@@ -279,10 +315,47 @@ int main(void)
 		while (box_gpio_poll_di(&cfg, &ev)) {
 			uint8_t f[DSERV_MSG_LEN];
 			char leaf[24];
+			/* publish the LOGICAL level, so `pin N active_low 1` means
+			 * something on the wire (box_gpio reports raw). */
+			int lvl = di_logical(&cfg, ev.pin, ev.level);
+
+			/* Feed every configured chord group. A member of a `quiet`
+			 * group is reported ONLY as part of its settled chord -- the
+			 * group replaces the per-pin event rather than doubling it. */
+			int quiet = 0;
+			for (int g = 0; g < BOX_NGROUPS; g++) {
+				if (cfg.group_pins[g] &&
+				    group_feed(&groups[g], &cfg, g, ev.pin, lvl, ev.t_us) &&
+				    cfg.group_quiet[g]) {
+					quiet = 1;
+				}
+			}
+			if (quiet) {
+				continue;
+			}
 			snprintf(leaf, sizeof leaf, "di/%u", ev.pin);
 			dserv_state_name(&cfg, name, sizeof name, leaf);   /* extio/<name>/state/di/<pin> */
-			dserv_msg_int(f, name, ev.t_us, ev.level);
+			dserv_msg_int(f, name, ev.t_us, lvl);
 			box_uplink_send(f, DSERV_MSG_LEN);
+		}
+
+		/* Settle windows expire between edges, so poll them every pass --
+		 * a chord closes settle_ms after its LAST member edge, and is stamped
+		 * at the FIRST (the true movement onset). */
+		{
+			group_out_t go[2];
+			uint64_t gnow = box_gpio_now_us();
+
+			for (int g = 0; g < BOX_NGROUPS; g++) {
+				if (!cfg.group_pins[g]) {
+					continue;
+				}
+				int gn = group_poll(&groups[g], &cfg, g, gnow, go);
+
+				for (int k = 0; k < gn; k++) {
+					publish_group(g, go[k].bits, go[k].t_us);
+				}
+			}
 		}
 
 #if defined(CONFIG_BT)

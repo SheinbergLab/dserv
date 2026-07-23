@@ -269,6 +269,26 @@ int box_gpio_poll_di(const box_config_t *c, box_di_event_t *out)
 	return 0;
 }
 
+uint64_t box_gpio_now_us(void)
+{
+	return now_us();
+}
+
+void box_gpio_read_di_levels(const box_config_t *c, uint8_t levels[BOX_NPINS])
+{
+	for (int i = 0; i < BOX_NPINS; i++) {
+		levels[i] = 0;
+		/* DI modes only (in / in_pullup); outputs and off read 0. */
+		if (c->pin_mode[i] == 2 || c->pin_mode[i] == 3) {
+			int raw = gpio_pin_get(port, off_of(i));
+
+			if (raw >= 0) {
+				levels[i] = (uint8_t) di_logical(c, i, raw);
+			}
+		}
+	}
+}
+
 void box_gpio_obs_mirror(const box_config_t *c, int obs)
 {
 	if (!obs_mirror_enabled(c)) {
