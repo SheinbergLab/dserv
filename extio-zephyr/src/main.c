@@ -22,6 +22,7 @@
 #include "box_persist.h"
 #include "box_gpio.h"
 #include "box_group.h"
+#include "box_clock.h"
 #include "box_announce.h"
 #include "box_console.h"
 #if defined(BOX_HAVE_PERSIST)
@@ -41,6 +42,21 @@
 static box_config_t   cfg;
 static dserv_framer_t rx_framer;
 static group_rt_t     groups[BOX_NGROUPS];   /* DI chord-settle state machines */
+static box_clock_t    boxclk;                /* box time -> dserv time alignment */
+static uint64_t       obs_begin_us;          /* box time of the last beginobs anchor */
+
+/* A hardware sync edge may anchor an obs toggle only if it is RECENT: well under
+ * the shortest obs on/off cadence (seconds), so a stale latched edge from the
+ * previous toggle can never anchor the current one. */
+#define SYNC_EDGE_WINDOW_US 250000
+
+/* Every published event time goes through here. Before the first sync this
+ * returns 0, which tells dserv to arrival-stamp -- events still publish, they
+ * are just not aligned yet. */
+static inline uint64_t event_stamp(uint64_t t_us)
+{
+	return box_clock_stamp(&boxclk, t_us);
+}
 
 /* Publish one settled chord: extio/<name>/state/group/<label>, value = the
  * member bitmask (bit i = i-th LOWEST member pin, the order the manifest
@@ -53,8 +69,48 @@ static void publish_group(int g, uint8_t bits, uint64_t t_us)
 	dserv_group_name(&cfg, g, gn, sizeof gn);
 	snprintf(leaf, sizeof leaf, "group/%s", gn);
 	dserv_state_name(&cfg, nm, sizeof nm, leaf);
-	dserv_msg_int(f, nm, t_us, bits);
+	dserv_msg_int(f, nm, t_us ? event_stamp(t_us) : 0, bits);
 	box_uplink_send(f, DSERV_MSG_LEN);
+}
+
+/* Clock-alignment telemetry, published at every obs anchor. This is how you tell
+ * from the host side whether stamping is trustworthy: `source` says whether the
+ * anchor was the hardware TTL edge or mere frame arrival, `transport_us` is the
+ * frame's transit lag measured against that edge (hw anchors only -- it is
+ * exactly the error a hw anchor removes), and `rate_ppb` appears once enough
+ * trusted pairs have taught the crystal rate. */
+static void publish_sync(uint64_t dserv_us, uint64_t box_us, int64_t offset_us,
+			 int hw, int64_t transport_us)
+{
+	uint8_t f[DSERV_MSG_LEN];
+	char nm[80];
+
+	dserv_state_name(&cfg, nm, sizeof nm, "sync/dserv_us");
+	dserv_msg_int64(f, nm, dserv_us, (int64_t) dserv_us);
+	box_uplink_send(f, DSERV_MSG_LEN);
+
+	dserv_state_name(&cfg, nm, sizeof nm, "sync/box_us");
+	dserv_msg_int64(f, nm, dserv_us, (int64_t) box_us);
+	box_uplink_send(f, DSERV_MSG_LEN);
+
+	dserv_state_name(&cfg, nm, sizeof nm, "sync/offset_us");
+	dserv_msg_int64(f, nm, dserv_us, offset_us);
+	box_uplink_send(f, DSERV_MSG_LEN);
+
+	dserv_state_name(&cfg, nm, sizeof nm, "sync/source");
+	dserv_msg_string(f, nm, dserv_us, hw ? "hw" : "sw");
+	box_uplink_send(f, DSERV_MSG_LEN);
+
+	if (transport_us >= 0) {
+		dserv_state_name(&cfg, nm, sizeof nm, "sync/transport_us");
+		dserv_msg_int64(f, nm, dserv_us, transport_us);
+		box_uplink_send(f, DSERV_MSG_LEN);
+	}
+	if (boxclk.rate_valid) {          /* learned crystal rate: hw anchors only */
+		dserv_state_name(&cfg, nm, sizeof nm, "sync/rate_ppb");
+		dserv_msg_int(f, nm, dserv_us, boxclk.rate_ppb);
+		box_uplink_send(f, DSERV_MSG_LEN);
+	}
 }
 
 /* (Re)seed every group from the pins' CURRENT logical levels, so a switch
@@ -99,6 +155,27 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 
 	if (dserv_msg_name_eq(&m, BOX_SYNC_DP)) {
 		int obs = (int) dserv_msg_as_long(&m);
+		uint64_t now_box = box_gpio_now_us();
+
+		/* ANCHOR. Prefer the IRQ-latched TTL edge (jitter ~us) over frame
+		 * arrival (100s of us of transport jitter): a hardware anchor takes
+		 * the transport out of the error budget entirely, and only trusted
+		 * (hw) anchors are allowed to teach the crystal rate. */
+		uint64_t anchor_box = now_box;
+		int hw = 0;
+
+		if (sync_input_enabled(&cfg)) {
+			uint64_t e = box_gpio_sync_edge_us(obs);   /* rising for obs=1 */
+
+			if (e && now_box - e < SYNC_EDGE_WINDOW_US) {
+				anchor_box = e;
+				hw = 1;
+			}
+		}
+		box_clock_sync(&boxclk, m.timestamp, anchor_box, hw);
+		if (obs) {
+			obs_begin_us = anchor_box;   /* epoch for box-scheduled events */
+		}
 
 		/* drive the obs-mirror output (LED / scope trace) */
 		box_gpio_obs_mirror(&cfg, obs);
@@ -112,10 +189,12 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 		dserv_msg_int(of, onm, m.timestamp, obs);
 		box_uplink_send(of, DSERV_MSG_LEN);
 
-		/* NOTE: the Pico additionally snaps its clock off this frame (dserv
-		 * timestamp + hardware sync-edge anchor) and uses it as the beginobs
-		 * epoch for GPIO_OP_SCHED_PULSE/SCHED_TIMER. That clock machinery is
-		 * NOT ported yet -- this mirror is accurate to frame arrival only. */
+		publish_sync(m.timestamp, anchor_box, boxclk.offset_us, hw,
+			     hw ? (int64_t)(now_box - anchor_box) : -1);
+
+		/* NOTE: GPIO_OP_SCHED_PULSE / SCHED_TIMER (fire at beginobs + N us)
+		 * are still unhandled in box_gpio_exec -- obs_begin_us above is the
+		 * epoch they will need. */
 		return;
 	}
 
@@ -344,7 +423,7 @@ int main(void)
 			}
 			snprintf(leaf, sizeof leaf, "di/%u", ev.pin);
 			dserv_state_name(&cfg, name, sizeof name, leaf);   /* extio/<name>/state/di/<pin> */
-			dserv_msg_int(f, name, ev.t_us, lvl);
+			dserv_msg_int(f, name, event_stamp(ev.t_us), lvl);
 			box_uplink_send(f, DSERV_MSG_LEN);
 		}
 
