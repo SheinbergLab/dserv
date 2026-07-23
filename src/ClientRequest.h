@@ -2,6 +2,7 @@
 #define CLIENT_REQUEST_H
 
 #include "sharedqueue.h"
+#include "RequestTiming.h"
 
 /*
  * client_request
@@ -35,6 +36,13 @@ typedef struct client_request_s {
   int socket_fd = -1;           // Socket FD if request came from socket (-1 if not)
   std::string websocket_id;     // WebSocket ID if request came from websocket (empty if not)
   std::string request_id;       // Client-provided request ID for async WebSocket responses
+
+  // Stamped at construction, which covers the common case of building a
+  // request immediately before queueing it.  IMPORTANT: the socket
+  // handlers reuse one struct for the life of a connection, so any site
+  // that reuses a request MUST re-stamp this before push_back or the
+  // measured queue residency becomes "time since the struct was built".
+  uint64_t t_enqueue = request_timing_now_ns();
 } client_request_t;
 
 #endif

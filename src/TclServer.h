@@ -249,6 +249,9 @@ public:
   // for client requests
   SharedQueue<client_request_t> queue;
 
+  // timing for the serialized request path (owned by the process thread)
+  RequestTiming timing;
+
   const char *PRINT_DPOINT_NAME = "print";
   const char *INTERPS_DPOINT_NAME = "dserv/interps";
   const char *SANDBOXES_DPOINT_NAME = "dserv/sandboxes";

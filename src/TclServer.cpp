@@ -2243,6 +2243,48 @@ static int subprocess_exit_cmd(ClientData clientData, Tcl_Interp *interp,
 
 
 
+/*
+ * dservTiming ?on|off|reset|stats?
+ *   Report timing for this interpreter's serialized request path.
+ *   With no argument, equivalent to "stats".
+ */
+static int dserv_timing_command(ClientData data, Tcl_Interp *interp,
+				int objc, Tcl_Obj *objv[])
+{
+  TclServer *tclserver = (TclServer *) data;
+
+  const char *sub = (objc > 1) ? Tcl_GetString(objv[1]) : "stats";
+
+  if (!strcmp(sub, "on")) {
+    tclserver->timing.set_enabled(true);
+  }
+  else if (!strcmp(sub, "off")) {
+    tclserver->timing.set_enabled(false);
+  }
+  else if (!strcmp(sub, "reset")) {
+    tclserver->timing.reset();
+  }
+  else if (!strcmp(sub, "stats")) {
+    std::string s = tclserver->timing.report();
+    Tcl_SetObjResult(interp, Tcl_NewStringObj(s.c_str(), -1));
+  }
+  else if (!strcmp(sub, "slow")) {
+    std::string s = tclserver->timing.slowest();
+    Tcl_SetObjResult(interp, Tcl_NewStringObj(s.c_str(), -1));
+  }
+  else if (!strcmp(sub, "labels")) {
+    std::string s = tclserver->timing.labels();
+    Tcl_SetObjResult(interp, Tcl_NewStringObj(s.c_str(), -1));
+  }
+  else {
+    Tcl_WrongNumArgs(interp, 1, objv,
+		     "?on|off|reset|stats|slow|labels?");
+    return TCL_ERROR;
+  }
+
+  return TCL_OK;
+}
+
 static int set_priority_command(ClientData data, Tcl_Interp *interp,
                                 int objc, Tcl_Obj *objv[])
 {
@@ -2887,6 +2929,8 @@ static void add_tcl_commands(Tcl_Interp *interp, TclServer *tserv)
   Tcl_CreateObjCommand(interp, "getVar",
                     (Tcl_ObjCmdProc *) get_var_command, tserv, NULL);
                                       
+  Tcl_CreateObjCommand(interp, "dservTiming",
+               (Tcl_ObjCmdProc *) dserv_timing_command, tserv, NULL);
   Tcl_CreateObjCommand(interp, "dservWhen",
                dserv_when_command, tserv, NULL);
   Tcl_CreateObjCommand(interp, "dservWhenCancel",
@@ -3483,6 +3527,41 @@ static int process_requests(TclServer *tserv)
     req = tserv->queue.front();
     tserv->queue.pop_front();
 
+    uint64_t t_dequeue = request_timing_now_ns();
+
+    /*
+     * Label the request so slow ones can be attributed to real code.
+     * Must be built BEFORE the switch: the REQ_DPOINT_SCRIPT case frees
+     * req.dpoint, so reading varname afterwards is a use-after-free.
+     * Only built while timing is on, since it allocates.
+     */
+    std::string timing_label;
+    if (tserv->timing.enabled()) {
+      switch (req.type) {
+      case REQ_SCRIPT:
+      case REQ_SCRIPT_NOREPLY:
+      case REQ_SCRIPT_WS_ASYNC:
+	timing_label = request_timing_script_label(req.script);
+	break;
+      case REQ_DPOINT_SCRIPT:
+	timing_label = "dpoint_script " +
+	  std::string(req.dpoint && req.dpoint->varname ?
+		      req.dpoint->varname : "?");
+	break;
+      case REQ_DPOINT:
+	timing_label = "dpoint_set " +
+	  std::string(req.dpoint && req.dpoint->varname ?
+		      req.dpoint->varname : "?");
+	break;
+      case REQ_TIMER:
+	timing_label = "timer";
+	break;
+      default:
+	timing_label = "type_" + std::to_string((int) req.type);
+	break;
+      }
+    }
+
     // set current request context so Tcl commands can access
     tserv->set_current_request(&req);
  
@@ -3584,6 +3663,10 @@ static int process_requests(TclServer *tserv)
     default:
       break;
     }
+
+    if (tserv->timing.enabled())
+      tserv->timing.record(req.type, timing_label, req.t_enqueue, t_dequeue,
+			   request_timing_now_ns());
 
     // clear context
     tserv->set_current_request(nullptr);
@@ -3691,6 +3774,10 @@ TclServer::tcp_client_process(TclServer *tserv,
     if (script.length() > 0) {
       std::string s;
       client_request.script = std::string(script);
+
+      // this struct is reused for the life of the connection, so the
+      // construction-time stamp is stale; re-stamp at each enqueue
+      client_request.t_enqueue = request_timing_now_ns();
 
       // push request onto queue for main thread to retrieve
       queue->push_back(client_request);
@@ -3802,7 +3889,10 @@ TclServer::message_client_process(TclServer *tserv,
 
       client_request.script = std::string(buffer);
       std::string s;
-      
+
+      // reused struct (see tcp_client_process): re-stamp at each enqueue
+      client_request.t_enqueue = request_timing_now_ns();
+
       // push request onto queue for main thread to retrieve
       queue->push_back(client_request);
       
