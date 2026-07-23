@@ -1,5 +1,24 @@
 /*
- * box_console.c -- interrupt-driven, non-blocking CLI console (see box_console.h).
+ * box_console.c -- the box's management console, on Zephyr's Shell subsystem.
+ *
+ * This replaces a hand-rolled CDC line editor (own ISR, RX/TX rings, echo, and
+ * backspace handling). That version dropped macOS terminal sessions under
+ * interaction; the Shell is Zephyr's battle-tested console and owns the CDC
+ * through the standard shell_uart backend (chosen zephyr,shell-uart), so all of
+ * the flushing/pacing/terminal handling is the stack's problem, not ours.
+ *
+ * Command surface is UNCHANGED: every verb registers as a shell command whose
+ * handler rejoins argv into the one line box_cli_exec already parses, so the
+ * grammar stays identical to the Pico box (and to what extio-setup drives) --
+ * `pin 3 mode out` reaches box_cli_exec exactly as before, just under a prompt.
+ *
+ * THREADING: the shell runs in its own thread, but box_cli_exec mutates the
+ * config the service loop is reading. Rather than lock the whole loop, a command
+ * is MARSHALED: the shell thread parks the line, wakes the loop, and blocks; the
+ * loop executes it (config + GPIO stay single-threaded, exactly as before) and
+ * hands the response back. Only one shell thread exists, so a single slot is
+ * enough. Output side: box_console_write goes to the shell backend, and the
+ * shell maps '\n' -> "\r\n" itself (SHELL_FLAG_OLF_CRLF), so we do NOT translate.
  */
 #include "box_console.h"
 #include "box_cli.h"
@@ -7,73 +26,37 @@
 #include "box_event.h"
 
 #include <zephyr/kernel.h>
-#include <zephyr/device.h>
-#include <zephyr/drivers/uart.h>
-#include <zephyr/sys/ring_buffer.h>
+#include <zephyr/shell/shell.h>
+#include <zephyr/shell/shell_uart.h>
+#include <zephyr/sys/atomic.h>
 #include <zephyr/sys/reboot.h>
 #include <string.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <errno.h>
 
 #if defined(BOX_HAVE_PERSIST)
 #include "box_flash.h"
 #include "box_persist.h"
 #endif
 
-static const struct device *con;
-
-RING_BUF_DECLARE(con_rx, 256);
-RING_BUF_DECLARE(con_tx, 2048);
-
-/* CDC console ISR: RX -> con_rx, drain con_tx -> TX FIFO. */
-static void con_isr(const struct device *dev, void *user)
-{
-	ARG_UNUSED(user);
-	while (uart_irq_update(dev), uart_irq_is_pending(dev)) {
-		if (uart_irq_rx_ready(dev)) {
-			uint8_t tmp[64];
-			int n = uart_fifo_read(dev, tmp, sizeof tmp);
-			if (n > 0) {
-				(void) ring_buf_put(&con_rx, tmp, (uint32_t) n);
-				box_event_signal();   /* wake the loop to service the CLI */
-			}
-		}
-		if (uart_irq_tx_ready(dev)) {
-			uint8_t *p;
-			uint32_t sz = ring_buf_get_claim(&con_tx, &p, 64);
-			if (sz == 0) {
-				uart_irq_tx_disable(dev);
-			} else {
-				int w = uart_fifo_fill(dev, p, sz);
-				ring_buf_get_finish(&con_tx, w > 0 ? (uint32_t) w : 0);
-			}
-		}
-	}
-}
+/* ---------------- output ---------------- */
 
 void box_console_write(const char *s)
 {
-	if (!con) {
+	const struct shell *sh = shell_backend_uart_get_ptr();
+
+	if (!sh) {
 		return;
 	}
-	/* Translate a bare '\n' to '\r\n' so a raw terminal returns to column 0
-	 * (box_cli already emits '\r\n'; the '\r' guard avoids doubling those). */
-	char prev = 0;
-	for (const char *p = s; *p; p++) {
-		if (*p == '\n' && prev != '\r') {
-			(void) ring_buf_put(&con_tx, (const uint8_t *) "\r\n", 2);
-		} else {
-			(void) ring_buf_put(&con_tx, (const uint8_t *) p, 1);
-		}
-		prev = *p;
-	}
-	uart_irq_tx_enable(con);
+	shell_fprintf(sh, SHELL_NORMAL, "%s", s);
 }
 
 void box_console_printf(const char *fmt, ...)
 {
 	char buf[256];
 	va_list ap;
+
 	va_start(ap, fmt);
 	vsnprintf(buf, sizeof buf, fmt, ap);
 	va_end(ap);
@@ -82,27 +65,101 @@ void box_console_printf(const char *fmt, ...)
 
 int box_console_init(void)
 {
-	con = DEVICE_DT_GET(DT_NODELABEL(cdc_acm_console));
-	if (!device_is_ready(con)) {
-		con = NULL;
-		return -1;
-	}
-	uart_irq_callback_user_data_set(con, con_isr, NULL);
-	uart_irq_rx_enable(con);
+	/* Nothing to claim: the shell autostarts on the chosen zephyr,shell-uart
+	 * (the console CDC) before main() runs. */
 	return 0;
 }
 
-/* ---- line assembly + dispatch to box_cli ---- */
-static char line_buf[128];
-static int  line_len;
+/* ---------------- shell thread <-> service loop handoff ---------------- */
 
-static void run_line(box_config_t *cfg, const char *line)
+static box_config_t *g_cfg;             /* published by box_console_service */
+
+static struct {
+	char line[192];
+	char resp[1024];                /* `show`/`help` output is large */
+} req;
+
+static atomic_t req_pending = ATOMIC_INIT(0);
+static K_SEM_DEFINE(req_done, 0, 1);
+
+/* Append to the pending response (used by the action handlers below). */
+static void resp_add(const char *s)
 {
-	char resp[1024];   /* `help`/`show` output is large */
-	gpio_cmd_t cmd = { .op = GPIO_OP_NONE };
-	cli_action_t a = box_cli_exec(cfg, line, resp, sizeof resp, &cmd);
+	size_t n = strlen(req.resp);
 
-	box_console_write(resp);   /* the OK/ERR line box_cli produced */
+	if (n < sizeof req.resp - 1) {
+		snprintf(req.resp + n, sizeof req.resp - n, "%s", s);
+	}
+}
+
+/* Hand one CLI line to the service loop and wait for its response. Runs on the
+ * shell thread. */
+static int submit(const struct shell *sh, const char *line)
+{
+	if (!g_cfg) {
+		shell_error(sh, "box service loop not running yet");
+		return -ENODEV;
+	}
+
+	snprintf(req.line, sizeof req.line, "%s", line);
+	req.resp[0] = '\0';
+
+	atomic_set(&req_pending, 1);
+	box_event_signal();             /* wake the loop now, don't wait for its tick */
+
+	if (k_sem_take(&req_done, K_MSEC(3000)) != 0) {
+		atomic_set(&req_pending, 0);
+		shell_error(sh, "timed out waiting for the box service loop");
+		return -ETIMEDOUT;
+	}
+
+	if (req.resp[0]) {
+		shell_fprintf(sh, SHELL_NORMAL, "%s", req.resp);
+	}
+	return 0;
+}
+
+/* Rejoin argv into the single line box_cli_exec parses, then submit it. */
+static int cmd_box(const struct shell *sh, size_t argc, char **argv)
+{
+	char line[sizeof req.line];
+	int k = 0;
+
+	for (size_t i = 0; i < argc; i++) {
+		int r = snprintf(line + k, sizeof line - k, "%s%s", i ? " " : "", argv[i]);
+
+		if (r < 0 || r >= (int) (sizeof line - k)) {
+			shell_error(sh, "command line too long");
+			return -E2BIG;
+		}
+		k += r;
+	}
+	return submit(sh, line);
+}
+
+/* `help` is a shell built-in, so box_cli's own grammar listing is reached via
+ * `cmds` (the built-in help still lists every command registered below). */
+static int cmd_box_cmds(const struct shell *sh, size_t argc, char **argv)
+{
+	ARG_UNUSED(argc);
+	ARG_UNUSED(argv);
+	return submit(sh, "help");
+}
+
+/* ---------------- service-loop side ---------------- */
+
+void box_console_service(box_config_t *cfg)
+{
+	int do_reboot = 0;
+
+	g_cfg = cfg;                    /* publish for the shell thread */
+
+	if (atomic_get(&req_pending) != 1) {
+		return;
+	}
+
+	gpio_cmd_t cmd = { .op = GPIO_OP_NONE };
+	cli_action_t a = box_cli_exec(cfg, req.line, req.resp, sizeof req.resp, &cmd);
 
 	switch (a) {
 	case CLI_GPIO:
@@ -111,90 +168,75 @@ static void run_line(box_config_t *cfg, const char *line)
 	case CLI_PIN:
 	case CLI_GROUP:
 	case CLI_AIN:
-		box_gpio_apply_config(cfg);   /* pin/group/analog change -> re-apply */
+		box_gpio_apply_config(cfg);     /* pin/group/analog change -> re-apply */
 		break;
 	case CLI_SAVE:
 #if defined(BOX_HAVE_PERSIST)
 	{
 		uint8_t blob[BOX_PERSIST_BLOB_MAX];
 		uint32_t n = box_persist_serialize(cfg, blob, sizeof blob);
-		box_console_printf("%s\r\n", box_flash_save(blob, n) == 0 ? "saved" : "save FAILED");
+
+		resp_add(box_flash_save(blob, n) == 0 ? "saved\n" : "save FAILED\n");
 	}
 #else
-		box_console_write("no persistence on this board\r\n");
+		resp_add("no persistence on this board\n");
 #endif
 		break;
 	case CLI_FACTORY:
 		memset(cfg, 0, sizeof *cfg);
 		box_gpio_apply_config(cfg);
-		box_console_write("factory reset\r\n");
+		resp_add("factory reset\n");
 		break;
 	case CLI_REBOOT:
-		box_console_write("rebooting\r\n");
-		k_msleep(50);
-		sys_reboot(SYS_REBOOT_WARM);
+		do_reboot = 1;                  /* after the reply has gone out */
 		break;
 	case CLI_BOOTSEL:
-		box_console_write("bootsel unsupported here; press the Program button\r\n");
+		resp_add("bootsel unsupported here; press the Program button\n");
 		break;
 	default:
 		break;
 	}
-}
 
-/* Batch echo per chunk: fast typing must not turn into a burst of 1-byte USB
- * packets (that stresses the host CDC driver -- it dropped a macOS `screen`
- * session mid-type). We build up the echo for a whole RX chunk and write it in
- * as few calls as possible, flushing before a command's own output. */
-static char ech[192];
-static int  ech_n;
-static void echo_flush(void)
-{
-	if (ech_n > 0) {
-		ech[ech_n] = '\0';
-		box_console_write(ech);
-		ech_n = 0;
-	}
-}
-static void echo_puts(const char *s)
-{
-	while (*s && ech_n < (int) sizeof(ech) - 1) {
-		ech[ech_n++] = *s++;
-	}
-	if (*s) {                     /* buffer full -> flush and continue */
-		echo_flush();
-		box_console_write(s);
+	atomic_set(&req_pending, 0);
+	k_sem_give(&req_done);
+
+	if (do_reboot) {
+		k_msleep(200);                  /* let the shell print + the CDC drain */
+		sys_reboot(SYS_REBOOT_WARM);
 	}
 }
 
-void box_console_service(box_config_t *cfg)
-{
-	uint8_t chunk[64];
-	uint32_t got;
-	while ((got = ring_buf_get(&con_rx, chunk, sizeof chunk)) > 0) {
-		for (uint32_t i = 0; i < got; i++) {
-			uint8_t c = chunk[i];
-			if (c == '\r' || c == '\n') {
-				echo_puts("\r\n");
-				echo_flush();                 /* flush echo before the reply */
-				if (line_len > 0) {
-					line_buf[line_len] = '\0';
-					run_line(cfg, line_buf);
-				}
-				line_len = 0;
-				box_console_write("> ");
-			} else if (c == 0x08 || c == 0x7f) {  /* backspace / DEL */
-				if (line_len > 0) {
-					line_len--;
-					echo_puts("\b \b");
-				}
-			} else if (line_len < (int) sizeof(line_buf) - 1) {
-				line_buf[line_len++] = (char) c;
-				char e[2] = { (char) c, '\0' };
-				echo_puts(e);
-			}
-		}
-		echo_flush();   /* one write for the whole chunk's remaining echo */
-	}
-}
+/* ---------------- command registration ---------------- */
+/* One shell command per box_cli verb -> tab-completion and built-in `help`
+ * listing come free, while the grammar itself stays box_cli's. */
 
+#define BOX_SHELL_CMD(verb, help_text) \
+	SHELL_CMD_REGISTER(verb, NULL, help_text, cmd_box)
+
+SHELL_CMD_REGISTER(cmds, NULL, "List the full box command grammar", cmd_box_cmds);
+
+BOX_SHELL_CMD(show,    "Show the box configuration");
+BOX_SHELL_CMD(dump,    "Dump the config as replayable commands");
+BOX_SHELL_CMD(name,    "name <NAME> -- set the box name (datapoint identity)");
+BOX_SHELL_CMD(desc,    "desc <TEXT>|off -- free-form box description");
+BOX_SHELL_CMD(channel, "channel [<NAME>|dev] -- firmware update track");
+BOX_SHELL_CMD(pin,     "pin <N> mode|pulse|debounce|active_low <V>");
+BOX_SHELL_CMD(label,   "label <N> <TEXT>|off -- per-pin role label");
+BOX_SHELL_CMD(group,   "group <G> pins|label|settle|quiet|off <V>");
+BOX_SHELL_CMD(ain,     "ain group <G> channels|label|mode|deadband|decimate|batch|average|off <V>");
+BOX_SHELL_CMD(mcp,     "mcp enable 0|1 | mcp rate <HZ>");
+BOX_SHELL_CMD(oled,    "oled enable 0|1");
+BOX_SHELL_CMD(ble,     "ble enable|pipe|latency <V>");
+BOX_SHELL_CMD(net,     "net mode dhcp|static | net ip|gateway|mask <A.B.C.D>");
+BOX_SHELL_CMD(dserv,   "dserv ip <A.B.C.D> | dserv port <N>");
+BOX_SHELL_CMD(wifi,    "wifi ssid|pass <V> | wifi pm 0|1");
+BOX_SHELL_CMD(obs,     "obs pin <N> | obs off -- obs mirror output");
+BOX_SHELL_CMD(sync,    "sync pin <N> | sync off -- TTL obs-sync input");
+BOX_SHELL_CMD(do,      "do <N> 0|1 | do <N> pulse <US> -- drive a DO now");
+BOX_SHELL_CMD(save,    "Persist the config to storage");
+BOX_SHELL_CMD(factory, "Reset the config to defaults");
+BOX_SHELL_CMD(reboot,  "Warm-reset the box");
+BOX_SHELL_CMD(bootsel, "Enter the USB bootloader (where supported)");
+#ifdef BOX_NET_DUAL
+BOX_SHELL_CMD(mode,    "mode auto|usb|eth -- boot transport policy");
+#endif

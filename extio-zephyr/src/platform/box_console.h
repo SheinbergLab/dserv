@@ -1,16 +1,18 @@
 /*
  * box_console.h -- the box's two-way management console over the USB console CDC.
  *
- * Owns cdc_acm_console with interrupt-driven RX/TX ring buffers, so it is
- * non-blocking BY CONSTRUCTION: box_console_write() copies into the TX ring and
- * returns; the CDC TX interrupt drains it. If the host isn't reading and the
- * ring fills, output is DROPPED, never blocked -- the real-time service loop can
- * never stall on the console. Input is drained the same way and fed to box_cli
- * in the service loop (single-threaded -> no cfg locking).
+ * Implemented on Zephyr's Shell subsystem (see box_console.c): the standard
+ * shell_uart backend owns cdc_acm_console via chosen zephyr,shell-uart, and each
+ * box_cli verb is registered as a shell command. The command grammar is
+ * unchanged -- `pin 3 mode out` still reaches box_cli_exec verbatim.
+ *
+ * Commands are marshaled from the shell thread to the service loop, so config
+ * and GPIO stay single-threaded exactly as before (no cfg locking); the loop
+ * runs the line in box_console_service() and hands the response back.
  *
  * Zephyr's own printk/LOG stays on the board's hardware UART (we don't override
  * zephyr,console), so driver diagnostics remain available on a serial adapter
- * while this owns the USB console cleanly.
+ * while the shell owns the USB console cleanly.
  */
 #ifndef BOX_CONSOLE_H
 #define BOX_CONSOLE_H

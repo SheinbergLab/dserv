@@ -132,6 +132,44 @@ controller-firmware license).
 `native_sim` (host-runnable `main.c`) requires Linux — Zephyr's POSIX arch
 refuses macOS. On macOS use `tools/box_sim.c` below for host testing.
 
+## Console status — USB CDC console is BROKEN on Teensy (RT1062)
+
+The management console (Zephyr Shell over the console CDC, `zephyr,shell-uart`)
+is **not usable on either Teensy** as of 2026-07-23. Output is shredded — bytes
+silently dropped mid-write, mangled ANSI escapes, truncated responses — and host
+terminals then drop the port. It reproduces identically on macOS and on Linux
+(`picocom` on a Pi), so it is not a host-side or terminal problem.
+
+**This is below our code.** The stock Zephyr sample
+`samples/subsys/shell/shell_module` built untouched for `teensy41` with its own
+`usb.overlay` + `overlay-usb.conf` — one CDC-ACM, upstream defaults, zero extio
+code — reproduces the same shredding and disconnects. The fault is in
+`device_next` CDC-ACM or the RT1062 UDC driver. Repro:
+
+```sh
+cd $ZEPHYR_BASE/samples/subsys/shell/shell_module
+west build -b teensy41 . --pristine -- \
+    -DEXTRA_DTC_OVERLAY_FILE=usb.overlay -DEXTRA_CONF_FILE=overlay-usb.conf
+```
+
+Things that look like the cause but are NOT: the shell backend's 8-byte TX ring,
+the 30-byte print chunk, `USBD_CDC_ACM_WORKQUEUE`, and the two-CDC split. All
+were tried; the stock single-CDC sample fails with every one of them at default.
+Do **not** override `USBD_CDC_ACM_TX_DELAY_MS` to 0 — see the app `Kconfig`; that
+makes it worse by adding a host-echo feedback storm on top.
+
+What still works, and what to do instead:
+
+* **The data CDC (frame pipe) is unaffected and reliable.** It survives the same
+  byte loss because the framer resyncs on `>` and discards junk. Configure a
+  Teensy box from dserv over `extio/<name>/config/...` datapoints — everything
+  the console CLI does is reachable that way.
+* On Teensy, `zephyr,console` still points at **lpuart6 (pins 0/1)**, so a
+  USB-serial adapter gives a robust console if one is actually needed.
+* **Unknown on `frdm_rw612`** — different silicon, different UDC driver. The
+  console must be re-tested there before any conclusion is drawn for the target
+  board; that is the board the console actually has to work on.
+
 ## Host-side core check (no Zephyr)
 
 The forked core still compiles and self-tests with a plain C compiler, exactly

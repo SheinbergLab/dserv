@@ -12,6 +12,12 @@
 		box-gpio-port     = &hsgpio0;   /* box pin n -> hsgpio0.n (12 = user LED) */
 		box-pulse-counter = &ctimer1;   /* hardware box-timed pulse               */
 	};
+
+	/* The box CLI shell owns the USB console CDC; zephyr,console stays on the
+	 * board's own UART for Zephyr printk / driver LOG. */
+	chosen {
+		zephyr,shell-uart = &cdc_acm_console;
+	};
 };
 
 &ctimer1 {

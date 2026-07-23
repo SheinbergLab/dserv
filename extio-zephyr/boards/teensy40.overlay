@@ -12,8 +12,11 @@
 	};
 
 	/* zephyr,console stays on lpuart6 (Teensy pins 0/1) for Zephyr's own printk
-	 * and driver LOG (dev serial adapter); box_console owns the USB console CDC
-	 * for the two-way box CLI -- separate devices, no conflict. */
+	 * and driver LOG (dev serial adapter); the box CLI shell owns the USB
+	 * console CDC -- separate devices, no conflict. */
+	chosen {
+		zephyr,shell-uart = &cdc_acm_console;
+	};
 };
 
 &gpt2 {
