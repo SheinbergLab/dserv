@@ -11,12 +11,9 @@
 		box-pulse-counter = &gpt2;    /* hardware box-timed pulse             */
 	};
 
-	chosen {
-		/* Console/CLI on the box's own USB console CDC rather than lpuart6
-		 * (Teensy pins 0/1) -- a deployed box is diagnosable over the same
-		 * cable that carries its frames, no UART adapter needed. */
-		zephyr,console = &cdc_acm_console;
-	};
+	/* zephyr,console stays on lpuart6 (Teensy pins 0/1) for Zephyr's own printk
+	 * and driver LOG (dev serial adapter); box_console owns the USB console CDC
+	 * for the two-way box CLI -- separate devices, no conflict. */
 };
 
 &gpt2 {

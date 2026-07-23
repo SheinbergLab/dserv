@@ -21,6 +21,7 @@
 #include "dserv_config.h"
 #include "box_persist.h"
 #include "box_gpio.h"
+#include "box_console.h"
 #if defined(BOX_HAVE_PERSIST)
 #include "box_flash.h"
 #endif
@@ -69,14 +70,14 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 		uint8_t blob[BOX_PERSIST_BLOB_MAX];
 		uint32_t n = box_persist_serialize(&cfg, blob, sizeof blob);
 		int rc = box_flash_save(blob, n);
-		printk("cmd/save -> %s (%u bytes)\n", rc == 0 ? "ok" : "FAILED", n);
+		box_console_printf("cmd/save -> %s (%u bytes)\n", rc == 0 ? "ok" : "FAILED", n);
 #else
-		printk("cmd/save -> no persistence on this board\n");
+		box_console_printf("cmd/save -> no persistence on this board\n");
 #endif
 	} else if (r == CFG_REBOOT) {
 		/* Warm reset: the firmware restarts. Portable on every board. NOTE this
 		 * does NOT enter the bootloader -- see CFG_BOOTSEL below. */
-		printk("cmd/reboot -> warm reset\n");
+		box_console_printf("cmd/reboot -> warm reset\n");
 		k_msleep(100);                        /* let the console drain */
 		sys_reboot(SYS_REBOOT_WARM);
 	} else if (r == CFG_BOOTSEL) {
@@ -86,7 +87,7 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 		 *            Teensyduino's handshake is not exposed by Zephyr
 		 *   RW612    moot -- MCUboot + mcumgr does DFU over the live link
 		 * Report honestly rather than silently doing nothing. */
-		printk("cmd/bootsel -> not supported on this board; "
+		box_console_printf("cmd/bootsel -> not supported on this board; "
 		       "press the Program button to enter the bootloader\n");
 	}
 }
@@ -125,15 +126,16 @@ int main(void)
 	box_gpio_apply_config(&cfg);
 
 	box_uplink_init(&cfg);       /* USB (and Ethernet where present) up */
+	box_console_init();          /* two-way CLI on the USB console CDC */
 	dserv_framer_reset(&rx_framer);
 	k_msleep(2000);              /* let the host enumerate + open the console */
 
-	printk("\n=== extio core smoke test (Zephyr %s) ===\n", KERNEL_VERSION_STRING);
+	box_console_printf("\n=== extio core smoke test (Zephyr %s) ===\n", KERNEL_VERSION_STRING);
 
 	/* config datapoint: set pin 5 to output */
 	dserv_msg_int(f, "extio/box/config/pin/5/mode", 0, 1);
 	r = feed(f, &cmd);
-	printk("apply config/pin/5/mode=out    -> %-9s pin_mode[5]=%u\n",
+	box_console_printf("apply config/pin/5/mode=out    -> %-9s pin_mode[5]=%u\n",
 	       dserv_cfg_result_str(r), cfg.pin_mode[5]);
 
 	/* No demo dserv target: leaving dserv_ip unset keeps eth from claiming the
@@ -144,7 +146,7 @@ int main(void)
 	/* transient command: box-timed pulse on pin 6 -> a gpio_cmd for the platform */
 	dserv_msg_int(f, "extio/box/cmd/do/6/pulse_us", 0, 500);
 	r = feed(f, &cmd);
-	printk("apply cmd/do/6/pulse_us=500    -> %-9s op=%d pin=%u value=%u\n",
+	box_console_printf("apply cmd/do/6/pulse_us=500    -> %-9s op=%d pin=%u value=%u\n",
 	       dserv_cfg_result_str(r), cmd.op, cmd.pin, cmd.value);
 
 	/* persistence round-trip (the flash write itself is platform; the codec is core) */
@@ -152,7 +154,7 @@ int main(void)
 	uint32_t n = box_persist_serialize(&cfg, blob, sizeof blob);
 	box_config_t restored = {0};
 	int ok = box_persist_deserialize(blob, n, &restored);
-	printk("persist round-trip             -> %-9s %u bytes, applied_count=%u\n",
+	box_console_printf("persist round-trip             -> %-9s %u bytes, applied_count=%u\n",
 	       ok == 0 ? "ok" : "FAIL", n, restored.applied_count);
 
 #if defined(BOX_HAVE_PERSIST)
@@ -165,22 +167,22 @@ int main(void)
 			box_gpio_apply_config(&cfg);   /* apply the loaded pin map/name */
 		}
 	}
-	printk("persist store                  -> config %s\n",
+	box_console_printf("persist store                  -> config %s\n",
 	       cfg_loaded ? "LOADED from flash" : "fresh (defaults)");
 #else
-	printk("persist store                  -> none on this board\n");
+	box_console_printf("persist store                  -> none on this board\n");
 #endif
 
 	/* the box's datapoint identity */
 	char pfx[64];
 	dserv_cfg_prefix(&cfg, pfx, sizeof pfx);
-	printk("datapoint prefix               -> %s  (dserv port %u)\n",
+	box_console_printf("datapoint prefix               -> %s  (dserv port %u)\n",
 	       pfx, dserv_cfg_port(&cfg));
 
-	printk("=== codec smoke test done ===\n\n");
+	box_console_printf("=== codec smoke test done ===\n\n");
 
 	/* ---- block #3: GPIO (already initialised above, before the console) ---- */
-	printk("gpio: pin %d=out (LED), pin %d=in_pullup\n", LED_PIN, BTN_PIN);
+	box_console_printf("gpio: pin %d=out (LED), pin %d=in_pullup\n", LED_PIN, BTN_PIN);
 
 	/* Boot heartbeat: three hardware-timed LED pulses (the hardware counter
 	 * drops each falling edge, not software). */
@@ -194,28 +196,28 @@ int main(void)
 	/* one-shot status: DHCP lease (if eth came up) + the PTP hardware clock */
 	uint8_t ip[4];
 	if (box_net_eth_wait_ip(ip, 5000)) {
-		printk("eth DHCP IPv4: %u.%u.%u.%u  link=%d\n",
+		box_console_printf("eth DHCP IPv4: %u.%u.%u.%u  link=%d\n",
 		       ip[0], ip[1], ip[2], ip[3], box_net_eth_link());
 	} else {
-		printk("eth: no lease (link=%d)\n", box_net_eth_link());
+		box_console_printf("eth: no lease (link=%d)\n", box_net_eth_link());
 	}
-	printk("PTP hw clock: ready=%d  now=%llu ns\n",
+	box_console_printf("PTP hw clock: ready=%d  now=%llu ns\n",
 	       (int) box_ptp_ready(), (unsigned long long) box_ptp_now_ns());
 #else
-	printk("no Ethernet on this board -- USB-only uplink\n");
+	box_console_printf("no Ethernet on this board -- USB-only uplink\n");
 #endif
-	printk("active uplink: %s\n", box_uplink_active_name());
+	box_console_printf("active uplink: %s\n", box_uplink_active_name());
 
 #if defined(CONFIG_BT)
 	/* ---- block #6 (ingress): multi-peripheral BLE central ---- */
 	if (box_ble_init() == 0) {
-		printk("BLE central up; scanning for d5e7000x peripherals (max %d)\n\n",
+		box_console_printf("BLE central up; scanning for d5e7000x peripherals (max %d)\n\n",
 		       CONFIG_BT_MAX_CONN);
 	} else {
-		printk("BLE init failed (continuing wired-only)\n\n");
+		box_console_printf("BLE init failed (continuing wired-only)\n\n");
 	}
 #else
-	printk("no radio on this board -- BLE ingress disabled\n\n");
+	box_console_printf("no radio on this board -- BLE ingress disabled\n\n");
 #endif
 
 	/* ---- converged box service loop (blocks #2-6 together) ----
@@ -228,6 +230,7 @@ int main(void)
 
 	while (1) {
 		box_uplink_service(&cfg);         /* carrier/strap selection + (re)connect */
+		box_console_service(&cfg);        /* two-way CLI (non-blocking, bounded) */
 
 		int n = box_uplink_poll(rx, sizeof rx);
 		if (n == BOX_NET_RESET) {
@@ -285,26 +288,8 @@ int main(void)
 			dserv_msg_int64(f, name, 0, (int64_t) box_ptp_now_ns());
 			box_uplink_send(f, DSERV_MSG_LEN);
 #endif
-
-			/* Also print status to the always-on console every 2 s -- the one
-			 * channel independent of which data uplink is active, so a bench box
-			 * with no dserv is still fully observable. */
-			if ((watchdog & 1) == 0) {
-#if defined(CONFIG_NETWORKING)
-				uint8_t sip[4];
-				int leased = box_net_eth_get_ip(sip);
-				printk("status: uplink=%s eth_link=%d ip=%u.%u.%u.%u "
-				       "ptp_ready=%d ptp=%llu ns\n",
-				       box_uplink_active_name(), box_net_eth_link(),
-				       leased ? sip[0] : 0, leased ? sip[1] : 0,
-				       leased ? sip[2] : 0, leased ? sip[3] : 0,
-				       (int) box_ptp_ready(),
-				       (unsigned long long) box_ptp_now_ns());
-#else
-				printk("status: uplink=%s wd=%d\n",
-				       box_uplink_active_name(), watchdog);
-#endif
-			}
+			/* status is available on demand via the `show` CLI command and as
+			 * these datapoints -- no periodic console spam. */
 		}
 
 		/* Block until an ISR has work for us (CDC RX / DI edge), or the
