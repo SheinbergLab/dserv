@@ -360,6 +360,84 @@ for SET-1-while-high, visible to whatever external hardware the pin drives).
 **Done:** obs-mirror output (`config/obs/pin` via console + `ess/in_obs` drives
 the pin, publishes `state/in_obs`).
 
+## PROPOSAL: a devicetree pin map (box pin → any GPIO), 2026-07-23
+
+**Status: proposed, not implemented.** Worth deciding BEFORE block #7 — analog
+needs specific SPI pins, and picking them under today's one-port constraint would
+bake the limitation in.
+
+### The problem
+
+`box_gpio.c` maps `box pin n → <box-gpio-port>.n` via
+`off_of(n) { return (gpio_pin_t) n; }` against a single aliased port. On
+teensy40's top edge that gives:
+
+| port | physical pins |
+|---|---|
+| **gpio2** (the alias) | 6, 7, 8, 9, 10, 11, 12, 13 |
+| gpio1 | 0, 1 |
+| gpio4 | 2, 3, 4, 5 |
+
+1. **Six of fourteen top-edge pins are unreachable.** phys 0–5 live on gpio1 and
+   gpio4; nothing in the current scheme can address them.
+2. **The numbering is scrambled vs the silkscreen.** box 0→phys 10, box 1→phys
+   12, box 2→phys 11, box 3→phys 13, box 10→phys 6, box 11→phys 9, box 16→phys
+   8. This is not cosmetic — it cost real time on the bench repeatedly, and every
+   "which pins do I jumper?" question needs a doc lookup.
+
+### The proposal
+
+Replace the single-port alias with a **phandle array of GPIO specs** — the
+Zephyr-native primitive for exactly this, and consistent with
+[[feedback_rw612_idiomatic_not_mirror]]:
+
+```dts
+/ {
+	box_pins: box-pins {
+		gpios = <&gpio2 3 0>,      /* box pin 0 */
+			<&gpio4 4 0>,      /* box pin 1 -- unreachable today */
+			<&gpio1 2 0>;      /* box pin 2 */
+	};
+};
+```
+
+resolved with `GPIO_DT_SPEC_GET_BY_IDX(DT_NODELABEL(box_pins), gpios, i)` into a
+`struct gpio_dt_spec specs[]`. Buys: any port; per-pin flags (active-low, pulls)
+declared in devicetree instead of config; and **box pin number chosen per board**
+— on Teensy, make it the silkscreen number so box pin 13 IS the LED.
+
+**The frozen wire contract is untouched**: `config/pin/<n>` and `cmd/do/<n>`
+stay a flat index, it just resolves somewhere sane.
+
+### What changes
+
+* `box_gpio.c`: `port` + `off_of(n)` → `specs[n]`; the `gpio_pin_*()` calls
+  become `gpio_pin_*_dt()`. Mechanical.
+* **The DI callback is the real work.** `gpio_callback` is per-PORT, so a
+  multi-port map needs one callback per distinct port plus a reverse
+  (port,pin) → box-pin lookup in the ISR. Everything else is a rename.
+* Board overlays gain the `box-pins` node; `box-gpio-port` retires.
+* **Manifest:** add `state/pinmap/<n>` (e.g. `"T13"`) so extio-setup and the
+  fleet page can show physical names instead of making users consult a table.
+
+### Migration
+
+Confirmed with David: no critical saved configs, so no persist migration is
+needed — but a stored NVS blob's `pin 3 mode out` WOULD point at a different
+physical pin after a remap, so bump `BOX_PERSIST_VERSION` (or just `factory`
+each bench box) rather than silently reinterpreting old blobs.
+
+Tests/tools that hardcode pin numbers and will need updating:
+* `tools/sched_verify.sh` — `do/3`, `pin/3`, `pin/1` throughout, plus its
+  "jumpered phys13 → phys12 (box pin 3 out → pin 1 in)" header comment;
+* `tools/rtt_bench.py` — `OUT_PIN, IN_PIN = 3, 1`;
+* `tools/box_sim.c` — `config/pin/5/...` fixtures (host-side only, no hardware,
+  so these just need to stay self-consistent);
+* `src/main.c` — `LED_PIN` / `BTN_PIN` demo defines, per board.
+
+**Deployed Pico boxes are unaffected** — this is per-board devicetree; their
+`box pin n = GP n` semantics are unchanged.
+
 ## Tier 2 — peripherals
 
 - [ ] **Analog: MCP3204 + analog groups** — `src/core/box_ain_group.h`, zero
