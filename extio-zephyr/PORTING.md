@@ -277,6 +277,35 @@ REFUTED — do not re-walk these:**
   queue changed nothing. Note it is started at `CONFIG_SYSTEM_WORKQUEUE_PRIORITY`
   anyway, so it separates the queue but not the priority.
 
+**The cost SPLITS IN TWO** (David's test: bind the shell to the hardware UART
+instead of the console CDC — the Teensy board DTS already defaults
+`zephyr,shell-uart = &lpuart6`, our overlay is what overrides it):
+
+| build | floor | median |
+|---|---|---|
+| Shell OFF | 0.286 | 0.313 |
+| Shell ON, **CDC-ACM** backend (as shipped) | 0.49 | 0.565 |
+| Shell ON, **lpuart6** backend | **0.293** | **0.553** |
+
+* **The FLOOR penalty is entirely the CDC-ACM shell backend** — moving the shell
+  to a hardware UART recovers it completely (0.49 → 0.293 ≈ Shell-OFF's 0.286).
+* **The MEDIAN penalty (~0.24 ms) is the Shell SUBSYSTEM itself** — unchanged at
+  ~0.55 whichever backend it uses, and already shown to be independent of thread
+  priority. So the USB path is ruled out as the main cost.
+
+**Leading hypothesis for the median (UNTESTED):** the RT1062 XIP-executes from
+external QSPI NOR, and `CONFIG_SHELL` adds ~40 KB of code (129 KB → 89 KB with it
+removed). More code = more instruction-cache pressure, and a hot-loop miss costs
+an external QSPI fetch. That would be independent of transport AND priority,
+which is exactly the observed signature. Testable via Zephyr code relocation to
+ITCM (the Teensy build already links `libcode_relocation_source_lib.a`), and it
+would predict the effect is *much* smaller on a part that executes from internal
+flash/RAM — worth re-checking on the RW612 before assuming it transfers.
+
+**Config decision:** the shipped build keeps the shell on the console CDC. The
+median is identical either way, and a USB console is worth far more than a
+0.2 ms floor improvement that costs an FTDI dangling off pins 0/1.
+
 Worth knowing for any future attempt: the workqueue sits INSIDE the round trip
 twice (CDC RX inbound, CDC TX outbound), so *lowering* its priority would slow
 our own reply frame — "deprioritize the workqueue" is the wrong instinct here.
