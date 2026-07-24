@@ -559,6 +559,26 @@ int main(void)
 			uint8_t f[DSERV_MSG_LEN];
 			dserv_state_name(&cfg, name, sizeof name, "watchdog");
 			dserv_msg_int(f, name, 0, watchdog++);
+			{
+				/* USB caller cost + TX-ring drops. Published on EVERY
+				 * board: the comparison against the Ethernet numbers is
+				 * what turns "how many datapoints can I push" into a
+				 * budget rather than a guess. */
+				uint32_t ul = 0, um = 0, ud = 0;
+				box_net_usb_send_stats(&ul, &um, &ud);
+				box_uplink_send(f, DSERV_MSG_LEN);
+				dserv_state_name(&cfg, name, sizeof name, "dbg/usb_send_us");
+				dserv_msg_int(f, name, 0, (int32_t) ul);
+				box_uplink_send(f, DSERV_MSG_LEN);
+				dserv_state_name(&cfg, name, sizeof name, "dbg/usb_send_max_us");
+				dserv_msg_int(f, name, 0, (int32_t) um);
+				box_uplink_send(f, DSERV_MSG_LEN);
+				dserv_state_name(&cfg, name, sizeof name, "dbg/usb_drops");
+				dserv_msg_int(f, name, 0, (int32_t) ud);
+				box_uplink_send(f, DSERV_MSG_LEN);
+				dserv_state_name(&cfg, name, sizeof name, "watchdog");
+				dserv_msg_int(f, name, 0, watchdog - 1);
+			}
 #if defined(CONFIG_NETWORKING)
 			/* Publish-latency investigation: how long does one
 			 * zsock_send() actually take, and how long is a full

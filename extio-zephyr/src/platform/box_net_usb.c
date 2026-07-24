@@ -97,15 +97,42 @@ int box_net_usb_server_poll(uint8_t *buf, int max)
 	return (int) ring_buf_get(&rx_rb, buf, (uint32_t) max);
 }
 
+/* ---- send-cost instrumentation (mirrors box_net_eth.c) ----
+ * USB is ASYNCHRONOUS BY CONSTRUCTION: this copies into a ring and enables the
+ * TX interrupt, so the caller pays a memcpy and the wire time happens in the ISR.
+ * Ethernet's send was a full stack traversal INLINE in the caller -- 275 us
+ * before the ITCM fix, 61 us after. Publishing both lets a datapoint budget be
+ * derived rather than guessed.
+ *
+ * For USB the binding limit is NOT loop time, it is the ring filling faster than
+ * the host drains it: drops are whole frames (never partial), counted here. A
+ * rising drop count is the real "too many datapoints" signal on this transport. */
+static uint32_t usend_last_us, usend_max_us, usend_drops;
+
+void box_net_usb_send_stats(uint32_t *last_us, uint32_t *max_us, uint32_t *drops)
+{
+	if (last_us) *last_us = usend_last_us;
+	if (max_us)  *max_us  = usend_max_us;
+	if (drops)   *drops   = usend_drops;
+}
+
 int box_net_usb_client_send(const uint8_t *buf, int len)
 {
 	if (!box_net_usb_reading()) {
 		return -1;                          /* host not draining */
 	}
 	if (ring_buf_space_get(&tx_rb) < (uint32_t) len) {
+		usend_drops++;
 		return -2;                          /* no room -> drop whole frame, never partial */
 	}
+	uint32_t t0 = k_cycle_get_32();
 	(void) ring_buf_put(&tx_rb, buf, (uint32_t) len);
 	uart_irq_tx_enable(data_dev);
+	uint32_t dt = k_cyc_to_us_floor32(k_cycle_get_32() - t0);
+
+	usend_last_us = dt;
+	if (dt > usend_max_us) {
+		usend_max_us = dt;
+	}
 	return 0;
 }

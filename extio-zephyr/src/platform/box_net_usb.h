@@ -29,6 +29,11 @@ int box_net_usb_server_poll(uint8_t *buf, int max);
 /* Publish one frame (box -> host), all-or-nothing: enqueued only if the TX ring
  * has room for the whole frame (never a partial frame on the wire). 0 ok, <0 if
  * the host isn't draining or the ring is full (best-effort drop). */
+/* Caller-side cost of a USB publish, and frames dropped for a full TX ring.
+ * The drop count is the meaningful "too many datapoints" signal here -- USB's
+ * limit is the host's drain rate, not service-loop time. */
+void box_net_usb_send_stats(uint32_t *last_us, uint32_t *max_us, uint32_t *drops);
+
 int box_net_usb_client_send(const uint8_t *buf, int len);
 
 /* 1 iff the host has the DATA tty open (DTR asserted) -- i.e. actually draining. */
