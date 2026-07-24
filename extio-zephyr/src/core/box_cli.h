@@ -59,6 +59,9 @@ static inline void box_cli_show(const box_config_t *c, char *out, int outsz)
         dserv_cfg_port(c), obs, syn,   /* effective port (default when unset), not raw 0 */
         c->wifi_ssid[0] ? c->wifi_ssid : "(build)", c->wifi_pass[0] ? "set" : "(build)",
         c->wifi_pm, c->mcp_en, c->oled_en, c->ble_en, c->pipe_en, c->applied_count);
+    if (k < outsz - 24)
+        k += snprintf(out + k, outsz - k, "  console=%s\r\n",
+                      dserv_console_str((uint8_t) dserv_cfg_console_mode(c)));
     if (c->desc[0] && k < outsz - 8)
         k += snprintf(out + k, outsz - k, "  desc=%s\r\n", c->desc);
     for (int i = 0; i < BOX_NPINS && k < outsz - 64; i++)
@@ -136,6 +139,7 @@ static inline void box_cli_dump(const box_config_t *c)
             if (c->ain_group_batch[ag])    printf("ain group %d batch %u\r\n",    ag, c->ain_group_batch[ag]);
             if (c->ain_group_flags[ag] & AIN_GROUP_FLAG_AVG) printf("ain group %d average 1\r\n", ag);
         }
+    if (dserv_cfg_console_mode(c) == CONSOLE_MODE_UART) printf("console uart\r\n");
     if (c->oled_en)                       printf("oled enable 1\r\n");
     if (c->ble_en)                        printf("ble enable 1\r\n");
     if (c->pipe_en)                       printf("ble pipe 1\r\n");
@@ -438,6 +442,15 @@ static inline cli_action_t box_cli_exec(box_config_t *c, const char *line,
         return CLI_OK;
     }
 #endif
+    if (sscanf(line, "console %7s", w) == 1) {   /* cdc|uart -- a TIMING choice */
+        int v = dserv_console_val(w);
+        if (v < 0) { snprintf(out, outsz, "ERR console cdc|uart\r\n"); return CLI_ERR; }
+        c->console_mode = (uint8_t) v; c->applied_count++;
+        snprintf(out, outsz, "OK console=%s (save+reboot to apply%s)\r\n",
+                 dserv_console_str(c->console_mode),
+                 v == CONSOLE_MODE_UART ? "; needs a USB-serial adapter on the console UART" : "");
+        return CLI_OK;
+    }
     if (!strcmp(line, "show"))    { box_cli_show(c, out, outsz); return CLI_OK; }
     if (!strcmp(line, "dump"))    { box_cli_dump(c); out[0] = '\0'; return CLI_OK; }  /* config as replayable cmds */
     if (!strcmp(line, "save"))    { snprintf(out, outsz, "saving...\r\n"); return CLI_SAVE; }
@@ -446,7 +459,7 @@ static inline cli_action_t box_cli_exec(box_config_t *c, const char *line,
     if (!strcmp(line, "bootsel")) { snprintf(out, outsz, "entering USB BOOTSEL (then: picotool load <uf2>)...\r\n"); return CLI_BOOTSEL; }
     if (!strcmp(line, "help")) {
         snprintf(out, outsz,
-            "cmds: show | dump | name NAME | desc TEXT | channel NAME | " BOX_CLI_HELP_XTRA
+            "cmds: show | dump | name NAME | desc TEXT | channel NAME | console cdc|uart | " BOX_CLI_HELP_XTRA
             "net mode dhcp|static | net ip A.B.C.D | net gateway A.B.C.D | net mask A.B.C.D |\r\n"
             "      wifi ssid SSID | wifi pass PASS | wifi pm 0|1 | dserv ip A.B.C.D | dserv port N |\r\n"
             "      pin N mode out|in|in_pullup|off | pin N pulse US | pin N debounce MS |\r\n"

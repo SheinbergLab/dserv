@@ -80,9 +80,17 @@ void box_console_printf(const char *fmt, ...)
 	box_console_write(buf);
 }
 
-int box_console_init(void)
+int box_console_init(const box_config_t *cfg)
 {
-	con = DEVICE_DT_GET(DT_NODELABEL(cdc_acm_console));
+	/* Bind per config (v22 console_mode). Claiming the console CDC costs ~0.21 ms
+	 * of median round-trip latency; the same console on the board's console UART
+	 * is essentially free (see PORTING.md). Binding the UART leaves the console
+	 * CDC enumerated but UNCLAIMED, which measures free. */
+	if (dserv_cfg_console_mode(cfg) == CONSOLE_MODE_UART) {
+		con = DEVICE_DT_GET(DT_CHOSEN(zephyr_console));
+	} else {
+		con = DEVICE_DT_GET(DT_NODELABEL(cdc_acm_console));
+	}
 	if (!device_is_ready(con)) {
 		con = NULL;
 		return -1;

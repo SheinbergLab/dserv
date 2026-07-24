@@ -219,6 +219,9 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 		}
 	} else if (r == CFG_GPIO && cmd.op != GPIO_OP_NONE) {
 		box_gpio_exec(&cfg, &cmd);            /* immediate DO set/pulse */
+	} else if (r == CFG_CONSOLE) {
+		box_console_printf("console=%s -- save+reboot to apply\n",
+		       dserv_console_str((uint8_t) dserv_cfg_console_mode(&cfg)));
 	} else if (r == CFG_GROUP || r == CFG_LABEL || r == CFG_DESC) {
 		/* group/label/desc change: reseed the chord machines from the
 		 * pins' current levels, and re-announce so the edit reaches
@@ -300,7 +303,26 @@ int main(void)
 	box_gpio_apply_config(&cfg);
 
 	box_uplink_init(&cfg);       /* USB (and Ethernet where present) up */
-	box_console_init();          /* two-way CLI on the USB console CDC */
+
+	/* Load the persisted config BEFORE the console comes up: console_mode (v22)
+	 * decides WHICH device the console binds to, so the saved choice has to be
+	 * known first. A flash fault here has no box-console to report on, but
+	 * Zephyr's own printk/LOG is on the board UART (chosen zephyr,console) and
+	 * still works -- the boot-log channel PORTING.md documents. */
+#if defined(BOX_HAVE_PERSIST)
+	if (box_flash_init() == 0) {
+		uint8_t lb[BOX_PERSIST_BLOB_MAX];
+		int ln = box_flash_load(lb, sizeof lb);
+
+		cfg_loaded = (ln > 0 && box_persist_deserialize(lb, (uint32_t) ln, &cfg) == 0);
+		if (cfg_loaded) {
+			box_gpio_apply_config(&cfg);   /* apply the loaded pin map/name */
+			groups_resync();               /* seed chords from real pin state */
+		}
+	}
+#endif
+
+	box_console_init(&cfg);      /* binds CDC or console UART per console_mode */
 	dserv_framer_reset(&rx_framer);
 	k_msleep(2000);              /* let the host enumerate + open the console */
 
@@ -332,16 +354,7 @@ int main(void)
 	       ok == 0 ? "ok" : "FAIL", n, restored.applied_count);
 
 #if defined(BOX_HAVE_PERSIST)
-	/* Mount the settings store (NVS on RW612, SD-card FAT on Teensy 4.1). */
-	if (box_flash_init() == 0) {
-		uint8_t lb[BOX_PERSIST_BLOB_MAX];
-		int ln = box_flash_load(lb, sizeof lb);
-		cfg_loaded = (ln > 0 && box_persist_deserialize(lb, (uint32_t) ln, &cfg) == 0);
-		if (cfg_loaded) {
-			box_gpio_apply_config(&cfg);   /* apply the loaded pin map/name */
-			groups_resync();               /* seed chords from real pin state */
-		}
-	}
+	/* (the store was mounted + loaded above, before the console bound) */
 	box_console_printf("persist store                  -> config %s\n",
 	       cfg_loaded ? "LOADED from flash" : "fresh (defaults)");
 #else
@@ -381,6 +394,8 @@ int main(void)
 #else
 	box_console_printf("no Ethernet on this board -- USB-only uplink\n");
 #endif
+	box_console_printf("console: %s (config/console cdc|uart; save+reboot)\n",
+	       dserv_console_str((uint8_t) dserv_cfg_console_mode(&cfg)));
 	box_console_printf("active uplink: %s\n", box_uplink_active_name());
 
 #if defined(CONFIG_BT)

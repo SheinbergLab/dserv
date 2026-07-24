@@ -17,8 +17,10 @@
 
 #include "dserv_config.h"
 
-/* Claim cdc_acm_console + start the RX interrupt. 0 on success. */
-int box_console_init(void);
+/* Bind the console device per cfg->console_mode (CDC or the board's console
+ * UART) and start its RX interrupt. 0 on success. MUST be called AFTER the
+ * persisted config is loaded, or the saved choice is ignored. */
+int box_console_init(const box_config_t *cfg);
 
 /* Drain input, run any complete CLI line against cfg, queue the reply. Bounded
  * and non-blocking; call once per service pass. */

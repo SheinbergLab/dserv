@@ -173,6 +173,17 @@ typedef struct {
      * Additive tail => older saved blobs load these zeroed (auto-derive). */
     uint8_t  net_gw[4];
     uint8_t  net_sn[4];
+
+    /* v22: which device the management console binds to. This is a TIMING
+     * choice, not a cosmetic one: a second actively-claimed CDC-ACM instance
+     * costs ~0.21 ms of median round-trip latency (measured -- see
+     * PORTING.md), while the same console on a hardware UART is essentially
+     * free. 0 = cdc (default: works with no extra hardware), 1 = uart (needs a
+     * USB-serial adapter on the board's console UART pins).
+     * Additive tail => older blobs load 0 = cdc, i.e. today's behaviour.
+     * Safe to persist wrongly: the console is NOT the control channel, so
+     * config/console is still reachable over the frame pipe from dserv. */
+    uint8_t  console_mode;
 } box_config_t;
 
 #define AIN_GROUP_FLAG_AVG  0x01u   /* ain_group_flags: decimate window -> boxcar mean, not drop */
@@ -198,6 +209,7 @@ typedef enum {
     CFG_NET_MODE,
     CFG_OBS_PIN,
     CFG_SYNC_PIN,
+    CFG_CONSOLE,
     CFG_ACTIVE_LOW,
     CFG_WIFI_SSID,
     CFG_WIFI_PASS,
@@ -356,6 +368,17 @@ static inline const char *dserv_xport_str(uint8_t m)
 enum { XMODE_AUTO = 0, XMODE_ETH = 1, XMODE_USB = 2 };
 static inline const char *dserv_xmode_str(uint8_t m)
 { return m == XMODE_ETH ? "eth" : m == XMODE_USB ? "usb" : "auto"; }
+
+/* console binding: 0 = the USB console CDC (convenient), 1 = the board's console
+ * UART (better timing). See box_config_t.console_mode. */
+#define CONSOLE_MODE_CDC   0
+#define CONSOLE_MODE_UART  1
+static inline int         dserv_cfg_console_mode(const box_config_t *c)
+{ return c->console_mode == CONSOLE_MODE_UART ? CONSOLE_MODE_UART : CONSOLE_MODE_CDC; }
+static inline const char *dserv_console_str(uint8_t m)
+{ return m == CONSOLE_MODE_UART ? "uart" : "cdc"; }
+static inline int         dserv_console_val(const char *w)
+{ return !strcmp(w, "cdc") ? CONSOLE_MODE_CDC : (!strcmp(w, "uart") ? CONSOLE_MODE_UART : -1); }
 
 /* obs-mirror accessors: enable is a flag distinct from the pin, so GP0 is a
  * valid mirror pin and the zeroed factory default is "off". */
@@ -569,6 +592,12 @@ static inline cfg_result_t dserv_cfg__config(box_config_t *c, const char *k,
         long v = dserv_msg_as_long(m); if (v < 0) v = 0; if (v > 30) v = 30;
         c->ble_latency = (uint8_t) v; c->applied_count++; return CFG_BLE_LATENCY;
     }
+    if (strcmp(k, "console") == 0) {          /* cdc|uart; save+reboot to apply */
+        char w[8]; dserv_msg_copy_cstr(m, w, sizeof w);
+        int v = dserv_console_val(w);
+        if (v < 0) return CFG_UNKNOWN;
+        c->console_mode = (uint8_t) v; c->applied_count++; return CFG_CONSOLE;
+    }
     if (strcmp(k, "obs/pin") == 0) {
         char w[8]; dserv_msg_copy_cstr(m, w, sizeof w);
         if (m->type == DSERV_STRING && !strcmp(w, "off")) obs_mirror_off(c);
@@ -670,6 +699,7 @@ static inline const char *dserv_cfg_result_str(cfg_result_t r)
     case CFG_NET_MODE:   return "net_mode";
     case CFG_OBS_PIN:    return "obs_pin";
     case CFG_SYNC_PIN:   return "sync_pin";
+    case CFG_CONSOLE:    return "console";
     case CFG_ACTIVE_LOW: return "active_low";
     case CFG_WIFI_SSID:  return "wifi_ssid";
     case CFG_WIFI_PASS:  return "wifi_pass";

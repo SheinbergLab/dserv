@@ -75,6 +75,9 @@ static void announce_ident(const box_config_t *c)
 	pub_str(c, "build",     BOX_BUILD_TARGET);   /* shelf image match key   */
 	pub_str(c, "board",     BOX_BOARD_ID);       /* OTA compat filter       */
 	pub_str(c, "channel",   dserv_cfg_channel(c));
+	/* which device the console bound to -- a timing-relevant choice, so a host
+	 * can see it without guessing (see config/console). */
+	pub_str(c, "console",   dserv_console_str((uint8_t) dserv_cfg_console_mode(c)));
 
 	/* 0.0.0.0 over USB -- `transport` says why, so this is informative rather
 	 * than an error. */
