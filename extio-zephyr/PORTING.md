@@ -125,9 +125,13 @@ Keep the distinction that matters: a local free-running clock needs no peer and
       6 chords sharing their DI timestamps; `quiet 1` → 0 DI events, 6 chords.
       Fixed on the way: `main.c` published the RAW DI level, so `active_low` was
       a no-op on the wire; now publishes `di_logical()` like the Pico.
-      **Not yet exercised:** a real multi-pin chord (two switches closing ms
-      apart → one atomic bitmask). Needs a second output jumpered to a second
-      input — the single-pin case cannot produce a multi-bit mask.
+      **Multi-bit mask verified 2026-07-23** (teensy40, phys11+phys12 both tied
+      to the pin-3 output): group `{1,2}` publishes `value=3` on the rise, `0` on
+      the fall, three times clean — bit0=pin1, bit1=pin2 ascending, the announced
+      order. Still NOT exercised: the roll-gap settle (two edges a few ms apart
+      merging into one chord stamped at the FIRST edge). Both inputs share one
+      node here so they move together; the roll gap needs two SEPARATE outputs
+      driven a few ms apart (e.g. phys13→phys12 and phys10→phys11).
 - [x] **Clock sync — DONE 2026-07-23** (commit d5f8811). Every `ess/in_obs` edge
       anchors `box_clock`; all published event times go through `event_stamp()`.
       Hardware TTL edge preferred over frame arrival (250 ms recency gate), and
