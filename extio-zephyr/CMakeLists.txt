@@ -52,3 +52,24 @@ endif()
 # The portable core (forked from wiznet-io, pico_* -> box_*) plus the RW612/Zephyr
 # platform layer, added building-block by building-block.
 target_include_directories(app PRIVATE src src/core src/platform)
+
+# ---- network stack -> ITCM ----------------------------------------------------
+# The box XIPs from external QSPI flash (CONFIG_XIP=y on Teensy 4.x), so every
+# instruction-cache miss is a FlexSPI fetch. Our service loop is small and runs
+# constantly, so it stays hot -- measured at 10 us per idle pass. The network
+# stack is large and runs intermittently, so it is cold on every publish, and a
+# single 128-byte zsock_send() measured 275-864 us of CPU (state/dbg/send_us,
+# 2026-07-24). The VARIABILITY is the tell: DMA waits and protocol timers do not
+# swing 3x, cache state does. Ruled out beforehand: Nagle, syscall count, TX
+# traffic classes, and TX descriptor depth -- see boards/teensy41.conf.
+#
+# CONFIG_CODE_DATA_RELOCATION is already on, and the in-tree precedent is the
+# FlexSPI flash driver, which relocates itself to ITCM for the same reason
+# (drivers/flash/CMakeLists.txt). ITCM is 128 KB with ~9 KB used, so there is
+# room; if there is not, the link fails loudly rather than silently degrading.
+if(CONFIG_NETWORKING AND CONFIG_CODE_DATA_RELOCATION)
+	zephyr_code_relocate(LIBRARY subsys__net__ip           LOCATION ITCM_TEXT)
+	zephyr_code_relocate(LIBRARY subsys__net__l2__ethernet LOCATION ITCM_TEXT)
+	zephyr_code_relocate(LIBRARY drivers__ethernet         LOCATION ITCM_TEXT)
+	zephyr_code_relocate(LIBRARY lib__net_buf              LOCATION ITCM_TEXT)
+endif()
