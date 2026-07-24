@@ -4,6 +4,7 @@
 #include "box_console.h"
 #include "box_cli.h"
 #include "box_gpio.h"
+#include "box_obs.h"
 #include "box_event.h"
 
 #include <zephyr/kernel.h>
@@ -123,6 +124,11 @@ static void run_line(box_config_t *cfg, const char *line)
 		break;
 	case CLI_SAVE:
 #if defined(BOX_HAVE_PERSIST)
+		if (box_obs_active()) {      /* never program flash mid-trial */
+			box_obs_defer(BOX_DEFER_SAVE);
+			box_console_write("deferred to end of obs\r\n");
+			break;
+		}
 	{
 		uint8_t blob[BOX_PERSIST_BLOB_MAX];
 		uint32_t n = box_persist_serialize(cfg, blob, sizeof blob);

@@ -25,6 +25,7 @@
 #include "box_group.h"
 #include "box_clock.h"
 #include "box_announce.h"
+#include "box_obs.h"
 #include "box_console.h"
 #if defined(BOX_HAVE_PERSIST)
 #include "box_flash.h"
@@ -174,6 +175,7 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 			}
 		}
 		box_clock_sync(&boxclk, m.timestamp, anchor_box, hw);
+		box_obs_set(obs);            /* keep the LEVEL, not just the edge */
 		if (obs) {
 			obs_begin_us = anchor_box;   /* epoch for box-scheduled events */
 		}
@@ -242,6 +244,11 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 		box_announce_manifest(&cfg);   /* pins/in|out, obs_pin, sync_pin moved */
 	} else if (r == CFG_SAVE) {
 #if defined(BOX_HAVE_PERSIST)
+		if (box_obs_active()) {      /* never program flash mid-trial */
+			box_obs_defer(BOX_DEFER_SAVE);
+			box_console_printf("cmd/save -> deferred to end of obs\n");
+			return;
+		}
 		/* Persist the whole config blob so it survives reboot/power-cycle. */
 		uint8_t blob[BOX_PERSIST_BLOB_MAX];
 		uint32_t n = box_persist_serialize(&cfg, blob, sizeof blob);
@@ -537,6 +544,25 @@ int main(void)
 #endif
 			/* status is available on demand via the `show` CLI command and as
 			 * these datapoints -- no periodic console spam. */
+		}
+
+		/* Work parked while the rig was mid-trial (see box_obs.h): run it now
+		 * that we are idle. Nothing here is time-critical BY DEFINITION -- it
+		 * was deferred precisely because it can block. */
+		{
+			uint32_t due = box_obs_take_deferred();
+
+#if defined(BOX_HAVE_PERSIST)
+			if (due & BOX_DEFER_SAVE) {
+				uint8_t blob[BOX_PERSIST_BLOB_MAX];
+				uint32_t bn = box_persist_serialize(&cfg, blob, sizeof blob);
+
+				box_console_printf("deferred save -> %s (%u bytes)\n",
+				       box_flash_save(blob, bn) == 0 ? "ok" : "FAILED", bn);
+			}
+#else
+			(void) due;
+#endif
 		}
 
 		/* Block until an ISR has work for us (CDC RX / DI edge), or the

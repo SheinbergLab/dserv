@@ -12,6 +12,7 @@ project(extio_zephyr LANGUAGES C)
 target_sources(app PRIVATE
 	src/main.c
 	src/box_announce.c             # the box describing itself to dserv
+	src/box_obs.c                  # obs-period state + idle-deferred work
 	src/platform/box_gpio.c        # block #3: GPIO + k_timer box-timed pulse
 	src/platform/box_sched.c       # scheduled events (fire at beginobs + N us)
 	src/platform/box_console.c     # two-way CLI over the USB console CDC
@@ -50,4 +51,4 @@ endif()
 
 # The portable core (forked from wiznet-io, pico_* -> box_*) plus the RW612/Zephyr
 # platform layer, added building-block by building-block.
-target_include_directories(app PRIVATE src/core src/platform)
+target_include_directories(app PRIVATE src src/core src/platform)
