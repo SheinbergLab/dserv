@@ -233,9 +233,30 @@ fine. What actually happens:
 Corrections to the 2026-07-23 consequences, now that the cause is known:
 * Loopback tests driven with `pulse_us` are trustworthy again once the k_timer
   path lands (rig-verify first, of course).
-* The recorded RTT numbers were almost certainly driven by SET, not pulse —
-  a pulse produced **no** reply frame at all, so there would have been nothing
-  to time. A cheap re-confirmation after the reflash wouldn't hurt.
+* The recorded RTT numbers were driven by SET, not pulse — a pulse produced
+  **no** reply frame at all, so there was nothing to time. CONFIRMED: `pulse_us`
+  loopback gives clean rise+fall edges on the k_timer path (200 ms pulse →
+  di/1=1 then di/1=0 exactly 200 ms apart).
+
+### RTT re-measured on the full-box build (2026-07-23)
+
+Re-ran `tools/rtt_bench.py` (host → `cmd/do` SET pin 3 → wire → DI pin 1 →
+publish → host) on the current HEAD firmware, teensy40, dserv stopped, n=300 ×2:
+
+    min 0.49–0.56   median 0.56–0.57   p99 0.61–0.64   sd 0.04–0.13 ms
+
+That is ~2× the **0.286 ms median** recorded at commit baa81cb — and the FLOOR
+moved with it (min 0.273 → ~0.49 ms), so it is systematic added latency, not
+jitter. **Not a regression to fix blindly: baa81cb was a MINIMAL build (blocks
+#2–4 only).** The current loop runs, every pass, group feed/poll (4 groups),
+clock stamping, `box_sched` service (8 slots), the console-shell marshal check,
+and manifest bookkeeping — the cost of being a complete box. Still comfortably
+sub-ms and the measurement is clean (0 misses).
+Not yet root-caused to a single culprit. If reclaiming the ~0.28 ms matters, the
+next step is a build bisect (strip CONFIG_SHELL, then groups, then sched) — the
+Shell thread is the first suspect, since an idle shell backend still schedules.
+Harness note: after the console-first CDC reorder the data pipe is the
+HIGHER-numbered `cu.usbmodem*`; `rtt_bench.py` now takes `[-1]`, not `[0]`.
 
 **Upstream note:** the stale-flag bug bites free-run mode too (the counter
 re-crosses an old compare value on every 32-bit wrap, ~172 s at the RT1062's
