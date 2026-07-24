@@ -415,6 +415,67 @@ for SET-1-while-high, visible to whatever external hardware the pin drives).
 **Done:** obs-mirror output (`config/obs/pin` via console + `ess/in_obs` drives
 the pin, publishes `state/in_obs`).
 
+## PROPOSAL: selectable console — convenience (CDC) vs timing (UART)
+
+**Status: proposed, not implemented.** Measurements behind it are in "RTT
+re-measured" below; the short version:
+
+| console binding | median RTT |
+|---|---|
+| none at all | 0.313 ms |
+| **hardware UART (lpuart6, pins 0/1)** | **0.346 ms** |
+| CDC-ACM (as shipped) | ~0.56 ms |
+| + `CONFIG_SHELL` (either transport) | ~0.55–0.57 ms |
+
+So the console *code* is nearly free (~0.03 ms); the ~0.21 ms is the cost of a
+**second actively-claimed CDC-ACM instance**, and `CONFIG_SHELL` costs a further
+~0.24 ms that does NOT stack with it (both saturate the same bottleneck — almost
+certainly recurring work on the cooperative system workqueue at
+`CONFIG_SYSTEM_WORKQUEUE_PRIORITY=-1`, which preempts the service loop; that also
+explains why the dedicated CDC-ACM queue didn't help, being started at the same
+priority).
+
+### The two options have different natures
+
+* **Console device (CDC vs UART) is RUNTIME-selectable, cheaply.** Both devices
+  are already in every board's devicetree and enabled; `box_console_init()` only
+  has to choose which pointer to bind. And the cost comes from *claiming* the CDC
+  — bind the UART instead and the console CDC stays enumerated-but-unclaimed,
+  which the stub build showed is free.
+* **`CONFIG_SHELL` is COMPILE-time only.** It cannot be a runtime option; it has
+  to be a separate build variant.
+
+### Recommendation: a persisted config key, not a strap
+
+`console cdc|uart` in `box_config_t` (additive at the struct tail, so old blobs
+load as 0 = `cdc` = today's behaviour), applied at `box_console_init()`,
+`save`+`reboot` to take effect — the same shape as the Pico's `mode auto|usb|eth`.
+
+**Why a persisted key beats a strap here**, even though the Pico used a strap:
+the Pico's GP28 strap guarded the *transport*, so a bad persisted value could
+kill the only link to the box and the strap was the recovery path (see the
+GP28 boot-hang lesson). That does not apply here — the console is **not** the
+control channel. `config/console` is reachable over the frame pipe like any other
+datapoint, so a box left on `uart` with no FTDI attached is still fully
+configurable from dserv and can be flipped back. No pin consumed, no hardware
+required, nothing to get locked out of.
+
+Add a strap **only** if a board wants a hardware guarantee — as an optional DT
+alias (`box-console-strap`), read at boot, **open = CDC** (the safe default that
+works with no extra hardware), pulled low = UART. If the alias is absent the
+feature compiles out. It would need `box_gpio_reserved()` to exclude the pin.
+
+### Also worth doing
+
+* **Announce it:** `state/console` = `"cdc"` | `"uart"` in the manifest, so a
+  host can see which mode a box booted in without guessing.
+* **Shell as a build variant:** keep a `shell.conf` (`CONFIG_SHELL=y` + the
+  `zephyr,shell-uart` chosen) for a "convenience build", documented as costing
+  ~0.24 ms median. Not the default.
+* **Per-board testing:** the RW612 must be re-measured before assuming any of
+  this transfers — different silicon, different UDC, and its CTIMER/console
+  situation differs from the Teensy's.
+
 ## PROPOSAL: `cmd/announce`, and what it would take to auto-purge dead boxes
 
 **Status: proposed, not implemented.** Prompted by "does `extio_clear` also clear
