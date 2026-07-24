@@ -144,8 +144,68 @@ Keep the distinction that matters: a local free-running clock needs no peer and
       `dservGet` is correct.
 - [ ] **Scheduled events** — `box_gpio_exec` handles only `GPIO_OP_SET` and
       `GPIO_OP_PULSE`. `GPIO_OP_SCHED_PULSE` and `GPIO_OP_SCHED_TIMER` (fire at
-      beginobs + N µs) are parsed by the core and then silently dropped. Needs
-      clock sync for the beginobs epoch.
+      beginobs + N µs) are parsed by the core and then silently dropped. The
+      beginobs epoch it needs now exists (clock sync is done).
+      **ATTEMPTED 2026-07-23 AND REVERTED** — read the two findings below before
+      retrying, they change the design.
+
+### BLOCKER: `cmd/do/<n>/pulse_us` produces no DI event (pre-existing)
+
+Found while testing scheduled events; **not caused by them**, and it invalidates
+the obvious way to verify any of this on a loopback jumper.
+
+On teensy40 with phys13→phys12 jumpered (box pin 3 out → pin 1 in), in a single
+listen window: `cmd/do/3 1` and `cmd/do/3 0` (SET) publish `state/di/1` every
+time, while `cmd/do/3/pulse_us <any width>` publishes **nothing** — 2 ms through
+4 s, DI and chord channels both silent, `debounce_ms[1]=0`, `quiet=0`.
+
+Instrumented inside `pulse_start` and the command dispatch, the pulse case
+reports:
+
+    op=2 pin=3 val=2000000  rb1=1  path=1
+
+i.e. correct opcode/pin/width; the pin **does** rise and the jumper **does**
+conduct (`rb1` = pin 1 read back HIGH immediately after the raise); the hardware
+counter armed successfully. Yet no edge is reported. `box_gpio_poll_di()` only
+reports when `di_unsettled[i]` was set by `di_isr`, so **the DI interrupt is not
+latching the pulse-driven edge** although it latches the SET-driven one on the
+same pin. Cause unknown.
+
+Consequences worth taking seriously:
+* Any loopback test that drives with `pulse_us` will read as a total failure even
+  when the feature under test works. Drive with `cmd/do/<n>` SET instead.
+* **The recorded RTT benchmark numbers were measured through this exact path**
+  (drive `cmd/do` → time the `state/di` frame back) and deserve a re-check.
+
+### The pulse path assumes 4 hardware channels; the Teensy counter has 1
+
+`box_gpio.c` sets `BOX_PULSE_NCH 4` and allocates a match channel per in-flight
+pulse. Zephyr's `counter_mcux_gpt` driver advertises **`.channels = 1`** and
+hard-rejects any other id:
+
+    if (chan_id != 0) { LOG_ERR("Invalid channel id"); return -EINVAL; }
+
+So on Teensy there is exactly ONE channel. `pulse_nch` clamps correctly at
+runtime, but the consequence is that concurrent pulses on different pins, and any
+scheduler competing for the same channel, silently fall back. The RW612's CTIMER
+does have 4 — this is Teensy-specific, and it is why a counter-based scheduler is
+the wrong shape here.
+
+**Design guidance for the retry:** David has confirmed **100 µs resolution is
+acceptable** for this box. `CONFIG_SYS_CLOCK_TICKS_PER_SEC=10000`, so a plain
+`k_timer` meets that with no channel contention at all — for both the pulse
+falling edge and the scheduled-event fire. Prefer that over the two-stage
+counter-arming scheme attempted here.
+
+Also note the blocking fallback that existed at the time: `k_busy_wait(width)`
+stalls the service loop for the whole pulse, so the DI poller only runs after the
+pin is already back low and both edges cancel against the last published level.
+Whatever replaces it must never block.
+
+**What did work in the attempt** (worth keeping when redone): scheduling
+bookkeeping was exact — with a beginobs anchor, `cmd/do/3/at 500000` and
+`cmd/timer/7/at 1000000` published `state/timer/<tid>` at precisely +500000 µs
+and +1000000 µs, stamped at the intended instant rather than at drain time.
 - [ ] **Hardware obs-sync input** — half-present. `box_gpio_apply_config` already
       claims the pin and latches edges, but nothing consumes the latch; it only
       becomes meaningful once clock sync exists (it is the hardware anchor that
