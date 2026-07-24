@@ -25,14 +25,61 @@ Dataserver::~Dataserver()
   datapoint_table.clear();
 }
 
+static inline int64_t steady_us(void)
+{
+  return (int64_t) std::chrono::duration_cast<std::chrono::microseconds>
+    (std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+static inline int64_t system_us(void)
+{
+  return (int64_t) std::chrono::duration_cast<std::chrono::microseconds>
+    (std::chrono::system_clock::now().time_since_epoch()).count();
+}
+
+int64_t Dataserver::clock_epoch_offset_us(void)
+{
+  /* Captured on first use and never recomputed -- recomputing would reintroduce
+   * exactly the discontinuities this exists to remove. Thread-safe init (C++11
+   * magic statics); the value is stable because system_clock and steady_clock
+   * are slewed together by NTP and diverge ONLY across a step. */
+  static const int64_t offset = system_us() - steady_us();
+  return offset;
+}
+
+/*
+ * The acquisition timebase: a MONOTONIC counter rendered on the wall-clock
+ * scale.
+ *
+ * This used to be high_resolution_clock, which is a typedef whose meaning is
+ * platform-dependent: libstdc++ (Linux) aliases it to system_clock =
+ * CLOCK_REALTIME, while libc++ (macOS) aliases it to steady_clock. So the same
+ * source produced timestamps with DIFFERENT EPOCHS on the two platforms, and on
+ * Linux -- the deployment target -- every datapoint rode a clock NTP can STEP.
+ * A step mid-session silently corrupts every interval computed across it, which
+ * for a data-acquisition timebase is the one failure mode you cannot detect
+ * after the fact.
+ *
+ * steady_clock can never step. Adding the fixed epoch offset keeps the values
+ * on the same us-since-1970 scale they have always had, so datafiles, analysis
+ * code, and the extio box clock sync (which only ever needs a consistent target
+ * to map into) are all unchanged -- this is a semantics fix, not a format
+ * change.
+ *
+ * NOT CLOCK_MONOTONIC_RAW: steady_clock is NTP RATE-disciplined on Linux, and
+ * that property is load-bearing -- it is what makes the host a valid frequency
+ * reference for measuring a box's crystal error (the extio Teensy reads
+ * -113.9 ppm against it). _RAW would fold the host's own oscillator error into
+ * every such measurement.
+ *
+ * Accepted consequence: across a long session these timestamps drift from true
+ * wall clock by the host's accumulated slew (ms over many hours). That is the
+ * intended trade -- internal consistency over external agreement -- and
+ * clock_epoch_offset_us() makes the conversion recoverable.
+ */
 int64_t Dataserver::now(void)
 {
-  std::chrono::time_point<std::chrono::high_resolution_clock> now = 
-    std::chrono::high_resolution_clock::now();    
-  auto duration = now.time_since_epoch();
-  return
-    ((int64_t) std::chrono::duration_cast<std::chrono::microseconds>(duration).
-     count());
+  return clock_epoch_offset_us() + steady_us();
 }
   
 /*

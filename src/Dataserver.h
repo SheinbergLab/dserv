@@ -103,6 +103,13 @@ public:
   ~Dataserver();
 
   static int64_t now(void);
+
+  /* Fixed offset (us) added to the monotonic counter to render now() on the
+   * wall-clock scale; captured once, never updated. Add the CURRENT
+   * (system_clock - steady_clock) difference minus this value to convert a
+   * dserv timestamp back to true wall-clock time. See now() for rationale. */
+  static int64_t clock_epoch_offset_us(void);
+
   int tcpport;
   int port(void) { return tcpport; }
 
