@@ -252,8 +252,34 @@ jitter. **Not a regression to fix blindly: baa81cb was a MINIMAL build (blocks
 clock stamping, `box_sched` service (8 slots), the console-shell marshal check,
 and manifest bookkeeping — the cost of being a complete box. Still comfortably
 sub-ms and the measurement is clean (0 misses).
-**BISECTED: it is `CONFIG_SHELL`, and it is NOT any of the obvious levers.**
-Same board, same harness, n=300 each:
+> **CORRECTION 2026-07-23 — the "it is `CONFIG_SHELL`" conclusion below is
+> WRONG.** The "Shell OFF" row was measured with a fully STUBBED console
+> (`box_console_init()` a no-op, the console CDC never claimed,
+> `box_console_printf` a no-op) — so it removed *the console*, not just the
+> Shell. Replacing the Shell with the small hand-rolled console (`CONFIG_SHELL`
+> absent, verified) still measures **median 0.553–0.576**. Full picture:
+>
+> | build | floor | median |
+> |---|---|---|
+> | **no console at all** (stub) | 0.286 | **0.313** |
+> | hand-rolled console on CDC | ~0.29 | ~0.56 |
+> | Shell on CDC | 0.49 | 0.565 |
+> | Shell on lpuart6 | 0.293 | 0.553 |
+>
+> * **FLOOR:** Shell-on-CDC is uniquely bad (0.49). Everything else ~0.29 — so
+>   the floor penalty is the CDC-ACM *shell backend* specifically; the
+>   hand-rolled console on the *same* CDC does not pay it.
+> * **MEDIAN:** only *no console at all* is fast. **Any working console costs
+>   ~0.24 ms**, Shell or not. So the median cost is having a console on the box,
+>   not the Shell subsystem — and the XIP-cache-pressure hypothesis below is
+>   correspondingly weaker (the hand-rolled console is 28 KB SMALLER and still
+>   pays it).
+>
+> Mechanism still unknown. What is now ruled out: the Shell subsystem, the shell
+> thread priority, the backend transport, per-pass service overhead, console-TX
+> starvation, and workqueue sharing.
+
+**(superseded — see the correction above)** Same board, same harness, n=300 each:
 
 | build | floor | median |
 |---|---|---|

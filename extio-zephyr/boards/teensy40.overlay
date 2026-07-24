@@ -13,9 +13,6 @@
 	/* zephyr,console stays on lpuart6 (Teensy pins 0/1) for Zephyr's own printk
 	 * and driver LOG (dev serial adapter); the box CLI shell owns the USB
 	 * console CDC -- separate devices, no conflict. */
-	chosen {
-		zephyr,shell-uart = &cdc_acm_console;
-	};
 };
 
 /* No settings storage on the Teensy 4.0 (XIP-from-flash write hazard, and no SD
