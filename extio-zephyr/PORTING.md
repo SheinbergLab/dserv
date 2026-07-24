@@ -252,9 +252,45 @@ jitter. **Not a regression to fix blindly: baa81cb was a MINIMAL build (blocks
 clock stamping, `box_sched` service (8 slots), the console-shell marshal check,
 and manifest bookkeeping — the cost of being a complete box. Still comfortably
 sub-ms and the measurement is clean (0 misses).
-Not yet root-caused to a single culprit. If reclaiming the ~0.28 ms matters, the
-next step is a build bisect (strip CONFIG_SHELL, then groups, then sched) — the
-Shell thread is the first suspect, since an idle shell backend still schedules.
+**BISECTED: it is `CONFIG_SHELL`, and it is NOT any of the obvious levers.**
+Same board, same harness, n=300 each:
+
+| build | floor | median |
+|---|---|---|
+| minimal baseline (baa81cb, recorded) | 0.273 | 0.286 |
+| **Shell OFF** (console stubbed, `CONFIG_SHELL=n`) | **0.286** | **0.313** |
+| Shell ON (as shipped) | 0.49 | 0.565 |
+| Shell ON + `SHELL_THREAD_PRIORITY=14` | 0.405 | 0.585 |
+| Shell ON + console port actively drained | 0.371 | 0.582 |
+| Shell ON + `USBD_CDC_ACM_WORKQUEUE=y` | 0.352 | 0.574 |
+
+Dropping the Shell recovers essentially all of it (0.565 → 0.313 ≈ the 0.286
+baseline). Nothing else moves the median at all. **Hypotheses tested and
+REFUTED — do not re-walk these:**
+* *per-pass service overhead* — gating `box_uplink_service` +
+  `box_console_service` to 1-in-64 left the median unchanged (and worsened p99);
+* *shell thread preempting the loop* — dropping it to priority 14 (main is 0)
+  changed nothing, so it is not CPU stolen by that thread;
+* *console-CDC TX starved and retrying on the shared workqueue every 1 ms* —
+  draining the console port throughout the run changed nothing;
+* *CDC work sharing the cooperative system workqueue* — the dedicated CDC-ACM
+  queue changed nothing. Note it is started at `CONFIG_SYSTEM_WORKQUEUE_PRIORITY`
+  anyway, so it separates the queue but not the priority.
+
+Worth knowing for any future attempt: the workqueue sits INSIDE the round trip
+twice (CDC RX inbound, CDC TX outbound), so *lowering* its priority would slow
+our own reply frame — "deprioritize the workqueue" is the wrong instinct here.
+`CONFIG_SYSTEM_WORKQUEUE_PRIORITY=-1` (cooperative) does outrank the main loop
+unconditionally, which is why no amount of shell-thread tuning helps; the
+remaining unknown is what the Shell puts on that path. Deferred logging is a
+non-issue on this board — the teensy40 build has no `CONFIG_LOG` at all.
+
+**Practical answer for now:** both figures are sub-ms and the cost buys an
+interactive console. A latency-critical deployment can simply build without the
+Shell (~0.25 ms back) — every config the CLI offers is also reachable over the
+frame pipe as `config/...` datapoints. Re-measure on the RW612 before assuming
+any of this transfers; it is different silicon and a different UDC.
+
 Harness note: after the console-first CDC reorder the data pipe is the
 HIGHER-numbered `cu.usbmodem*`; `rtt_bench.py` now takes `[-1]`, not `[0]`.
 
