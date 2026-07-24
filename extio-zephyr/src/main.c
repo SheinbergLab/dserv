@@ -75,6 +75,22 @@ static void publish_group(int g, uint8_t bits, uint64_t t_us)
 	box_uplink_send(f, DSERV_MSG_LEN);
 }
 
+/* Publish a DO level: extio/<name>/state/do/<pin>, stamped at the instant the
+ * pin actually moved (not at command arrival). Matches the Pico exactly --
+ * SET only, from the datapoint path only -- so hosts decode both boxes alike.
+ * Consumers: UIs showing live output state, and host/loopback_rtt.tcl, which
+ * reads it to pick the next level (the .sh variant just alternates). */
+static void publish_do(uint8_t pin, uint8_t level, uint64_t stamp)
+{
+	uint8_t f[DSERV_MSG_LEN];
+	char leaf[24], nm[80];
+
+	snprintf(leaf, sizeof leaf, "do/%u", pin);
+	dserv_state_name(&cfg, nm, sizeof nm, leaf);
+	dserv_msg_int(f, nm, stamp, level);
+	box_uplink_send(f, DSERV_MSG_LEN);
+}
+
 /* Clock-alignment telemetry, published at every obs anchor. This is how you tell
  * from the host side whether stamping is trustworthy: `source` says whether the
  * anchor was the hardware TTL edge or mere frame arrival, `transport_us` is the
@@ -221,6 +237,11 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 		}
 	} else if (r == CFG_GPIO && cmd.op != GPIO_OP_NONE) {
 		box_gpio_exec(&cfg, &cmd);            /* immediate DO set/pulse */
+		if (cmd.op == GPIO_OP_SET) {
+			/* the pin has just moved -> stamp its actuation, not arrival */
+			publish_do(cmd.pin, (uint8_t) (cmd.value ? 1 : 0),
+				   event_stamp(box_gpio_now_us()));
+		}
 	} else if (r == CFG_CONSOLE) {
 		box_console_printf("console=%s -- save+reboot to apply\n",
 		       dserv_console_str((uint8_t) dserv_cfg_console_mode(&cfg)));
