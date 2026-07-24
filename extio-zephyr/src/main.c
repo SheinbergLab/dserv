@@ -453,6 +453,7 @@ int main(void)
 	 * ingress, and a 1 Hz watchdog -> whichever uplink is active. */
 	uint8_t rx[256];
 	int watchdog = 0;
+	uint32_t loop_last_us = 0, loop_max_us = 0, loop_t0 = 0;
 	int64_t next_wd = k_uptime_get() + 1000;
 	char name[80];
 
@@ -548,6 +549,33 @@ int main(void)
 			uint8_t f[DSERV_MSG_LEN];
 			dserv_state_name(&cfg, name, sizeof name, "watchdog");
 			dserv_msg_int(f, name, 0, watchdog++);
+#if defined(CONFIG_NETWORKING)
+			/* Publish-latency investigation: how long does one
+			 * zsock_send() actually take, and how long is a full
+			 * service-loop pass? Two frames the box emits us apart
+			 * arrive at dserv ~650 us apart and three host-side
+			 * theories were wrong -- these two numbers separate
+			 * "the send is expensive" from "the loop is slow"
+			 * from "neither, look outside the box". */
+			{
+				uint32_t sl = 0, sm = 0;
+				box_net_eth_send_stats(&sl, &sm);
+				dserv_state_name(&cfg, name, sizeof name, "dbg/send_us");
+				dserv_msg_int(f, name, 0, (int32_t) sl);
+				box_uplink_send(f, DSERV_MSG_LEN);
+				dserv_state_name(&cfg, name, sizeof name, "dbg/send_max_us");
+				dserv_msg_int(f, name, 0, (int32_t) sm);
+				box_uplink_send(f, DSERV_MSG_LEN);
+				dserv_state_name(&cfg, name, sizeof name, "dbg/loop_us");
+				dserv_msg_int(f, name, 0, (int32_t) loop_last_us);
+				box_uplink_send(f, DSERV_MSG_LEN);
+				dserv_state_name(&cfg, name, sizeof name, "dbg/loop_max_us");
+				dserv_msg_int(f, name, 0, (int32_t) loop_max_us);
+				box_uplink_send(f, DSERV_MSG_LEN);
+				dserv_state_name(&cfg, name, sizeof name, "watchdog");
+				dserv_msg_int(f, name, 0, watchdog - 1);
+			}
+#endif
 			box_uplink_send(f, DSERV_MSG_LEN);
 
 			/* box status as datapoints -- observable any time over the active
@@ -596,10 +624,21 @@ int main(void)
 #endif
 		}
 
+		/* Cost of the pass we just finished -- measured to the point of
+		 * blocking, so the wait itself is excluded. */
+		if (loop_t0) {
+			uint32_t d = k_cyc_to_us_floor32(k_cycle_get_32() - loop_t0);
+			loop_last_us = d;
+			if (d > loop_max_us) {
+				loop_max_us = d;
+			}
+		}
+
 		/* Block until an ISR has work for us (CDC RX / DI edge), or the
 		 * watchdog tick is due. Replaces a flat k_msleep(1) that added up to
 		 * 1 ms to BOTH halves of every round trip. */
 		box_event_wait(K_MSEC(1));
+		loop_t0 = k_cycle_get_32();
 	}
 	return 0;
 }

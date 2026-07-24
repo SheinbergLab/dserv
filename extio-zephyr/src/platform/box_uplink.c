@@ -257,6 +257,7 @@ int box_uplink_init(const box_config_t *cfg)
 	k_thread_create(&reg_thread, reg_stack, K_THREAD_STACK_SIZEOF(reg_stack),
 			reg_thread_fn, NULL, NULL, NULL, 7, 0, K_NO_WAIT);
 	k_thread_name_set(&reg_thread, "extio_reg");
+	box_net_eth_rx_wake_start();   /* inbound packets wake the loop, not the 1ms timeout */
 #endif
 	active = NULL;
 	eth_streak = 0;

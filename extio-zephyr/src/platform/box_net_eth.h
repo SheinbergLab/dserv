@@ -62,6 +62,15 @@ void box_net_eth_server_service(void);
  * caller that sees this stay 0 while the client socket is up must re-register. */
 int box_net_eth_server_up(void);
 
+/* Cost of the last zsock_send() and the running max, in us. Instrumentation for
+ * the publish-latency investigation; see box_net_eth.c. */
+void box_net_eth_send_stats(uint32_t *last_us, uint32_t *max_us);
+
+/* Start the RX wake thread: signals box_event when the config link becomes
+ * readable, so an inbound command does not wait out the service loop's 1 ms
+ * poll timeout. Call once, after init. */
+void box_net_eth_rx_wake_start(void);
+
 /* Send ONE text command ("%reg ...\n" / "%match ...\n") to dserv and wait
  * (bounded) for its "<rc> ...\n" reply. 0 = dserv ACCEPTED (rc 1), <0 otherwise.
  *

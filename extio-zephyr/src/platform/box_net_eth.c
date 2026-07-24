@@ -2,6 +2,7 @@
  * box_net_eth.c -- RW612/Zephyr Ethernet transport over BSD-style sockets.
  */
 #include "box_net_eth.h"
+#include "box_event.h"
 
 #include <zephyr/kernel.h>
 #include <zephyr/net/net_if.h>
@@ -21,6 +22,19 @@ static int connecting;          /* 1 = a non-blocking connect() is in flight */
 static int srv_listen = -1;     /* listening socket (BOX_ETH_CFG_PORT)          */
 static int srv_conn   = -1;     /* dserv's accepted connect-back                */
 static int srv_fresh;           /* one-shot: report BOX_NET_RESET after accept  */
+
+/* Small frames carrying single events are the ENTIRE traffic pattern here, so
+ * Nagle is pure harm: it holds a 128-byte publish until a prior segment is
+ * ACKed, adding an RTT (or a delayed-ACK interval) to an event whose whole
+ * value is its timeliness. dserv disables it on its own send socket
+ * (Dataserver.cpp open_send_sock) and the Pico's W6300 path opens with
+ * SF_TCP_NODELAY -- this port simply never did, which is an oversight rather
+ * than a choice. */
+static void tcp_nodelay(int fd)
+{
+	int one = 1;
+	(void) zsock_setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
+}
 
 static void srv_drop(void)
 {
@@ -121,6 +135,7 @@ int box_net_eth_connect(const uint8_t dserv_ip[4], uint16_t port)
 	if (sock < 0) {
 		return -1;
 	}
+	tcp_nodelay(sock);                       /* publishes are small and latency-critical */
 	zsock_fcntl(sock, ZVFS_F_SETFL, ZVFS_O_NONBLOCK);
 
 	int r = zsock_connect(sock, (struct sockaddr *)&addr, sizeof addr);
@@ -181,6 +196,7 @@ void box_net_eth_server_service(void)
 	if (c < 0) {
 		return;                      /* EAGAIN: nobody waiting */
 	}
+	tcp_nodelay(c);                          /* inbound cmd/config, same argument */
 	zsock_fcntl(c, ZVFS_F_SETFL, ZVFS_O_NONBLOCK);
 	srv_conn = c;
 	srv_fresh = 1;                       /* -> BOX_NET_RESET -> announce burst */
@@ -189,6 +205,50 @@ void box_net_eth_server_service(void)
 int box_net_eth_server_up(void)
 {
 	return srv_conn >= 0;
+}
+
+/* ---- wake the service loop on inbound packets ----
+ *
+ * Every other inbound path signals box_event and gets an immediate wake: the CDC
+ * RX ISR (box_net_usb), the console, the GPIO edge ISR. Ethernet had NOTHING, so
+ * a command sat in the socket until box_event_wait(K_MSEC(1)) timed out -- ~0.5 ms
+ * of pure structural delay on every dserv->box command, and up to 1 ms worst case.
+ * That is invisible on a throughput test and dominant on a latency one.
+ *
+ * Zephyr's socket API exposes no ISR hook, so the idiomatic equivalent is a thread
+ * blocked in zsock_poll() that signals and goes straight back to waiting. It never
+ * touches the socket data -- the service loop still owns every read, so there is no
+ * second consumer and no locking. Priority is below the service loop: this only
+ * needs to make the loop runnable, not to run before it. */
+static K_THREAD_STACK_DEFINE(eth_rx_stack, 1024);
+static struct k_thread eth_rx_thread;
+
+static void eth_rx_thread_fn(void *a, void *b, void *c)
+{
+	ARG_UNUSED(a); ARG_UNUSED(b); ARG_UNUSED(c);
+	for (;;) {
+		int fd = srv_conn;               /* sampled; -1 while disconnected */
+		if (fd < 0) {
+			k_msleep(20);            /* nothing to watch yet */
+			continue;
+		}
+		struct zsock_pollfd pfd = { .fd = fd, .events = ZSOCK_POLLIN };
+		/* Bounded wait so a socket swap (reconnect) is picked up promptly and a
+		 * closed fd can never wedge this thread. */
+		if (zsock_poll(&pfd, 1, 200) > 0) {
+			box_event_signal();
+			/* The loop drains it. Yield so we re-poll after that has happened
+			 * rather than spinning on a still-readable socket. */
+			k_msleep(1);
+		}
+	}
+}
+
+void box_net_eth_rx_wake_start(void)
+{
+	k_thread_create(&eth_rx_thread, eth_rx_stack, K_THREAD_STACK_SIZEOF(eth_rx_stack),
+			eth_rx_thread_fn, NULL, NULL, NULL, 8, 0, K_NO_WAIT);
+	k_thread_name_set(&eth_rx_thread, "extio_ethrx");
 }
 
 int box_net_eth_poll(uint8_t *buf, int max)
@@ -252,12 +312,33 @@ int box_net_eth_poll(uint8_t *buf, int max)
 	return 0;
 }
 
+/* ---- send-cost instrumentation ----
+ * Three host-side hypotheses for the ~650 us between two frames the box emits
+ * microseconds apart (syscall count, Nagle + RX wake, TX traffic class) were all
+ * wrong. This measures the thing directly instead of narrowing it again: if
+ * zsock_send itself burns ~650 us, the cost is the stack traversal; if it
+ * returns fast, the delay is elsewhere and the send was never the culprit. */
+static uint32_t send_last_us, send_max_us;
+
+void box_net_eth_send_stats(uint32_t *last_us, uint32_t *max_us)
+{
+	if (last_us) *last_us = send_last_us;
+	if (max_us)  *max_us  = send_max_us;
+}
+
 int box_net_eth_send(const uint8_t *buf, int len)
 {
 	if (sock < 0) {
 		return -1;
 	}
+	uint32_t t0 = k_cycle_get_32();
 	int n = zsock_send(sock, buf, (size_t) len, 0);
+	uint32_t dt = k_cyc_to_us_floor32(k_cycle_get_32() - t0);
+
+	send_last_us = dt;
+	if (dt > send_max_us) {
+		send_max_us = dt;
+	}
 	return (n == len) ? 0 : -1;
 }
 
