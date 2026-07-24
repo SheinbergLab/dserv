@@ -142,70 +142,109 @@ Keep the distinction that matters: a local free-running clock needs no peer and
       rig TTL (deterministic relative to the obs event) to measure properly.
       Gotcha: `dservctl listen --jsonl` renders negative ints as unsigned;
       `dservGet` is correct.
-- [ ] **Scheduled events** — `box_gpio_exec` handles only `GPIO_OP_SET` and
-      `GPIO_OP_PULSE`. `GPIO_OP_SCHED_PULSE` and `GPIO_OP_SCHED_TIMER` (fire at
-      beginobs + N µs) are parsed by the core and then silently dropped. The
-      beginobs epoch it needs now exists (clock sync is done).
-      **ATTEMPTED 2026-07-23 AND REVERTED** — read the two findings below before
-      retrying, they change the design.
+- [x] **Scheduled events — DONE 2026-07-23** (k_timer design, exactly as the
+      guidance below prescribed). `src/platform/box_sched.{c,h}`: 8-slot table
+      mirroring the Pico's `g_sched[]` contract — `cmd/do/<n>/at <us>` pulses
+      pin n (width = `config/pin/<n>/pulse_us`, default 1000) at beginobs+us
+      and posts `state/timer/<n>`; `cmd/timer/<t>/at <us>` is notify-only.
+      Each slot rides its own k_timer; the expiry (ISR) drives the pulse at the
+      intended instant, the service loop drains the publish stamped at the
+      INTENDED fire time. No beginobs → console ignore; table full → console
+      message. The pulse path itself moved off the hardware counter onto
+      per-pin k_timers at the same time (see the autopsy below — the counter
+      was the whole problem). Builds clean on all three boards.
+      **RIG-VERIFIED 2026-07-23 on teensy40** (`tools/sched_verify.sh`):
+      * `pulse_us 2000` → the di/1 pair that never existed on the counter
+        path, widths 2065/2070 µs (k_timer tick round-up, within the accepted
+        100 µs resolution);
+      * `pulse_us 4000000` → rise/fall 4.000329 s apart with the watchdog at a
+        perfect 1 Hz throughout (nothing blocks; the +329 µs = tick rounding
+        plus sw-anchor crystal drift over 4 s — no hw TTL on the bench);
+      * sched: `state/timer/3` and `state/timer/7` stamped **exactly**
+        500000 µs apart (the +500 ms / +1000 ms deltas, 0 µs bookkeeping
+        error), and the scheduled pulse fell 2060 µs after its stamp
+        (`config/pin/3/pulse_us 2000` honored).
+      * clean re-run with the obs mirror off: the scheduled pulse's PHYSICAL
+        rising edge (DI-latched through the jumper) landed **175 µs after the
+        intended instant** — end-to-end scheduled actuation on the 100 µs
+        k_timer tick, sw anchors only. (Pico Tier C with hw anchors + µs
+        alarms was 34 µs; this is the expected tick-resolution cost, well
+        inside the accepted budget.) Width that run: 1976 µs — the ~24 µs
+        asymmetry is GPIO-ISR latch latency behind the tick ISR that drives
+        both edges, sub-tick noise.
+      Reading the di trace around the sched test needs one fact: the box's
+      **obs mirror is (persistently) on pin 3** (`state/obs_pin=3`), the same
+      pin the loopback jumper drives — so beginobs itself raised di/1 (26 µs
+      after the frame anchor — an accidental live demo of the hw-anchor
+      margin), the scheduled raise was invisible (already high), and its fall
+      is the di/1=0 that trails `state/timer/3`. For clean pulse loopbacks,
+      `config/obs/pin off` (and `cmd/save`) or mirror on a non-jumpered pin.
+      Note the host-side `config/obs/pin` datapoint read back "off" while the
+      box announced 3 — the reboot-divergence gotcha from "Open bugs" in the
+      flesh; the manifest announce is what made it visible, as designed.
 
-### BLOCKER: `cmd/do/<n>/pulse_us` produces no DI event (pre-existing)
+### AUTOPSY: the "pulse produces no DI event" blocker — SOLVED 2026-07-23
 
-Found while testing scheduled events; **not caused by them**, and it invalidates
-the obvious way to verify any of this on a loopback jumper.
+The 2026-07-23 attempt was reverted over a mystery: `cmd/do/3 1|0` (SET)
+published `state/di/1` every time, while `cmd/do/3/pulse_us <any width>`
+published **nothing**, 2 ms through 4 s, and the working theory was "the DI
+interrupt is not latching the pulse-driven edge; cause unknown."
 
-On teensy40 with phys13→phys12 jumpered (box pin 3 out → pin 1 in), in a single
-listen window: `cmd/do/3 1` and `cmd/do/3 0` (SET) publish `state/di/1` every
-time, while `cmd/do/3/pulse_us <any width>` publishes **nothing** — 2 ms through
-4 s, DI and chord channels both silent, `debounce_ms[1]=0`, `quiet=0`.
+**That theory was wrong, and the mystery is solved — live, on the bench.**
+Reproduced over dserv against the still-instrumented firmware, then
+discriminated with one experiment: park the pin HIGH first (`cmd/do/3 1`, event
+arrives), THEN `pulse_us 2000` → **exactly one `state/di/1 = 0` arrives,
+timestamped at the pulse**. The DI interrupt latches pulse-driven edges just
+fine. What actually happens:
 
-Instrumented inside `pulse_start` and the command dispatch, the pulse case
-reports:
+* **Every pulse was a microsecond-wide sliver, not its requested width.**
+  Zephyr's `counter_mcux_gpt` driver arms an alarm (`mcux_gpt_set_alarm`)
+  by enabling the compare interrupt **without clearing a stale compare status
+  flag (OF1)** — so if OF1 is already latched, the "falling edge" callback runs
+  the instant the alarm is armed, right after `box_gpio_exec` raised the pin.
+* **OF1 was ALWAYS stale, courtesy of restart mode.** Our devicetree set no
+  `run-mode`, and the `nxp,imx-gpt` binding defaults to `restart`: the counter
+  resets at the compare value — and *re-crosses the old compare value forever*,
+  every couple of seconds, re-latching OF1 while idle (the binding even warns
+  about alarm side effects in restart mode). So from the first boot-heartbeat
+  pulse onward, every later arm found a stale flag and fired instantly.
+  (Restart mode also resets CNT **on any OCR1 write** — the driver's own
+  `mcux_gpt_reset()` exploits exactly that — so even with the flag cleared,
+  every relative alarm would fire LATE by CNT-at-arm-time, up to seconds.
+  The counter path was unsalvageable on this driver without both a driver
+  patch and `run-mode = "free-run"`.)
+* **The sliver explains the "no event" perfectly.** Both DI edges land between
+  two poller passes; `box_gpio_poll_di` samples the settled level, finds it
+  equal to the published level, and reports nothing — the same both-edges-cancel
+  mechanism we had (correctly) attributed to the k_busy_wait fallback, only via
+  timing rather than blocking. `rb1=1` in the instrumentation was read inside
+  the sliver. From parked-HIGH the sliver ends at a *different* level than
+  published — hence exactly one fall event, which is what nailed it.
+* **Nothing ever blocked.** `state/watchdog` held a perfect 1 Hz cadence
+  through armed pulses — the "maybe we accidentally block during the timed
+  pulse" hypothesis is retired for the armed path (the busy-wait fallback was
+  real but rarely engaged; it is now deleted entirely).
 
-    op=2 pin=3 val=2000000  rb1=1  path=1
+Corrections to the 2026-07-23 consequences, now that the cause is known:
+* Loopback tests driven with `pulse_us` are trustworthy again once the k_timer
+  path lands (rig-verify first, of course).
+* The recorded RTT numbers were almost certainly driven by SET, not pulse —
+  a pulse produced **no** reply frame at all, so there would have been nothing
+  to time. A cheap re-confirmation after the reflash wouldn't hurt.
 
-i.e. correct opcode/pin/width; the pin **does** rise and the jumper **does**
-conduct (`rb1` = pin 1 read back HIGH immediately after the raise); the hardware
-counter armed successfully. Yet no edge is reported. `box_gpio_poll_di()` only
-reports when `di_unsettled[i]` was set by `di_isr`, so **the DI interrupt is not
-latching the pulse-driven edge** although it latches the SET-driven one on the
-same pin. Cause unknown.
+**Upstream note:** the stale-flag bug bites free-run mode too (the counter
+re-crosses an old compare value on every 32-bit wrap, ~172 s at the RT1062's
+25 MHz `gptfreq`). Candidate one-line fix: `GPT_ClearStatusFlags(base,
+kGPT_OutputCompare1Flag)` before `GPT_EnableInterrupts` in
+`mcux_gpt_set_alarm()`. Worth filing against Zephyr; we no longer depend on it
+(k_timer also dissolves the Teensy single-channel limit — the second 07-23
+finding — since every pin/slot owns its own timer).
 
-Consequences worth taking seriously:
-* Any loopback test that drives with `pulse_us` will read as a total failure even
-  when the feature under test works. Drive with `cmd/do/<n>` SET instead.
-* **The recorded RTT benchmark numbers were measured through this exact path**
-  (drive `cmd/do` → time the `state/di` frame back) and deserve a re-check.
-
-### The pulse path assumes 4 hardware channels; the Teensy counter has 1
-
-`box_gpio.c` sets `BOX_PULSE_NCH 4` and allocates a match channel per in-flight
-pulse. Zephyr's `counter_mcux_gpt` driver advertises **`.channels = 1`** and
-hard-rejects any other id:
-
-    if (chan_id != 0) { LOG_ERR("Invalid channel id"); return -EINVAL; }
-
-So on Teensy there is exactly ONE channel. `pulse_nch` clamps correctly at
-runtime, but the consequence is that concurrent pulses on different pins, and any
-scheduler competing for the same channel, silently fall back. The RW612's CTIMER
-does have 4 — this is Teensy-specific, and it is why a counter-based scheduler is
-the wrong shape here.
-
-**Design guidance for the retry:** David has confirmed **100 µs resolution is
-acceptable** for this box. `CONFIG_SYS_CLOCK_TICKS_PER_SEC=10000`, so a plain
-`k_timer` meets that with no channel contention at all — for both the pulse
-falling edge and the scheduled-event fire. Prefer that over the two-stage
-counter-arming scheme attempted here.
-
-Also note the blocking fallback that existed at the time: `k_busy_wait(width)`
-stalls the service loop for the whole pulse, so the DI poller only runs after the
-pin is already back low and both edges cancel against the last published level.
-Whatever replaces it must never block.
-
-**What did work in the attempt** (worth keeping when redone): scheduling
-bookkeeping was exact — with a beginobs anchor, `cmd/do/3/at 500000` and
-`cmd/timer/7/at 1000000` published `state/timer/<tid>` at precisely +500000 µs
-and +1000000 µs, stamped at the intended instant rather than at drain time.
+Two incidental fixes that rode along in `box_gpio_exec`: a SET now cancels the
+pin's pending pulse falling edge (a stale fall timer could previously clobber a
+later SET), and the ensure-output reconfigure is skipped for pins already
+configured as outputs (it drives the pin low first — a real glitch on the wire
+for SET-1-while-high, visible to whatever external hardware the pin drives).
 - [ ] **Hardware obs-sync input** — half-present. `box_gpio_apply_config` already
       claims the pin and latches edges, but nothing consumes the latch; it only
       becomes meaningful once clock sync exists (it is the hardware anchor that
@@ -256,9 +295,14 @@ the pin, publishes `state/in_obs`).
       `partition@7f0000 { label = "storage"; reg = <0x007f0000 DT_SIZE_K(64)>; }`
       under a `compatible = "fixed-partitions"` parent (box_flash.c uses
       `DT_MTD_FROM_FIXED_PARTITION`).
-      **Not yet checked:** whether `teensy_loader_cli`/HalfKay full-chip-erases,
-      which would wipe saved config on every REFLASH (surviving reboots — what
-      was tested — is the functional requirement).
+      **CHECKED 2026-07-23 (teensy40, incidentally): `teensy_loader_cli`/
+      HalfKay does NOT wipe the storage partition.** The k_timer-pulse reflash
+      came back with the full saved config intact — pin modes, labels, the joy
+      group, `pin3 pulse=2000us`, and (the tell) `obs_pin=3` from earlier
+      obs-mirror testing, none of it re-entered by hand. So saved config
+      survives REFLASHES, not just reboots. Corollary: a stale persisted
+      config outlives new firmware — if a test needs a clean slate, clear it
+      explicitly (`cmd/factory`, or set+`cmd/save`).
       **Open choice:** NVS needs no SD card and would work on **teensy40** too,
       and it exercises the same `box_flash.c` the RW612 will use — a real bench
       advantage. SD is architecturally safer (separate device, no XIP write).

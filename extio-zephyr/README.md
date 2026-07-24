@@ -23,9 +23,9 @@ plus the uplink arbiter can be validated on hardware today.
 | `teensy41`   | USB-HS + Ethernet(+PTP) | ✗ no radio | **wired test system** — native IP stack vs the W6300's hardware offload |
 | `teensy40`   | USB-HS only | ✗ no radio | **USB test system** — USB-HS vs the Pico 2's USB-FS |
 
-Board differences live entirely in `boards/<board>.{overlay,conf}`: two devicetree
-aliases (`box-gpio-port`, `box-pulse-counter`) point the platform layer at each
-SoC's GPIO controller and hardware counter, and per-board `.conf` files gate the
+Board differences live entirely in `boards/<board>.{overlay,conf}`: a devicetree
+alias (`box-gpio-port`) points the platform layer at each SoC's GPIO controller,
+and per-board `.conf` files gate the
 networking and Bluetooth subsystems. No `#ifdef`s in the transport code — the
 uplink arbiter simply has one candidate instead of two on a USB-only board.
 
@@ -53,14 +53,15 @@ peripherals. Only C identifiers changed.
 | `src/core/box_group.h`      | DI chord groups (was `pico_group.h`) | forked |
 | `src/core/box_ain_group.h`  | Analog groups (was `pico_ain_group.h`) | forked |
 | `src/main.c`                | Zephyr entry — core smoke test + GPIO hardware demo | block #2–3 |
-| `src/platform/box_gpio.{h,c}` | GPIO via devicetree hsgpio0; box-timed pulse on a CTIMER counter; DI edge capture + debounce | block #3 |
+| `src/platform/box_gpio.{h,c}` | GPIO via devicetree hsgpio0; box-timed pulse on per-pin k_timers; DI edge capture + debounce | block #3 |
+| `src/platform/box_sched.{h,c}` | Scheduled events: pulse / `state/timer` post at beginobs + N µs | block #3 |
 | `src/platform/box_usbd.{h,c}` | USB device (device_next) context; registers CDC-ACM classes, HS+FS configs | **block #4** |
 | `src/platform/box_net_usb.{h,c}` | CDC-ACM 128-byte frame transport (data pipe) + console handle | block #4 |
 | `src/platform/box_net_eth.{h,c}` | Ethernet transport: DHCP + TCP socket to dserv, 128-byte frames | **block #5** |
 | `src/platform/box_ptp.{h,c}` | ENET IEEE-1588 hardware clock access (sub-µs sync enabler) | block #5 |
 | `src/platform/box_uplink.{h,c}` | Uplink arbiter: carrier/strap/mode selection over USB+Eth (TRANSPORT.md) | **block #6** |
 | `src/platform/box_ble.{h,c}` | Multi-peripheral BLE central (frozen d5e7000x pipe) — ingress → uplink | **block #6** |
-| `boards/frdm_rw612.overlay` | Enables ctimer1 (pulse), two CDC-ACM instances, and the ENET PTP clock | block #3–5 |
+| `boards/frdm_rw612.overlay` | Enables two CDC-ACM instances and the ENET PTP clock | block #3–5 |
 | `tools/box_sim.c`           | POSIX sim/selftest (was `wiznet-io/sim/pico_sim.c`) | forked, passing |
 
 ## Building blocks (roadmap)
@@ -76,7 +77,8 @@ peripherals. Only C identifiers changed.
    toolchain + verbatim core port. On-silicon run pending the board. (`native_sim`
    is Linux-only, so host testing stays on the plain-`cc` `tools/box_sim.c`.)
 3. **[done] GPIO platform layer (`box_gpio`)** — DO/DI via devicetree hsgpio0,
-   box-timed pulse on a hardware CTIMER (Zephyr `counter` API, ctimer1), DI edge
+   box-timed pulse on per-pin k_timers (the counter-API attempt is autopsied in
+   PORTING.md — the mcux GPT driver fires stale alarms instantly), DI edge
    capture + debounce. Cross-builds for frdm_rw612 (`zephyr.elf`, ~44 KB); the
    demo pulses the user LED and reads SW2. On-silicon run pending the board.
 4. **[done] USB-HS CDC transport** — device_next stack on the HS EHCI controller

@@ -21,6 +21,7 @@
 #include "dserv_config.h"
 #include "box_persist.h"
 #include "box_gpio.h"
+#include "box_sched.h"
 #include "box_group.h"
 #include "box_clock.h"
 #include "box_announce.h"
@@ -191,16 +192,32 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 
 		publish_sync(m.timestamp, anchor_box, boxclk.offset_us, hw,
 			     hw ? (int64_t)(now_box - anchor_box) : -1);
-
-		/* NOTE: GPIO_OP_SCHED_PULSE / SCHED_TIMER (fire at beginobs + N us)
-		 * are still unhandled in box_gpio_exec -- obs_begin_us above is the
-		 * epoch they will need. */
 		return;
 	}
 
 	gpio_cmd_t cmd;
 	cfg_result_t r = dserv_dispatch(&cfg, &m, &cmd);
-	if (r == CFG_GPIO && cmd.op != GPIO_OP_NONE) {
+	if (r == CFG_GPIO && cmd.op == GPIO_OP_SCHED_PULSE) {
+		/* do/<n>/at: pulse at beginobs + delta, width from the pin's
+		 * configured pulse_us -- and post state/timer/<n> at the fire. */
+		if (obs_begin_us == 0) {
+			box_console_printf("sched: no beginobs yet, ignoring\n");
+		} else {
+			uint32_t w = cfg.do_pulse_us[cmd.pin] ? cfg.do_pulse_us[cmd.pin] : 1000;
+			if (box_sched_arm(&cfg, cmd.pin, cmd.pin, w,
+					  obs_begin_us + cmd.value) != 0) {
+				box_console_printf("sched: table full\n");
+			}
+		}
+	} else if (r == CFG_GPIO && cmd.op == GPIO_OP_SCHED_TIMER) {
+		/* timer/<t>/at: notify-only at beginobs + delta */
+		if (obs_begin_us == 0) {
+			box_console_printf("sched: no beginobs yet, ignoring\n");
+		} else if (box_sched_arm(&cfg, BOX_SCHED_NOTIFY_ONLY, cmd.pin, 0,
+					 obs_begin_us + cmd.value) != 0) {
+			box_console_printf("sched: table full\n");
+		}
+	} else if (r == CFG_GPIO && cmd.op != GPIO_OP_NONE) {
 		box_gpio_exec(&cfg, &cmd);            /* immediate DO set/pulse */
 	} else if (r == CFG_GROUP || r == CFG_LABEL || r == CFG_DESC) {
 		/* group/label/desc change: reseed the chord machines from the
@@ -279,6 +296,7 @@ int main(void)
 	if (box_gpio_init() != 0) {
 		/* nothing to print to yet; the LED demo below simply won't run */
 	}
+	box_sched_init();
 	box_gpio_apply_config(&cfg);
 
 	box_uplink_init(&cfg);       /* USB (and Ethernet where present) up */
@@ -443,6 +461,23 @@ int main(void)
 				for (int k = 0; k < gn; k++) {
 					publish_group(g, go[k].bits, go[k].t_us);
 				}
+			}
+		}
+
+		/* Scheduled events that fired (timer ISR already drove the pulse):
+		 * post state/timer/<tid>, stamped at the INTENDED fire instant --
+		 * not at this drain -- so host-side timing analysis sees the truth. */
+		{
+			box_sched_fired_t sf;
+
+			while (box_sched_poll(&sf)) {
+				uint8_t f[DSERV_MSG_LEN];
+				char leaf[20];
+
+				snprintf(leaf, sizeof leaf, "timer/%u", sf.tid);
+				dserv_state_name(&cfg, name, sizeof name, leaf);
+				dserv_msg_int(f, name, event_stamp(sf.fire_us), 1);
+				box_uplink_send(f, DSERV_MSG_LEN);
 			}
 		}
 

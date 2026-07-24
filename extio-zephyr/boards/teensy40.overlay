@@ -8,7 +8,6 @@
 / {
 	aliases {
 		box-gpio-port     = &gpio2;   /* box pin n -> gpio2.n (3 = board LED) */
-		box-pulse-counter = &gpt2;    /* hardware box-timed pulse             */
 	};
 
 	/* zephyr,console stays on lpuart6 (Teensy pins 0/1) for Zephyr's own printk
@@ -17,10 +16,6 @@
 	chosen {
 		zephyr,shell-uart = &cdc_acm_console;
 	};
-};
-
-&gpt2 {
-	status = "okay";
 };
 
 /* No settings storage on the Teensy 4.0 (XIP-from-flash write hazard, and no SD

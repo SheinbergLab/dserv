@@ -5,8 +5,11 @@
  * bare-metal wiznet-io/pico/pico_gpio.h fills on the RP2350 -- but implemented
  * with Zephyr/NXP idioms rather than transliterated:
  *   - pins are resolved through devicetree (hsgpio0), not flat SDK numbers;
- *   - the non-blocking box-timed pulse rides a hardware CTIMER via the Zephyr
- *     `counter` API (ctimer1), the portable analog of the Pico alarm pool;
+ *   - the non-blocking box-timed pulse drops its falling edge from a per-pin
+ *     k_timer (100 us kernel tick), the portable analog of the Pico alarm
+ *     pool. NOT the Zephyr `counter` API: the mcux GPT driver arms alarms
+ *     without clearing a stale compare flag and defaults to restart mode, so
+ *     alarms fire instantly -- see PORTING.md;
  *   - DI edges are captured with a gpio_callback and timestamped from the
  *     high-resolution cycle counter.
  *
@@ -21,7 +24,7 @@
 #include "dserv_config.h"
 #include <stdint.h>
 
-/* Resolve the GPIO port + pulse counter devices and start the counter.
+/* Resolve the GPIO port device and init the per-pin pulse timers.
  * Returns 0 on success, negative on a missing/!ready device. Call once at boot. */
 int box_gpio_init(void);
 
@@ -32,10 +35,12 @@ int box_gpio_init(void);
  * pins are never disturbed unless explicitly claimed. */
 void box_gpio_apply_config(const box_config_t *c);
 
-/* Execute one gpio command. SET drives a level now; PULSE drives high now and
- * schedules the falling edge on a CTIMER match channel (non-blocking, box-timed
- * width immune to host/dserv jitter). Up to N hardware channels of concurrent
- * pulses on distinct pins; a blocking busy-wait is the pool-full fallback. */
+/* Execute one gpio command. SET drives a level now (and cancels the pin's
+ * pending pulse falling edge, so a stale timer can never clobber it); PULSE
+ * drives high now and schedules the falling edge on the pin's own k_timer
+ * (non-blocking, box-timed width immune to host/dserv jitter, 100 us tick
+ * resolution). Every pin can pulse concurrently; nothing ever blocks.
+ * ISR-safe for configured output pins (box_sched fires pulses from a timer). */
 void box_gpio_exec(const box_config_t *c, const gpio_cmd_t *cmd);
 
 /* One settled (debounced) DI transition, timestamped at the first edge (the

@@ -12,7 +12,6 @@
 / {
 	aliases {
 		box-gpio-port     = &gpio2;   /* box pin n -> gpio2.n (3 = board LED) */
-		box-pulse-counter = &gpt2;    /* hardware box-timed pulse             */
 	};
 
 	/* zephyr,console stays on lpuart6 (Teensy pins 0/1) for Zephyr's own printk
@@ -21,12 +20,6 @@
 	chosen {
 		zephyr,shell-uart = &cdc_acm_console;
 	};
-};
-
-/* GPT2 as the Zephyr counter behind the box-timed DO pulse (the RT1062's
- * equivalent of the RW612's CTIMER). */
-&gpt2 {
-	status = "okay";
 };
 
 /* Settings storage: NVS needs a `storage_partition`, which the teensy4 board does

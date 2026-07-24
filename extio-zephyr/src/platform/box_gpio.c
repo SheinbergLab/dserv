@@ -1,7 +1,7 @@
 /*
  * box_gpio.c -- RW612/Zephyr implementation of the box_gpio.h seam.
- * See the header for the design rationale (devicetree pins, CTIMER counter
- * pulse, gpio_callback DI capture) and how it differs from pico_gpio.h.
+ * See the header for the design rationale (devicetree pins, k_timer pulse,
+ * gpio_callback DI capture) and how it differs from pico_gpio.h.
  */
 #include "box_gpio.h"
 #include "box_event.h"
@@ -9,27 +9,17 @@
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
 #include <zephyr/drivers/gpio.h>
-#include <zephyr/drivers/counter.h>
 
 /* ---- devices (devicetree aliases, resolved per board) ----
  * box pin n -> <box-gpio-port>.n, so the flat wire index is preserved on every
- * board. Each board's overlay supplies two aliases:
+ * board. Each board's overlay supplies one alias:
  *   box-gpio-port      GPIO controller carrying the box's DO/DI pins
- *   box-pulse-counter  hardware counter for the non-blocking box-timed pulse
- * (RW612: hsgpio0 + ctimer1.  Teensy 4.x: gpio2 + gpt2.) */
+ * (RW612: hsgpio0.  Teensy 4.x: gpio2.) */
 #if !DT_NODE_EXISTS(DT_ALIAS(box_gpio_port))
 #error "board overlay must define the 'box-gpio-port' alias"
 #endif
-#if !DT_NODE_EXISTS(DT_ALIAS(box_pulse_counter))
-#error "board overlay must define the 'box-pulse-counter' alias"
-#endif
 
 static const struct device *port;          /* box-gpio-port     */
-static const struct device *pulse_ctr;     /* box-pulse-counter */
-
-#define BOX_PULSE_NCH 4                    /* CTIMER match channels for concurrent pulses */
-static uint8_t  pulse_nch;                 /* min(BOX_PULSE_NCH, counter channels) */
-static int8_t   pulse_chan_pin[BOX_PULSE_NCH];  /* pin owning channel c, -1 = free */
 
 static inline gpio_pin_t off_of(int n) { return (gpio_pin_t) n; }
 
@@ -96,17 +86,25 @@ uint64_t box_gpio_sync_edge_us(int rising)
 	return t;
 }
 
-/* ---- non-blocking pulse: CTIMER match channel drops the edge ---- */
-static void pulse_expired(const struct device *dev, uint8_t chan,
-			  uint32_t ticks, void *user)
+/* ---- non-blocking pulse: a per-pin k_timer drops the edge ----
+ * One timer per pin, so concurrent pulses on distinct pins never contend and
+ * there is no channel pool to exhaust (and so no blocking fallback -- the old
+ * k_busy_wait fallback stalled the service loop for the whole width, which made
+ * the DI poller miss both edges of a looped-back pulse). Expiry runs in the
+ * system-clock ISR; resolution is the 100 us kernel tick, accepted for this box.
+ *
+ * This replaces the hardware-counter (GPT/CTIMER alarm) scheme. That path was
+ * broken by Zephyr's counter_mcux_gpt driver: set_alarm() enables the compare
+ * interrupt WITHOUT clearing a stale compare status flag, and the GPT runs in
+ * restart mode by default (counter resets at -- and re-crosses -- the old
+ * compare value forever), so every alarm after the first fired immediately and
+ * the "pulse" was a microsecond sliver. See PORTING.md for the full autopsy. */
+static struct k_timer pulse_fall[BOX_NPINS];
+
+static void pulse_fall_expired(struct k_timer *t)
 {
-	ARG_UNUSED(dev);
-	ARG_UNUSED(ticks);
-	int pin = (int)(intptr_t) user;
+	int pin = (int)(t - pulse_fall);
 	gpio_pin_set(port, off_of(pin), 0);
-	if (chan < pulse_nch) {
-		pulse_chan_pin[chan] = -1;               /* free the channel */
-	}
 }
 
 int box_gpio_init(void)
@@ -115,18 +113,8 @@ int box_gpio_init(void)
 	if (!device_is_ready(port)) {
 		return -1;
 	}
-
-	pulse_ctr = DEVICE_DT_GET(DT_ALIAS(box_pulse_counter));
-	if (device_is_ready(pulse_ctr)) {
-		uint8_t n = counter_get_num_of_channels(pulse_ctr);
-		pulse_nch = n < BOX_PULSE_NCH ? n : BOX_PULSE_NCH;
-		for (int c = 0; c < BOX_PULSE_NCH; c++) {
-			pulse_chan_pin[c] = -1;
-		}
-		counter_start(pulse_ctr);
-	} else {
-		pulse_ctr = NULL;                        /* busy-wait fallback */
-		pulse_nch = 0;
+	for (int i = 0; i < BOX_NPINS; i++) {
+		k_timer_init(&pulse_fall[i], pulse_fall_expired, NULL);
 	}
 	return 0;
 }
@@ -191,7 +179,6 @@ void box_gpio_apply_config(const box_config_t *c)
 
 void box_gpio_exec(const box_config_t *c, const gpio_cmd_t *cmd)
 {
-	ARG_UNUSED(c);
 	if (cmd->op == GPIO_OP_NONE) {
 		return;
 	}
@@ -199,8 +186,16 @@ void box_gpio_exec(const box_config_t *c, const gpio_cmd_t *cmd)
 		return;
 	}
 
-	/* ensure output (a bare cmd may precede a mode set) */
-	gpio_pin_configure(port, off_of(cmd->pin), GPIO_OUTPUT_INACTIVE);
+	/* ensure output (a bare cmd may precede a mode set) -- but only for pins
+	 * NOT already configured as outputs: reconfiguring drives the pin low
+	 * first, a real glitch on the wire (e.g. SET 1 while already high). */
+	if (c->pin_mode[cmd->pin] != 1) {
+		gpio_pin_configure(port, off_of(cmd->pin), GPIO_OUTPUT_INACTIVE);
+	}
+
+	/* any new DO op on a pin cancels its pending pulse falling edge, so a
+	 * SET can never be clobbered later by a stale timer */
+	k_timer_stop(&pulse_fall[cmd->pin]);
 
 	if (cmd->op == GPIO_OP_SET) {
 		gpio_pin_set(port, off_of(cmd->pin), cmd->value ? 1 : 0);
@@ -211,30 +206,9 @@ void box_gpio_exec(const box_config_t *c, const gpio_cmd_t *cmd)
 		return;
 	}
 
-	/* PULSE: raise now, drop via a hardware CTIMER match channel */
+	/* PULSE: raise now, drop when the per-pin timer expires (never blocks) */
 	gpio_pin_set(port, off_of(cmd->pin), 1);
-
-	int chan = -1;
-	for (int ch = 0; ch < pulse_nch; ch++) {
-		if (pulse_chan_pin[ch] < 0) { chan = ch; break; }
-	}
-	if (pulse_ctr && chan >= 0) {
-		struct counter_alarm_cfg acfg = {
-			.callback  = pulse_expired,
-			.ticks     = counter_us_to_ticks(pulse_ctr, cmd->value),
-			.user_data = (void *)(intptr_t) cmd->pin,
-			.flags     = 0,                       /* relative to now */
-		};
-		pulse_chan_pin[chan] = (int8_t) cmd->pin;
-		if (counter_set_channel_alarm(pulse_ctr, chan, &acfg) != 0) {
-			pulse_chan_pin[chan] = -1;
-			k_busy_wait(cmd->value);
-			gpio_pin_set(port, off_of(cmd->pin), 0);
-		}
-	} else {                                          /* no channel -> blocking fallback */
-		k_busy_wait(cmd->value);
-		gpio_pin_set(port, off_of(cmd->pin), 0);
-	}
+	k_timer_start(&pulse_fall[cmd->pin], K_USEC(cmd->value), K_NO_WAIT);
 }
 
 int box_gpio_poll_di(const box_config_t *c, box_di_event_t *out)
