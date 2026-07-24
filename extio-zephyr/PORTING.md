@@ -360,6 +360,63 @@ for SET-1-while-high, visible to whatever external hardware the pin drives).
 **Done:** obs-mirror output (`config/obs/pin` via console + `ess/in_obs` drives
 the pin, publishes `state/in_obs`).
 
+## PROPOSAL: `cmd/announce`, and what it would take to auto-purge dead boxes
+
+**Status: proposed, not implemented.** Prompted by "does `extio_clear` also clear
+datapoints, and should it run automatically?"
+
+### What the existing purge actually does
+
+`config/extioconf.tcl`:
+* `extio_clear <name>` — drops the box's forwards, then `dservClear`s every key
+  matching `extio/<name>/state/*` **and** `extio/<name>/decoded/*`, and unsets
+  the `::extio_known` / `::extio_wd` / `::extio_stale` tracking.
+* `extio_clear_dead` — runs that for every box that has `state/` keys but no
+  live forwards.
+
+So **yes, it clears datapoints** — but note two things:
+* **`config/*` and `cmd/*` are NOT cleared** (only those two patterns match). A
+  purged-and-returned box can therefore still show host-side config it no longer
+  holds — the same divergence as the "config set while unreachable" bug above.
+* **A dserv restart clears everything anyway**, so ghosts are bounded by dserv's
+  lifetime. (Observed 2026-07-23: after a restart the table held only
+  `extio/box/` — 32 state + 1 decoded, zero `config/*`, and an unrelated
+  `extio/office/*` had vanished entirely.)
+
+### Why automating it is not safe as-is
+
+**The manifest is 31 of those ~32 state keys** (`board`, `fw`, `build`,
+`pins/in|out`, `label/<n>`, `group/<name>/*`, …) and `box_announce_burst()` only
+fires on **`BOX_NET_RESET`** — the pass a host (re)opens the pipe. Therefore:
+
+* *Box genuinely vanished, then returned* → **safe**. `extio_service` reopens the
+  port, DTR rises, `BOX_NET_RESET` fires, the box re-announces. Purging lost
+  nothing.
+* *Box alive but briefly quiet* → **not safe**. `extio_discover` prunes forwards
+  after >2 stale ticks (~6 s of frozen watchdog). Auto-purging on that wipes the
+  manifest of a box that never left, and because there is no reconnect **nothing
+  re-announces it** — the box sits there looking half-configured until something
+  forces a reconnect. A `cmd/save` writing NVS is a plausible way to stall the
+  loop past the threshold, so this would bite intermittently and confusingly.
+
+### The proposal
+
+1. **Add `cmd/announce`** — a few lines; `box_announce_burst()` already exists
+   and is wired in `main.c`. Gives an on-demand "resync this box", useful on its
+   own (a manual button in extio-setup / the fleet page), and it makes any purge
+   recoverable without waiting for a reconnect.
+2. **Only then consider auto-purge**, and with a *much* longer grace than the 6 s
+   prune threshold — 30–60 s of frozen watchdog, so it means "gone", not "busy".
+3. Have `extio_discover` fire `cmd/announce` whenever it **newly wires** a box.
+   That closes the loop: purge freely, and anything still alive re-describes
+   itself on the next discovery pass.
+4. Decide separately whether a purge should also clear `config/*`/`cmd/*`. It
+   would be more honest ("the ghost fully disappears") but it is a policy call —
+   those are the command channel, not status.
+
+Keep it manual until at least (1) is in. Doing (2) without (1) is the unsafe
+ordering.
+
 ## PROPOSAL: a devicetree pin map (box pin → any GPIO), 2026-07-23
 
 **Status: proposed, not implemented.** Worth deciding BEFORE block #7 — analog
