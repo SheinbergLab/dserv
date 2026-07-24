@@ -742,3 +742,133 @@ Wiring (Teensy 4.1, `zephyr,console = &lpuart6`, 115200 8N1):
 3. DI groups — unlocks experiment input.
 4. Clock sync → scheduled events → obs-sync input, as one unit.
 5. Analog (block #7), then RW612-only work once that board is on the bench.
+
+## NEXT: Ethernet RX — DTCM DMA buffers, and the errata mitigation RT10xx is missing
+
+**Status 2026-07-24.** Ethernet publish latency was traced to instruction fetch
+from external QSPI flash and largely fixed by relocating the network stack to
+ITCM (commit 6072776): `zsock_send` 275 → **61 µs**, loopback RTT 2365 → **783
+µs**, manifest-announce loop stall 11.9 → **4.7 ms**. What follows is the
+receive-side equivalent, which is *not* done.
+
+### Where the remaining time is
+
+With TX fixed, the loopback splits as `cmd → do_echo ≈ 720 µs` and
+`do_echo → di ≈ 3–96 µs` — i.e. ~90 % of what is left is the **inbound** leg.
+The box's own share of that is instrumented (`state/dbg/*`) and small:
+
+| stage | µs |
+| --- | --- |
+| `wake_us` — RX thread saw readability → loop reached `recv` | 30 |
+| `recv_us` — the `zsock_recv` that returned the frame | 94 |
+| `disp_us` — framer + dispatch + GPIO write (+ the `state/do` publish) | 170 (max 313) |
+| **box-internal total** | **~294** |
+
+That leaves **~430 µs unaccounted**: dserv's send path, transit, and the box's
+net RX thread processing *before* the socket becomes readable. One inference
+narrows it — USB's entire loopback on the same host is 574 µs and USB's outbound
+goes through a *Tcl callback in a subprocess*, strictly heavier than dserv's
+native `SendClient` write; if the native path cost 430 µs the USB total could not
+be 574. So suspicion falls on the box's RX stack, not the host.
+
+### The DTCM opportunity
+
+`drivers/ethernet/eth_nxp_enet.c` selects buffer placement three ways. We
+currently take the middle branch, because `CONFIG_NOCACHE_MEMORY=y` and
+`ETH_NXP_ENET_USE_DTCM_FOR_DMA_BUFFER` is off:
+
+```c
+#elif defined(CONFIG_NOCACHE_MEMORY)
+#define _nxp_enet_dma_desc_section   __nocache   /* descriptors only */
+#define _nxp_enet_dma_buffer_section             /* buffers: CACHEABLE */
+#define driver_cache_maintain        true        /* clean/invalidate every transfer */
+```
+
+Only the descriptors avoid the cache. **The DMA buffers are cacheable and the
+driver performs cache maintenance on every RX and every TX.** Enabling DTCM sets
+`driver_cache_maintain = false`, removing that work entirely rather than reducing
+it. DTCM has room: 128 KB, **0 currently used**, against ~10 KB of buffers
+(6 RX + 1 TX × 1518).
+
+### Why it is disabled, and what that actually means
+
+```
+config ETH_NXP_ENET_USE_DTCM_FOR_DMA_BUFFER
+	# ERR050396: ENET writes to TCM require CACHE_ENET to be cleared, while
+	# ENET_1G writes to TCM can still corrupt data on Cortex-M7.
+	default n if CPU_CORTEX_M7
+```
+
+Read precisely: the **fatal** case is `ENET_1G`, which the RT1062 does not have —
+it has plain 10/100 ENET. For plain ENET the requirement is conditional:
+**CACHE_ENET must be cleared.** The `default n if CPU_CORTEX_M7` is a blanket
+that cannot distinguish which ENET instance a given M7 part carries, so it
+protects RT1170-class silicon.
+
+**But the precondition is unmet on our SoC.** `CACHE_ENET` here is
+`IOMUXC_GPR_GPR13_CACHE_ENET` (GPR13 bit 7), and Zephyr clears it **only for
+imxrt11xx**:
+
+```c
+/* soc/nxp/imxrt/imxrt11xx/soc.c:858 */
+/*  For ENET, clear CACHE_ENET if TCM is used as the write destination. */
+IOMUXC_GPR->GPR28 &= (~IOMUXC_GPR_GPR28_CACHE_ENET_MASK);
+```
+
+`imxrt10xx/soc.c` has no equivalent. So enabling the option today would put ENET
+DMA writes into TCM **without the mitigation NXP requires** — which is why the
+blanket default has never been refined per-instance.
+
+### The work
+
+1. Clear `IOMUXC_GPR->GPR13 &= ~IOMUXC_GPR_GPR13_CACHE_ENET_MASK` **before the
+   ENET driver initialises** — a `SYS_INIT` ordered ahead of `ETH_INIT_PRIORITY`,
+   mirroring imxrt11xx. Getting the ordering wrong is the whole risk: the write
+   must land before any ENET DMA starts.
+2. Enable `CONFIG_ETH_NXP_ENET_USE_DTCM_FOR_DMA_BUFFER` in `boards/teensy41.conf`.
+3. Re-measure `dbg/recv_us`, `dbg/wake_us` and the loopback.
+
+### Verification — latency is NOT sufficient evidence
+
+This is a **silicon errata mitigation**, and a missed mitigation corrupts data
+*occasionally*. "The numbers improved" says nothing about whether it is correct.
+Before this goes near a rig it needs a sustained soak that checks frame
+**integrity**, not timing — the box already emits a monotonic watchdog counter
+and self-describing frames, so a long run verifying no gaps, no malformed frames
+and no framer resyncs is the bar. For an acquisition box, silent rare corruption
+is a worse failure than 400 µs of latency.
+
+### Also pending, cheaper and lower risk
+
+- **Relocate the remaining net libraries to ITCM.** `subsys__net__lib__sockets`
+  and the top-level `subsys__net` were *not* in commit 6072776. ITCM has ~44 KB
+  free. `recv_us` at 94 µs suggests the socket layer is not dominant, but it is
+  one line to test.
+- **Preemptive network threads.** We run `CONFIG_NET_TC_THREAD_COOPERATIVE=y`, so
+  the RX traffic-class thread runs to completion and the preemptible service loop
+  cannot get in. Test `CONFIG_NET_TC_THREAD_PREEMPTIVE=y`, but measure **under
+  traffic** — the mirror risk is a starved RX thread dropping packets.
+- **Do not confuse packet priority with thread priority.**
+  `NET_TX_DEFAULT_PRIORITY` / `NET_RX_DEFAULT_PRIORITY` are *traffic class*
+  priorities. The driver's thread knob is `ETH_NXP_ENET_RX_THREAD_PRIORITY`.
+- **Instrument `SendClient::send_dpoint` in dserv** if the ~430 µs needs splitting
+  definitively rather than by inference.
+- **Move sends off the service loop** (own TX queue + thread). Will not make 61 µs
+  cheaper, but stops the RT path serializing behind the stack and kills the
+  remaining announce stall.
+
+### Upstream angle
+
+`imxrt10xx` is missing a mitigation its sibling SoC implements, which is why a
+legitimate optimisation is disabled for a whole family of parts. If the GPR13
+clear proves out under integrity soak, it is worth offering upstream — the fix is
+small and the reference implementation is already in-tree.
+
+### What is retracted
+
+Every W6300-vs-native-stack number from 2026-07-24 was measured against a
+cold-cache path. The recorded conclusion — "hardware TCP offload beats the native
+IP stack by ~240 µs per frame, structurally" — **is withdrawn**, not merely
+refined: a send now costs 61 µs against the W6300's ~240 µs for a whole frame.
+The comparison must be redone (one-way `host_gpio_rtt` delivery on pi5dev, and
+the four-way transport table) before any hub decision leans on it.

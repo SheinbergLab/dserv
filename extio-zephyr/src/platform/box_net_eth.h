@@ -66,6 +66,10 @@ int box_net_eth_server_up(void);
  * the publish-latency investigation; see box_net_eth.c. */
 void box_net_eth_send_stats(uint32_t *last_us, uint32_t *max_us);
 
+/* Inbound split: RX-thread-signal -> loop-reached-recv, and the recv cost. */
+void box_net_eth_rx_stats(uint32_t *wake_us, uint32_t *wake_max,
+			  uint32_t *recv_us, uint32_t *recv_max);
+
 /* Start the RX wake thread: signals box_event when the config link becomes
  * readable, so an inbound command does not wait out the service loop's 1 ms
  * poll timeout. Call once, after init. */

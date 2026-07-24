@@ -454,6 +454,7 @@ int main(void)
 	uint8_t rx[256];
 	int watchdog = 0;
 	uint32_t loop_last_us = 0, loop_max_us = 0, loop_t0 = 0;
+	uint32_t disp_last_us = 0, disp_max_us = 0;
 	int64_t next_wd = k_uptime_get() + 1000;
 	char name[80];
 
@@ -468,7 +469,16 @@ int main(void)
 			 * told while listening, so describe the box now. */
 			box_announce_burst(&cfg, groups);
 		} else if (n > 0) {
+			/* Cost of turning received bytes into an executed command
+			 * (framer + dispatch + GPIO write). Completes the inbound
+			 * split alongside wake_us / recv_us in box_net_eth.c. */
+			uint32_t d0 = k_cycle_get_32();
 			dserv_framer_feed(&rx_framer, rx, (uint32_t) n, on_usb_frame, NULL);
+			uint32_t dd = k_cyc_to_us_floor32(k_cycle_get_32() - d0);
+			disp_last_us = dd;
+			if (dd > disp_max_us) {
+				disp_max_us = dd;
+			}
 		}
 
 		box_di_event_t ev;
@@ -572,6 +582,22 @@ int main(void)
 				dserv_state_name(&cfg, name, sizeof name, "dbg/loop_max_us");
 				dserv_msg_int(f, name, 0, (int32_t) loop_max_us);
 				box_uplink_send(f, DSERV_MSG_LEN);
+				{
+					uint32_t wu = 0, wm = 0, ru = 0, rm = 0;
+					box_net_eth_rx_stats(&wu, &wm, &ru, &rm);
+					dserv_state_name(&cfg, name, sizeof name, "dbg/wake_us");
+					dserv_msg_int(f, name, 0, (int32_t) wu);
+					box_uplink_send(f, DSERV_MSG_LEN);
+					dserv_state_name(&cfg, name, sizeof name, "dbg/recv_us");
+					dserv_msg_int(f, name, 0, (int32_t) ru);
+					box_uplink_send(f, DSERV_MSG_LEN);
+					dserv_state_name(&cfg, name, sizeof name, "dbg/disp_us");
+					dserv_msg_int(f, name, 0, (int32_t) disp_last_us);
+					box_uplink_send(f, DSERV_MSG_LEN);
+					dserv_state_name(&cfg, name, sizeof name, "dbg/disp_max_us");
+					dserv_msg_int(f, name, 0, (int32_t) disp_max_us);
+					box_uplink_send(f, DSERV_MSG_LEN);
+				}
 				dserv_state_name(&cfg, name, sizeof name, "watchdog");
 				dserv_msg_int(f, name, 0, watchdog - 1);
 			}

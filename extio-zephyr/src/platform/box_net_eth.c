@@ -22,6 +22,25 @@ static int connecting;          /* 1 = a non-blocking connect() is in flight */
 static int srv_listen = -1;     /* listening socket (BOX_ETH_CFG_PORT)          */
 static int srv_conn   = -1;     /* dserv's accepted connect-back                */
 static int srv_fresh;           /* one-shot: report BOX_NET_RESET after accept  */
+/* ---- inbound instrumentation ----
+ * With the stack in ITCM the OUTBOUND cost collapsed (275 -> 61 us) and the
+ * remaining loopback time is the command leg. These split the box's share of it:
+ *   wake_us  RX thread saw the socket readable -> service loop reached recv
+ *   recv_us  cost of the zsock_recv that returned the frame
+ * If both are small, the time is spent BEFORE the socket became readable --
+ * dserv's send path, transit, or the box's net RX thread -- and not in our loop. */
+static volatile uint32_t rx_signal_cyc;
+static uint32_t wake_last_us, wake_max_us;
+static uint32_t recv_last_us, recv_max_us;
+
+void box_net_eth_rx_stats(uint32_t *wake_us, uint32_t *wake_max,
+			  uint32_t *recv_us, uint32_t *recv_max)
+{
+	if (wake_us)   *wake_us   = wake_last_us;
+	if (wake_max)  *wake_max  = wake_max_us;
+	if (recv_us)   *recv_us   = recv_last_us;
+	if (recv_max)  *recv_max  = recv_max_us;
+}
 
 /* Small frames carrying single events are the ENTIRE traffic pattern here, so
  * Nagle is pure harm: it holds a 128-byte publish until a prior segment is
@@ -236,6 +255,7 @@ static void eth_rx_thread_fn(void *a, void *b, void *c)
 		/* Bounded wait so a socket swap (reconnect) is picked up promptly and a
 		 * closed fd can never wedge this thread. */
 		if (zsock_poll(&pfd, 1, 200) > 0) {
+			rx_signal_cyc = k_cycle_get_32();
 			box_event_signal();
 			/* The loop drains it. Yield so we re-poll after that has happened
 			 * rather than spinning on a still-readable socket. */
@@ -300,8 +320,18 @@ int box_net_eth_poll(uint8_t *buf, int max)
 		if (max <= 0) {
 			return 0;
 		}
+		uint32_t r0 = k_cycle_get_32();
 		int n = zsock_recv(srv_conn, buf, (size_t) max, ZSOCK_MSG_DONTWAIT);
 		if (n > 0) {
+			uint32_t d = k_cyc_to_us_floor32(k_cycle_get_32() - r0);
+			recv_last_us = d;
+			if (d > recv_max_us) recv_max_us = d;
+
+			uint32_t w = k_cyc_to_us_floor32(r0 - rx_signal_cyc);
+			if (w < 1000000) {          /* ignore a stale/never-signalled stamp */
+				wake_last_us = w;
+				if (w > wake_max_us) wake_max_us = w;
+			}
 			return n;
 		}
 		if (n == 0) {                    /* dserv closed the config link */
@@ -319,6 +349,7 @@ int box_net_eth_poll(uint8_t *buf, int max)
  * zsock_send itself burns ~650 us, the cost is the stack traversal; if it
  * returns fast, the delay is elsewhere and the send was never the culprit. */
 static uint32_t send_last_us, send_max_us;
+
 
 void box_net_eth_send_stats(uint32_t *last_us, uint32_t *max_us)
 {
