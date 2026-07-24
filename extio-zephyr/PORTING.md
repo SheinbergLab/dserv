@@ -307,9 +307,30 @@ Recovering it looks feasible; checked against the drivers 2026-07-23:
   *once per 32-bit wrap* (~172 s at 25 MHz `gptfreq`).
 * **The stale-OF1 bug itself remains** — `mcux_gpt_set_alarm()` still does
   `SetOutputCompareValue` → `EnableInterrupts` with no `ClearStatusFlags`
-  between. Rare-intermittent is still wrong for a rig, so a full Teensy fix
-  wants the one-line driver patch as well (`wiznet-io/patches/` + `build.sh` is
-  the established pattern for carrying exactly this).
+  between.
+* **BOTH FIXES TRIED ON HARDWARE 2026-07-23 — STILL NOT USABLE.** Reinstated the
+  counter-armed falling edge on teensy40 with `run-mode = "free-run"`, then
+  additionally hand-patched `counter_mcux_gpt.c` to `GPT_ClearStatusFlags(OF1)`
+  before `GPT_EnableInterrupts`. Measured real widths through the phys13→phys12
+  loopback (6 trials each):
+
+  | requested | free-run only | free-run + OF1 patch |
+  |---|---|---|
+  | 2 000 µs | no edge pair | 2 123 µs (1 of 6) |
+  | 20 000 µs | 20 095 µs (1 of 6) | 20 065 µs (2 of 6) |
+  | 200 000 µs | no edge pair | no edge pair |
+
+  Widths are ACCURATE when an edge pair appears, but most trials still produce
+  no pair (i.e. a sliver). And the few successes cannot be attributed to the
+  counter with confidence — `counter_set_channel_alarm()` returning `-EBUSY`
+  falls back to `k_timer`, which would also measure correctly. **So the original
+  "unsalvageable on this driver" verdict stands for the Teensy GPT**; free-run +
+  the OF1 clear are necessary but not sufficient, and the residual fault was not
+  isolated. Do not spend more on the GPT unless 34 µs actuation is needed *on a
+  Teensy specifically*.
+  (Both experiments fully reverted, including the shared `~/zephyrproject`
+  driver patch — verify with `grep "extio patch" $ZEPHYR_BASE/drivers/counter/`
+  before trusting a later build.)
 * **The RW612's CTIMER is a DIFFERENT and healthier driver.** `nxp,lpc-ctimer` /
   `counter_mcux_ctimer.c`: **4 match channels** (vs the GPT's **1**), and
   `CTIMER_SetupMatch()` is called with `enableCounterReset = false`, so the
