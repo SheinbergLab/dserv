@@ -294,6 +294,30 @@ any of this transfers; it is different silicon and a different UDC.
 Harness note: after the console-first CDC reorder the data pipe is the
 HIGHER-numbered `cu.usbmodem*`; `rtt_bench.py` now takes `[-1]`, not `[0]`.
 
+### Path BACK to the hardware counter (and why the RW612 likely doesn't need one)
+
+`k_timer` costs us the Pico's 34 µs-class actuation (100 µs kernel tick here).
+Recovering it looks feasible; checked against the drivers 2026-07-23:
+
+* **`run-mode = "free-run"` is a one-line devicetree fix we never applied.** The
+  `nxp,imx-gpt` binding exposes it (`enum: restart | free-run`, default
+  `restart`) and the driver honors it (`enable_free_run` →
+  `gptConfig.enableFreeRun`). It removes the CNT-reset-on-OCR1-write fault
+  outright, and shrinks the stale-OF1 window from *every compare period* to
+  *once per 32-bit wrap* (~172 s at 25 MHz `gptfreq`).
+* **The stale-OF1 bug itself remains** — `mcux_gpt_set_alarm()` still does
+  `SetOutputCompareValue` → `EnableInterrupts` with no `ClearStatusFlags`
+  between. Rare-intermittent is still wrong for a rig, so a full Teensy fix
+  wants the one-line driver patch as well (`wiznet-io/patches/` + `build.sh` is
+  the established pattern for carrying exactly this).
+* **The RW612's CTIMER is a DIFFERENT and healthier driver.** `nxp,lpc-ctimer` /
+  `counter_mcux_ctimer.c`: **4 match channels** (vs the GPT's **1**), and
+  `CTIMER_SetupMatch()` is called with `enableCounterReset = false`, so the
+  restart-mode fault cannot occur by construction. **`BOX_PULSE_NCH 4` was never
+  wrong — it was right for the target and wrong only for the Teensy stand-in.**
+  Expect the hardware-counter path to work on the RW612 as originally designed;
+  verify on silicon before relying on it.
+
 **Upstream note:** the stale-flag bug bites free-run mode too (the counter
 re-crosses an old compare value on every 32-bit wrap, ~172 s at the RT1062's
 25 MHz `gptfreq`). Candidate one-line fix: `GPT_ClearStatusFlags(base,
