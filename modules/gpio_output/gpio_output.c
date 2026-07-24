@@ -34,6 +34,8 @@ typedef struct gpio_info_s
 {
   int fd;			/* chip fd */
   int nlines;
+  tclserver_t *tclserver;
+  char *dpoint_prefix;		/* "gpio/output" */
 #ifdef __linux__
   struct gpiohandle_request **line_requests;
 #endif
@@ -46,6 +48,32 @@ static gpio_info_t g_gpioInfo;
 
 
 #ifdef __linux__
+
+/* Publish a drive of line <offset> to <value> as gpio/output/<offset>.
+ *
+ * The output leaves a timestamped trail like every other actuator: the eventlog
+ * records host GPIO activity during an experiment, and `dservTimestamp
+ * gpio/output/<n>` gives callers a t0 for the edge without bracketing the call
+ * in Tcl (which folds interpreter latency into the measurement).
+ *
+ * Stamped AFTER the driving ioctl returns, so the timestamp is a lower bound on
+ * when the line moved rather than an upper one -- the ioctl is what generates
+ * the edge, so stamping before it would report a time at which the pin
+ * demonstrably had not changed yet.
+ *
+ * Callers publish only on ioctl success: a failed drive moved no pin, and a
+ * datapoint for it would be a lie in the eventlog. */
+static void gpio_output_publish(gpio_info_t *info, int offset, int value)
+{
+  char point_name[64];
+  snprintf(point_name, sizeof(point_name), "%s/%d",
+	   info->dpoint_prefix, offset);
+  ds_datapoint_t *dp = dpoint_new(point_name,
+				  tclserver_now(info->tclserver),
+				  DSERV_INT, sizeof(int),
+				  (unsigned char *) &value);
+  tclserver_set_point(info->tclserver, dp);
+}
 
 static int gpio_output_init_command(ClientData data,
 				   Tcl_Interp *interp,
@@ -153,6 +181,11 @@ int gpio_line_request_output_command(ClientData data,
     
   int ret = ioctl(info->fd, GPIO_GET_LINEHANDLE_IOCTL, req);
 
+  /* the request itself drives the line to `value` (default_values[0]), so this
+   * is a real edge -- and it seeds gpio/output/<n> so the datapoint reads back
+   * correctly before the first gpioLineSetValue. */
+  if (ret != -1) gpio_output_publish(info, offset, value);
+
   Tcl_SetObjResult(interp, Tcl_NewIntObj(ret));
   return TCL_OK;
 }
@@ -191,6 +224,8 @@ int gpio_line_set_value_command(ClientData data,
   datavals.values[0] = value;
   int ret = ioctl(info->line_requests[offset]->fd,
 		  GPIOHANDLE_SET_LINE_VALUES_IOCTL, &datavals);
+
+  if (ret != -1) gpio_output_publish(info, offset, value);
 
   Tcl_SetObjResult(interp, Tcl_NewIntObj(ret));
   return TCL_OK;
@@ -270,7 +305,9 @@ int Dserv_gpio_output_Init(Tcl_Interp *interp)
   tclserver_t *tclserver = tclserver_get_from_interp(interp);
 
   g_gpioInfo.fd = -1;
-  
+  g_gpioInfo.tclserver = tclserver;
+  g_gpioInfo.dpoint_prefix = "gpio/output";
+
   Tcl_CreateObjCommand(interp, "gpioOutputInit",
 		       (Tcl_ObjCmdProc *) gpio_output_init_command,
 		       &g_gpioInfo, NULL);
