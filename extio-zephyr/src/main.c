@@ -330,13 +330,21 @@ int main(void)
 	box_sched_init();
 	box_gpio_apply_config(&cfg);
 
-	box_uplink_init(&cfg);       /* USB (and Ethernet where present) up */
-
-	/* Load the persisted config BEFORE the console comes up: console_mode (v22)
-	 * decides WHICH device the console binds to, so the saved choice has to be
-	 * known first. A flash fault here has no box-console to report on, but
-	 * Zephyr's own printk/LOG is on the board UART (chosen zephyr,console) and
-	 * still works -- the boot-log channel PORTING.md documents. */
+	/* Load the persisted config BEFORE the uplink AND before the console.
+	 *
+	 * Before the UPLINK because transport_mode is persisted policy that the
+	 * uplink acts on at init: `mode eth` suppresses the USB data pipe entirely
+	 * (box_usbd_start), and enumeration happens inside box_uplink_init. Load it
+	 * afterwards and that decision is made against the FACTORY DEFAULT -- the box
+	 * enumerates a data pipe a declared-Ethernet box was told not to have, with
+	 * no symptom other than the setting appearing to do nothing.
+	 *
+	 * Before the CONSOLE because console_mode (v22) decides WHICH device the
+	 * console binds to, so the saved choice has to be known first.
+	 *
+	 * A flash fault here has no box-console to report on, but Zephyr's own
+	 * printk/LOG is on the board UART (chosen zephyr,console) and still works --
+	 * the boot-log channel PORTING.md documents. */
 #if defined(BOX_HAVE_PERSIST)
 	if (box_flash_init() == 0) {
 		uint8_t lb[BOX_PERSIST_BLOB_MAX];
@@ -349,6 +357,8 @@ int main(void)
 		}
 	}
 #endif
+
+	box_uplink_init(&cfg);       /* USB (and Ethernet where present) up */
 
 	box_console_init(&cfg);      /* binds CDC or console UART per console_mode */
 	dserv_framer_reset(&rx_framer);

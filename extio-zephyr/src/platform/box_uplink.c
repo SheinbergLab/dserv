@@ -13,7 +13,37 @@
 
 /* ---- transport adapters (wrap the box_net_* backends into the vtable) ---- */
 
-static int u_usb_init(const box_config_t *c)      { (void) c; return box_net_usb_init(); }
+#if defined(CONFIG_NETWORKING)
+static uint8_t strap_override(uint8_t persisted);   /* defined with the arbiter below */
+#endif
+
+/* A box that has DECLARED Ethernet (persisted `mode eth`, or the strap pulled)
+ * enumerates the console CDC only -- no binary data pipe. Otherwise a host sees
+ * a pipe the box will never read: dserv's extio subprocess claims the port,
+ * lists the box in extio/boxes as though it were USB-attached, and hot-swap-polls
+ * it forever, while the real traffic is on the network.
+ *
+ * AUTO DELIBERATELY KEEPS THE PIPE. In auto, USB is the FALLBACK -- desired()
+ * drops back to it whenever carrier is absent -- so suppressing the pipe there
+ * would leave a box with a dead cable reachable only by console, which is the
+ * one thing auto exists to prevent. Only XMODE_ETH is safe to strip, and it is
+ * safe precisely because desired() returns eth unconditionally in that mode:
+ * there is no USB fallback to lose.
+ *
+ * The gate is persisted config + a GPIO strap, both readable at boot. It is NOT
+ * PHY carrier sense: enumeration happens long before autonegotiation settles,
+ * and boot-time PHY probing is what wedged the Pico (dropped 2026-07-05,
+ * PHYSR unreliable at cold boot). */
+static int u_usb_init(const box_config_t *c)
+{
+	int with_data = 1;
+#if defined(CONFIG_NETWORKING)
+	with_data = (strap_override(c->transport_mode) != XMODE_ETH);
+#else
+	ARG_UNUSED(c);                          /* USB-only board: always the data pipe */
+#endif
+	return box_net_usb_init(with_data);
+}
 static int u_usb_available(void)                  { return 1; }        /* the always-there fallback */
 static int u_usb_connect(const box_config_t *c)   { (void) c; return 0; } /* enumeration is implicit */
 static int u_usb_connected(void)                  { return box_net_usb_reading(); } /* host draining (DTR) */

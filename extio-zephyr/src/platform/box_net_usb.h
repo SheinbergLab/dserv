@@ -18,7 +18,9 @@
 #define BOX_NET_RESET (-1)   /* server_poll: host (re)opened the pipe; reset the framer */
 
 /* usbd + CDC-ACM bring-up (data pipe irq + enable). 0 on success. */
-int box_net_usb_init(void);
+/* with_data_pipe = 0 enumerates the console CDC only (declared-Ethernet box);
+ * see box_usbd.h for why. The console is always registered. */
+int box_net_usb_init(int with_data_pipe);
 
 /* Drain inbound bytes (host -> box) into buf. Returns bytes read (0 if none), or
  * BOX_NET_RESET the pass the host opens the data tty (partial frame is stale). */

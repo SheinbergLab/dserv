@@ -38,6 +38,16 @@ typedef enum { CLI_OK, CLI_ERR, CLI_PIN, CLI_GROUP, CLI_AIN, CLI_GPIO, CLI_SAVE,
 
 /* mode word<->value shared with dserv_config.h: dserv_mode_val / dserv_mode_str */
 
+/* `mode auto|usb|eth` is meaningful on any image with more than one uplink to
+ * arbitrate. On the Pico that is only the BOX_NET_DUAL build; on Zephyr it is any
+ * board with networking compiled in, since the arbiter there always has both
+ * candidates. Without this the Zephyr build had NO way to set transport_mode at
+ * all -- it was permanently XMODE_AUTO, which made the declared-Ethernet
+ * behaviours (including suppressing the USB data pipe) unreachable. */
+#if defined(BOX_NET_DUAL) || defined(CONFIG_NETWORKING)
+#define BOX_HAVE_XPORT_POLICY 1
+#endif
+
 static inline void box_cli_show(const box_config_t *c, char *out, int outsz)
 {
     char obs[8], syn[8];
@@ -46,7 +56,7 @@ static inline void box_cli_show(const box_config_t *c, char *out, int outsz)
     if (sync_input_enabled(c))  snprintf(syn, sizeof syn, "%d", sync_input_pin(c));
     else                        snprintf(syn, sizeof syn, "off");
     int k = 0;
-#ifdef BOX_NET_DUAL
+#ifdef BOX_HAVE_XPORT_POLICY
     k += snprintf(out + k, outsz - k, "mode=%s ", dserv_xmode_str(c->transport_mode));
 #endif
     k += snprintf(out + k, outsz - k,
@@ -90,7 +100,7 @@ static inline void box_cli_dump(const box_config_t *c)
     printf("# (uncomment the next line to wipe the target's existing config first)\r\n");
     printf("#factory\r\n");
     if (c->name[0])                       printf("name %s\r\n", c->name);
-#ifdef BOX_NET_DUAL
+#ifdef BOX_HAVE_XPORT_POLICY
     if (c->transport_mode)                printf("mode %s\r\n", dserv_xmode_str(c->transport_mode));
 #endif
     if (c->net_mode == NET_MODE_STATIC) {
@@ -148,8 +158,10 @@ static inline void box_cli_dump(const box_config_t *c)
     printf("# reboot   (uncomment / run to apply mode/net changes)\r\n");
 }
 
-#ifdef BOX_NET_DUAL
-#define BOX_CLI_HELP_XTRA "mode auto|usb|eth | phylink [1|0] | "
+#if defined(BOX_NET_DUAL)
+#define BOX_CLI_HELP_XTRA "mode auto|usb|eth | phylink [1|0] | "   /* phylink: Pico bench tool */
+#elif defined(BOX_HAVE_XPORT_POLICY)
+#define BOX_CLI_HELP_XTRA "mode auto|usb|eth | "
 #else
 #define BOX_CLI_HELP_XTRA ""
 #endif
@@ -427,7 +439,7 @@ static inline cli_action_t box_cli_exec(box_config_t *c, const char *line,
         else { snprintf(out, outsz, "ERR net mode dhcp|static\r\n"); return CLI_ERR; }
         c->applied_count++; snprintf(out, outsz, "OK net mode=%s (save+reboot to apply)\r\n", dserv_netmode_str(c->net_mode)); return CLI_OK;
     }
-#ifdef BOX_NET_DUAL
+#ifdef BOX_HAVE_XPORT_POLICY
     /* Boot transport policy for the open-strap case (GND strap always forces eth).
      * Safe to persist again: with the core split, a bad choice can't kill the
      * console -- and auto never commits to a transport it can't bring up. */

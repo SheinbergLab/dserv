@@ -55,7 +55,7 @@ int box_net_usb_reading(void)
 
 const struct device *box_net_usb_console(void) { return console_dev; }
 
-int box_net_usb_init(void)
+int box_net_usb_init(int with_data_pipe)
 {
 	data_dev    = DEVICE_DT_GET(DT_NODELABEL(cdc_acm_data));
 	console_dev = DEVICE_DT_GET(DT_NODELABEL(cdc_acm_console));
@@ -63,13 +63,21 @@ int box_net_usb_init(void)
 		return -1;
 	}
 
-	int err = box_usbd_start(NULL);
+	int err = box_usbd_start(NULL, with_data_pipe);
 	if (err) {
 		return err;
 	}
 
-	uart_irq_callback_user_data_set(data_dev, data_isr, NULL);
-	uart_irq_rx_enable(data_dev);
+	/* No data pipe -> no RX interrupt to arm. The uart device still exists (it is
+	 * a devicetree node and its driver inits regardless), but its class was never
+	 * registered with the USB stack, so there are no endpoints behind it. Arming
+	 * the ISR anyway would be harmless-but-dishonest; skipping it keeps "no data
+	 * pipe" true all the way down. The console is unaffected -- box_console owns
+	 * it separately, which is what keeps a declared-Ethernet box diagnosable. */
+	if (with_data_pipe) {
+		uart_irq_callback_user_data_set(data_dev, data_isr, NULL);
+		uart_irq_rx_enable(data_dev);
+	}
 	return 0;
 }
 

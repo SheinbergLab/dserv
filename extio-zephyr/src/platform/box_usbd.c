@@ -43,9 +43,23 @@ static void fix_triple(struct usbd_context *ctx, enum usbd_speed speed)
 	usbd_device_set_code_triple(ctx, speed, USB_BCC_MISCELLANEOUS, 0x02, 0x01);
 }
 
-int box_usbd_start(usbd_msg_cb_t msg_cb)
+/* Class instance names are "cdc_acm_<DT instance>" (USBD_DEFINE_CLASS in
+ * usbd_cdc_acm.c), so suppressing the data pipe means blocking instance 1.
+ *
+ * The board overlays declare console FIRST, data SECOND -- an ordering that is
+ * already contractual (it sets USB interface numbering, and the dserv host
+ * module looks for the data pipe at if02 / the *3 tty; getting it backwards is
+ * what made dserv steal the console). Assert it here rather than trust it: if
+ * an overlay ever reorders them, this build fails loudly instead of silently
+ * blocking the CONSOLE and leaving a box that cannot be diagnosed. */
+BUILD_ASSERT(DT_SAME_NODE(DT_INST(1, zephyr_cdc_acm_uart), DT_NODELABEL(cdc_acm_data)),
+	     "cdc_acm_data must be DT instance 1 (console is declared first)");
+static const char *const no_data_pipe[] = { "cdc_acm_1", NULL };
+
+int box_usbd_start(usbd_msg_cb_t msg_cb, int with_data_pipe)
 {
 	int err;
+	const char *const *block = with_data_pipe ? NULL : no_data_pipe;
 
 	if ((err = usbd_add_descriptor(&box_ctx, &box_lang)) ||
 	    (err = usbd_add_descriptor(&box_ctx, &box_mfr)) ||
@@ -58,7 +72,7 @@ int box_usbd_start(usbd_msg_cb_t msg_cb)
 	if (USBD_SUPPORTS_HIGH_SPEED &&
 	    usbd_caps_speed(&box_ctx) == USBD_SPEED_HS) {
 		if ((err = usbd_add_configuration(&box_ctx, USBD_SPEED_HS, &box_hs_config)) ||
-		    (err = usbd_register_all_classes(&box_ctx, USBD_SPEED_HS, 1, NULL))) {
+		    (err = usbd_register_all_classes(&box_ctx, USBD_SPEED_HS, 1, block))) {
 			LOG_ERR("HS config failed (%d)", err);
 			return err;
 		}
@@ -66,7 +80,7 @@ int box_usbd_start(usbd_msg_cb_t msg_cb)
 	}
 
 	if ((err = usbd_add_configuration(&box_ctx, USBD_SPEED_FS, &box_fs_config)) ||
-	    (err = usbd_register_all_classes(&box_ctx, USBD_SPEED_FS, 1, NULL))) {
+	    (err = usbd_register_all_classes(&box_ctx, USBD_SPEED_FS, 1, block))) {
 		LOG_ERR("FS config failed (%d)", err);
 		return err;
 	}
