@@ -153,9 +153,31 @@ void *input_thread(void *arg)
       }
       
       status = (event.id == GPIO_V2_LINE_EVENT_RISING_EDGE) ? 1 : 0;
-      
+
+      /* Stamp with the KERNEL's edge time, not with "now".
+       *
+       * tclserver_now() here recorded when this thread got round to the event --
+       * after an epoll wakeup, a read, and whatever the scheduler did in
+       * between. Measured on a Pi 5 that path is ~72 us (median; p99 ~100), and
+       * it landed in every GPIO-referenced number as a silent positive bias.
+       * event.timestamp_ns is taken in the GPIO irq handler, so it is the edge.
+       *
+       * Same timebase, exactly: the uAPI stamps CLOCK_MONOTONIC by default (we
+       * never set GPIO_V2_LINE_FLAG_EVENT_CLOCK_REALTIME), and dserv time is
+       * steady_clock + a fixed epoch offset, with steady_clock == CLOCK_MONOTONIC
+       * on Linux. So this is a unit conversion, not an approximation.
+       *
+       * NOTE this changes the MEANING of these timestamps from "when dserv
+       * learned" to "when the pin moved" -- an improvement, but sessions either
+       * side of it differ by that ~72 us, which matters when comparing old data
+       * to new. Falls back to now() if a driver reports no timestamp. */
+      uint64_t edge_us = event.timestamp_ns ?
+	(uint64_t) (tclserver_clock_epoch_offset_us() +
+		    (int64_t) (event.timestamp_ns / 1000)) :
+	tclserver_now(info->tclserver);
+
       dp = dpoint_new(point_name,
-		      tclserver_now(info->tclserver),
+		      edge_us,
 		      DSERV_INT, sizeof(int),
 		      (unsigned char *) &status);
       tclserver_set_point(info->tclserver, dp);

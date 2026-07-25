@@ -50,6 +50,15 @@ extern "C" {
 	{
 	  return ((TclServer *) tclserver)->now();
 	}
+
+	/* Kernel timestamps (e.g. gpio_v2_line_event.timestamp_ns) are CLOCK_MONOTONIC;
+	   dserv time is steady_clock + this fixed offset, and on Linux steady_clock IS
+	   CLOCK_MONOTONIC. So a module can place a hardware timestamp on dserv's scale
+	   exactly, instead of restamping and recording when it NOTICED the event. */
+	int64_t tclserver_clock_epoch_offset_us(void)
+	{
+	  return Dataserver::clock_epoch_offset_us();
+	}
 	
 	
   void tclserver_queue_script(tclserver_t *tclserver,
