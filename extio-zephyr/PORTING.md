@@ -840,10 +840,17 @@ is a worse failure than 400 µs of latency.
 
 ### Also pending, cheaper and lower risk
 
-- **Relocate the remaining net libraries to ITCM.** `subsys__net__lib__sockets`
-  and the top-level `subsys__net` were *not* in commit 6072776. ITCM has ~44 KB
-  free. `recv_us` at 94 µs suggests the socket layer is not dominant, but it is
-  one line to test.
+- **Relocate the remaining net libraries to ITCM.** The sockets layer was *not*
+  in commit 6072776. NAMING GOTCHA (verified 2026-07-25 against the build's .a
+  files): there is **no `subsys__net__lib__sockets` target** —
+  `subsys/net/lib/sockets/CMakeLists.txt` never calls `zephyr_library()`, so
+  `sockets_inet.c` lands in the **`subsys__net`** library opened by
+  `subsys/net/CMakeLists.txt`. Relocate THAT. Also not yet relocated:
+  `modules__hal_nxp`'s `fsl_enet.c` (runs in the ISR under irq_lock and does
+  `ENET_ReadFrame` per frame — use the FILES form; the whole hal_nxp lib is too
+  big) and the per-event kernel files (condvar/queue/poll/sem/work — the wake
+  chain between the stack and the service loop). ITCM has ~41 KB free after the
+  phase-0 stats build.
 - **Preemptive network threads.** We run `CONFIG_NET_TC_THREAD_COOPERATIVE=y`, so
   the RX traffic-class thread runs to completion and the preemptible service loop
   cannot get in. Test `CONFIG_NET_TC_THREAD_PREEMPTIVE=y`, but measure **under
@@ -872,3 +879,746 @@ IP stack by ~240 µs per frame, structurally" — **is withdrawn**, not merely
 refined: a send now costs 61 µs against the W6300's ~240 µs for a whole frame.
 The comparison must be redone (one-way `host_gpio_rtt` delivery on pi5dev, and
 the four-way transport table) before any hub decision leans on it.
+
+---
+
+## 2026-07-25 — a measurement audit: what the numbers above are worth
+
+Short version: **treat every latency figure earlier in this document as
+provisional.** They were measured through a dserv timebase that changed on
+2026-07-24, on a host whose load was not controlled, with a harness that had no
+way to detect its own error. None of that means they are wrong; it means nothing
+has yet checked them. This section records what was checked, what it changed,
+and what still is not trustworthy.
+
+### The timebase changed under us
+
+dserv commit `227315e` ("monotonic timebase for datapoint timestamps", 2026-07-24
+16:09) replaced `Dataserver::now()`'s `high_resolution_clock` with `steady_clock`
+plus a fixed epoch offset. On Linux — the deployment target and the host for
+every number here — `high_resolution_clock` aliased to `CLOCK_REALTIME`. So the
+old timestamps rode a clock NTP can step, and the new ones do not.
+
+Every latency figure above predates the dserv build carrying that fix. The
+observed effect was not subtle: on the same box, wire, and firmware, updating
+dserv moved the measured loop from 1160 µs to 954 µs, and moved the `cmd →
+do_echo` leg the *other* way, 655 → 923 µs. Both harnesses were wrong, in
+opposite directions, which is exactly the failure mode a single harness cannot
+see.
+
+### The cross-check that should have existed
+
+Two harnesses compute the identical quantity, so **they must agree, and their
+disagreement is a free correctness check**:
+
+- `wiznet-io/host/loopback_rtt.sh` — arrival(`state/di`) − timestamp(`cmd/do`)
+- `lb_split.sh` — the same span as `L1 + L2`, split at the `state/do` echo
+  (`lb_tot` column, added 2026-07-25)
+
+Run both. If they disagree, *stop* — the measurement apparatus is broken and no
+conclusion drawn from it survives. Tonight that check was the whole story:
+
+| dserv | box | transport | `loopback_rtt` | `lb_tot` | gap |
+|---|---|---|---|---|---|
+| pre-fix | teensy41 | eth | 1160 | 696 | ~465 µs |
+| 0.48.10 | teensy41 | eth | 954 | 964 | ~0 |
+| 0.48.10 | teensy41 | **USB** | 1143 | 717 | **~426 µs** |
+| 0.48.10 | office (W6300) | eth | 676 | 654 | ~0 |
+
+Two boxes, two MCUs, two firmware lines agree over Ethernet under 0.48.10. **The
+USB path still does not.** Those frames do not arrive through dserv's client
+socket; they come up through the `extio` subprocess and `modules/usbio/usbio.c`.
+One asymmetry there worth a look: `usbio.c:122` *preserves* a box-supplied
+timestamp (`if (!dpoint->timestamp)`), so USB datapoints can carry box-clock
+times where native ones carry host time. That should not reach these numbers —
+both harnesses stamp with `[now]` inside the callback rather than reading
+`dservTimestamp` on a box datapoint — so the cause is **unidentified**. Until it
+is, **no USB latency number here is usable.**
+
+### What was tested and ruled out
+
+Recorded because each cost real time and none should be re-run:
+
+- **The phase-0 statistics build is free.** A/B against a pristine build with
+  `NET_PKT_RXTIME/TXTIME_STATS[_DETAIL]`, `NET_STATISTICS[_USER_API]` all `=n`:
+  min 844 vs 843, median 1163 vs 1123 — identical floor, medians inside run
+  spread. Leave the instrumentation on.
+- **dserv's script dispatch has no cold-wakeup cost.** Measured with no box and
+  no transport (set a datapoint, time until its callback runs): 116 µs cold vs
+  130 µs warm. Warm is marginally *slower*, as two dispatches should be. An
+  earlier hypothesis that ~450 µs of cold dispatch was hiding in the callback
+  path is **refuted**.
+- **Not harness aliasing.** `SETTLE` at 0.02 / 0.037 / 0.071 → 1160 / 1163 /
+  1161 µs. The effect is insensitive to iteration period across a 3.5× spread.
+- **Not differing box behaviour.** The box publishes `state/do/<n>` whether or
+  not anything is subscribed to it (verified: 47 ms fresh after a run with no
+  match and no script). Frame output is identical in both harness
+  configurations.
+- **Host load scales everything.** On a busy Mac (load 3.04, WindowServer 28 %,
+  `stim2`, Roon) both transports inflated ~1.4× versus the same rig quiet, while
+  the Eth ÷ USB ratio held at 1.36 → 1.38. Absolute µs are not portable across
+  sessions; ratios largely are. **Measure both transports in the same session or
+  report neither.**
+
+### Corrected numbers, such as they are
+
+pi4dev (Pi 4B, governor `performance` @ 1.8 GHz, no throttling, load ~0.0;
+`eth0` = 192.168.11.10/24, box at .41), dserv 0.48.10, phase-0 stats build:
+
+| leg | teensy41 (Zephyr, eth) | office (W6300) |
+|---|---|---|
+| total loop | 954–964 | **654–676** |
+| L1 `cmd → do_echo` | 923 | **581** |
+| L2 `do_echo → di` | 37 | 73 |
+| box-internal (`recv`+`disp`) | ~258 | — |
+| unaccounted in L1 | **~665** | — |
+
+The unaccounted figure is now ~665 µs, not the ~430 µs recorded above. That
+number is the entire premise of the DTCM/ERR050396 work, and it was derived from
+an L1 measurement the timestamp fix moved by 270 µs. **Recompute it before
+touching the errata mitigation** — that item is the riskiest on the list (a
+silicon workaround needing a frame-integrity soak) and it should not be
+justified by a number measured through a since-fixed clock.
+
+### The W6300 comparison, and the retraction above
+
+Measured the same evening, same host, same dserv, same harness: the W6300 box's
+inbound leg is **~342 µs faster** (581 vs 923). This is the redo the retraction
+above demanded, and it points back toward the withdrawn conclusion rather than
+away from it — now at ~342 µs rather than the original ~240 µs.
+
+Hold that loosely. It is one pair of runs, and it is **not a transport-only
+comparison**: pico2 vs RT1062, bare-metal vs Zephyr, and the ICMP floor already
+differs (0.077 ms vs 0.197 ms). It is sufficient to say the retraction is no
+longer supported by evidence; it is *not* sufficient to reinstate the original
+claim. The four-way table still needs running.
+
+Also logged: `loopback_rtt` on the W6300 hit a single **25,966 µs** outlier in 59
+samples (p99 957, so one event rather than a fat tail). A 26 ms stall on an
+acquisition box is worth knowing whether it recurs.
+
+### Does the DO echo delay the DI it causes? Yes — by 62 µs, and it does not matter
+
+Asked because the loopback's `L2` leg carries an extra frame the pure input path
+would not. Both publishes are **blocking `box_net_client_send()` calls on the one
+service loop**: `publish_do()` fires inline in the command handler right after
+`pico_gpio_exec()` (`wizchip_dserv_config.c:1427`), while the DI edge can only go
+out on a *later* pass, when `pico_gpio_poll_di()` drains it (`:1859`). So the DI
+frame's transmission queues behind the echo's. The Zephyr box has the same
+structure — this document's own `disp_us` row is "framer + dispatch + GPIO write
+(+ the `state/do` publish)".
+
+Both frames are nonetheless **edge-stamped**: `publish_do` uses
+`event_stamp(t_act)` taken at the pin write, `publish_di` uses
+`event_stamp(e.t_us)` taken at the IRQ. So the box's *record* of when things
+happened is independent of when it managed to send them. `host/lb_queue.sh`
+separates the two (office box, GP10→GP11, n=60):
+
+| quantity | median |
+| --- | --- |
+| `q_box` = `dservTimestamp(di) − dservTimestamp(do)` (both box clock) | **−1 µs** |
+| `q_arr` = arrival(di) − arrival(do) (both host clock) | 62 µs |
+| `q_que` = `q_arr − q_box` — the serialization | **62 µs** (p90 126, p99 214) |
+
+Each term is a difference *within* one clock, so the box-clock offset and its
+~98 µs sync jitter cancel; only rate error over ~100 µs survives, which is
+nothing. That is what makes `q_que` trustworthy despite mixing two clocks.
+
+`q_box` at −1 µs is also a **positive control**: the jumper and the IRQ cost
+nothing measurable, and the slight negative is correct rather than noise —
+`publish_do` reads `time_us_64()` *after* `pico_gpio_exec()` returns, while the
+DI IRQ fires at the transition itself, so the edge stamp legitimately precedes
+the write stamp by a microsecond. Both are real edge stamps, not drain-time
+artifacts.
+
+Three conclusions:
+
+1. **The DI timestamp is unaffected, which is the part that matters.** Queueing
+   delays when dserv *learns* of an edge, not the time recorded for it. Event
+   logging, the obs timeline, and RT computed from a box onset stamp are all
+   edge-accurate regardless. Only notification latency moves.
+2. **The loopback figure is inflated ~62 µs on ~654 µs, about 9 %** — carrying
+   the extra frame does not badly distort it, but `host_gpio_rtt.sh` remains the
+   correct harness for pure input latency, because the host generates the edge
+   and no echo is in the path.
+3. **The marginal cost of a second frame out the W6300 on the RT path is 62 µs,
+   not ~240 µs.** This is independent evidence against the figure behind the
+   retracted claim above, and it explains why `L2` at 73 µs never squared with a
+   supposed 240 µs send. It does not establish what the original 240 µs
+   measured — one more reason the four-way table needs rerunning.
+
+Note the echo exists **only for `GPIO_OP_SET`**. A scheduled pulse (`do/<n>/at`)
+goes through `sched_arm()` and publishes nothing, so `lb_split` and `lb_queue`
+return no samples on that path.
+
+### Still missing: a hardware reference
+
+Both harnesses stamp inside a Tcl callback via `tclserver_now()` — they share a
+mechanism, so their agreement is evidence but not proof. Nothing measured so far
+is referenced to a real electrical edge. Now that the boxes are on a Pi,
+`host_gpio_rtt.sh` with its native-GPIO baseline can close that gap, and it is
+the one measurement a software timestamp bug cannot fool. Wire it per the
+`box_out_rtt.sh` header diagram — **not** the one in `host_gpio_rtt.sh`, whose
+header puts the native baseline on GPIO22 while `box_out_rtt.sh` drives GPIO22
+from the box (baseline belongs on GPIO23 / phys 16). Following the wrong diagram
+puts two drivers on one pin.
+
+### Operational notes
+
+- **Flashing a Teensy from a dev host needs the soft-reboot flag `west flash`
+  omits:** `teensy_loader_cli --mcu=TEENSY41 -s -v build-teensy41/zephyr/zephyr.hex`.
+  Without `-s` it fails with "Unable to open device". There is no remote path:
+  `main.c:294` — `cmd/bootsel` is unsupported on Teensy because the bootloader is
+  a separate chip watching the Program button. HalfKay does not wipe NVS; pin
+  config survived every reflash tonight.
+- **A box that vanishes leaves stale datapoints.** `dservctl extio
+  "extio_clear_dead"` (config/extioconf.tcl:141) clears `state/*` and `decoded/*`
+  for boxes no longer in `::extio_known`.
+- **Harnesses live in `~/extio-bench/` on pi4dev**: `loopback_rtt.sh`,
+  `lb_split.sh`, `host_gpio_rtt.sh`, `box_out_rtt.sh`, plus `dispatch_test.sh`
+  (dserv-only dispatch latency) and small Tcl state-dump helpers.
+- **Office box loopback** is wired GP10 → GP11 (adjacent header pins 14/15), both
+  free per `wiznet-io/PINMAP.md` with the MCP3204 and OLED enabled.
+
+### What not to depend on yet
+
+1. Any USB latency number, until the harness disagreement is explained.
+2. The ~430 µs unaccounted figure and the DTCM case resting on it.
+3. Any absolute µs measured on an uncontrolled host.
+4. The W6300-vs-native margin as a *transport* result — it is currently a
+   whole-box result.
+
+---
+
+## 2026-07-26 — THE WIZNET REFERENCE SET (electrically referenced)
+
+**These are the numbers to compare against. Everything earlier in this document
+is superseded** — see "What this supersedes" at the end of the section.
+
+### The requirement, stated
+
+**Within 1 ms end-to-end is fine for this work.** Recorded because it changes
+which items are worth doing: it is the difference between "the DTCM errata
+mitigation is the next task" and "the DTCM errata mitigation can wait
+indefinitely". Latency work below this line is optimisation; timestamp accuracy
+and tail behaviour are not, because neither is bounded by the same budget.
+
+### Setup
+
+Host `rpi500` (Pi 5, governor `performance`, load ~1.2 with the ess_control
+Firefox page CLOSED — see the load caveat below), dserv **0.48.10** (has the
+`227315e` monotonic timebase fix). Box `upstairs`: pico2, `build = dual`,
+`transport = w6300`, fw `0.48.7-2-ge9b1e1a`, 192.168.88.28 → 192.168.88.29:4620.
+
+```
+Pi phys 13 (GPIO27, out) ──┬── Pi phys 16 (GPIO23, in)    [native baseline = P]
+                           └── box phys 14 (GP10, in)     "from_pi"
+Pi phys 15 (GPIO22, in) ───── box phys 15 (GP11, out)     "loop_out"
+                                     └───────────────────  box phys 16 (GP12, in) "loop_in"
+Pi phys 14 (GND) ──────────── box GND
+```
+
+The baseline jumper is **Pi-to-Pi**, not to the box. It measures the host's own
+input path off the *identical* electrical edge, which is the only way to remove
+the host from the box's number.
+
+### Measured
+
+| measurement | med | min | p99 | max |
+| --- | --- | --- | --- | --- |
+| **Input: edge → dserv knows** (via box) | **322** | 278 | 358 | 365 |
+| Same edge, Pi sensing directly (**P**) | 72 | 50 | 99 | 110 |
+| **Output: dserv cmd → Pi sees box pin move** | 329 | 288 | 393 | 393 |
+| Loopback total (`loopback_rtt` / `lb_split`) | 676 / 657 | 632 / 610 | 717 / 718 | 717 / 718 |
+| `L1` cmd → do_echo | 554 | 517 | 679 | 679 |
+| `L2` do_echo → di | 100 | 39 | 139 | 139 |
+
+### Derived, and the budget closes
+
+- **Outbound** (dserv command → box pin physically moves) = 329 − 72 = **~257 µs**
+- **Return** (box event → dserv knows) = 554 − 257 = **~297 µs**
+- Cost of routing an edge through the box vs the Pi sensing it directly
+  = 322 − 72 = **~250 µs**
+
+257 + 297 = 554, which is `L1` measured independently by a different harness.
+That closure is the point: the split was unavailable last night (the box-clock
+route gave ±64 ms of accumulated drift) and the electrical reference recovers it.
+
+### Verdict against the requirement
+
+**Input latency 322 µs median, 358 µs p99** — the number that governs "subject
+acts → dserv knows". ~2.8× margin at p99, no outliers in 149 samples. This box
+is comfortably inside spec and its tail is the tightest measured anywhere in this
+exercise.
+
+### Caveats attached to these specific runs
+
+- **The box was UNSYNCED.** It power-cycled during wiring (`uptime_us` reset,
+  `watchdog` 1275 → 942) and had no obs anchor after. So `box_clock_stamp()`
+  returns 0 and **dserv arrival-stamps** those frames — the harness's "box stamp
+  error" column is therefore *delivery measured from the arrival stamp*, NOT
+  clock accuracy. The `sync/*` datapoints visible at the time were 48 minutes
+  stale and sticky in dserv's table, which is precisely the trap
+  `host_gpio_rtt.sh`'s header warns about. Read that column as clock accuracy
+  ONLY after confirming a fresh anchor.
+- The 41 µs between that column (281) and the delivery column (322) is dserv's
+  **arrival-stamp → callback-execution** gap. Free measurement, worth knowing.
+- **A power cycle reverts unsaved config.** Pin modes and labels survive (NVS);
+  anything set at runtime and not followed by `cmd/save` does not.
+- `host_gpio_rtt.sh` labels the box column "(USB)" — hardcoded, wrong for a
+  w6300 box, cosmetic.
+- **Host load dominates everything.** The ess_control page open in Firefox on
+  rpi500 put the box at load 3.36 (Firefox 38.9 % + web content 29.1 %). Close it
+  before measuring. On a loaded Mac the same effect inflated *both* transports
+  ~1.4× while leaving their ratio intact.
+
+### The same box on USB-FS — and why Ethernet wins here
+
+Same host, same dserv, same jumpers; Ethernet unplugged so the arbiter falls back
+(`transport = usb`, `ip = 0.0.0.0`). The box power-cycles when the cable moves, so
+debounce was re-applied.
+
+| | Ethernet (W6300) | USB-FS |
+| --- | --- | --- |
+| **Input: edge → dserv knows**, med | **322** | 525 |
+| — min | 278 | **214** |
+| — p99 | **358** | 1008 |
+| **Output: cmd → pin moves**, med | **329** | 393 |
+| — p99 | **393** | 1147 |
+| Loopback, med | **676** | 1043 |
+| — p99 | **718** | 1430 |
+| Native baseline `P` | 72 | 72 |
+
+**USB's floor is 64 µs FASTER** (min 214 vs 278) — `box_net_usb_client_send` is a
+memcpy into a ring plus a TX interrupt enable, so the wire time happens in the ISR
+and the cost is *off the RT loop by construction*, whereas the Ethernet send IS
+the stack traversal, inline on it. What ruins USB-FS is **frame quantization**:
+1 ms slots, so the median pays ~267 µs of waiting and p99 pays ~650 µs. At p99
+USB-FS **breaches the 1 ms requirement** (1008 µs input, 1430 µs loopback) while
+Ethernet keeps 2.8× margin. Ethernet is correct for this box, for a structural
+reason rather than a measured preference.
+
+`P` came back at **72 µs median in both runs**, across a transport change and a
+dserv restart. The host's input path is a stable constant; that is what makes
+subtracting it legitimate.
+
+**Projection for USB-HS (RT1062), stated as arithmetic, not a result.** On this
+box USB's non-quantization path is ~64 µs cheaper than Ethernet's. High-Speed
+cuts the slot interval 8× (1 ms → 125 µs microframes), so the quantization term
+should fall to ~33 µs median / ~80 µs p99, leaving USB-HS net faster than
+Ethernet with a far tighter tail. Two things that arithmetic does not capture:
+the host-side `extio`/`usbio` hop is unchanged by HS and is already inside these
+numbers, and the Teensy's Ethernet is Zephyr's *software* stack rather than
+hardware TCP offload, so the baseline it must beat is a slower one. Both push the
+same way. **Measure it; do not cite this paragraph as a finding.**
+
+### Hardware obs-sync: anchor quality, measured against a real edge
+
+Wired **Pi phys 37 (GPIO26, out) → box phys 31 (GP26)** and set `sync/pin 26`
+(persisted). Note the config key is **`config/sync/pin`**, not `config/sync_pin`
+— the state datapoint and the config key differ, and setting the wrong one
+silently does nothing (`state/sync_pin` stays `-1`).
+
+The sync pin is **latch-only** (`pico_gpio.h:133`: "TTL obs-sync: latch, don't
+report") — it publishes no DI events, so a sync line costs zero wire traffic.
+On an `ess/in_obs` frame the box pairs that frame's *dserv* timestamp with the
+**latched edge time** if the edge is fresh (`SYNC_EDGE_WINDOW_US` = 250 ms),
+giving `source = hw`; otherwise it degrades to frame-arrival time (`sw`) and says
+so. `box_clock_sync` is `offset_us = dserv_us - box_us` with `box_us` = the
+latched edge — **no transport term**, which is the whole point.
+
+#### Anchor repeatability, and the crystal
+
+Five successive anchors, same transport, ~2.5 s apart:
+
+```
+offset ...926431 / ...926368 / ...926309 / ...926246 / ...926186
+deltas      -63       -59       -63       -60   us
+```
+
+**Repeatability ~±2 µs.** The offset does not scatter; it marches monotonically
+at ~60 µs per ~2.5 s = **~25 ppm**, which is the box's oscillator, in the
+documented +27→+43 ppm band. The anchor is precise; the crystal is what moves —
+and `hw` anchors teach the rate, so this gets corrected rather than accumulating
+into the 64 ms-after-31-minutes seen on `office`.
+
+Per-event **sync quality (spread) is ~90–125 µs**, matching the recorded 98 µs
+Tier A figure.
+
+#### Standing bias is a HOST-side property, not the box's
+
+The bias moved from **+3114 µs to −243 µs** by changing nothing but how tightly
+the edge and the `ess/in_obs` publish were coupled on the host — two separate
+`dservctl` invocations versus both in one interp call. The hw anchor removes the
+box-ward *transport* delay; it does **not** remove host-side skew between driving
+the pin and stamping the datapoint. Whatever gap exists there lands directly in
+the offset. Couple them, or characterise the skew and calibrate it out.
+
+The box reports the frame-behind-edge delay per anchor as
+`state/sync/transport_us` — 2355 µs with the loose two-call sequence, **727 µs**
+on USB-FS and **206 µs** on Ethernet once coupled. Free per-anchor transport
+telemetry, and a direct readout of what a `sw` anchor would have absorbed as
+error.
+
+#### Two things left open, recorded rather than tidied away
+
+- **A 564 µs bias difference between a USB-anchored and an Ethernet-anchored
+  run** is unexplained. It is not anchor noise (that is ±2 µs), but a **reboot
+  intervened** between them, resetting the rate estimator — so they are not a
+  clean pair, and the code has no transport term that could explain it. A clean
+  transport A/B is awkward here because **switching transport requires a
+  reboot** (see below).
+- **Do not copy this section's anchor spacing into a test.** Two anchors 1 s
+  apart clears `BOX_CLOCK_PAIR_MIN_US` (0.5 s) and therefore teaches the rate
+  from a *one-second baseline* — and the first valid sample is taken as the rate
+  outright (`if (!c->rate_valid) c->rate_ppb = sample`). Tens of µs of edge noise
+  over 1 s implies tens of ppm. Real obs anchors are spaced by trial durations
+  and are a far better baseline; the rate quality induced here is worse than a
+  running experiment would produce.
+
+#### Uncertainty budget WITHOUT a hardware sync line
+
+The decisive detail is in `box_clock_sync`: **a `sw` anchor never teaches the
+rate.** `if (!trusted) return;` sits above the rate estimator, so only `hw`
+anchors reach it. Without a sync line the box has no rate correction at all and
+its ~25 ppm crystal error accumulates freely between anchors — the mechanism
+behind the 64 ms found on `office` after 31 idle minutes.
+
+A `sw` anchor pairs the frame's *send* timestamp with the box's *receipt* time,
+i.e. it assumes delivery is instantaneous. Every stamp then reads **early by
+roughly the one-way delivery**, which `transport_us` measures directly.
+
+| source of error | Ethernet | USB-FS |
+| --- | --- | --- |
+| Standing bias (= one-way delivery) | ~200 µs | ~730 µs |
+| Anchor-to-anchor jitter | ~±50–100 µs | up to ±400 µs (frame quantization) |
+| Drift between anchors, 25 ppm | 125 µs per 5 s | same |
+| Per-event sync jitter | ~90–125 µs | ~90–125 µs |
+| **Total, anchors every ~5–10 s** | **~400–600 µs** | **~1.0–1.3 ms** |
+
+**Verdict against the 1 ms requirement: Ethernet without a sync line is fine**
+(about half the budget) *provided obs anchors keep coming*. **USB-FS without a
+sync line is marginal to over budget**, because the 1 ms frame quantization lands
+directly in the anchor.
+
+**The operating rule:** at 25 ppm, drift alone eats 1 ms in **40 seconds**, so
+re-anchor at least every ~10 s. Normal `beginobs`/`endobs` cadence satisfies this
+easily — `ess/in_obs` toggles twice per trial. The danger case is not a running
+experiment but an **idle box between obs**, where the offset silently rots.
+
+**What often makes this moot:** the standing bias is *systematic*, so it cancels
+wherever both endpoints are box-stamped — button press → release, DI edge →
+scheduled pulse, response latency from a box onset stamp. Those see only the
+~90–125 µs jitter and are well inside budget with no sync line at all. The bias
+applies in full only to **box-to-host** intervals (a box event against a stimulus
+onset stamped by dserv or stim2), which is exactly the case the sync line fixes.
+
+#### Why the wire beats every packet transport, and what that implies
+
+Latency for one 128-byte dserv frame decomposes into **waiting for a slot** plus
+**serialising the bits**. Different transports fail in different halves:
+
+| transport | wait for a slot | serialise 128 B | total |
+| --- | --- | --- | --- |
+| UART 115200 | 0 | **11.1 ms** | 11.1 ms |
+| UART 1 Mbaud | 0 | 1.28 ms | 1.28 ms |
+| UART 3 Mbaud | 0 | 0.43 ms | 0.43 ms |
+| UART 12 Mbaud | 0 | 0.11 ms | 0.11 ms |
+| USB-FS | 0–1000 µs | 85 µs | ~0.6 ms avg |
+| USB-HS | 0–125 µs | 2 µs | ~64 µs avg |
+| **Ethernet 100M** | **~0** | **~10 µs** | **~10 µs** |
+
+A true UART has **no bus schedule** — the shift register starts when it is free —
+which is the property USB lacks. But it pays in serialisation, so classic 115200
+is far *worse* than USB-FS. **Ethernet already provides the "unpaced" property
+with 100× less serialisation**, which is exactly what the measurements show
+(Ethernet 322/358 µs vs USB-FS 525/1008). The enemy is USB's polled
+architecture, not modernity — and this vindicates the 2026-07-09 decision in
+BLE.md to supersede the UART sidecar once rigs went wired-Ethernet.
+
+Two traps if serial is ever revisited: a UART behind a **USB-serial adapter
+reintroduces USB pacing** (FTDI latency timer defaults to 16 ms of batching), and
+a real UART's RX interrupt typically fires on a FIFO threshold or a ~4-character
+idle timeout, so a short message can sit in the FIFO. "No pacing" is a property
+of the wire, not of the driver stack above it.
+
+**The synthesis: the packet carries the data, the wire carries the time.** The
+TTL sync line is the one-bit limit case of a parallel interface — no framing, no
+arbitration, no serialisation — which is why it anchors to ~±2 µs while every
+packetised path sits in the hundreds of µs. Those are two different jobs and it
+is correct for them to use different media.
+
+#### Software-only anchoring, for hosts with no GPIO
+
+The standard method is PTP/NTP's four-timestamp exchange — host sends at `T1`,
+box receives at `T2`, replies at `T3`, host receives at `T4`; then
+`RTT = (T4-T1) - (T3-T2)` and `offset = T2 - (T1 + RTT/2)` — with **min-RTT
+filtering** across probes, keeping the least-queued sample where the symmetry
+assumption is least wrong.
+
+**Most of this already exists in tree.** The BLE echo-sync work built exactly
+this pattern (min-RTT estimator feeding `box_clock`) and took the handheld from
+**+22.6 ms to +0.37 ms using software timestamps only**. Porting it to the wired
+path is reuse, not invention. It also closes the rate gap: `sw` anchors never
+teach the rate, an echo estimator naturally can, and **drift is the failure mode
+that produces 64 ms surprises** while bias is merely calibratable.
+
+**Certify it against `upstairs`.** That box has a hardware sync line *and* can run
+the software estimator, so the software answer can be measured against the
+hardware one on the same box at the same time. That converts "probably good
+enough" into a number, after which it can be deployed on GPIO-less hosts knowing
+exactly what was given up. Same validate-the-method-once pattern used throughout
+this document.
+
+#### The `sw` anchor bias IS the one-way delivery — measured, not assumed
+
+Alternating `hw` and `sw` anchors on the same box, bracketing each `sw` sample
+between two `hw` samples to interpolate out the ~25 ppm drift:
+
+```
+sw - hw = -202 us        (predicted -206 us from state/sync/transport_us)
+```
+
+Exact agreement, in the predicted direction. A `sw` anchor pairs the frame's
+*send* timestamp with the box's *receipt* time, i.e. assumes delivery is
+instantaneous, so every stamp reads early by exactly `d`. Script:
+`host/sw_bias.sh`.
+
+#### Stage 1: host-only bias correction, certified
+
+`dservSetData <var> <ts> <type> <bytes>` honours an explicit timestamp
+(`Dataserver.cpp`: `if (!ts) ts = ds->now()`). So publishing the sync datapoint
+**forward-dated by `d`** makes the naive `sw` anchor correct **with no firmware
+change** — the box computes `offset = dserv_us - receipt_box`, and `receipt_box`
+genuinely corresponds to dserv time `T_send + d`.
+
+`d` is estimated without any wire by halving the **minimum** RTT of the existing
+`cmd/do → state/do` echo (least-queued sample = where the symmetry assumption is
+least wrong). Certified against the hardware line on the same box
+(`host/stage1_certify.sh`):
+
+```
+echo RTT: min 500  med 536 us   ->  d_est = min/2 = 250 us
+  sw UNCORRECTED  vs hw:  -190 us
+  sw CORRECTED    vs hw:   -34 us
+```
+
+**Bias ~190 µs → ~34 µs, host-side only.** 34 µs is below the anchor's own
+jitter floor (~90–125 µs), so at this resolution the bias is gone.
+
+**Do not over-trust the residual.** It is the difference of two errors that
+happened to partially cancel: `min-RTT/2` = 250 µs *over*-estimates the true
+`d` = 206 µs by ~44 µs (the echo includes the box's dispatch and GPIO write,
+which the anchor delay does not), while the forward-dating *under*-applies
+because `[now]` is evaluated some tens of µs before the frame actually leaves
+dserv. On another host or transport they will not cancel the same way. The
+dominant term (`d` itself) is measured per-deployment, so the method adapts; the
+residual does not. **Re-certify per deployment**, and note bracket interpolation
+contributes its own ~±50 µs, so read this as "indistinguishable from zero at this
+resolution", not "exactly 34".
+
+**Suppress the correction whenever `state/sync/source = hw`.** Forward-dating a
+frame whose anchor comes from a latched edge would *introduce* precisely the
+error this removes.
+
+`d` is **per-box and per-transport** (206 µs Ethernet, ~730 µs USB-FS), so a
+multi-box rig needs per-box values.
+
+#### Stage 2: implemented, deployed, certified (2026-07-26)
+
+Built and OTA'd to `upstairs`; see `config/extio_sync.tcl` (host) and
+`CFG_PROBE`/`CFG_SYNC` in `common/dserv_config.h` +
+`pico/wizchip_dserv_config.c` (box).
+
+**Protocol.** Two keys under the box's existing `%match <pfx>/cmd/*`, so **no
+registration change**:
+
+```
+cmd/probe <seq>   -> state/probe = the box's OWN turnaround (t_send - t_recv).
+                     Both reads are box-clock, so the box's unknown offset
+                     cancels and the host can subtract box time from the RTT.
+cmd/sync  <d_us>  -> offset = (frame_ts + d_us) - receipt_box, trusted=0.
+                     Skipped when a fresh latched TTL edge exists.
+```
+
+**NAMED `probe`, NOT `echo`.** `state/echo/*` is already the BLE echo-sync
+telemetry (`echo/synced`, `echo/rtt_us`, `echo/offset_us`, `echo/rate_ppb`). The
+leaf `state/echo` would not literally collide, but two unrelated sync mechanisms
+sharing that word on a `BOX_BLE` build is a trap.
+
+**Certified against the hardware line, same box, same session:**
+
+| method | stamp error (median) | spread | vs `hw` |
+| --- | --- | --- | --- |
+| `sw` uncorrected | −202 µs | — | 274 µs |
+| **`sw` + correction** | **−100 µs** | ~70 µs | **172 µs** |
+| `hw` TTL edge | +72 µs | ~83 µs | — |
+
+The correction **halves the bias**, and all three are inside the 1 ms
+requirement. The durable win is not the bias but the **cadence**: anchoring every
+2 s bounds drift at ~50 µs regardless of obs spacing, which is the failure mode
+that produced 64 ms on an idle box.
+
+**The 172 µs residual is a modelling error, not noise.** `d = net/2` halves a
+round trip whose legs are not comparable: the return leg includes **dserv's
+~116 µs Tcl dispatch** (measured independently, `host/dispatch_test.sh`) while
+the outbound leg does not. Note a textbook four-timestamp NTP solve does **not**
+fix this — that formula assumes symmetry too. The actual fix is host-side: take
+`T1` from `dservTimestamp(cmd/probe)` and `T4` from
+`dservTimestamp(state/probe)` (dserv arrival-stamps it, since the box sends
+timestamp 0) instead of bracketing with `[now]` in Tcl. That excludes host
+*processing* from both ends and leaves something much closer to path delay.
+
+#### The box arithmetic is EXACT — the open question is host-side
+
+Sending `cmd/sync 200` and reading the anchor inputs the box already publishes:
+
+```
+ds + d - bx = 1785002151935731 + 200 - 1265180110 = 1785000886755821
+off (state/sync/offset_us)                        = 1785000886755821   ✓
+```
+
+Exact to the microsecond. `publish_sync` has always emitted all three inputs
+(`sync/dserv_us` = `m.timestamp`, `sync/box_us` = `now_box`,
+`sync/offset_us`, plus `transport_us` = applied `d`), so the anchor was auditable
+the whole time — it just was not read. **Check those four datapoints before
+theorising about a sync discrepancy.**
+
+Consequence: the unexplained result below is NOT in the firmware. Changing the
+host estimator moved `d` by 38 µs but the measured bias by 176 µs, and since the
+box demonstrably applies `offset += d` at 1:1, the inconsistency lives in the
+host-side `d` estimate or in the harness. Still open, but a much smaller haystack.
+
+#### Never anchor mid-obs
+
+Re-anchoring **steps** the offset. Applying that inside a data-collection window
+puts two events of one trial on different mappings and silently corrupts any
+interval computed across the step — precisely the failure dserv's own monotonic
+timebase commit (`227315e`) exists to prevent on the host side. **Obs boundaries
+are the only moments where a clock discontinuity is provably harmless**, and they
+already anchor; they are also frequent during real experiments and always outside
+real data.
+
+So both `cmd/probe` and `cmd/sync` are gated on `!g_in_obs` **in the box** (it
+owns the flag, closing the race where an obs begins while a frame is in flight),
+and the host skips too so the frames are not even generated. The probe matters
+less but is gated anyway: a reply is a blocking send on the one service loop, so
+it delays a concurrent DI event's *delivery* by ~62 µs (p99 214) — timestamps are
+edge-stamped and unaffected, but there is no reason to spend it during data
+collection when `d` is stable enough that an estimate one trial old is fine.
+
+**The ticker's job is the IDLE GAP between obs, not the experiment.** That makes
+it strictly additive to a mechanism already correctly placed, and it means an
+imperfect `d` can only ever act while no data is being collected — the next obs
+boundary re-anchors off the better path regardless.
+
+Verified on silicon: `cmd/sync 200` outside obs → `src=swc d=200`; `cmd/sync 333`
+during obs → ignored (`d` stays 200); `cmd/probe` during obs → no `state/probe`
+at all.
+
+#### `sync/source` has three values, not two
+
+`hw` (latched TTL edge) / `swc` (arrival-anchored but delay-corrected via
+`cmd/sync`) / `sw` (naive arrival, wrong by exactly the one-way delay). A
+datafile now records **which** method produced a timestamp instead of leaving it
+to be inferred after the fact.
+
+#### Two wrong guard policies, recorded so they are not re-derived
+
+The host must decide which boxes to sw-correct. Two plausible answers both fail:
+
+1. **`state/sync/source == "hw"`.** That datapoint is **STICKY** in dserv's
+   table — it survives box reboots and means "synced at some point", not "synced
+   now". A 31-minute-old `hw` suppressed correction forever on a box whose line
+   had since been unplugged. (Same trap `host_gpio_rtt.sh`'s header warns about.)
+2. **...plus a freshness window.** Fails the other way: `hw` anchors arrive at
+   obs boundaries, minutes apart between blocks, so *any* window eventually lets
+   the host stomp a good `hw` anchor with a worse `sw` one. Observed directly — a
+   100-sample run took 140 s, aged the anchor past a 30 s window, and the host
+   took over mid-experiment. **Alternating two methods that disagree by 172 µs is
+   worse than committing to either.**
+
+**Correct signal: `state/sync_pin >= 0`** — announced in the manifest, a stable
+property of the box, and it answers the question actually being asked ("does this
+box have a wired anchor?"). Probe *unconditionally* regardless, so `d` stays warm
+and losing the line degrades instantly rather than after a warm-up.
+
+#### The OTA path, which worked cleanly
+
+`sh build.sh dual --tbyb --push` (needs `DSERV_AGENT_FIRMWARE_TOKEN`) publishes
+bin=TBYB trial + uf2=hashed slot-A base to the `dev` shelf, then
+`dservctl extio "extio_ota_push_shelf <box> dev"`. New firmware was running in
+~5 s, `ota/state = committed`, and NVS config (pins, labels, `sync_pin`)
+survived. This is the flash path when the box is on a remote host and the
+toolchain is not.
+
+#### PTP applicability, per board
+
+| end | IEEE-1588 hardware timestamping |
+| --- | --- |
+| RT1062 / Teensy | **Yes** — `CONFIG_PTP_CLOCK_NXP_ENET` on, `box_ptp.c` reads the counter today (`state/ptp/ns`) |
+| W6300 / RP2350 | **Almost certainly not** — a hardwired TCP/IP offload chip, not a 1588-capable MAC (verify against the datasheet) |
+| Host | Varies. Pi 5 and Intel server NICs are the credible targets; **USB Ethernet adapters essentially never have it** |
+
+With hardware timestamps at *both* ends PTP reaches sub-µs, which would **beat
+the TTL line** — because our "hardware sync" is only hardware on the box side
+(the host stamps `ess/in_obs` in software, which is why anchor quality tops out
+at ~90–125 µs). With software timestamping at either end, expect tens of µs on a
+quiet LAN — still far better than today's naive `sw` anchor, which assumes zero
+delay. Note `box_ptp.c` currently reads only the **local free-running counter**;
+disciplining it to a grandmaster needs a peer and is not implemented.
+
+Caveat: PTP accuracy depends on **path symmetry**, so non-PTP-aware switches
+inject asymmetric queuing. A direct cable is ideal; transparent/boundary clocks
+fix it but are real infrastructure.
+
+**Reframe worth keeping:** "dserv host with no GPIO" is not "no TTL anywhere in
+the rig". The sync edge need not originate from the dserv host — a stimulus
+computer's sync output, a shared trigger distribution, or a photodiode anchors
+the box just as well, since all the box needs is an edge it can latch paired with
+a datapoint carrying a host timestamp.
+
+#### Transport selection is boot-time only (dual image)
+
+`box_net_dual_impl.c`: the transport comes from the **GP28 strap read in main()**,
+not from flash ("a stale `mode eth` in flash on a box with no cable used to hang
+W6300 init forever; a strap can't go stale"), and there is deliberately no
+boot-time PHY auto-detect. With the strap open the policy is auto: boot USB, then
+sense `CW_GET_PHYLINK` debounced and swap up to Ethernet — **but outside the 10 s
+boot window it refuses to switch while a USB host is mounted** ("an active USB
+session is never yanked out from under dserv"), and it never auto-downgrades.
+
+Practical consequence: plugging Ethernet into a box already serving a USB host
+does nothing. `cmd/reboot` with the cable already in works — inside the boot
+window the USB-host veto is bypassed, and it came up on Ethernet at ~17 s with
+`sync_pin` and pin config intact (they had been `cmd/save`d).
+
+### The USB harness disagreement is NOT generic — it was Teensy-specific
+
+The two-harness agreement check on this box over USB: `loopback_rtt` 1043 vs
+`lb_split` total 1119 — **76 µs apart, i.e. they agree**. The ~426 µs
+disagreement seen on the Teensy's USB path does **not** reproduce here, on the
+same ingest path (`extio` subprocess → `usbio.c` → `tclserver_set_point`). So
+that anomaly is not a property of the USB ingest path in general, and the hunt
+narrows to the Teensy/Zephyr side. Item 1 of "What not to depend on yet" is
+correspondingly narrowed, not cleared.
+
+### Wiring hazard found the hard way
+
+GPIO26 was already held as an **output** (`consumer="dserv output"` — the
+intended sync line), so teeing it to GPIO27 wired two driven outputs together and
+clamped the node low. Symptom: `gpio/output/27` reads back correctly in dserv
+while `pinctrl get` shows `27: op dh … | lo`, and no observer sees an edge.
+**`pinctrl get <lines>` and `gpioinfo` are the diagnostic** — dserv cannot see
+this, because from its side the write succeeded. The baseline belongs on an
+unclaimed line (GPIO23).
+
+### What this supersedes
+
+- The whole-loop figures in "NEXT: Ethernet RX" (2365 → 783 µs etc.) — measured
+  pre-timestamp-fix.
+- The `720 / 294 / 430` L1 split and the DTCM case resting on it.
+- Any USB number for either box, still unresolved (see the harness matrix above).
+- The retracted W6300-vs-native claim stays retracted; this section does not
+  reinstate it, because `upstairs` and the Teensy have not yet been measured
+  under identical conditions with the electrical reference.
