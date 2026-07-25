@@ -46,6 +46,9 @@ static dserv_framer_t rx_framer;
 static group_rt_t     groups[BOX_NGROUPS];   /* DI chord-settle state machines */
 static box_clock_t    boxclk;                /* box time -> dserv time alignment */
 static uint64_t       obs_begin_us;          /* box time of the last beginobs anchor */
+#if defined(BOX_HAVE_PERSIST)
+static int            box_persist_mount_err;   /* 0 = NVS mounted; else the errno */
+#endif
 
 /* A hardware sync edge may anchor an obs toggle only if it is RECENT: well under
  * the shortest obs on/off cadence (seconds), so a stale latched edge from the
@@ -346,7 +349,11 @@ int main(void)
 	 * printk/LOG is on the board UART (chosen zephyr,console) and still works --
 	 * the boot-log channel PORTING.md documents. */
 #if defined(BOX_HAVE_PERSIST)
-	if (box_flash_init() == 0) {
+	int frc = box_flash_init();
+	if (frc != 0) {
+		box_persist_mount_err = frc;   /* surfaced in the boot banner */
+	}
+	if (frc == 0) {
 		uint8_t lb[BOX_PERSIST_BLOB_MAX];
 		int ln = box_flash_load(lb, sizeof lb);
 
@@ -355,6 +362,32 @@ int main(void)
 			box_gpio_apply_config(&cfg);   /* apply the loaded pin map/name */
 			groups_resync();               /* seed chords from real pin state */
 		}
+	}
+#endif
+
+#if defined(BOX_BRINGUP_NET_IP)
+	/* BRING-UP SCAFFOLD -- now RETIRABLE, kept only as a factory-reset default.
+	 *
+	 * Added while `cmd/save` was broken on the FRDM-RW612, which made the box's
+	 * own IP unconfigurable: net/ip applies only in box_net_eth_init() at boot,
+	 * so a runtime change needs a reboot, and a reboot without persistence
+	 * forgets it. Circular -- hence a compiled-in default.
+	 *
+	 * That is FIXED (PARTITION_OFFSET + NVS_INIT_BAD_MEMORY_REGION; see
+	 * PORTING.md 2026-07-25), so this is inert whenever a saved config exists:
+	 * it is applied ONLY when nothing loaded from flash. Its remaining value is
+	 * that a factory-reset box still lands on the bench network.
+	 *
+	 * DO NOT let it become load-bearing -- it hardcodes an IP in firmware.
+	 * Delete the block and the CMakeLists definitions when the rig outgrows it.
+	 */
+	if (!cfg_loaded) {
+		if (dserv_cfg__parse_ip(BOX_BRINGUP_NET_IP, cfg.net_ip) == 0) {
+			cfg.net_mode = NET_MODE_STATIC;
+		}
+		dserv_cfg__parse_ip(BOX_BRINGUP_NET_MASK, cfg.net_sn);
+		dserv_cfg__parse_ip(BOX_BRINGUP_DSERV_IP, cfg.net_gw);
+		dserv_cfg__parse_ip(BOX_BRINGUP_DSERV_IP, cfg.dserv_ip);
 	}
 #endif
 
@@ -427,6 +460,24 @@ int main(void)
 	} else {
 		box_console_printf("eth: no lease (link=%d)\n", box_net_eth_link());
 	}
+#if defined(BOX_HAVE_PERSIST)
+	/* Say so LOUDLY when persistence is dead: every `save` will fail and every
+	 * reboot silently reverts to defaults, which reads as a firmware bug. */
+	if (box_persist_mount_err) {
+		/* Everything needed to diagnose it, in one line: a bare "FAILED" sent
+		 * this hunt into the FlexSPI driver for hours when the answer was a
+		 * wrong partition offset. See PORTING.md 2026-07-25. */
+		int pirc = 0; uint32_t pisz = 0, poff = 0, ss = 0, sc = 0;
+		box_flash_debug(&pirc, &pisz, &poff);
+		box_flash_geometry(&ss, &sc);
+		box_console_printf("persist: NVS MOUNT FAILED err=%d -- `save` will fail, "
+		                   "config will NOT survive reboot\n", box_persist_mount_err);
+		box_console_printf("persist:   page_info(off=0x%x) rc=%d size=%u; "
+		                   "sectors %ux%u\n",
+		                   (unsigned) poff, pirc, (unsigned) pisz,
+		                   (unsigned) sc, (unsigned) ss);
+	}
+#endif
 	box_console_printf("PTP hw clock: ready=%d  now=%llu ns\n",
 	       (int) box_ptp_ready(), (unsigned long long) box_ptp_now_ns());
 #else
@@ -729,8 +780,17 @@ int main(void)
 				uint8_t blob[BOX_PERSIST_BLOB_MAX];
 				uint32_t bn = box_persist_serialize(&cfg, blob, sizeof blob);
 
-				box_console_printf("deferred save -> %s (%u bytes)\n",
-				       box_flash_save(blob, bn) == 0 ? "ok" : "FAILED", bn);
+				int src = box_flash_save(blob, bn);
+				if (src == 0) {
+					box_console_printf("deferred save -> ok (%u bytes)\n", bn);
+				} else {
+					/* Report the errno. A bare "FAILED" sent the
+					 * RW612 hunt toward the FlexSPI driver when the
+					 * answer was -EDEADLK (-45): NVS refusing an
+					 * unrecognised region. */
+					box_console_printf("deferred save -> FAILED (%u bytes, err=%d)\n",
+					       bn, src);
+				}
 			}
 #else
 			(void) due;

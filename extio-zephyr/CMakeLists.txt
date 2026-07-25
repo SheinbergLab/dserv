@@ -42,6 +42,24 @@ if(CONFIG_NETWORKING)
 	)
 endif()
 
+# TEMPORARY: compiled-in network defaults for the FRDM-RW612 bring-up rig.
+# Needed only because `cmd/save` fails on this board (nvs_mount -> -ENOTSUP,
+# reproduced with stock Zephyr -- see PORTING.md), which leaves net/ip
+# unconfigurable: it applies at boot, so changing it needs a reboot, and a
+# reboot without persistence forgets it.
+#
+# These are DEFAULTS, applied only when nothing loaded from flash, so fixing
+# NVS retires them automatically. Delete this block once it is fixed.
+#
+#   box  192.168.11.41  <-- direct cable -->  raspberrypi eth0  192.168.11.10
+if(CONFIG_BOARD_FRDM_RW612)
+	target_compile_definitions(app PRIVATE
+		BOX_BRINGUP_NET_IP="192.168.11.41"
+		BOX_BRINGUP_NET_MASK="255.255.255.0"
+		BOX_BRINGUP_DSERV_IP="192.168.11.10"
+	)
+endif()
+
 # BLE ingress: frdm_rw612 only (no radio on Teensy).
 if(CONFIG_BT)
 	target_sources(app PRIVATE

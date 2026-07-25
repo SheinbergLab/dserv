@@ -14,9 +14,60 @@
  * Enable the ENET IEEE-1588 hardware clock (block #5). The board enables the MAC
  * and MDIO but leaves this node disabled; turning it on instantiates the PTP
  * clock device (PTP_CLOCK_NXP_ENET), the sub-µs sync enabler.
+ *
+ * `status = "okay"` ALONE IS NOT ENOUGH. Two separate defects sit behind it,
+ * both verified on silicon 2026-07-25 against the stock samples/net/ptp:
+ *
+ *   1. ptp_clock_nxp_enet_init() calls pinctrl_apply_state(DEFAULT)
+ *      unconditionally. With no pinctrl-0 the state table is empty,
+ *      pinctrl_lookup_state() returns -ENOENT, init fails, and the device
+ *      reports DISABLED in `device list` -- presenting as "no PTP hardware"
+ *      rather than as a config error.
+ *   2. The node's stock `clocks = <&clkctl1 MCUX_ENET_PLL>` names a clock ID
+ *      that clock_control_mcux_syscon.c HAS NO CASE FOR. Its get_rate() falls
+ *      out of the switch and returns 0 -- SUCCESS -- without ever writing
+ *      *rate. ptp_clock_nxp_enet.c:165 casts that return to (void) and passes
+ *      the still-uninitialized stack variable to ENET_Ptp1588StartTimer().
+ *      Measured effect: the counter ran at a rock-steady 0.14996x real time.
+ *      MCUX_ENET_CLK does have a case (CLOCK_GetTddrMciEnetClkFreq = 50 MHz,
+ *      the ENET module clock), and with it the counter measures -14 ppm over
+ *      121 s.
+ *
+ * Defect 2 is the nastier one: it fails SILENTLY and in a way that looks like
+ * a working clock. Anything that sanity-checks only "does ptp/ns advance?"
+ * passes. Check the RATE.
  */
+&pinctrl {
+	/*
+	 * A default pinctrl state purely to satisfy the driver's unconditional
+	 * apply -- the counter itself needs no pin.
+	 *
+	 * PAD CHOICE IS A TRAP. The four 1588 event pads are IO_MUX_ENET_TIMER0..3
+	 * = IO27/IO61/IO24/IO26, but pads 24 and 26 are flexcomm3 USART, i.e. THE
+	 * CONSOLE on the J-Link VCOM. Muxing one there boots a completely healthy
+	 * system with no console -- silent, and easily misread as a boot hang.
+	 * The board dts names those pads only via IO_MUX_FC3_USART_DATA, so
+	 * grepping the dts for "24" does not find the conflict; decode pad indices
+	 * out of build/zephyr/zephyr.dts instead (pad = pinmux value & 0x7F).
+	 *
+	 * TIMER1 (IO61) is free and off the Arduino header, so it costs no box
+	 * pin. TIMER0 (IO27 = Arduino D5) is the header-REACHABLE channel and is
+	 * deliberately left free: it is the candidate for a hardware capture
+	 * input, which would put a TTL edge directly on the PTP timebase.
+	 */
+	pinmux_enet_ptp: pinmux_enet_ptp {
+		group0 {
+			pinmux = <IO_MUX_ENET_TIMER1>;
+			slew-rate = "normal";
+		};
+	};
+};
+
 &enet_ptp_clock {
 	status = "okay";
+	pinctrl-0 = <&pinmux_enet_ptp>;
+	pinctrl-names = "default";
+	clocks = <&clkctl1 MCUX_ENET_CLK>;
 };
 
 /*

@@ -75,17 +75,13 @@ quantization dwarfs it. All that is established is that the clock runs at roughl
 the right speed. Real rate measurement needs on-box sampling (the echo/sync
 machinery), not 1 Hz datapoints.
 
-- [ ] **frdm_rw612 will very likely hit the SAME failure, with no easy fix.** Its
-      `enet_ptp_clock` node carries no pinctrl, the board never mentions PTP, and
-      **no `1588` pinmux entries exist anywhere in the RW612 dts or board
-      pinctrl** — yet it is the same driver with the same unconditional
-      `pinctrl_apply_state`. So there is nothing valid to point `pinctrl-0` at.
-      Options, in order of preference: confirm from the RW612 reference manual
-      whether 1588 event pads exist and add the pinmux entries; or carry a small
-      patch making the default pinctrl state optional in the driver (the 1588
-      event pins are genuinely optional hardware) — `wiznet-io/patches/` is the
-      precedent for a locally-applied Zephyr patch; or upstream that fix. Settle
-      this early — PTP is a headline reason the RW612 was chosen.
+- [x] **frdm_rw612 DID hit the same failure — SOLVED 2026-07-25, no patch
+      needed.** The prediction was right; the stated reason was wrong. **1588
+      pinmux entries DO exist**: `IO_MUX_ENET_TIMER0..3` in
+      `modules/hal/nxp/dts/nxp/rw/RW612-pinctrl.h` (pads IO27/IO61/IO24/IO26).
+      So `pinctrl-0` has something valid to point at and neither the driver
+      patch nor the reference-manual dig was necessary. A second, worse defect
+      was hiding behind it. See "2026-07-25 — RW612 first boot" below.
 - [ ] `CONFIG_PTP_CLOCK_SHELL=y` (from `samples/net/ptp`) adds shell commands to
       read/adjust the clock directly — a useful diagnostic now that the console
       works.
@@ -1719,3 +1715,330 @@ unclaimed line (GPIO23).
 - The retracted W6300-vs-native claim stays retracted; this section does not
   reinstate it, because `upstairs` and the Teensy have not yet been measured
   under identical conditions with the electrical reference.
+
+---
+
+## 2026-07-25 — RW612 first boot: PTP instantiates, and a silent clock bug
+
+First silicon session on the FRDM-RW612. The headline: **the 1588 clock works,
+and `status = "okay"` alone is not enough to get it.** Two independent defects
+sat behind it, the second far nastier than the first.
+
+Everything below was established against **stock `zephyr/samples/net/ptp`**,
+nothing of ours in the picture, before touching the app — the "run something
+independent first" approach, and it was the right call: both defects are in
+board/driver plumbing, and finding them inside our own build would have mixed
+them with our bugs.
+
+### Toolchain and probe, for the record
+
+The MCU-Link on this board is **already reflashed with SEGGER J-Link firmware**
+(VID `0x1366` / PID `0x1024`), so `west flash -r jlink` works with no LinkServer
+and no NXP tooling. `/dev/cu.usbmodem0010698133301` is the J-Link VCOM carrying
+the **board UART console** (flexcomm3) — that is where Zephyr's `printk`/shell
+live. Our app's own CLI is on the **USB CDC console**, a second cable to the
+RW612's own USB-C port. Both are needed for a full session.
+
+BT links without ceremony — `west blobs fetch hal_nxp` has evidently already
+been run on this machine, so the NBU blob is not a blocker for goal 3.
+
+### Defect 1: the predicted pinctrl failure — real, but the recorded cause was wrong
+
+`ptp_clock_nxp_enet_init()` calls `pinctrl_apply_state(PINCTRL_STATE_DEFAULT)`
+unconditionally. With no `pinctrl-0` the state table is empty,
+`pinctrl_lookup_state()` returns `-ENOENT`, and the device reports **`DISABLED`**
+in the `device list` shell command — i.e. it presents as *absent hardware*
+rather than as a config error. Confirmed on silicon.
+
+**But the fix needed no Zephyr patch and no reference-manual dig.** The PTP
+section above claimed "no `1588` pinmux entries exist anywhere in the RW612 dts
+or board pinctrl". They exist: `IO_MUX_ENET_TIMER0..3` in
+`modules/hal/nxp/dts/nxp/rw/RW612-pinctrl.h`, pads **IO27 / IO61 / IO24 / IO26**.
+A three-line `&pinctrl` group takes the device to **`READY`**.
+
+**Pad choice is a trap, and it cost real time.** Pads **24 and 26 are flexcomm3
+USART — the console**. Muxing `ENET_TIMER2` onto pad 24 boots a completely
+healthy system with **no console at all**: silent, and it reads exactly like a
+boot hang. J-Link said otherwise — `PC` sat in `arch_cpu_idle`, `IPSR` = 0, i.e.
+the idle thread, running fine.
+
+The reason a grep misses it is worth keeping: **the board dts names those pads
+only through the macro `IO_MUX_FC3_USART_DATA`**, never as literal numbers, so
+`grep 24` over the dts finds nothing. The reliable check is the *expanded*
+devicetree — decode `pinmux` cells out of `build/zephyr/zephyr.dts`, where
+`pad = value & 0x7F`, and cross-reference against which groups are actually
+referenced by an enabled node's `pinctrl-0`:
+
+```
+pinmux_flexcomm3_usart  APPLIED  pads [24, 26]      <- the console
+pinmux_enet             APPLIED  pads [21,22,23,25,55,58,59,60,62,63]
+pad 27 (TIMER0, Arduino D5)  FREE
+pad 61 (TIMER1)              FREE
+```
+
+We use **TIMER1 / IO61** — free, off the Arduino header, costs no box pin.
+**TIMER0 / IO27 is deliberately left free**: it is Arduino D5, i.e. the
+header-*reachable* 1588 event pad, and therefore the candidate for a hardware
+**capture** input. That would put a TTL edge directly onto the PTP timebase —
+the TTL sync line and PTP unified in one mechanism, rather than two clocks to
+reconcile. Worth remembering when the sync story reaches this board.
+
+### Defect 2: the counter ran at 0.14996x real time, silently
+
+With pinctrl fixed the device is `READY` and `ptp_clock get` advances. It was
+also **wrong by a factor of 6.67**, rock-steady.
+
+Root cause, and it is a chain of three:
+
+1. The node's stock `clocks = <&clkctl1 MCUX_ENET_PLL>` names a clock ID that
+   **`clock_control_mcux_syscon.c` has no `case` for**. There is a
+   `MCUX_ENET_CLK` case (used by the MAC) and `MCUX_ENET_QOS_PTP_CLK`, but
+   nothing for `MCUX_ENET_PLL`.
+2. That `get_rate()` falls straight out of the `switch` and **`return 0`** —
+   i.e. reports **success** — without ever writing `*rate`.
+3. `ptp_clock_nxp_enet.c:165` casts the return to `(void)`, and
+   `uint32_t enet_ref_pll_rate;` is an **uninitialized stack variable**. It goes
+   directly into `ENET_Ptp1588StartTimer()`, which derives the tick increment
+   from it.
+
+Fix, in our overlay: `clocks = <&clkctl1 MCUX_ENET_CLK>`
+(`CLOCK_GetTddrMciEnetClkFreq()` = **50 MHz**, the ENET module clock). Rate goes
+to 1.00 immediately.
+
+**The lesson is the shape of this failure, not the fix.** A clock that advances
+smoothly, monotonically, and at a perfectly stable wrong rate passes every
+"is the PTP clock alive?" check anyone would naturally write — including
+`main.c`'s own `PTP hw clock: ready=%d now=%llu`. **Check the rate, not the
+motion.** This is the same class as the `sw`-anchor bias above: not noise, not
+intermittent, just quietly wrong.
+
+Both fixes are in `boards/frdm_rw612.overlay` with the reasoning inline.
+
+### What the rate is NOT yet known to be
+
+Two harnesses were run and **they disagreed**, so per the standing rule neither
+is trusted:
+
+| harness | figure |
+| --- | --- |
+| shell `ptp_clock get`, 121 s | −14 ppm |
+| `state/ptp/ns` off the frame pipe, endpoints | +1924 ppm |
+| same, least-squares over 139 samples | +48 ppm |
+
+The +1924 ppm was an artifact of a single late first sample — the DTR-open
+**announce burst** floods the pipe, so the first arrival timestamp lands ~190 ms
+late and compresses the host span. Endpoint arithmetic is the wrong estimator
+against a bursty transport; least-squares over all samples is not.
+
+But the real limit is instrument resolution: **max residual ±104 ms**, because
+arrival times come from a host read loop with a 0.2 s timeout. Estimates swing
+across ~130 ppm depending on which samples are included, which is the tell.
+
+**Established: the rate is 1.000 within about ±100 ppm** — which settles the
+`MCUX_ENET_CLK` fix beyond doubt, since the defect it replaced was 850,000 ppm.
+**Not established: any ppm-level figure.** Do not quote the −14 ppm as a crystal
+characterization. This is exactly what the PTP section above already warned
+about 1 Hz `ptp/ns` datapoints — "the quantization dwarfs it" — and it applies
+to the shell path equally. Real rate measurement needs the PTP stack against a
+grandmaster, or on-box sampling. Which leads to:
+
+### The host side is already capable — measured, not assumed
+
+`ethtool -T eth0` on **rpi500** (Pi 5, RP1 MAC):
+
+```
+hardware-transmit  hardware-receive  hardware-raw-clock
+Hardware timestamp provider qualifier: Precise (IEEE 1588 quality)
+Hardware Transmit Timestamp Modes: off / on / onestep-sync
+```
+
+So the Pi 5 is a **full hardware-timestamping PTP endpoint** with a `/dev/ptp*`
+and one-step sync. Combined with the RW612's now-working 1588 clock, **PTP can
+be closed end-to-end on hardware already owned** — direct cable, to avoid the
+switch asymmetry the PTP section flags. That is the credible route to beating
+the TTL line's 35 µs / 19 µs, and it is the correct next measurement of the RW612
+clock, replacing both harnesses above.
+
+Consequence for the **i.MX93** evaluation: its main differentiator over the Pi 5
+was going to be exactly this capability, and the Pi 5 already has it. It has no
+3D GPU (unlike the i.MX95) so it cannot host stim2, and 2xA55 is slower than the
+Pi 5's A76s, so it is a downgrade as an experiment host. **Parked**, absent a
+specific need. Its one remaining merit is as a second, independent host for
+cross-checks — non-trivial given how many conclusions in this document were
+confounded by single-host measurement.
+
+### Our own app on this board
+
+Builds and runs. Boot banner over the USB CDC console:
+
+```
+gpio: pin 12=out (LED), pin 11=in_pullup
+eth: no lease (link=0)
+PTP hw clock: ready=1  now=8368999580 ns
+console: cdc (config/console cdc|uart; save+reboot)
+active uplink: usb
+BLE central up; scanning for d5e7000x peripherals (max 8)
+```
+
+- **`CONFIG_MAIN_STACK_SIZE=4096` from the shared `prj.conf` overflows on this
+  board** — usage fault in `main`'s prologue, since `main()` here initialises BT
+  + net + USB. Set to **16384** in `boards/frdm_rw612.conf`. That is a working
+  value, **not a measured minimum** — trim it with `CONFIG_THREAD_ANALYZER`
+  rather than leaving a guess in the tree.
+- **The frame pipe is clean on first contact.** 1613 frames decoded straight off
+  the CDC data endpoint with **zero resync-discarded bytes**, 28 distinct
+  `state/*` keys, announce working. Note this is the *raw pipe*, no dserv — a
+  useful harness in its own right (`host/` candidate), because it removes dserv,
+  Tcl dispatch and the `usbio` module from the path.
+- **`lsof` the port, not `pgrep dserv`.** A stale reader produced a mid-run
+  "multiple access on port" failure. `extio-setup` was running and its serial
+  driver probes box ports, which fits the transient far better than dserv does.
+  Same family as the 2026-07-23 lesson ("dserv's own extio subprocess was
+  opening the console port").
+
+### Not yet touched
+
+Ethernet on this board is unproven — `link=0`, no cable during this session, and
+the KSZ8081 autonegotiation timed out in the stock sample for the same reason.
+Goal 1 (rock-solid HS USB) has had no latency measurement at all; the numbers
+above are rate checks, not latency. **No RW612 latency figure exists yet**, and
+when one is taken it must run the two-harness agreement check before it is
+believed.
+
+---
+
+## 2026-07-25 (later) — Ethernet up, and the `save` hunt
+
+### Ethernet works end-to-end
+
+Against dserv on a Pi 5 (`raspberrypi`, eth0 192.168.11.10, direct cable, box .41):
+
+```
+transport = eth   board = frdm_rw612   ip = 192.168.11.41   extio/boxes = box
+ESTAB 192.168.11.10:4620  <- 192.168.11.41:38118   (box -> dserv frames)
+ESTAB 192.168.11.10:37502 -> 192.168.11.41:5010    (dserv connect-back)
+```
+
+Both halves of the handshake: the box self-registered (`%reg`/`%match`) and dserv
+connected back to its config server. ICMP **0.283 ms min / 0.304 avg** (W6300
+0.077, Teensy 0.197 — different hosts, indicative only).
+
+**No latency number was obtained** — see the pin-map blocker below. Nothing here
+is yet comparable to the wiznet reference set.
+
+### `cmd/save` — TWO stacked bugs, and a bad diagnosis in between
+
+Symptom: `save FAILED`, no detail. Resolved; both fixes are in tree.
+
+**Bug 1 (Zephyr-side, real):** stock `samples/subsys/kvss/nvs` failed with
+`nvs_mount -> -45`. **-45 is `EDEADLK`, not `ENOTSUP`** — `nvs_startup`'s "all
+sectors are closed, this is not a nvs fs or irreparably corrupted" branch. The
+64 MB FlexSPI part ships **non-blank** at `storage_partition` (0x620000), so NVS
+sees no valid filesystem and refuses to clobber a region it does not recognise.
+Fix: `CONFIG_NVS_INIT_BAD_MEMORY_REGION=y` in `boards/frdm_rw612.conf`.
+
+**Bug 2 (ours, the actual cause of `save FAILED`):** `box_flash.c` used
+`DT_REG_ADDR(storage_partition)`. This board declares its partitions
+`compatible = "zephyr,mapped-partition"`, so that resolves through the FlexSPI
+controller's `ranges` and yields the **memory-mapped XIP address `0x18620000`**,
+while the flash API wants the **offset within the device, `0x620000`**.
+`flash_get_page_info_by_offs()` therefore returned `-EINVAL`, `sector_size`
+stayed 0, and mount failed. Fix: `PARTITION_OFFSET()` / `PARTITION_SIZE()` /
+`PARTITION_DEVICE()` (the label-token macros the stock sample uses).
+
+**Bug 3 (latent, would have bitten next):** `sector_count` was
+`partition_size / sector_size` — "fill the partition". That partition is 58 MB =
+**14816 sectors**, and with bad-region recovery enabled NVS erases an
+unrecognised region *whole*: ~45 ms per 4 kB sector ≈ **11 minutes**, presenting
+as a hung boot rather than a size error. Now capped at 8 sectors; the blob is
+1080 bytes.
+
+Verified on silicon: `page_info(off=0x620000) rc=0 size=4096`, `NVS 8x4096`,
+`saved (1080 bytes)`, and **`pin18=out` survived a reboot**.
+
+**The diagnostic lesson, which cost the most time here.** Every failure path
+returned a bare `-1`. That single fact produced a wrong root cause held for
+hours: because stock Zephyr also failed, "NVS is broken on this board" looked
+confirmed, and the hunt went to the FlexSPI driver and the XIP-write hazard —
+both irrelevant. The two failures were **different bugs with different errnos**
+that a `-1` made indistinguishable. `box_flash_{init,save}` now return the real
+errno, `box_flash_last_error()`/`box_flash_geometry()`/`box_flash_debug()` expose
+the mount inputs, and the boot banner prints geometry and shouts if the mount
+failed. **Print the errno.** Two independent bugs presenting identically is not
+rare; it is what a discarded return value guarantees.
+
+Corollary worth generalising: *"stock code reproduces it, so it is not our bug"*
+is only valid if the stock failure is the SAME failure. Compare error codes, not
+just outcomes.
+
+### The pin map blocks all I/O measurement
+
+`pinmux_hsgpio0` muxes **only pads [0, 1, 11, 12, 18, 21]** to GPIO. Of those:
+
+| pad | what it is |
+| --- | --- |
+| 11 | **User SW2 button** (`gpio_keys`, active low + pull-up) — also Arduino D2 |
+| 12 | user LED |
+| 21 | **ENET PHY interrupt** (KSZ8081 `int-gpios`) — do not touch |
+| 18 | Arduino D4 — genuinely free |
+| 0 | Arduino D6, but **rejected by the config path** (`pins/in` unchanged, no `state/di/0`) — 0 is a sentinel somewhere |
+
+**So there is no usable pair of box pins for a loopback today.** Every other
+header pin is not muxed to GPIO at all, and configuring one *silently succeeds*
+while doing nothing electrically — the same silent-failure shape as the PTP
+clock-rate bug. The fix is an overlay adding pads to `pinmux_hsgpio0`, not a
+different jumper. This is the concrete case for the "devicetree pin map" proposal
+above.
+
+**Hazard:** pin 11 was briefly set to `out` while probing this. That is the SW2
+pin — driving it high while the switch is pressed shorts it to ground. Reverted
+before any press. Treat pads 11/12/21 as reserved on this board.
+
+### DI has never been observed on this board
+
+Not from the loopback, not from SW2; `state/di/18` never came into existence.
+May be fully explained by the pin-map problem above, or may be genuine DI silence
+like the RT10xx hunt. **Unresolved, and it gates every latency number** —
+`loopback_rtt` cannot produce a sample without a DI edge.
+
+### Ethernet needs the cable present at BOOT
+
+A box booted with no cable never brings the link up, and plugging one in
+afterwards does not help: `net/link` stays 0 at both ends until a reboot with the
+cable attached, after which it negotiates 100 Mb full duplex immediately.
+Hot-*moving* a cable on an already-linked box does re-negotiate fine. Practically:
+**reboot the box after wiring Ethernet.**
+
+### Host-side traps
+
+- **NetworkManager drops the interface address on carrier loss.** When the link
+  flapped, `eth0` went DOWN and **lost 192.168.11.10 entirely**, so the Pi had no
+  address even once carrier returned. Fixed by taking it out of NM:
+  `nmcli dev set eth0 managed no` + `ip addr add 192.168.11.10/24 dev eth0`.
+  Does not survive a Pi reboot — make it a systemd unit if this rig persists.
+- **A frozen counter reads exactly like a healthy one if sampled once.** A wedged
+  box was declared alive off a single `watchdog` = 973 that happened to exceed an
+  earlier reading. It was the *last value it ever sent*. dserv never deletes
+  datapoints, so `transport=eth`, `link=1` and an IP were all being served from a
+  corpse. **Always sample a counter twice.** Same sticky-datapoint family as the
+  `sync/source` trap above.
+- **Bench hygiene.** A USB hub carrying the board, the J-Link probe *and* the
+  Ethernet adapter dropped three times, each time taking the console, the debugger
+  and the network at once — once mid-flash. Several "board failures" chased that
+  day were this. **Never let one hub carry both the thing under test and the means
+  of observing it.**
+
+### Bring-up scaffold now retirable
+
+`BOX_BRINGUP_NET_IP` (CMakeLists + main.c) existed only because `save` was
+broken, making `net/ip` unconfigurable (it applies at boot; changing it needs a
+reboot; a reboot without persistence forgets it). **Persistence works now**, so
+this can go — set the address at runtime and `save`. It is inert while a saved
+config exists, but it hardcodes an IP in firmware and should not become load-
+bearing.
+
+### State at end of session
+
+Working: Ethernet transport + registration, PTP clock at correct rate, USB-HS
+frame pipe (zero resync discards over thousands of frames), BLE central scanning,
+GPIO output, **persistent config**. Unproven: DI edges, any latency figure.

@@ -132,7 +132,16 @@ static void run_line(box_config_t *cfg, const char *line)
 	{
 		uint8_t blob[BOX_PERSIST_BLOB_MAX];
 		uint32_t n = box_persist_serialize(cfg, blob, sizeof blob);
-		box_console_printf("%s\r\n", box_flash_save(blob, n) == 0 ? "saved" : "save FAILED");
+		{
+			int rc = box_flash_save(blob, n);
+			if (rc == 0) {
+				box_console_printf("saved (%u bytes)\r\n", n);
+			} else {
+				/* Print the errno. "save FAILED" alone cost hours on the
+				 * RW612 bring-up: the answer was in the return value. */
+				box_console_printf("save FAILED (%u bytes, err=%d)\r\n", n, rc);
+			}
+		}
 	}
 #else
 		box_console_write("no persistence on this board\r\n");
