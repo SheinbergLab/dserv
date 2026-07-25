@@ -2001,13 +2001,34 @@ May be fully explained by the pin-map problem above, or may be genuine DI silenc
 like the RT10xx hunt. **Unresolved, and it gates every latency number** —
 `loopback_rtt` cannot produce a sample without a DI edge.
 
-### Ethernet needs the cable present at BOOT
+### RETRACTED: "Ethernet needs the cable present at BOOT"
 
-A box booted with no cable never brings the link up, and plugging one in
-afterwards does not help: `net/link` stays 0 at both ends until a reboot with the
-cable attached, after which it negotiates 100 Mb full duplex immediately.
-Hot-*moving* a cable on an already-linked box does re-negotiate fine. Practically:
-**reboot the box after wiring Ethernet.**
+That was recorded here, and it was wrong. The real bug was **`box_net_eth_init()`
+never brought the interface admin-up.** Zephyr's net_config subsystem
+(`CONFIG_NET_CONFIG_SETTINGS` / `AUTO_INIT`) normally does that; we do not enable
+it, because we own our own addressing. With the interface down the ENET driver
+never starts the PHY, autonegotiation never runs, and **both** ends report no
+carrier. Fixed by an explicit `net_if_up()` (idempotent) in `box_net_eth_init`.
+
+**How it presented, and why it cost an evening.** Identical to a dead cable: box
+`net/link=0`, host `NO-CARRIER`, no link LEDs. So the hunt went to cables, hub
+power, ports, and NetworkManager — none of which could ever have been the cause.
+Two things kept it alive: it worked *intermittently* early on (whatever brought
+the iface up in those boots was incidental), and every host-side observation was
+consistent with a physical fault.
+
+**The test that actually settled it, in one step: run KNOWN-GOOD STOCK FIRMWARE
+on the same hardware.** `samples/net/ptp` linked immediately on the same board,
+cable, port and host — which localises the fault to our firmware and exonerates
+the entire physical layer at once. Reach for that *before* swapping cables. It is
+the same lever that isolated both PTP bugs and the NVS bug.
+
+Second lesson: **`CONFIG_LOG` was off.** The KSZ8081 driver announces "PHY (2) is
+entering autonegotiation sequence" and "PHY 2 is up ... 100 Mb, full duplex" —
+it was reporting the truth all along and nobody was listening. Logging is now
+enabled on the board UART for this board (`boards/frdm_rw612.conf`), separate
+from the box console on USB CDC. On a networked board this is not optional: an
+interface that never came up is otherwise indistinguishable from a bad cable.
 
 ### Host-side traps
 
@@ -2039,6 +2060,8 @@ bearing.
 
 ### State at end of session
 
-Working: Ethernet transport + registration, PTP clock at correct rate, USB-HS
-frame pipe (zero resync discards over thousands of frames), BLE central scanning,
-GPIO output, **persistent config**. Unproven: DI edges, any latency figure.
+Working: Ethernet transport + registration (link brought up by the box itself),
+PTP clock at correct rate, USB-HS frame pipe (zero resync discards over thousands
+of frames), BLE central scanning, GPIO output, **persistent config surviving
+reflash** (`pins/out=5,12,18` restored from NVS). ICMP 0.235 ms min.
+Unproven: DI edges, any latency figure.

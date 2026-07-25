@@ -70,6 +70,22 @@ int box_net_eth_init(const box_config_t *cfg)
 		return -1;
 	}
 
+	/* Bring the interface ADMIN UP explicitly. Zephyr's net_config subsystem
+	 * (CONFIG_NET_CONFIG_SETTINGS/AUTO_INIT) normally does this, and we do not
+	 * enable it -- we own our own addressing. Without it the iface stays down,
+	 * the ENET driver never starts the PHY, autonegotiation never runs, and
+	 * BOTH ends report no carrier. That presents as a dead cable: the box says
+	 * link=0, the host says NO-CARRIER, and swapping cables/ports/hosts teaches
+	 * you nothing. Verified 2026-07-25 -- stock samples/net/ptp linked on the
+	 * same board+cable+host purely because it enables net_config.
+	 * Idempotent: net_if_up() on an already-up iface returns 0. */
+	if (!net_if_is_admin_up(iface)) {
+		int rc = net_if_up(iface);
+		if (rc && rc != -EALREADY) {
+			return rc;
+		}
+	}
+
 	if (cfg && cfg->net_mode == NET_MODE_STATIC) {
 		struct in_addr ip, nm, gw;
 
