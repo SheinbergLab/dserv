@@ -63,12 +63,32 @@ static void srv_drop(void)
 	}
 }
 
-int box_net_eth_init(void)
+int box_net_eth_init(const box_config_t *cfg)
 {
 	iface = net_if_get_default();
 	if (!iface) {
 		return -1;
 	}
+
+	if (cfg && cfg->net_mode == NET_MODE_STATIC) {
+		struct in_addr ip, nm, gw;
+
+		memcpy(&ip, cfg->net_ip, 4);
+		if (!net_if_ipv4_addr_add(iface, &ip, NET_ADDR_MANUAL, 0)) {
+			return -1;
+		}
+		memcpy(&nm, cfg->net_sn, 4);
+		if (nm.s_addr == 0) {
+			nm.s_addr = htonl(0xffffff00);    /* zero mask => /24 */
+		}
+		net_if_ipv4_set_netmask_by_addr(iface, &ip, &nm);
+		memcpy(&gw, cfg->net_gw, 4);
+		if (gw.s_addr != 0) {                     /* zero gw => none */
+			net_if_ipv4_set_gw(iface, &gw);
+		}
+		return 0;
+	}
+
 	net_dhcpv4_start(iface);
 	return 0;
 }
@@ -239,7 +259,9 @@ int box_net_eth_server_up(void)
  * touches the socket data -- the service loop still owns every read, so there is no
  * second consumer and no locking. Priority is below the service loop: this only
  * needs to make the loop runnable, not to run before it. */
-static K_THREAD_STACK_DEFINE(eth_rx_stack, 1024);
+/* 2048: zsock_poll + fdtable machinery overflowed the original 1024 -- the
+ * suspected cause of the wake thread dying silently (dbg/wake_us frozen). */
+static K_THREAD_STACK_DEFINE(eth_rx_stack, 2048);
 static struct k_thread eth_rx_thread;
 
 static void eth_rx_thread_fn(void *a, void *b, void *c)
@@ -372,6 +394,89 @@ int box_net_eth_send(const uint8_t *buf, int len)
 	}
 	return (n == len) ? 0 : -1;
 }
+
+/* ---- in-stack residence time ----
+ * Deltas of the stack's own rx_time/tx_time accumulators (sum + count, us),
+ * fetched through the public net_mgmt stats request. Everything here is
+ * per-interval: subtract the previous snapshot so a 1 Hz reader sees "mean of
+ * the frames moved since last second", not a boot-lifetime average that a
+ * bench run can no longer move. */
+#if defined(CONFIG_NET_STATISTICS_USER_API) && \
+	(defined(CONFIG_NET_PKT_RXTIME_STATS) || defined(CONFIG_NET_PKT_TXTIME_STATS))
+
+#include <zephyr/net/net_stats.h>
+#include <zephyr/net/net_mgmt.h>
+
+int box_net_eth_stack_stats(box_eth_stack_stats_t *out)
+{
+	static struct net_stats prev;
+	static int primed;
+	struct net_stats cur;
+
+	memset(out, 0, sizeof *out);
+	if (!iface ||
+	    net_mgmt(NET_REQUEST_STATS_GET_ALL, iface, &cur, sizeof cur) != 0) {
+		return -1;
+	}
+
+#if defined(CONFIG_NET_PKT_RXTIME_STATS)
+	{
+		uint64_t s = cur.rx_time.sum - (primed ? prev.rx_time.sum : 0);
+		uint32_t n = cur.rx_time.count - (primed ? prev.rx_time.count : 0);
+
+		out->rx_avg_us = n ? (uint32_t) (s / n) : 0;
+		out->rx_count = n;
+	}
+#if defined(CONFIG_NET_PKT_RXTIME_STATS_DETAIL)
+	out->rx_detail_n = MIN((int) ARRAY_SIZE(cur.rx_time_detail),
+			       (int) ARRAY_SIZE(out->rx_detail_us));
+	for (int i = 0; i < out->rx_detail_n; i++) {
+		uint64_t s = cur.rx_time_detail[i].sum -
+			     (primed ? prev.rx_time_detail[i].sum : 0);
+		uint32_t n = cur.rx_time_detail[i].count -
+			     (primed ? prev.rx_time_detail[i].count : 0);
+
+		out->rx_detail_us[i] = n ? (uint32_t) (s / n) : 0;
+	}
+#endif
+#endif
+
+#if defined(CONFIG_NET_PKT_TXTIME_STATS)
+	{
+		uint64_t s = cur.tx_time.sum - (primed ? prev.tx_time.sum : 0);
+		uint32_t n = cur.tx_time.count - (primed ? prev.tx_time.count : 0);
+
+		out->tx_avg_us = n ? (uint32_t) (s / n) : 0;
+		out->tx_count = n;
+	}
+#if defined(CONFIG_NET_PKT_TXTIME_STATS_DETAIL)
+	out->tx_detail_n = MIN((int) ARRAY_SIZE(cur.tx_time_detail),
+			       (int) ARRAY_SIZE(out->tx_detail_us));
+	for (int i = 0; i < out->tx_detail_n; i++) {
+		uint64_t s = cur.tx_time_detail[i].sum -
+			     (primed ? prev.tx_time_detail[i].sum : 0);
+		uint32_t n = cur.tx_time_detail[i].count -
+			     (primed ? prev.tx_time_detail[i].count : 0);
+
+		out->tx_detail_us[i] = n ? (uint32_t) (s / n) : 0;
+	}
+#endif
+#endif
+
+	prev = cur;
+	primed = 1;
+	return 0;
+}
+
+#else /* stats not in this build */
+
+int box_net_eth_stack_stats(box_eth_stack_stats_t *out)
+{
+	memset(out, 0, sizeof *out);
+	return -1;
+}
+
+#endif
 
 /* One %-command per connection, with a bounded non-blocking connect.
  *

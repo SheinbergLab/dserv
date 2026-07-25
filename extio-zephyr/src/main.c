@@ -618,6 +618,73 @@ int main(void)
 					dserv_msg_int(f, name, 0, (int32_t) disp_max_us);
 					box_uplink_send(f, DSERV_MSG_LEN);
 				}
+				{
+					/* The previously-dark segment: the stack's own
+					 * residence measurement (see box_net_eth.h).
+					 * Interval means; a side with no traffic since
+					 * the last tick publishes nothing. */
+					box_eth_stack_stats_t ss;
+					if (box_net_eth_stack_stats(&ss) == 0) {
+						char d[64];
+						int off;
+						if (ss.rx_count) {
+							dserv_state_name(&cfg, name, sizeof name, "dbg/rxstack_us");
+							dserv_msg_int(f, name, 0, (int32_t) ss.rx_avg_us);
+							box_uplink_send(f, DSERV_MSG_LEN);
+							dserv_state_name(&cfg, name, sizeof name, "dbg/rxstack_n");
+							dserv_msg_int(f, name, 0, (int32_t) ss.rx_count);
+							box_uplink_send(f, DSERV_MSG_LEN);
+						}
+						if (ss.rx_count && ss.rx_detail_n) {
+							off = 0;
+							for (int i = 0; i < ss.rx_detail_n; i++) {
+								off += snprintf(d + off, sizeof d - off,
+										i ? "/%u" : "%u",
+										ss.rx_detail_us[i]);
+							}
+							dserv_state_name(&cfg, name, sizeof name, "dbg/rxstack_detail");
+							dserv_msg_string(f, name, 0, d);
+							box_uplink_send(f, DSERV_MSG_LEN);
+						}
+						if (ss.tx_count) {
+							dserv_state_name(&cfg, name, sizeof name, "dbg/txstack_us");
+							dserv_msg_int(f, name, 0, (int32_t) ss.tx_avg_us);
+							box_uplink_send(f, DSERV_MSG_LEN);
+							dserv_state_name(&cfg, name, sizeof name, "dbg/txstack_n");
+							dserv_msg_int(f, name, 0, (int32_t) ss.tx_count);
+							box_uplink_send(f, DSERV_MSG_LEN);
+						}
+						if (ss.tx_count && ss.tx_detail_n) {
+							off = 0;
+							for (int i = 0; i < ss.tx_detail_n; i++) {
+								off += snprintf(d + off, sizeof d - off,
+										i ? "/%u" : "%u",
+										ss.tx_detail_us[i]);
+							}
+							dserv_state_name(&cfg, name, sizeof name, "dbg/txstack_detail");
+							dserv_msg_string(f, name, 0, d);
+							box_uplink_send(f, DSERV_MSG_LEN);
+						}
+					}
+				}
+#if defined(CONFIG_SOC_SERIES_IMXRT10XX)
+				{
+					/* TEMP: DI-silence hunt. Raw IGPIO interrupt
+					 * state + ISR entry count, once a second. */
+					uint32_t r[5];
+					char g[96];
+					box_gpio_dbg_regs(r);
+					snprintf(g, sizeof g,
+						 "imr=%lx isr=%lx icr1=%lx edge=%lx psr=%lx isrn=%lu",
+						 (unsigned long) r[0], (unsigned long) r[1],
+						 (unsigned long) r[2], (unsigned long) r[3],
+						 (unsigned long) r[4],
+						 (unsigned long) box_gpio_di_isr_count());
+					dserv_state_name(&cfg, name, sizeof name, "dbg/gpio");
+					dserv_msg_string(f, name, 0, g);
+					box_uplink_send(f, DSERV_MSG_LEN);
+				}
+#endif
 				dserv_state_name(&cfg, name, sizeof name, "watchdog");
 				dserv_msg_int(f, name, 0, watchdog - 1);
 			}

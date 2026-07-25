@@ -61,7 +61,7 @@ static const box_uplink_if uplink_usb = {
  * A USB-only board (teensy40) compiles this out and the arbiter simply has one
  * candidate -- the policy code below is unchanged either way. */
 #if defined(CONFIG_NETWORKING)
-static int u_eth_init(const box_config_t *c)      { (void) c; return box_net_eth_init(); }
+static int u_eth_init(const box_config_t *c)      { return box_net_eth_init(c); }
 /* Eth counts as a usable uplink only with BOTH carrier AND a configured dserv
  * target -- otherwise it publishes into the void, so we stay on USB and the box
  * remains reachable/observable (also the sane bench default with no dserv). The

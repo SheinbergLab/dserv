@@ -57,6 +57,11 @@ void box_gpio_obs_mirror(const box_config_t *c, int obs);
  * chord-settle windows in box_group.h need exactly that). */
 uint64_t box_gpio_now_us(void);
 
+/* TEMP diagnostics (DI-silence hunt): ISR entry count, and on RT10xx the raw
+ * IGPIO interrupt registers for the box port (imr, isr, icr1, edge_sel, psr). */
+uint32_t box_gpio_di_isr_count(void);
+void box_gpio_dbg_regs(uint32_t out[5]);
+
 /* Current LOGICAL level of each configured DI pin, indexed by box pin number
  * (active_low already applied); non-DI pins read 0. Used to seed the DI group
  * state machines so a switch already held at boot is not reported as an edge. */
