@@ -220,6 +220,17 @@ typedef enum {
     CFG_BOOTSEL,    /* cmd/bootsel -> reboot into USB BOOTSEL for reflashing */
     CFG_BLE_PAIR,   /* cmd/ble/pair <secs> -> open the receiver's pairing window (remote `ble pair`) */
     CFG_BLE_FORGET, /* cmd/ble/forget      -> clear the bond allowlist  (remote `ble forget`)      */
+    /* Software clock anchoring, for rigs with no TTL sync line (extio_sync.tcl).
+     * cmd/probe <seq> -> reflect the box's OWN turnaround so the host can take
+     * it out of the RTT; both reads are box-clock, so the unknown offset
+     * cancels. NAMED "probe", NOT "echo": state/echo/* is already the BLE
+     * echo-sync telemetry (echo/synced, echo/rtt_us, ...) and two unrelated
+     * mechanisms sharing that word on a BOX_BLE build is a trap.
+     * cmd/sync <d_us> -> anchor with the host's measured one-way delay added,
+     * which is exactly the error a naive arrival-anchor makes (-202 us measured
+     * on Ethernet, ~-730 us on USB-FS). Ignored when a fresh TTL edge exists. */
+    CFG_PROBE,      /* cmd/probe <seq>  -> publish state/probe = turnaround us */
+    CFG_SYNC,       /* cmd/sync <d_us>  -> delay-corrected clock anchor        */
     CFG_UNKNOWN     /* under this box's name but unrecognized */
 } cfg_result_t;
 
@@ -629,6 +640,9 @@ static inline cfg_result_t dserv_cfg__cmd(const char *k, const dserv_msg_t *m,
      * (on_frame) drives the window/allowlist -- these keys are inert elsewhere. */
     if (strcmp(k, "ble/pair")   == 0) return CFG_BLE_PAIR;
     if (strcmp(k, "ble/forget") == 0) return CFG_BLE_FORGET;
+    /* sw clock anchoring; the caller reads the value off *m (see the enum). */
+    if (strcmp(k, "probe") == 0) return CFG_PROBE;
+    if (strcmp(k, "sync") == 0) return CFG_SYNC;
     return CFG_UNKNOWN;
 }
 
@@ -692,6 +706,8 @@ static inline const char *dserv_cfg_result_str(cfg_result_t r)
     case CFG_BOOTSEL:    return "bootsel";
     case CFG_BLE_PAIR:   return "ble_pair";
     case CFG_BLE_FORGET: return "ble_forget";
+    case CFG_PROBE:       return "probe";
+    case CFG_SYNC:       return "sync";
     default:             return "unknown";
     }
 }
