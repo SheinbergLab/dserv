@@ -1552,6 +1552,103 @@ bin=TBYB trial + uf2=hashed slot-A base to the `dev` shelf, then
 survived. This is the flash path when the box is on a remote host and the
 toolchain is not.
 
+#### A hardware reference at last — and what it revealed (2026-07-26, later)
+
+dserv now stamps GPIO edges with the kernel's `gpio_v2_line_event.timestamp_ns`
+instead of `tclserver_now()` (commit `b0b1f8d`). That makes the tee'd baseline
+input a genuine hardware time reference, so `host/clock_err.sh` can difference
+**one physical edge stamped independently at both ends** — Pi kernel IRQ vs box
+IRQ — with no software stamp, no delivery time and no Tcl callback in the path.
+
+| sync mode | clock error (median) | spread |
+| --- | --- | --- |
+| **`hw` (TTL edge)** | **+35 µs** | **19 µs** |
+| `swc` (delay-corrected) | −167 µs | ~4 µs (bulk) |
+| `sw` (naive arrival) | −181 µs | ~4 µs (bulk) |
+
+**The hardware anchor is far better than this document previously claimed.** The
++72 µs / ~83 µs spread recorded above was mostly the HOST's own software input
+path (~72 µs median, p99 ~100) being attributed to the box clock. **Supersede
+that figure with 35 µs / 19 µs.** Every earlier GPIO-referenced number carried
+the same contamination.
+
+**Incidental, and a genuine positive:** in `sw` mode the clock ran **130 s with
+no anchor at all** and held a ~4 µs spread. The rate correction — taught by
+earlier `hw` anchors — works properly. It is the *bias* half of the mechanism
+that does not.
+
+#### The correction applies ~195 µs and delivers ~14 µs
+
+`swc` vs `sw` differ by 14 µs while `d = 195` demonstrably reaches the box and is
+applied (`swc` is published only from that branch, and `offset = ds + d - bx` was
+verified exact to the microsecond). The offset moves; the stamps do not follow.
+
+**This is a violated identity, i.e. a bug — not the estimation difficulty below.**
+Keep the two separate. Remaining suspects: the anchor in force during the run is
+not the one assumed, or `box_clock_stamp`'s rate term absorbs the change (`corr`
+scales with time-since-anchor, and anchor cadence differs between the modes
+compared). Both are settled by logging `offset_us` and `anchor_box_us` alongside
+a stamped event. Do that rather than guess again.
+
+#### Why the ~200 µs has been so hard to pin down and subtract
+
+Recorded because the reasons are structural and will recur on the NXP port:
+
+- **One-way delay estimated from a round trip over an asymmetric path.**
+  `d = RTT/2` is valid only if the legs match. Ours do not: the return leg
+  carries dserv's ~116 µs dispatch, the outbound leg never touches it.
+  Min-filtering removes queueing noise, **not** systematic bias. This is the
+  canonical limit in clock sync and is exactly why PTP exists with hardware
+  timestamps at both ends rather than as a better software estimator.
+- **The target is the same size as the instruments' own latencies:** host
+  dispatch 116 µs, host input path 72 µs, box turnaround ~60 µs, USB
+  quantization up to 1000 µs, loose obs-anchor coupling 3100 µs. Each had to be
+  found and removed before the target became visible, and three times a "result"
+  turned out to be one of them.
+- **`d` is not a scalar.** It differs by transport (206 vs ~730 µs), by
+  direction, plausibly by frame type, and inflates ~1.4× under host load.
+- **Two variables kept moving at once** — reboots between comparisons, transport
+  switches that *require* a reboot, dserv restarts, config changes. Most
+  comparisons carried a confound, which is why conclusions kept reversing.
+
+**The hardware line does not solve this; it dissolves it.** A wire has no
+asymmetry to estimate, which is the whole of why 35 µs / 19 µs falls out.
+
+**The shortcut not yet used:** `state/sync/transport_us` on a hw-equipped box
+**is** `d`, measured hardware-to-hardware. So a box with a TTL line can act as a
+**delay calibrator for the fleet** — measure `d` once there, hand that constant
+to boxes without a line on the same host and transport. One careful measurement
+beats a permanently-running estimator that cannot see its own asymmetry.
+
+**Recommendation.** Use the TTL line wherever any trigger source exists. On a
+GPIO-less host expect ~180 µs of *systematic* bias — inside the 1 ms
+requirement, calibratable as a constant, and it **cancels outright for
+box-to-box intervals**. Do not rely on `cmd/sync` to remove it as built; either
+send `d = 0` (keeping the cadence, which does work) or leave it labelled `swc` so
+the data records that a not-fully-effective correction was applied.
+
+#### Building dserv on a fresh Pi (rpi500 notes)
+
+The `dserv` target resolves tcl/jansson/uv/OpenSSL via `find_library` against
+**system** packages — nothing pulls `deps/fltk` or `deps/libharu`, so the full
+recursive submodule init is avoidable. Needed: `libjansson-dev libuv1-dev
+libssl-dev sqlite3` (the `sqlite3` *executable* is a hard `find_program`
+requirement).
+
+**Tcl is the exception and the `deps/tcl` submodule build is the right answer.**
+Debian's `tcl9.0-dev` ships `tcl.h` under `/usr/include/tcl9.0/` and the stub
+library as `libtclstub9.0.a`, while the build expects `tcl.h` and `libtclstub.a`
+at standard prefixes — so the distro package needs per-host `-I` flags and a
+symlink, which is exactly the divergence the submodule exists to avoid.
+`deps/tcl/unix: ./configure --prefix=/usr/local && make && sudo make install`
+takes ~2 min on a Pi 5 and puts everything where CMake expects it. Verify with
+`ldd dserv | grep tcl` that headers and library come from the same place.
+
+Module/binary must be installed **together**: `ENABLE_EXPORTS ON`
+(CMakeLists.txt:247) means modules resolve symbols from the dserv binary at load
+time, and `gpio_input.c` now calls `tclserver_clock_epoch_offset_us`, which
+exists only in the rebuilt binary.
+
 #### PTP applicability, per board
 
 | end | IEEE-1588 hardware timestamping |
