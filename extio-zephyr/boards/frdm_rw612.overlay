@@ -91,3 +91,45 @@
 		compatible = "zephyr,cdc-acm-uart";
 	};
 };
+
+/*
+ * Box GPIO pads (loopback / real I/O).
+ *
+ * box pin n -> hsgpio0.n, so a pin is usable ONLY if pad n is muxed to GPIO.
+ * The board's own pinmux_hsgpio0 muxes just [0, 1, 11, 12, 18, 21], and of
+ * those 12 is the user LED, 21 is the ENET PHY interrupt, and 11 is the SW2
+ * button -- leaving pin 18 as the single free box pin, i.e. no loopback pair
+ * and no way to prove DI at all.
+ *
+ * A pad that is NOT muxed to GPIO still accepts `pin <n> mode out` and reports
+ * itself in state/pins/out while doing NOTHING electrically. That silent
+ * success is the same failure shape as the PTP clock-rate bug -- check the pad,
+ * not the acknowledgement.
+ *
+ * Added here, all verified free against the EXPANDED devicetree (decode
+ * `pinmux` cells in build/zephyr/zephyr.dts, pad = value & 0x7F -- macro greps
+ * miss conflicts, which is how pad 24 = console was nearly muxed away):
+ *
+ *   pad 15 -> Arduino D3
+ *   pad 20 -> Arduino D7
+ *   pad 27 -> Arduino D5   (also ENET_TIMER0; free because PTP uses TIMER1/IO61)
+ *
+ * With pad 0 (Arduino D6) already muxed by the board, the usable box pins are
+ * 0, 15, 18, 20, 27 -- plus 11 (SW2, input) and 12 (LED, output).
+ * Reserved on this board: 11, 12, 21, 24, 26, 61.
+ */
+&pinctrl {
+	pinmux_box_gpio: pinmux_box_gpio {
+		group0 {
+			pinmux = <IO_MUX_GPIO15
+				  IO_MUX_GPIO20
+				  IO_MUX_GPIO27>;
+			slew-rate = "normal";
+		};
+	};
+};
+
+&hsgpio0 {
+	pinctrl-0 = <&pinmux_hsgpio0 &pinmux_box_gpio>;
+	pinctrl-names = "default";
+};

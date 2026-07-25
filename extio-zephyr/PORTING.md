@@ -1971,7 +1971,7 @@ Corollary worth generalising: *"stock code reproduces it, so it is not our bug"*
 is only valid if the stock failure is the SAME failure. Compare error codes, not
 just outcomes.
 
-### The pin map blocks all I/O measurement
+### The pin map blocked all I/O measurement — SOLVED
 
 `pinmux_hsgpio0` muxes **only pads [0, 1, 11, 12, 18, 21]** to GPIO. Of those:
 
@@ -1983,23 +1983,52 @@ just outcomes.
 | 18 | Arduino D4 — genuinely free |
 | 0 | Arduino D6, but **rejected by the config path** (`pins/in` unchanged, no `state/di/0`) — 0 is a sentinel somewhere |
 
-**So there is no usable pair of box pins for a loopback today.** Every other
-header pin is not muxed to GPIO at all, and configuring one *silently succeeds*
-while doing nothing electrically — the same silent-failure shape as the PTP
-clock-rate bug. The fix is an overlay adding pads to `pinmux_hsgpio0`, not a
-different jumper. This is the concrete case for the "devicetree pin map" proposal
-above.
+Every other header pin is not muxed to GPIO at all, and configuring one
+*silently succeeds* while doing nothing electrically — the same silent-failure
+shape as the PTP clock-rate bug. **Fixed** by adding pads **15 (D3), 20 (D7),
+27 (D5)** to `hsgpio0`'s pinctrl in `boards/frdm_rw612.overlay`; usable box pins
+are now **0, 15, 18, 20, 27** (plus 11 = SW2 input, 12 = LED output).
+
+**Retracted: "pin 0 is rejected by the config path / 0 is a sentinel."** Wrong.
+`dserv_cfg__config` accepts `n >= 0 && n < BOX_NPINS`. That test was run against
+a box that was already wedged — the same frozen-`watchdog` corpse described
+below — so the null result meant nothing. Pad 0 (Arduino D6) is muxed by the
+board and works.
 
 **Hazard:** pin 11 was briefly set to `out` while probing this. That is the SW2
 pin — driving it high while the switch is pressed shorts it to ground. Reverted
 before any press. Treat pads 11/12/21 as reserved on this board.
 
-### DI has never been observed on this board
+### DI works — there was never any DI silence
 
-Not from the loopback, not from SW2; `state/di/18` never came into existence.
-May be fully explained by the pin-map problem above, or may be genuine DI silence
-like the RT10xx hunt. **Unresolved, and it gates every latency number** —
-`loopback_rtt` cannot produce a sample without a DI edge.
+Fully explained by the pin map. With pad 15 muxed and D4 -> D3 jumpered,
+`state/di/15` tracks `state/do/18` exactly on every toggle. No RT10xx-style
+hunt was needed; "DI has never been observed on this board" was an artifact of
+driving and sensing pads that were not connected to the GPIO peripheral.
+
+**First loopback, and the two-harness agreement check PASSES:**
+
+| harness | min | med | p90 | p99 | max |
+| --- | --- | --- | --- | --- | --- |
+| `loopback_rtt` | 835 | **1056** | 1192 | 1252 | 3113 |
+| `lb_split` total | 819 | **1078** | 1177 | 4056 | 4056 |
+| — `L1` cmd -> do_echo | 727 | 869 | 940 | 3793 | 3793 |
+| — `L2` do_echo -> di | 23 | 210 | 259 | 318 | 318 |
+
+Medians 22 us apart, i.e. they agree (the recorded failure case was 426 us), so
+the apparatus is sound.
+
+**These are NOT comparable to the wiznet reference set yet**, and must not be
+quoted as such. Three differences remain: the host was on the **`ondemand`**
+governor (the reference set is `performance` — also the likely source of the
+single 3793 us outlier, which is what frequency ramping looks like); it is a
+different Pi from rpi500; and **no electrical reference is wired**, so both ends
+are still software-timestamped. Re-take under `performance` and with
+`host_gpio_rtt.sh` / `box_out_rtt.sh` before drawing any conclusion.
+
+One thing worth watching once conditions match: `L2` at 210 us against the
+W6300's 100 us is the leg carrying the DI event alone, and it is the least
+governor-sensitive of the two.
 
 ### RETRACTED: "Ethernet needs the cable present at BOOT"
 
@@ -2064,4 +2093,6 @@ Working: Ethernet transport + registration (link brought up by the box itself),
 PTP clock at correct rate, USB-HS frame pipe (zero resync discards over thousands
 of frames), BLE central scanning, GPIO output, **persistent config surviving
 reflash** (`pins/out=5,12,18` restored from NVS). ICMP 0.235 ms min.
-Unproven: DI edges, any latency figure.
+DI proven, loopback closed, both harnesses agreeing. Unproven: any latency
+figure comparable to the wiznet set (host not in benchmark configuration, no
+electrical reference).
