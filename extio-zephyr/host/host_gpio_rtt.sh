@@ -151,9 +151,9 @@ list \$a \$b \$c \$d" 2>/dev/null)
   i=$((i + 1))
 done
 
-dservctl -c "catch {dpointSetScript $DEV/state/di/$IPIN {}}
+dservctl -c "catch {dpointRemoveScript $DEV/state/di/$IPIN}
 catch {dservRemoveExactMatch $DEV/state/di/$IPIN}
-catch {dpointSetScript gpio/input/$HPIN {}}
+catch {dpointRemoveScript gpio/input/$HPIN}
 catch {dservClear test/hg_box}
 catch {dservClear test/hg_host}" >/dev/null
 

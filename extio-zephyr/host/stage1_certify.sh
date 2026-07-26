@@ -43,7 +43,7 @@ while [ "$i" -lt "$N" ]; do
   [ "$A" -gt 0 ] && [ "$C" -gt 0 ] && echo $((A - C)) >> /tmp/s1_rtt.txt
   i=$((i + 1))
 done
-dservctl -c "catch {dpointSetScript $DEV/state/do/$OPIN {}}
+dservctl -c "catch {dpointRemoveScript $DEV/state/do/$OPIN}
 catch {dservRemoveExactMatch $DEV/state/do/$OPIN}
 catch {dservClear test/s1_do}" >/dev/null
 

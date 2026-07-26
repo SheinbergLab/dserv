@@ -38,7 +38,7 @@ proc loopback_rtt {dev {opin 1} {ipin 2} {timeout_ms 500}} {
         if {$a != 0} break
     }
 
-    catch { dpointSetScript $di {} }            ;# teardown never fails a measurement
+    catch { dpointRemoveScript $di }            ;# teardown never fails a measurement
     catch { dservRemoveMatch $di }
 
     if {$a == 0} { return -code error "timeout: no $di within ${timeout_ms} ms" }

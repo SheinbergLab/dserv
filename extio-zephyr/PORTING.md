@@ -2359,3 +2359,91 @@ reproduce on this box, over the same ingest path (`extio` subprocess ->
   datapoints" signal on USB. It reached 210 during the 12 ms period and stopped
   rising afterwards — a useful confirmation that the fix took.
 - The Pi has no `lsof` and `sudo` is not passwordless.
+
+### THE HARNESS BUG: `dpointSetScript <dp> {}` does not remove a script
+
+Every harness here tore down with `dpointSetScript $DEV/state/... {}`. That does
+**not** remove the script. `TclServer.cpp` `dpoint_set_script_command` does:
+
+```c
+tclserver->dpoint_scripts.insert(varname, script);   /* stores "" */
+```
+
+and the delivery path then does:
+
+```c
+if (tserv->dpoint_scripts.find(varname, script)) {
+    dpoint_tcl_script(interp, script.c_str(), dpoint);   /* fires even when "" */
+}
+```
+
+So an empty script is **stored and evaluated on every publish of that datapoint,
+permanently, until dserv restarts.** There is a proper `dpointRemoveScript`;
+nothing used it. Fixed across 10 harnesses (14 sites) 2026-07-26.
+
+**Effect, measured.** With a stale empty script on `state/do/18` left by earlier
+`lb_split` runs, `loopback_rtt` — which never touches that datapoint — paid an
+extra Tcl dispatch on every `do` echo:
+
+| | `loopback_rtt` | `lb_split` total |
+| --- | --- | --- |
+| stale empty scripts present | 850–875 | 715–733 |
+| after `dpointRemoveScript` | **719–732** | **718–738** |
+
+**This is what the "two-harness disagreement" was.** The harnesses agreed to
+10–15 us once cleaned. `lb_split` overwrote the empty script with a real one and
+so never paid the tax, while `loopback_rtt` did — a systematic ~130 us offset
+that looked like an observer effect and reversed with configuration. **It is
+also the leading candidate for the ~426 us Teensy USB disagreement** recorded
+above and open for days.
+
+**Consequence for every number in this document:** the harnesses accumulate this
+tax across runs on a long-lived dserv, so figures measured late in a session are
+inflated relative to early ones by an amount nobody was tracking. **The wiznet
+reference set was taken with these same harnesses** — so 676 / 322 us and the
+1 ms verdict resting on them are suspect and should be re-taken.
+
+Suggested dserv changes (not yet made — they touch the deployed server):
+1. Treat an empty script at registration as a removal, or skip the eval at
+   delivery. Today any caller can install a permanent invisible tax by accident.
+2. A second `dpointSetScript` on a live datapoint **silently replaces** the
+   first — no error. Two subsystems registering on one datapoint means one
+   loses silently. (`dservWhen` already keeps a separate registry specifically
+   "so it never dislodges a caller's dpointSetScript"; `dpointSetScript` has no
+   such protection against itself.)
+3. Note the delivery asymmetry: a datapoint WITH an entry costs a hash lookup,
+   one WITHOUT falls through to `find_match()`, a wildcard scan. "No script" can
+   therefore cost more than "script".
+
+### RW612 Ethernet, battened down and cleanly measured
+
+`mode eth` (strips the USB data pipe entirely, so dserv cannot double-forward),
+stale scripts cleared, Pi 5 `performance`, load ~0:
+
+| | RW612 | pico2 + W6300 (reference, SUSPECT — see above) |
+| --- | --- | --- |
+| loopback median | **719–738** | 676 |
+| loopback min | **640–681** | 632 |
+| loopback p99 | 872–877 | **717** |
+
+Median within ~7 %, **floor essentially identical**, tail ~20 % worse. This
+supersedes the "~1.4-1.5x slower" reading recorded earlier today: almost all of
+that apparent gap was measurement contamination — ~370 us of USB
+double-forwarding plus ~130 us of stale empty scripts.
+
+### Double-forwarding: a box on BOTH transports pays ~370 us
+
+With the box reachable over USB *and* Ethernet, it stays in `::extio_known` from
+the USB session (so `extio/box/cmd/*` is wired to `usbio_forward`) *and* self-
+registers over Ethernet. Every command is pushed twice — once into a USB pipe
+the box is not draining, because `uplink=eth` means the service loop polls
+Ethernet only. Measured cost: loopback 1227-1234 -> 852-870 on
+`extio_unforward_box`.
+
+**Operational rule: use `mode eth` on an Ethernet box.** It strips the data pipe
+at enumeration (`u_usb_init` registers the console CDC only), so `if02` never
+appears and the host cannot forward over USB. Verified: `by-id` shows `if00`
+alone. The console CDC remains for CLI.
+
+A host-side fix (unforward USB when `state/transport` reports `eth`) would be
+more robust but touches the deployed module shared with production Pico boxes.

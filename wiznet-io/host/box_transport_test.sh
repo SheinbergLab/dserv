@@ -61,7 +61,7 @@ while [ "$i" -lt "$N_RT" ]; do
   [ "$RT" -gt 0 ] && [ "$RT" -lt 500000 ] && echo "$RT" >> /tmp/bt_rt.txt
   i=$((i + 1))
 done
-dservctl -c "catch {dpointSetScript $DEV/state/sync/dserv_us {}}
+dservctl -c "catch {dpointRemoveScript $DEV/state/sync/dserv_us}
 catch {dservRemoveExactMatch $DEV/state/sync/dserv_us}
 catch {dservClear test/rt_arrival}
 dservSet ess/in_obs 0" >/dev/null

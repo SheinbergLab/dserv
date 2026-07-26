@@ -49,8 +49,8 @@ dpointSetScript test/dt_ping dt_ping" >/dev/null
     i=$((i + 1))
   done
 
-  dservctl -c "catch {dpointSetScript test/dt_ping {}}
-catch {dpointSetScript test/dt_warm {}}
+  dservctl -c "catch {dpointRemoveScript test/dt_ping}
+catch {dpointRemoveScript test/dt_warm}
 catch {dservRemoveExactMatch test/dt_ping}
 catch {dservRemoveExactMatch test/dt_warm}" >/dev/null
 }

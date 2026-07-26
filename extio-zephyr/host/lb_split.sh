@@ -3,6 +3,13 @@
 #   L1 = arrival(state/do/<opin>) - dservTimestamp(cmd/do/<opin>)   "cmd -> do_echo"
 #   L2 = arrival(state/di/<ipin>) - arrival(state/do/<opin>)        "do_echo -> di"
 # PORTING.md records 720 / 3-96 against a 783 us total. This says which leg moved.
+#
+# TEARDOWN USES dpointRemoveScript, NOT `dpointSetScript <dp> {}`. The latter
+# does NOT remove the script -- TclServer.cpp does dpoint_scripts.insert(), so an
+# EMPTY script is stored and the delivery path still evaluates it on EVERY publish
+# of that datapoint, permanently, until dserv restarts. Every harness here used to
+# do that, so repeated runs silently accumulated per-publish Tcl dispatch on
+# exactly the datapoints being measured. Fixed 2026-07-26.
 DEV=${1:?usage: lb_split.sh <extio/name> [opin] [ipin] [iters]}
 OPIN=${2:-3}
 IPIN=${3:-1}
@@ -37,8 +44,8 @@ while [ "$i" -lt "$N" ]; do
   i=$((i + 1))
 done
 
-dservctl -c "catch {dpointSetScript $DEV/state/do/$OPIN {}}
-catch {dpointSetScript $DEV/state/di/$IPIN {}}
+dservctl -c "catch {dpointRemoveScript $DEV/state/do/$OPIN}
+catch {dpointRemoveScript $DEV/state/di/$IPIN}
 catch {dservRemoveExactMatch $DEV/state/do/$OPIN}
 catch {dservRemoveExactMatch $DEV/state/di/$IPIN}
 catch {dservClear test/lb_do}; catch {dservClear test/lb_di}" >/dev/null

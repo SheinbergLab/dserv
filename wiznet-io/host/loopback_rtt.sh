@@ -46,7 +46,7 @@ while [ "$i" -lt "$N" ]; do
   i=$((i + 1))
 done
 
-dservctl -c "catch {dpointSetScript $DEV/state/di/$IPIN {}}
+dservctl -c "catch {dpointRemoveScript $DEV/state/di/$IPIN}
 catch {dservRemoveExactMatch $DEV/state/di/$IPIN}
 catch {dservClear test/lb_arrival}" >/dev/null
 
