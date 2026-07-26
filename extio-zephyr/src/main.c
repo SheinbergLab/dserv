@@ -160,6 +160,42 @@ static void abs_fire(struct k_timer *t)
 	 * shows up on the scope, not in the data. */
 	publish_do((uint8_t) pin, 1, abs_target_us[pin]);
 }
+
+/* Every term behind the armed/late decision, for when a box insists it is late
+ * and the clock looks fine. This is how the at_abs 64-bit truncation was found:
+ * reading the source could not settle it, dbg_T = 2147483647 did instantly.
+ *
+ * OFF by default, and the CALLER must invoke this only AFTER k_timer_start():
+ * lead_us is measured from a `now` read before the publishes, so seven uplink
+ * frames sitting between the two would delay the fire by exactly that much --
+ * the one thing this path must never do.
+ *
+ * Enable live, no reflash:  dservSet <prefix>/cmd/sched/debug 1
+ * Deliberately NOT persisted, so a box always boots quiet. */
+static uint8_t sched_dbg;
+
+static void sched_dbg_publish(uint64_t T, uint64_t now, uint64_t target_box,
+			      int64_t lead_us)
+{
+	static const char *const leaf[] = {
+		"sched/dbg_T",      "sched/dbg_now",    "sched/dbg_off",
+		"sched/dbg_anchor", "sched/dbg_rate",   "sched/dbg_target",
+		"sched/dbg_lead",
+	};
+	const int64_t val[] = {
+		(int64_t) T, (int64_t) now, boxclk.offset_us,
+		(int64_t) boxclk.anchor_box_us, (int64_t) boxclk.rate_ppb,
+		(int64_t) target_box, lead_us,
+	};
+	uint8_t f[DSERV_MSG_LEN];
+	char    nm[80];
+
+	for (unsigned i = 0; i < ARRAY_SIZE(val); i++) {
+		dserv_state_name(&cfg, nm, sizeof nm, leaf[i]);
+		dserv_msg_int64(f, nm, 0, val[i]);
+		box_uplink_send(f, DSERV_MSG_LEN);
+	}
+}
 #endif /* CONFIG_PTP_CLOCK */
 
 /* A hardware sync edge may anchor an obs toggle only if it is RECENT: well under
@@ -310,7 +346,7 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 			if (!dserv_msg_name_eq(&m, k2)) {
 				continue;
 			}
-			uint64_t T   = (uint64_t) dserv_msg_as_long(&m);
+			uint64_t T   = (uint64_t) dserv_msg_as_ll(&m);
 			uint64_t now = box_gpio_now_us();
 			uint8_t  f3[DSERV_MSG_LEN];
 			char     nm3[80];
@@ -335,6 +371,9 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 				dserv_state_name(&cfg, nm3, sizeof nm3, "sched/abs_err");
 				dserv_msg_string(f3, nm3, 0, "late");
 				box_uplink_send(f3, DSERV_MSG_LEN);
+				if (sched_dbg) {
+					sched_dbg_publish(T, now, target_box, lead_us);
+				}
 				return;
 			}
 
@@ -351,16 +390,40 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 			dserv_state_name(&cfg, nm3, sizeof nm3, "sched/abs_err");
 			dserv_msg_string(f3, nm3, 0, "armed");
 			box_uplink_send(f3, DSERV_MSG_LEN);
+			if (sched_dbg) {
+				sched_dbg_publish(T, now, target_box, lead_us);
+			}
 			return;
 		}
 	}
+
+#if defined(CONFIG_PTP_CLOCK)
+	/* <prefix>/cmd/sched/debug 0|1 -- arm the at_abs diagnostics. Runtime, not
+	 * persisted: turn it on against a live box, read sched/dbg_*, turn it off.
+	 * See sched_dbg_publish() for why it may only run after the timer is armed. */
+	{
+		char pfx[64], key[96];
+		dserv_cfg_prefix(&cfg, pfx, sizeof pfx);
+		snprintf(key, sizeof key, "%s/cmd/sched/debug", pfx);
+		if (dserv_msg_name_eq(&m, key)) {
+			sched_dbg = dserv_msg_as_long(&m) ? 1 : 0;
+
+			uint8_t f2[DSERV_MSG_LEN];
+			char nm[80];
+			dserv_state_name(&cfg, nm, sizeof nm, "sched/debug");
+			dserv_msg_int(f2, nm, 0, (int32_t) sched_dbg);
+			box_uplink_send(f2, DSERV_MSG_LEN);
+			return;
+		}
+	}
+#endif /* CONFIG_PTP_CLOCK */
 
 	{
 		char pfx[64], key[96];
 		dserv_cfg_prefix(&cfg, pfx, sizeof pfx);
 		snprintf(key, sizeof key, "%s/cmd/ptp/offset", pfx);
 		if (dserv_msg_name_eq(&m, key)) {
-			ptp_offset_us    = (int64_t) dserv_msg_as_long(&m);
+			ptp_offset_us    = dserv_msg_as_ll(&m);
 			ptp_offset_valid = 1;
 
 			uint32_t win = 0;

@@ -40,16 +40,21 @@ for B in $BOXES; do
   esac
 done
 
+# Clear the previous level so the rising edge is unambiguous. This must happen
+# BEFORE T is chosen: the clear plus its settle costs ~200 ms, and taking T
+# first spends that out of the lead. With the old ordering `sync_fire.sh 50`
+# handed the boxes a T that was already 150 ms in the past and every box
+# correctly answered "late" -- which read as a clock fault rather than a
+# harness bug.
+for B in $BOXES; do dservctl -c "dservSet $B/cmd/do/$PIN 0" >/dev/null; done
+sleep 0.2
+
 # T is chosen ONCE, in dserv time, and sent to every box unchanged. Everything
 # downstream is each box converting that same number through its own clock.
 NOW=$(dservctl -c 'now' | tr -d '[:space:]')
 T=$(( NOW + LEAD_MS * 1000 ))
 echo
 echo "== firing pin $PIN at T = $T  (now + ${LEAD_MS} ms) =="
-
-# Clear the previous level so the rising edge is unambiguous.
-for B in $BOXES; do dservctl -c "dservSet $B/cmd/do/$PIN 0" >/dev/null; done
-sleep 0.2
 
 for B in $BOXES; do
   dservctl -c "dservSet $B/cmd/do/$PIN/at_abs $T" >/dev/null

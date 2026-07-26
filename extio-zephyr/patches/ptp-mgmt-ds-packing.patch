@@ -1,0 +1,61 @@
+diff --git a/subsys/net/lib/ptp/port.c b/subsys/net/lib/ptp/port.c
+index 0a871738102..a62b4c05bb8 100644
+--- a/subsys/net/lib/ptp/port.c
++++ b/subsys/net/lib/ptp/port.c
+@@ -1310,6 +1310,8 @@ static int port_management_resp_tlv_fill(struct ptp_port *port,
+ 	struct ptp_tlv_mgmt *mgmt;
+ 	struct ptp_tlv_default_ds *tlv_dds;
+ 	struct ptp_tlv_parent_ds *tlv_pds;
++	struct ptp_tlv_current_ds *tlv_cds;
++	struct ptp_tlv_port_ds *tlv_prtds;
+ 	const struct ptp_parent_ds *pds = ptp_clock_parent_ds();
+ 	const struct ptp_current_ds *cds = ptp_clock_current_ds();
+ 	const struct ptp_default_ds *dds = ptp_clock_default_ds();
+@@ -1339,8 +1341,18 @@ static int port_management_resp_tlv_fill(struct ptp_port *port,
+ 		memcpy(&tlv_dds->clk_quality, &dds->clk_quality, sizeof(tlv_dds->clk_quality));
+ 		break;
+ 	case PTP_MGMT_CURRENT_DATA_SET:
++		tlv_cds = (struct ptp_tlv_current_ds *)mgmt->data;
++
++		/* Copy member-by-member: the wire struct is __packed while
++		 * struct ptp_current_ds is not, so a bulk memcpy shifts every
++		 * field after steps_rm by the internal padding and reports
++		 * plausible-looking rubbish (offsetFromMaster 0, meanPathDelay
++		 * 0xffffffff) rather than failing.
++		 */
+ 		length = sizeof(struct ptp_tlv_current_ds);
+-		memcpy(mgmt->data, cds, sizeof(struct ptp_tlv_current_ds));
++		tlv_cds->steps_rm = cds->steps_rm;
++		tlv_cds->offset_from_tt = cds->offset_from_tt;
++		tlv_cds->mean_delay = cds->mean_delay;
+ 		break;
+ 	case PTP_MGMT_PARENT_DATA_SET:
+ 		tlv_pds = (struct ptp_tlv_parent_ds *)mgmt->data;
+@@ -1365,8 +1377,26 @@ static int port_management_resp_tlv_fill(struct ptp_port *port,
+ 		memcpy(mgmt->data, tpds, sizeof(struct ptp_tlv_time_prop_ds));
+ 		break;
+ 	case PTP_MGMT_PORT_DATA_SET:
++		tlv_prtds = (struct ptp_tlv_port_ds *)mgmt->data;
++
++		/* Same packed-vs-unpacked hazard as CURRENT_DATA_SET above, and
++		 * worse here: state and delay_mechanism are enums (4 bytes
++		 * internally, 1 on the wire), so everything from state onwards
++		 * was misaligned -- portState always decoded as NONE.
++		 */
+ 		length = sizeof(struct ptp_tlv_port_ds);
+-		memcpy(mgmt->data, &port->port_ds, sizeof(struct ptp_tlv_port_ds));
++		memcpy(&tlv_prtds->id, &port->port_ds.id, sizeof(tlv_prtds->id));
++		tlv_prtds->state = (uint8_t)port->port_ds.state;
++		tlv_prtds->log_min_delay_req_interval =
++			port->port_ds.log_min_delay_req_interval;
++		tlv_prtds->mean_link_delay = port->port_ds.mean_link_delay;
++		tlv_prtds->log_announce_interval = port->port_ds.log_announce_interval;
++		tlv_prtds->announce_receipt_timeout = port->port_ds.announce_receipt_timeout;
++		tlv_prtds->log_sync_interval = port->port_ds.log_sync_interval;
++		tlv_prtds->delay_mechanism = (uint8_t)port->port_ds.delay_mechanism;
++		tlv_prtds->log_min_pdelay_req_interval =
++			port->port_ds.log_min_pdelay_req_interval;
++		tlv_prtds->version = port->port_ds.version;
+ 		break;
+ 	case PTP_MGMT_PRIORITY1:
+ 		length = sizeof(dds->priority1);
