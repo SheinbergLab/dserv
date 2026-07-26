@@ -5,6 +5,8 @@
 #include <mutex>
 #include "MatchDict.h"
 
+#include <vector>
+
 class TriggerDict
 {
  private:
@@ -49,6 +51,16 @@ class TriggerDict
    *   If datapoint is a match return true and set script
    */
   
+  /* Registered keys, for introspection (dpointScripts). Snapshot under lock. */
+  std::vector<std::string> keys()
+  {
+    std::lock_guard<std::mutex> mlock(mutex_);
+    std::vector<std::string> out;
+    out.reserve(map_.size());
+    for (auto const& [ key, value ] : map_) out.push_back(key);
+    return out;
+  }
+
   bool find_match(std::string varname, std::string &script)
   {
     std::lock_guard<std::mutex> mlock(mutex_);

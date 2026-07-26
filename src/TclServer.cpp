@@ -2562,6 +2562,48 @@ static int dpoint_remove_script_command (ClientData data, Tcl_Interp *interp,
   return TCL_OK;
   }
 
+/*
+ * Introspection for the dpoint script registry.
+ *
+ * These exist because the registry was previously WRITE-ONLY: there was no way
+ * to ask what was registered, so a leaked script (see dpointSetScript's empty-
+ * script trap) was invisible and cost a Tcl dispatch per publish indefinitely.
+ * `dpointScripts` lists registered datapoints; `dpointGetScript` returns one.
+ */
+static int dpoint_scripts_command (ClientData data, Tcl_Interp *interp,
+                                   int objc, Tcl_Obj *objv[])
+{
+  TclServer *tclserver = (TclServer *) data;
+  Tcl_Obj *l = Tcl_NewListObj(0, NULL);
+
+  for (auto const &k : tclserver->dpoint_scripts.keys()) {
+    Tcl_ListObjAppendElement(interp, l,
+                             Tcl_NewStringObj(k.c_str(), -1));
+  }
+  Tcl_SetObjResult(interp, l);
+  return TCL_OK;
+}
+
+static int dpoint_get_script_command (ClientData data, Tcl_Interp *interp,
+                                      int objc, Tcl_Obj *objv[])
+{
+  TclServer *tclserver = (TclServer *) data;
+
+  if (objc < 2) {
+    Tcl_WrongNumArgs(interp, 1, objv, "varname");
+    return TCL_ERROR;
+  }
+
+  std::string script;
+  if (!tclserver->dpoint_scripts.find(std::string(Tcl_GetString(objv[1])),
+                                      script)) {
+    Tcl_SetObjResult(interp, Tcl_NewStringObj("", -1));
+    return TCL_OK;                     /* not registered -> empty, not an error */
+  }
+  Tcl_SetObjResult(interp, Tcl_NewStringObj(script.c_str(), -1));
+  return TCL_OK;
+}
+
 static int dpoint_remove_all_scripts_command (ClientData data,
                           Tcl_Interp *interp,
                           int objc, Tcl_Obj *objv[])
@@ -2951,6 +2993,14 @@ static void add_tcl_commands(Tcl_Interp *interp, TclServer *tserv)
                dserv_remove_match_command, tserv, NULL);
   Tcl_CreateObjCommand(interp, "dservRemoveAllMatches",
                dserv_remove_all_matches_command, tserv, NULL);
+  /* dservAddExactMatch existed with no symmetric remove, so the natural call
+   * silently failed and every caller leaked a match (they were all wrapped in
+   * `catch`).  Exact and glob matches share one dict keyed by the match string
+   * -- client_add_match/client_add_exact_match both insert(match, spec) and
+   * client_remove_match removes by that key -- so this is genuinely just the
+   * missing name for the same operation. */
+  Tcl_CreateObjCommand(interp, "dservRemoveExactMatch",
+               dserv_remove_match_command, tserv, NULL);
 
   Tcl_CreateObjCommand(interp, "evtSetScript",
 			 (Tcl_ObjCmdProc *) evt_set_script_command, tserv, NULL);
@@ -2981,6 +3031,10 @@ static void add_tcl_commands(Tcl_Interp *interp, TclServer *tserv)
   Tcl_CreateObjCommand(interp, "dpointRemoveScript",
                (Tcl_ObjCmdProc *) dpoint_remove_script_command,
                tserv, NULL);
+  Tcl_CreateObjCommand(interp, "dpointScripts",
+               (Tcl_ObjCmdProc *) dpoint_scripts_command, tserv, NULL);
+  Tcl_CreateObjCommand(interp, "dpointGetScript",
+               (Tcl_ObjCmdProc *) dpoint_get_script_command, tserv, NULL);
   Tcl_CreateObjCommand(interp, "dpointRemoveAllScripts",
                (Tcl_ObjCmdProc *) dpoint_remove_all_scripts_command,
                tserv, NULL);
@@ -3643,16 +3697,31 @@ static int process_requests(TclServer *tserv)
 	}
         
 	// evaluate a dpoint script
+	//
+	// An EMPTY script is not evaluated. `dpointSetScript <dp> {}` reads like
+	// "clear this" and was used that way throughout the harnesses, but it
+	// stores "" rather than removing the entry -- and this path used to
+	// evaluate it on EVERY publish of that datapoint, forever, which cost a
+	// full Tcl dispatch per delivery and was invisible. Measured at ~130 us
+	// per publish on a Pi 5 (see extio-zephyr/PORTING.md 2026-07-26).
+	//
+	// The entry is deliberately still LOOKED UP: an empty exact entry keeps
+	// shadowing a wildcard script, so this change removes the cost without
+	// changing which script wins. Use dpointRemoveScript to actually remove.
 	std::string script;
 	if (tserv->dpoint_scripts.find(varname, script)) {
-	  ds_datapoint_t *dpoint = req.dpoint;
-	  const char *dpoint_script = script.c_str();
-	  int retcode = dpoint_tcl_script(interp, dpoint_script, dpoint);
+	  if (!script.empty()) {
+	    ds_datapoint_t *dpoint = req.dpoint;
+	    const char *dpoint_script = script.c_str();
+	    int retcode = dpoint_tcl_script(interp, dpoint_script, dpoint);
+	  }
 	}
 	else if (tserv->dpoint_scripts.find_match(varname, script)) {
-	  ds_datapoint_t *dpoint = req.dpoint;
-	  const char *dpoint_script = script.c_str();
-	  int retcode = dpoint_tcl_script(interp, dpoint_script, dpoint);
+	  if (!script.empty()) {
+	    ds_datapoint_t *dpoint = req.dpoint;
+	    const char *dpoint_script = script.c_str();
+	    int retcode = dpoint_tcl_script(interp, dpoint_script, dpoint);
+	  }
 	}
 
 	// fire any predicate-gated dservWhen callbacks for this point
