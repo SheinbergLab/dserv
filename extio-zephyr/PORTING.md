@@ -2219,3 +2219,40 @@ breaches the 1 ms requirement by ~68x, and no amount of shaving 96 us off the RX
 path touches it. Tail behaviour is not bounded by the same budget as the median.
 Unknown whether it is boot-only (announce burst, NVS write) or recurrent — that
 is the next thing to establish, ahead of any further median tuning.
+
+### RESOLVED: the 68 ms `loop_max_us` — NVS garbage collection
+
+Root-caused by staged sampling (`loop_max_us` is a running max since boot, never
+reset, and excludes the blocking wait):
+
+| stage | `loop_max_us` |
+| --- | --- |
+| boot + registration + announce, no save | **5,957** |
+| after one `cmd/save` (blob unchanged) | 10,583 |
+| forcing 8 distinct saves | 10,583 / **67,970** / … / **72,150** |
+
+Saves 1, 3, 4, 6, 7, 8 were cheap; saves 2 and 5 cost ~68 and ~72 ms. That is
+the NVS **garbage-collection** signature: most writes append cheaply, and every
+~3rd one rotates a sector and pays a ~4 kB erase (8 sectors x 4096 with a
+1080-byte blob = ~3 writes per sector). Not boot, not the announce burst.
+
+**Already correctly gated, so this is a documented cost rather than a bug.**
+BOTH save paths check `box_obs_active()` and `box_obs_defer(BOX_DEFER_SAVE)` —
+the datapoint path (`main.c` `CFG_SAVE`) and the console path (`box_console.c`
+`CLI_SAVE`). Flash programming therefore cannot land inside a trial; it runs at
+the obs boundary, which this document already establishes as the one place a
+discontinuity is provably harmless.
+
+**The precise residual, because it is not what you would guess.** DI is not a
+queue that can overflow during a stall. It is a per-pin COALESCING debouncer:
+the ISR sets an unsettled flag and records `di_first_edge_us`/`di_last_edge_us`,
+and `box_gpio_poll_di` reads the pin's CURRENT level and publishes only when it
+differs from the last published level. So a long stall does not delay a backlog
+and does not drop a queue — it **coalesces**: a pin that toggles an even number
+of times and returns to its starting level publishes **nothing at all**. Events
+that do publish are stamped at the onset edge, so timing stays correct. Right
+semantic for debounced switch inputs, and it happens outside obs regardless.
+
+If flash writes ever need to be safe at arbitrary times, the fix is to move
+`box_flash_save` off the service loop (workqueue or low-priority thread) rather
+than to deepen any buffer — an erase should never sit on the RT path.
