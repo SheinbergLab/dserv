@@ -2096,3 +2096,126 @@ reflash** (`pins/out=5,12,18` restored from NVS). ICMP 0.235 ms min.
 DI proven, loopback closed, both harnesses agreeing. Unproven: any latency
 figure comparable to the wiznet set (host not in benchmark configuration, no
 electrical reference).
+
+---
+
+## 2026-07-25 (later still) — first RW612 loopback, and the noise floor
+
+### The loopback closes
+
+D4 (pin 18, out) -> D3 (pin 15, in), host `raspberrypi` on `performance` @ 2.4
+GHz, load ~0.0, dserv over Ethernet:
+
+| harness | min | med | p90 | p99 | max |
+| --- | --- | --- | --- | --- | --- |
+| `loopback_rtt` | 945 | **1051** | 1120 | 1157 | 1164 |
+| `lb_split` total | 808 | **1029** | 1102 | 1190 | 1190 |
+| — `L1` cmd -> do_echo | 719 | 813 | 878 | 975 | 975 |
+| — `L2` do_echo -> di | 32 | 209 | 248 | 276 | 276 |
+
+**Two-harness agreement: 22 us.** The apparatus is sound.
+
+Against the wiznet reference set (rpi500/W6300 — a DIFFERENT Pi, so read the
+ratio, not the absolute): loopback 676, `L1` 554, `L2` 100, ICMP floor 0.077 ms
+vs the RW612's 0.210 ms. **Roughly 1.5x slower on every leg.**
+
+**This is NOT the number the 1 ms requirement is about.** That budget is on
+one-way input latency ("subject acts -> dserv knows"), measured for the W6300 as
+322 us median with `host_gpio_rtt.sh` against a real electrical edge. The
+loopback is a round trip including the outbound command. No electrical reference
+is wired on this rig yet, so the comparable figure does not exist.
+
+### The budget closes — and it is NOT mostly the wire
+
+| term | us | instrument |
+| --- | --- | --- |
+| host dserv dispatch | ~116 | `dispatch_test.sh` |
+| wire + box IP stack, RTT | 210 | ICMP floor |
+| box service-loop wake | 53 | `dbg/wake_us` |
+| box socket recv | 99 | `dbg/recv_us` |
+| box dispatch + GPIO + publish | 300 | `dbg/disp_us` (includes the ~142 us send) |
+| **sum** | **~778** | vs **`L1` = 813 measured** |
+
+~450 us of the 813 is INSIDE THE BOX; only ~210 us is wire-plus-IP-stack round
+trip. "Zephyr's stack is slow" is true but is not the dominant term.
+
+### Where the stack time actually goes (`CONFIG_NET_PKT_*TIME_STATS_DETAIL`)
+
+```
+Avg TX net_pkt (3399) time  69 us   [0->28->41=69 us]
+Avg RX net_pkt  (449) time 212 us   [0->28->13->96->73=210 us]
+```
+
+Tick points: `net_core.c:520` (driver -> `net_recv_data`), `net_tc.c:91` (TC
+thread pickup), `sockets_inet.c:281` (socket layer), `:931` (app read returns).
+
+| RX stage | us |
+| --- | --- |
+| driver -> `net_recv_data` | 28 |
+| -> traffic-class thread | 13 |
+| **-> socket layer (IP + TCP)** | **96** |
+| **-> app read returns** | **73** |
+| TX, whole path | 69 |
+
+**RX is 3x TX.** The target is the 96 us of TCP/IP processing, then the 73 us
+socket->app handoff. **Do not optimise TX** — the entire TX path is 69 us.
+
+### RULED OUT: `CONFIG_ETH_NXP_ENET_TX_BUFFERS`
+
+The driver defaults to 1 TX descriptor and `dbg/send_max_us` was 412, so a
+descriptor stall on the RT path looked plausible. Raised to 6:
+
+| | TX_BUFFERS=1 | TX_BUFFERS=6 |
+| --- | --- | --- |
+| loopback med | 1051 | 1068 |
+| `L1` / `L2` med | 813 / 209 | 820 / 218 |
+| `dbg/send_us` med | 142 | 161 |
+| `dbg/send_max_us` | 412 | **283** |
+
+**No resolvable effect on median latency.** Kept for the send worst case only.
+The packet stats explain why in hindsight: TX is 69 us end to end, so there was
+never 100+ us there to win. **The experiment was picked on a plausible mechanism
+instead of on evidence about where the time goes — instrument first.**
+
+### THE NOISE FLOOR, which invalidates single-run A/B
+
+Same build, four consecutive `loopback_rtt` runs:
+
+```
+med 987 / 999 / 982 / 948      min 910 / 904 / 897 / 892
+```
+
+**Median spread ~50 us within one build**, plus a **warm-up trend of ~100 us**:
+the first run after a reflash is consistently slowest and settles over
+subsequent runs (1051 -> 1068 -> 1005 -> 987 -> 999 -> 982 -> 948).
+
+Consequence: **no single-run A/B can resolve anything below ~100 us**, and every
+optimisation worth chasing here is in that range. Both of this session's A/B
+results dissolved under this: the TX-buffer "regression" was noise, and the
+stats build's apparent 60 us *improvement* was warm-up — instrumentation cannot
+speed up the data path.
+
+**Protocol for any future tuning on this platform:** several runs per build,
+DISCARD THE FIRST after each flash, and interleave A/B/A rather than comparing
+one run to one run. Otherwise the same change can be "confirmed" as a win or a
+regression depending only on which run is read.
+
+Silver lining, and the question that was actually being asked:
+`CONFIG_NET_PKT_RXTIME/TXTIME_STATS[_DETAIL]` + `NET_STATISTICS` + the Zephyr
+shell cost nothing measurable here either — the Teensy finding replicates, so
+leave the instrumentation on.
+
+### A Zephyr shell now lives on the board UART
+
+`CONFIG_SHELL` + `NET_SHELL` + `DEVICE_SHELL` + `PTP_CLOCK_SHELL` on flexcomm3
+(the J-Link VCOM), entirely separate from the box CLI on USB CDC, so the two
+never contend. That is where `net stats` above came from, and `device list` /
+`ptp_clock get` are the commands that isolated the PTP bugs.
+
+### OPEN: `dbg/loop_max_us` = 67,791
+
+A **68 ms** worst-case service-loop pass. If it can occur mid-experiment it
+breaches the 1 ms requirement by ~68x, and no amount of shaving 96 us off the RX
+path touches it. Tail behaviour is not bounded by the same budget as the median.
+Unknown whether it is boot-only (announce burst, NVS write) or recurrent — that
+is the next thing to establish, ahead of any further median tuning.
