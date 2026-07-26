@@ -314,6 +314,20 @@ static void groups_resync(void)
 
 /* One inbound 128-byte frame (config/cmd/ess-in_obs) from the host module:
  * dispatch it into the config, and run any GPIO command it produced. */
+/* Inbound frames accepted, published once a second as state/cmds_rx.
+ *
+ * This exists because "publishing but deaf" is the nastiest failure this box
+ * has: the uplink works, state/* keeps flowing, and every status field says
+ * healthy -- while the %match registration is gone and cmd/* silently never
+ * arrives. It has cost hours twice now, and no field on the box revealed it.
+ *
+ * A COUNTER does, and needs no interpretation: watch any state/* timestamp
+ * advance while cmds_rx sits still and the downlink is dead. It is monotonic
+ * from boot, so a host can also spot a reboot it missed (the count drops).
+ * Counts every accepted inbound frame, not just pin commands -- the question is
+ * whether the path works at all. */
+static uint32_t cmds_rx;
+
 static void on_usb_frame(const uint8_t *frame, void *ud)
 {
 	ARG_UNUSED(ud);
@@ -321,6 +335,7 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 	if (dserv_msg_parse(frame, &m) != 0) {
 		return;
 	}
+	cmds_rx++;
 
 #if defined(CONFIG_PTP_CLOCK)
 	/* <prefix>/cmd/ptp/offset <us> -- the host's PHC->dserv constant.
@@ -891,6 +906,17 @@ int main(void)
 				dserv_state_name(&cfg, name, sizeof name, "watchdog");
 				dserv_msg_int(f, name, 0, watchdog - 1);
 			}
+
+			/* Deliberately alongside watchdog: watchdog proves the UPLINK
+			 * is alive, cmds_rx proves the DOWNLINK is. Together they make
+			 * "publishing but deaf" a one-glance diagnosis -- watchdog
+			 * climbing while cmds_rx sits frozen -- instead of the hours it
+			 * has cost twice, hiding behind a box whose every status field
+			 * read healthy. */
+			dserv_state_name(&cfg, name, sizeof name, "cmds_rx");
+			dserv_msg_int(f, name, 0, (int32_t) cmds_rx);
+			box_uplink_send(f, DSERV_MSG_LEN);
+
 #if defined(CONFIG_NETWORKING)
 			/* Publish-latency investigation: how long does one
 			 * zsock_send() actually take, and how long is a full
