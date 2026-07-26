@@ -62,7 +62,7 @@ while [ "$i" -lt "$N_RT" ]; do
   i=$((i + 1))
 done
 dservctl -c "catch {dpointRemoveScript $DEV/state/sync/dserv_us}
-catch {dservRemoveExactMatch $DEV/state/sync/dserv_us}
+catch {dservRemoveMatch $DEV/state/sync/dserv_us}
 catch {dservClear test/rt_arrival}
 dservSet ess/in_obs 0" >/dev/null
 sort -n /tmp/bt_rt.txt | awk '{v[NR]=$1; s+=$1}

@@ -51,8 +51,8 @@ done
 
 dservctl -c "catch {dpointRemoveScript $DEV/state/do/$OPIN}
 catch {dpointRemoveScript $DEV/state/di/$IPIN}
-catch {dservRemoveExactMatch $DEV/state/do/$OPIN}
-catch {dservRemoveExactMatch $DEV/state/di/$IPIN}
+catch {dservRemoveMatch $DEV/state/do/$OPIN}
+catch {dservRemoveMatch $DEV/state/di/$IPIN}
 catch {dservClear test/q_do}; catch {dservClear test/q_di}" >/dev/null
 
 for f in /tmp/q_box.txt /tmp/q_arr.txt /tmp/q_que.txt; do

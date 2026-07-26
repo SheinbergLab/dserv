@@ -152,7 +152,7 @@ list \$a \$b \$c \$d" 2>/dev/null)
 done
 
 dservctl -c "catch {dpointRemoveScript $DEV/state/di/$IPIN}
-catch {dservRemoveExactMatch $DEV/state/di/$IPIN}
+catch {dservRemoveMatch $DEV/state/di/$IPIN}
 catch {dpointRemoveScript gpio/input/$HPIN}
 catch {dservClear test/hg_box}
 catch {dservClear test/hg_host}" >/dev/null

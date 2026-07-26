@@ -44,7 +44,7 @@ while [ "$i" -lt "$N" ]; do
   i=$((i + 1))
 done
 dservctl -c "catch {dpointRemoveScript $DEV/state/do/$OPIN}
-catch {dservRemoveExactMatch $DEV/state/do/$OPIN}
+catch {dservRemoveMatch $DEV/state/do/$OPIN}
 catch {dservClear test/s1_do}" >/dev/null
 
 RTTMIN=$(sort -n /tmp/s1_rtt.txt | head -1)

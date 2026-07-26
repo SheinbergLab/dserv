@@ -87,7 +87,7 @@ list \$a \$b" 2>/dev/null)
 done
 
 dservctl -c "catch {dpointRemoveScript gpio/input/$HPIN}
-catch {dservRemoveExactMatch gpio/input/$HPIN}
+catch {dservRemoveMatch gpio/input/$HPIN}
 catch {dservClear test/bo_hit}" >/dev/null
 
 sort -n "$OUT" | awk '{v[NR]=$1; s+=$1}

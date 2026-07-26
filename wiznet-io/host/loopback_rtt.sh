@@ -47,7 +47,7 @@ while [ "$i" -lt "$N" ]; do
 done
 
 dservctl -c "catch {dpointRemoveScript $DEV/state/di/$IPIN}
-catch {dservRemoveExactMatch $DEV/state/di/$IPIN}
+catch {dservRemoveMatch $DEV/state/di/$IPIN}
 catch {dservClear test/lb_arrival}" >/dev/null
 
 sort -n /tmp/lb_rtt.txt | awk '{v[NR]=$1; s+=$1}
