@@ -2447,3 +2447,73 @@ alone. The console CDC remains for CLI.
 
 A host-side fix (unforward USB when `state/transport` reports `eth`) would be
 more robust but touches the deployed module shared with production Pico boxes.
+
+---
+
+## 2026-07-26 — pico vs RW612, same host, same session, FIXED harnesses
+
+The comparison this document has needed since the port began. Host
+`raspberrypi` (Pi 5, `performance`, load ~0), one dserv, one direct cable
+(sequential — the Pi has a single Ethernet port), both boxes measured within
+minutes of each other, harnesses with the `dpointRemoveScript` /
+`dservRemoveMatch` fixes, leaked state cleared before each.
+
+| | pico2 + W6300 | RW612 (Ethernet) |
+| --- | --- | --- |
+| loopback median | **616–625** | 715–739 |
+| loopback min | **584–592** | 640–681 |
+| loopback p99 | **647–668** | 872–877 |
+| `L1` cmd -> do_echo | **523** | 667 |
+| `L2` do_echo -> di | 85 | **54** |
+| ICMP floor | **0.101 ms** | 0.170–0.198 ms |
+
+Both harnesses agree to ~10 us on both boxes.
+
+### The reference set WAS inflated — confirmed, ~50-60 us
+
+`office` measures **616–625** here against the **676** recorded in the wiznet
+reference set, with `L1`/`L2` at 523/85 against the recorded 554/100. Same box,
+same host class, same harnesses — except the harnesses no longer leak an empty
+script and a match per run. **That is the predicted harness-leak tax, measured.**
+
+**Every figure in the 2026-07-26 reference section should be read ~50-60 us
+high**, including the **322 us input latency** the "2.8x margin against the 1 ms
+requirement" verdict rests on. The verdict survives (it gets better, not worse),
+but the numbers want re-taking.
+
+### The gap is entirely in the COMMAND path — and reverses on the EVENT path
+
+- `L1` is **144 us slower** on the RW612. Of that, ~80 us is raw transport (the
+  ICMP floor difference: W6300 hardwired TCP/IP offload vs Zephyr's software
+  stack on the CPU), leaving ~64 us of box-side processing.
+- `L2` is **31 us FASTER on the RW612** (54 vs 85).
+
+**`L2` is the leg the 1 ms requirement is about.** "Subject acts -> dserv knows"
+is the input path, and the RW612 is ~35 % better on it. The round-trip figure
+that makes the RW612 look worse is dominated by the outbound command leg, which
+matters far less for these paradigms — a scheduled pulse or a stimulus onset is
+not on the critical path the way a subject response is.
+
+So: **lagging ~16-19 % on the round trip, ahead on input.** Not the "1.4-1.5x
+slower" recorded earlier today, which was almost entirely measurement
+contamination (USB double-forwarding + leaked scripts).
+
+### The real deficit is the TAIL
+
+p99 **872–877 vs 647–668** — ~32 % worse, and it is the one metric where the
+RW612 loses on every reading. That is jitter, not throughput, and it is the
+right target for further work. Median latency on this board is already inside
+budget; tail behaviour is not bounded by the same budget (see the NVS-GC and
+12 ms-logging entries above — both were tail events invisible in the median).
+
+### Caveats
+
+- `L2` is a PROXY for one-way input latency, not the measurement. The real
+  figure needs the Pi-GPIO electrical reference (`box_out_rtt.sh` wiring — NOT
+  `host_gpio_rtt.sh`'s header diagram, which collides on GPIO22). Both boxes'
+  numbers here are software-stamped at both ends.
+- Sequential, not simultaneous. The boxes cannot share the single Ethernet port
+  on a direct link; a small switch would allow both registered at once, at the
+  cost of putting a switch in the path.
+- The RW612 ran `mode eth` (data pipe stripped) — the correct configuration for
+  an Ethernet box, and required to avoid the ~370 us double-forwarding tax.
