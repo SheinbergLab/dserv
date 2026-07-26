@@ -50,6 +50,66 @@ static uint64_t       obs_begin_us;          /* box time of the last beginobs an
 static int            box_persist_mount_err;   /* 0 = NVS mounted; else the errno */
 #endif
 
+/* ---- PTP anchoring -------------------------------------------------------
+ *
+ * When the box's 1588 clock is disciplined to the host NIC's PHC by PTP, the
+ * host can hand us ONE constant:
+ *
+ *     ptp_offset_us = dserv_us - ptp_us
+ *
+ * It is constant because both terms are: dserv time is CLOCK_MONOTONIC plus a
+ * fixed epoch offset, and the PHC is rate-locked to that same clock by phc2sys
+ * (0.002 ppm -- see PORTING.md). The host measures it locally, with no wire
+ * involved, so unlike an obs anchor it carries NO TRANSPORT TERM AT ALL. That is
+ * the whole point: the one-way delay that has been so hard to subtract simply is
+ * not in this path.
+ *
+ * With it we can re-anchor box_clock from the PTP clock alone, as often as we
+ * like, without exchanging a single packet.
+ */
+#if defined(CONFIG_PTP_CLOCK)
+static int64_t  ptp_offset_us;        /* dserv_us - ptp_us, from the host */
+static int      ptp_offset_valid;
+
+/* Sandwich a PTP read between two local reads, exactly as host/phc_offset.c
+ * does: the midpoint pairs the two clocks and the spread bounds our own error.
+ * Returns 0 and fills *box_us / *ptp_us, or -1 if the PTP clock is not ready. */
+static int ptp_pair_read(uint64_t *box_us, uint64_t *ptp_us, uint32_t *window_us)
+{
+	if (!box_ptp_ready()) {
+		return -1;
+	}
+	uint64_t b0 = box_gpio_now_us();
+	uint64_t p  = box_ptp_now_ns();
+	uint64_t b1 = box_gpio_now_us();
+
+	if (!p) {
+		return -1;
+	}
+	*box_us = (b0 + b1) / 2;
+	*ptp_us = p / 1000u;
+	if (window_us) {
+		*window_us = (uint32_t)(b1 - b0);
+	}
+	return 0;
+}
+
+/* Re-anchor box_clock from PTP. Trusted, so it also teaches the rate estimator
+ * the box-local-vs-PTP crystal error -- which is exactly what that estimator
+ * was built for, now fed by a source with no transport jitter. */
+static int ptp_reanchor(uint32_t *window_us)
+{
+	uint64_t box_us, ptp_us;
+
+	if (!ptp_offset_valid || ptp_pair_read(&box_us, &ptp_us, window_us) != 0) {
+		return -1;
+	}
+	box_clock_sync(&boxclk, (uint64_t)((int64_t) ptp_us + ptp_offset_us),
+		       box_us, 1 /* trusted */);
+	return 0;
+}
+#endif /* CONFIG_PTP_CLOCK */
+
 /* A hardware sync edge may anchor an obs toggle only if it is RECENT: well under
  * the shortest obs on/off cadence (seconds), so a stale latched edge from the
  * previous toggle can never anchor the current one. */
@@ -173,6 +233,56 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 	if (dserv_msg_parse(frame, &m) != 0) {
 		return;
 	}
+
+#if defined(CONFIG_PTP_CLOCK)
+	/* <prefix>/cmd/ptp/offset <us> -- the host's PHC->dserv constant.
+	 *
+	 * Handled HERE rather than in dserv_cfg__cmd() because src/core/ is shared
+	 * verbatim with the Pico and this is Zephyr/PTP-only. Same precedent as
+	 * ess/in_obs below, which is also intercepted before dispatch.
+	 *
+	 * Anchoring is gated on !in_obs for the reason PORTING.md records: a
+	 * re-anchor STEPS the offset, and applying that inside a data-collection
+	 * window puts two events of one trial on different mappings. With PTP the
+	 * step is sub-us rather than the hundreds of us an obs anchor moves, but
+	 * the rule is about correctness, not magnitude.
+	 */
+	{
+		char pfx[64], key[96];
+		dserv_cfg_prefix(&cfg, pfx, sizeof pfx);
+		snprintf(key, sizeof key, "%s/cmd/ptp/offset", pfx);
+		if (dserv_msg_name_eq(&m, key)) {
+			ptp_offset_us    = (int64_t) dserv_msg_as_long(&m);
+			ptp_offset_valid = 1;
+
+			uint32_t win = 0;
+			int ok = box_obs_active() ? -1 : ptp_reanchor(&win);
+
+			uint8_t f2[DSERV_MSG_LEN];
+			char nm[80];
+			dserv_state_name(&cfg, nm, sizeof nm, "ptp/offset_us");
+			dserv_msg_int64(f2, nm, 0, ptp_offset_us);
+			box_uplink_send(f2, DSERV_MSG_LEN);
+
+			if (ok == 0) {
+				/* A FOURTH sync source beside hw / swc / sw, so a datafile
+				 * records which mechanism produced its timestamps. */
+				dserv_state_name(&cfg, nm, sizeof nm, "sync/source");
+				dserv_msg_string(f2, nm, 0, "ptp");
+				box_uplink_send(f2, DSERV_MSG_LEN);
+
+				dserv_state_name(&cfg, nm, sizeof nm, "sync/ptp_window_us");
+				dserv_msg_int(f2, nm, 0, (int32_t) win);
+				box_uplink_send(f2, DSERV_MSG_LEN);
+
+				dserv_state_name(&cfg, nm, sizeof nm, "sync/offset_us");
+				dserv_msg_int64(f2, nm, 0, boxclk.offset_us);
+				box_uplink_send(f2, DSERV_MSG_LEN);
+			}
+			return;
+		}
+	}
+#endif
 
 	if (dserv_msg_name_eq(&m, BOX_SYNC_DP)) {
 		int obs = (int) dserv_msg_as_long(&m);
@@ -764,6 +874,33 @@ int main(void)
 			dserv_state_name(&cfg, name, sizeof name, "ptp/ns");
 			dserv_msg_int64(f, name, 0, (int64_t) box_ptp_now_ns());
 			box_uplink_send(f, DSERV_MSG_LEN);
+
+#if defined(CONFIG_PTP_CLOCK)
+			/* Re-anchor from PTP once a second. Costs NO packets -- the
+			 * offset the host gave us is constant, so this is two local
+			 * clock reads. Contrast the obs anchor, which needs a frame to
+			 * arrive and inherits its transport delay.
+			 *
+			 * Skipped during an obs (a re-anchor steps the offset), which is
+			 * also why the 1 Hz cadence is harmless: the drift it corrects is
+			 * the box crystal against PTP, and box_clock's rate estimator
+			 * covers the gap across a trial. */
+			if (ptp_offset_valid && !box_obs_active()) {
+				uint32_t win = 0;
+
+				if (ptp_reanchor(&win) == 0) {
+					dserv_state_name(&cfg, name, sizeof name,
+							 "sync/ptp_window_us");
+					dserv_msg_int(f, name, 0, (int32_t) win);
+					box_uplink_send(f, DSERV_MSG_LEN);
+
+					dserv_state_name(&cfg, name, sizeof name,
+							 "sync/offset_us");
+					dserv_msg_int64(f, name, 0, boxclk.offset_us);
+					box_uplink_send(f, DSERV_MSG_LEN);
+				}
+			}
+#endif
 #endif
 			/* status is available on demand via the `show` CLI command and as
 			 * these datapoints -- no periodic console spam. */

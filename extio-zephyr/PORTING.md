@@ -2652,3 +2652,57 @@ stamped independently at both ends. PTP becomes a fourth `sync/source` value
 measured against a real edge rather than trusted. **Until that runs, the ±100 ns
 is PTP's estimate of its own offset — not evidence that a stamped event lands
 correctly on dserv's timeline.**
+
+### HARDWARE: the MDIO bus on this board is intermittent — and it explains a lot
+
+`E: phy_mc_ksz8081: PHY is still in factory mode!` and no link, on **stock
+Zephyr** (`samples/net/ptp`) as well as ours, across power cycles, with
+`CONFIG_PTP=n` as well as `=y`. Not our firmware.
+
+The message is **misleading**. `phy_mc_ksz8081_phy_readiness_check` reads the
+OMSO register and tests one bit; an MDIO read that returns all-ones sets that bit
+and aborts init. So it reports "factory mode" for any failed read.
+
+Proved with `CONFIG_MDIO_SHELL`, reading the same registers repeatedly:
+
+| reg | successive reads |
+| --- | --- |
+| 2 (PHYID1) | `0x0`, `0xffff`, `0xffff`, `0x5`  (should be `0x0022`) |
+| 1 (BMSR) | **`0x7849`** — valid, autoneg-capable, link down — then `0xffff` |
+| 0 (BMCR) | `0x1000`, `0x1000` — stable, autoneg enabled |
+
+`mdio scan` finds devices at 0x0 and 0x2, and PHYID2 reads `0x1561` (a genuine
+KSZ8081). **The PHY is alive and answers correctly some of the time.** Reads fail
+intermittently; when the factory-mode check lands on a bad read, Ethernet never
+comes up.
+
+There is **no software lever**: `nxp,enet-mdio` exposes only `pinctrl-0`, and MDC
+is derived inside the driver — no clock-rate knob to slow the bus down.
+
+**What this retroactively explains, and corrects:**
+
+- The link that came up and dropped twice earlier, and the cable swap that
+  changed nothing. It was never the cable.
+- **"Ethernet needs the cable present at BOOT" — retracted a second time, and
+  this time for the right reason.** It was neither a PHY-monitor gap nor a
+  missing `net_if_up()`; it was whether the MDIO reads at init happened to
+  succeed. Boots that worked were boots that got clean reads.
+- The `net_if_up()` addition (commit `c97c11b`) stays — bringing the interface up
+  explicitly is correct regardless — but **its claimed effect is unproven**, and
+  the commit message overstates it. Cable-at-boot worked before that change too.
+- Several hours of firmware hypotheses (PTP stack, the TIMER1 pinmux, config
+  ordering) were all wrong. **Stock firmware on the same hardware would have
+  partitioned this in one flash**, and it is the second time today that lever was
+  reached for last instead of first.
+
+**Standing lesson:** when a driver reports a specific device state, check whether
+that state is *inferred from a read that could have failed*. "Factory mode",
+`ptp/ns` advancing at 0.15x, `offset_from_tt: 0 ns`, `save FAILED (-1)` — four
+times today a confident-sounding report was a failed measurement in disguise.
+
+**Practically:** USB-HS on this box is unaffected and measured clean (866–890 us
+loopback, zero resync discards over thousands of frames), so development
+continues there. The PTP result (±100 ns, `host/start_ptp.sh`) was taken while
+the link was healthy and stands, but cannot be re-verified until the MDIO issue
+is resolved. Worth checking power delivery first — the board is fed from two USB
+cables — before concluding the board is faulty.
