@@ -2591,3 +2591,64 @@ Structurally better than the obs-anchor mechanism it would replace.
    purpose, is a 1588 **capture** pin — a TTL edge hardware-timestamped directly
    into the PTP timebase, no software path at all. That unifies the sync line and
    PTP into one mechanism.
+
+### The PHC -> dserv-clock bridge (step 2) — measured, and the drift removed
+
+The chain from a box event to dserv's timeline, each link measured:
+
+| link | mechanism | accuracy |
+| --- | --- | --- |
+| box 1588 clock <-> Pi PHC | `ptp4l`, hw timestamps both ends | **~±100 ns** |
+| PHC rate <-> system clock | `phc2sys` | **0.002 ppm** (was −46.4) |
+| PHC <-> `CLOCK_MONOTONIC` | `host/phc_offset.c` | **±703 ns** |
+| `CLOCK_MONOTONIC` -> dserv | `dservClockEpochOffset` (new) | exact |
+
+```
+dserv_us = phc_us - (phc_minus_mono_us) + dservClockEpochOffset
+```
+
+**Total ~±0.8 us**, dominated entirely by the third link. Against the TTL
+hardware anchor at 35 us that is ~44x better, and it is ~1250x inside the 1 ms
+requirement.
+
+**`phc2sys` is not optional.** The Pi is the PTP grandmaster, so its PHC is
+free-running: measured at **−46.4 ppm** against `CLOCK_MONOTONIC`, i.e. ~46 us of
+divergence per second, which would need re-measuring every ~21 ms to hold 1 us.
+`phc2sys -c eth0 -s CLOCK_REALTIME` disciplines the PHC to the system clock, and
+because Linux applies the same frequency adjustment to `CLOCK_MONOTONIC` as to
+`CLOCK_REALTIME`, that rate-locks the PHC to *dserv's* timebase. Drift collapses
+to 0.002 ppm — re-measure every ~400 s instead. Confirmation that the mechanism
+is the one intended: phc2sys reports `freq -46636` ppb, matching the −46.4 ppm
+measured independently by `phc_offset`. Script: `host/start_phc2sys.sh`.
+
+**`PTP_SYS_OFFSET_PRECISE` is NOT available here** — `macb` implements no
+`getcrosststamp`, so there is no hardware cross-timestamp and the two-method
+cross-check degrades to one method. `phc_offset` reports its own error bound
+(half the MONO-PHC-MONO read window, min-filtered: 1407 ns window -> ±703 ns) so
+the uncertainty is stated rather than assumed. On a NIC that supports it, method
+B would tighten this link by ~10x and make the whole chain PTP-limited.
+
+**Why this link is tractable at all:** both clocks are on the host. There is no
+wire, so no one-way delay to estimate and no asymmetry to model — precisely the
+problem that made the obs-anchor mechanism hard (see "Why the ~200 us has been so
+hard to pin down and subtract"). The hard half of clock sync is now handled by
+PTP in hardware, and what remains is two local clock reads.
+
+### What is still missing (step 3)
+
+Nothing yet APPLIES this to event timestamps. Two options:
+
+1. **Box-side (recommended):** feed `box_clock` a single offset
+   `D = dserv_us - ptp_us` computed on the host, in place of the obs-boundary
+   anchor. The existing `cmd/sync` plumbing already does exactly this shape, but
+   with a network round trip whose asymmetry is unmeasurable; here D comes from
+   two local reads and carries **no transport term at all**. Refresh every few
+   minutes, per the drift above.
+2. **Host-side:** convert on ingest in dserv. Avoids firmware change but puts a
+   per-datapoint conversion in the hot path and loses the box's own view.
+
+Then **certify with `host/clock_err.sh`**, which differences one physical edge
+stamped independently at both ends. PTP becomes a fourth `sync/source` value
+measured against a real edge rather than trusted. **Until that runs, the ±100 ns
+is PTP's estimate of its own offset — not evidence that a stamped event lands
+correctly on dserv's timeline.**

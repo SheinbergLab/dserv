@@ -2570,6 +2570,28 @@ static int dpoint_remove_script_command (ClientData data, Tcl_Interp *interp,
  * script trap) was invisible and cost a Tcl dispatch per publish indefinitely.
  * `dpointScripts` lists registered datapoints; `dpointGetScript` returns one.
  */
+/*
+ * dservClockEpochOffset -- the constant in dserv's timebase, in microseconds.
+ *
+ *   Dataserver::now() = clock_epoch_offset_us() + steady_us()
+ *
+ * i.e. CLOCK_MONOTONIC plus a value captured once at startup. Exposed because
+ * bridging an external hardware clock onto dserv's timeline needs it: a PTP
+ * grandmaster's PHC can be related to CLOCK_MONOTONIC locally (see
+ * extio-zephyr/host/phc_offset.c), but converting that into dserv time requires
+ * this constant, which was previously reachable only from C
+ * (tclserver_clock_epoch_offset_us, used by modules/gpio_input).
+ *
+ *   dserv_us = phc_us - (phc_minus_mono_us) + [dservClockEpochOffset]
+ */
+static int dserv_clock_epoch_offset_command (ClientData data, Tcl_Interp *interp,
+                                             int objc, Tcl_Obj *objv[])
+{
+  Tcl_SetObjResult(interp,
+                   Tcl_NewWideIntObj((Tcl_WideInt) Dataserver::clock_epoch_offset_us()));
+  return TCL_OK;
+}
+
 static int dpoint_scripts_command (ClientData data, Tcl_Interp *interp,
                                    int objc, Tcl_Obj *objv[])
 {
@@ -2937,6 +2959,8 @@ static void add_tcl_commands(Tcl_Interp *interp, TclServer *tserv)
   Tcl_CreateObjCommand(interp, "now",
                (Tcl_ObjCmdProc *) now_command,
                tserv, NULL);
+  Tcl_CreateObjCommand(interp, "dservClockEpochOffset",
+               (Tcl_ObjCmdProc *) dserv_clock_epoch_offset_command, tserv, NULL);
 
   Tcl_CreateObjCommand(interp, "subprocess",
                (Tcl_ObjCmdProc *) subprocess_command,
