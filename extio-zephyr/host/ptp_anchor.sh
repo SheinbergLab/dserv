@@ -20,9 +20,22 @@
 #
 #   sh ptp_anchor.sh <extio/name> [/dev/ptpN]
 set -e
-DEV=${1:?usage: ptp_anchor.sh <extio/name> [/dev/ptpN]}
-PHC=${2:-/dev/ptp0}
+DEV=${1:?usage: ptp_anchor.sh <extio/name> [/dev/ptpN] [iface]}
+PHC=${2:-}
+IFACE=${3:-eth0}
 HERE=$(dirname "$0")
+
+# Resolve the PHC from the interface -- do NOT hardcode /dev/ptp0. The index is
+# assigned at driver probe and is NOT stable across reboots: this rig moved from
+# ptp0 to ptp1 after a Pi restart, and a hardcoded path then silently measured
+# the wrong clock (or, here, failed outright).
+if [ -z "$PHC" ]; then
+  IDX=$(sudo ethtool -T "$IFACE" 2>/dev/null | awk '/provider index/ {print $NF}')
+  [ -n "$IDX" ] || IDX=$(ethtool -T "$IFACE" 2>/dev/null | awk '/provider index/ {print $NF}')
+  [ -n "$IDX" ] || { echo "cannot resolve PHC index for $IFACE" >&2; exit 1; }
+  PHC=/dev/ptp$IDX
+  echo "PHC for $IFACE: $PHC"
+fi
 
 command -v "$HERE/phc_offset" >/dev/null 2>&1 || [ -x "$HERE/phc_offset" ] || {
   echo "build it first:  cc -O2 -Wall -o $HERE/phc_offset $HERE/phc_offset.c" >&2

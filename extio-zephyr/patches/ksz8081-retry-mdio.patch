@@ -1,0 +1,72 @@
+--- /tmp/ksz8081.orig.c	2026-07-26 01:35:49
++++ drivers/ethernet/phy/phy_microchip_ksz8081.c	2026-07-26 01:35:50
+@@ -494,24 +494,52 @@
+ 		return ret;
+ 	}
+ 
+-	ret = phy_mc_ksz8081_reset_gpio(config);
+-	if (ret == -ENODEV) { /* On -ENODEV, attempt command-based reset */
+-		ret = phy_mc_ksz8081_write(dev, MII_BMCR, MII_BMCR_RESET);
+-		if (ret < 0) {
+-			goto done;
+-		}
+-	}
+-
+-	/* PHY reset can be slower on some systems. So make sure PHY is up.*/
+-	ret = phy_mc_ksz8081_phy_readiness_check(dev);
+-	if (ret < 0) {
+-		goto done;
+-	}
++	/* LOCAL PATCH -- retry the whole bring-up.
++	 *
++	 * Upstream runs reset -> readiness-check -> static-cfg exactly once, so a
++	 * SINGLE bad MDIO read aborts init permanently and the interface never
++	 * comes up. On a board with a marginal MDIO bus that is a coin flip every
++	 * boot. Measured on an FRDM-RW612: reading PHYID1 repeatedly returns
++	 * 0x0 / 0xffff / 0xffff / 0x5 (should be 0x0022) while BMSR alternates
++	 * between a valid 0x7849 and 0xffff -- i.e. the PHY is alive and answers
++	 * correctly some of the time.
++	 *
++	 * Note the readiness check infers state from those reads: an all-ones read
++	 * sets the OMSO factory-mode bit and is reported as
++	 * "PHY is still in factory mode!", which describes the read failure, not
++	 * the device.
++	 *
++	 * Retrying costs nothing on a healthy board (first attempt succeeds) and
++	 * turns an unusable board into a working one. See extio-zephyr/PORTING.md.
++	 */
++	for (int attempt = 0; attempt < 8; attempt++) {
++		ret = phy_mc_ksz8081_reset_gpio(config);
++		if (ret == -ENODEV) { /* On -ENODEV, attempt command-based reset */
++			ret = phy_mc_ksz8081_write(dev, MII_BMCR, MII_BMCR_RESET);
++			if (ret < 0) {
++				k_msleep(10);
++				continue;
++			}
++		}
+ 
+-	/* After each reset we will apply the static cfg from DT */
+-	ret = phy_mc_ksz8081_static_cfg(dev);
+-	if (ret) {
+-		goto done;
++		/* PHY reset can be slower on some systems. So make sure PHY is up.*/
++		ret = phy_mc_ksz8081_phy_readiness_check(dev);
++		if (ret < 0) {
++			k_msleep(10);
++			continue;
++		}
++
++		/* After each reset we will apply the static cfg from DT */
++		ret = phy_mc_ksz8081_static_cfg(dev);
++		if (ret) {
++			k_msleep(10);
++			continue;
++		}
++		if (attempt) {
++			LOG_WRN("PHY bring-up succeeded on attempt %d "
++				"(marginal MDIO bus)", attempt + 1);
++		}
++		break;
+ 	}
+ done:
+ 	/* Unlock mutex */

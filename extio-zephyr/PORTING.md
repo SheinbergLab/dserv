@@ -2706,3 +2706,74 @@ continues there. The PTP result (±100 ns, `host/start_ptp.sh`) was taken while
 the link was healthy and stands, but cannot be re-verified until the MDIO issue
 is resolved. Worth checking power delivery first — the board is fed from two USB
 cables — before concluding the board is faulty.
+
+### CORRECTION + the actual rule: the RW612 needs a FULL power discharge
+
+**Retracting "the MDIO bus is intermittent (hardware)" from earlier today.** It
+is not a marginal bus. Two things were going on, and both are recoverable:
+
+1. **A partially-seated USB-C connector.** With it loose, reading PHYID1
+   repeatedly gave `0x0 / 0xffff / 0xffff / 0x5`. With it properly seated, the
+   same read gives `0x22` three times out of three, and BMSR `0x784d` twice out
+   of two. The "flaky MDIO" was marginal power, not silicon.
+2. **The PHY latching a bad state at power-up**, which a quick USB unplug does
+   NOT clear.
+
+**THE RECOVERY RECIPE (verified):**
+
+```
+1. remove EVERYTHING -- both USB cables AND the Ethernet cable
+2. wait ~10 s for the rails to actually drain
+3. connect the ETHERNET cable FIRST
+4. then power (USB)
+```
+
+Ordering matters: the PHY latches its straps when reset deasserts, within
+milliseconds of power arriving. A board still partly charged, or powering up
+with no link partner present, latches differently. A quick unplug/replug is NOT
+enough and reproducibly leaves the box with no Ethernet.
+
+**What this supersedes.** This single quirk explains essentially every Ethernet
+mystery in this document from 2026-07-25 onwards:
+- the link that came up and dropped twice, and the cable swap that changed
+  nothing (the cable was always fine);
+- **"Ethernet needs the cable present at BOOT" -- retracted for the third and
+  final time.** The real rule is the discharge, of which cable-at-boot is one
+  necessary part;
+- the `E: PHY is still in factory mode!` abort -- that message reports a failed
+  MDIO read, not a device state;
+- OMSO reading `0x22` (NAND-tree bit set) and CTRL2 reading `0x0`. **Both read
+  the same when the link WORKS**, so they were never the fault. Do not chase
+  them; that diagnosis was wrong.
+
+**A driver patch that is still worth keeping** (`patches/ksz8081-retry-mdio.patch`):
+upstream runs reset -> readiness-check -> static-cfg exactly ONCE, so a single
+bad MDIO read aborts Ethernet permanently for that boot. Retrying costs nothing
+on a healthy board and removes one whole failure mode. It is not a fix for the
+discharge issue and should not be described as one.
+
+### Registration DOES survive a dserv restart -- but lands INCOMPLETE
+
+Verified by restarting dserv while watching the box console:
+
+```
+reg: config link down -> re-registering (x1)
+reg: config link restored
+reg: registered as extio/box (INCOMPLETE, watchdog will retry)
+```
+
+So the `server_up` watchdog fires correctly and the connect-back is
+re-established (`%reg` succeeds -- dserv reconnects to the box's port 5010).
+What fails is one or more of the `%match` lines, leaving the box **publishing
+but deaf**: uplink datapoints keep flowing while `cmd/*` never arrives, which
+reads exactly like a working box.
+
+Not the Pico's old fire-and-forget bug -- this port already waits for dserv's
+`1 ...` acknowledgement (`box_net_eth_send_command`), and already rotates the
+source port over `55000..55007` with `SO_REUSEADDR`. So `INCOMPLETE` is dserv
+*declining* a `%match`, not a dropped write. Direct testing shows dserv accepts
+`%match` fine from a fresh connection, so the cause is still open.
+
+**Diagnostic that matters:** `state/watchdog` advancing proves only the UPLINK.
+Test the downlink explicitly (`cmd/do/<pin>` -> `state/do/<pin>`) before trusting
+a box, and treat `INCOMPLETE` in the boot log as "this box cannot be commanded".
