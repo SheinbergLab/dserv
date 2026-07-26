@@ -110,6 +110,58 @@ static int ptp_reanchor(uint32_t *window_us)
 }
 #endif /* CONFIG_PTP_CLOCK */
 
+static void publish_do(uint8_t pin, uint8_t level, uint64_t stamp);
+
+/* ---- absolute-time triggering (`cmd/do/<pin>/at_abs <dserv_us>`) ----------
+ *
+ * The point of PTP: instead of "fire when this packet arrives" (transport delay
+ * IN the path, hundreds of us of jitter), the host says "fire at absolute time
+ * T" well in advance and every node schedules locally against its own synced
+ * clock. Delivery jitter stops mattering entirely -- a frame only has to arrive
+ * BEFORE T. Simultaneity across boxes is then bounded by clock sync (~us), not
+ * by the network (~hundreds of us).
+ *
+ * T is in DSERV time. box_clock maps box->dserv; we need the inverse, and it
+ * must undo the rate correction too or a distant T lands skewed:
+ *
+ *   stamp: dserv = box + offset + (box - anchor) * rate
+ *   here : box   = dserv - offset - (box - anchor) * rate
+ *
+ * Solved by one fixed-point pass -- the correction is ppb-scale, so a single
+ * refinement is far below the timer's own resolution.
+ */
+#if defined(CONFIG_PTP_CLOCK)
+static struct k_timer abs_timer[BOX_NPINS];
+static uint64_t       abs_target_us[BOX_NPINS];   /* intended dserv time */
+
+static uint64_t dserv_to_box_us(const box_clock_t *c, uint64_t dserv_us)
+{
+	int64_t box = (int64_t) dserv_us - c->offset_us;
+
+	for (int i = 0; i < 2; i++) {
+		int64_t dt   = box - (int64_t) c->anchor_box_us;
+		int64_t corr = (dt * (int64_t) c->rate_ppb) / 1000000000LL;
+		box = (int64_t) dserv_us - c->offset_us - corr;
+	}
+	return (uint64_t) box;
+}
+
+static void abs_fire(struct k_timer *t)
+{
+	int pin = (int) (intptr_t) k_timer_user_data_get(t);
+
+	if (pin < 0 || pin >= BOX_NPINS) {
+		return;
+	}
+	gpio_cmd_t c = { .op = GPIO_OP_SET, .pin = (uint8_t) pin, .value = 1 };
+	box_gpio_exec(&cfg, &c);
+	/* Stamp with the INTENDED time, not the actual fire time: that is the
+	 * instant the host asked for and the one every node agrees on. Timer slop
+	 * shows up on the scope, not in the data. */
+	publish_do((uint8_t) pin, 1, abs_target_us[pin]);
+}
+#endif /* CONFIG_PTP_CLOCK */
+
 /* A hardware sync edge may anchor an obs toggle only if it is RECENT: well under
  * the shortest obs on/off cadence (seconds), so a stale latched edge from the
  * previous toggle can never anchor the current one. */
@@ -247,6 +299,62 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 	 * step is sub-us rather than the hundreds of us an obs anchor moves, but
 	 * the rule is about correctness, not magnitude.
 	 */
+	/* <prefix>/cmd/do/<pin>/at_abs <dserv_us> -- fire at an ABSOLUTE instant. */
+	{
+		char pfx2[64], k2[112];
+		int pin2;
+
+		dserv_cfg_prefix(&cfg, pfx2, sizeof pfx2);
+		for (pin2 = 0; pin2 < BOX_NPINS; pin2++) {
+			snprintf(k2, sizeof k2, "%s/cmd/do/%d/at_abs", pfx2, pin2);
+			if (!dserv_msg_name_eq(&m, k2)) {
+				continue;
+			}
+			uint64_t T   = (uint64_t) dserv_msg_as_long(&m);
+			uint64_t now = box_gpio_now_us();
+			uint8_t  f3[DSERV_MSG_LEN];
+			char     nm3[80];
+
+			if (!boxclk.synced) {
+				dserv_state_name(&cfg, nm3, sizeof nm3, "sched/abs_err");
+				dserv_msg_string(f3, nm3, 0, "unsynced");
+				box_uplink_send(f3, DSERV_MSG_LEN);
+				return;
+			}
+
+			uint64_t target_box = dserv_to_box_us(&boxclk, T);
+			int64_t  lead_us    = (int64_t) target_box - (int64_t) now;
+
+			/* NEVER fire late. A box that silently fires milliseconds after T
+			 * is far worse than one that says it missed -- the whole value of
+			 * time-triggering is that every node agrees on the instant. */
+			if (lead_us <= 0) {
+				dserv_state_name(&cfg, nm3, sizeof nm3, "sched/abs_late_us");
+				dserv_msg_int64(f3, nm3, 0, -lead_us);
+				box_uplink_send(f3, DSERV_MSG_LEN);
+				dserv_state_name(&cfg, nm3, sizeof nm3, "sched/abs_err");
+				dserv_msg_string(f3, nm3, 0, "late");
+				box_uplink_send(f3, DSERV_MSG_LEN);
+				return;
+			}
+
+			abs_target_us[pin2] = T;
+			k_timer_stop(&abs_timer[pin2]);
+			k_timer_user_data_set(&abs_timer[pin2], (void *) (intptr_t) pin2);
+			k_timer_start(&abs_timer[pin2], K_USEC(lead_us), K_NO_WAIT);
+
+			/* Publish the lead so the host can see the margin it actually got
+			 * -- shrinking lead is the early warning before anything is late. */
+			dserv_state_name(&cfg, nm3, sizeof nm3, "sched/abs_lead_us");
+			dserv_msg_int64(f3, nm3, 0, lead_us);
+			box_uplink_send(f3, DSERV_MSG_LEN);
+			dserv_state_name(&cfg, nm3, sizeof nm3, "sched/abs_err");
+			dserv_msg_string(f3, nm3, 0, "armed");
+			box_uplink_send(f3, DSERV_MSG_LEN);
+			return;
+		}
+	}
+
 	{
 		char pfx[64], key[96];
 		dserv_cfg_prefix(&cfg, pfx, sizeof pfx);
@@ -475,32 +583,12 @@ int main(void)
 	}
 #endif
 
-#if defined(BOX_BRINGUP_NET_IP)
-	/* BRING-UP SCAFFOLD -- now RETIRABLE, kept only as a factory-reset default.
-	 *
-	 * Added while `cmd/save` was broken on the FRDM-RW612, which made the box's
-	 * own IP unconfigurable: net/ip applies only in box_net_eth_init() at boot,
-	 * so a runtime change needs a reboot, and a reboot without persistence
-	 * forgets it. Circular -- hence a compiled-in default.
-	 *
-	 * That is FIXED (PARTITION_OFFSET + NVS_INIT_BAD_MEMORY_REGION; see
-	 * PORTING.md 2026-07-25), so this is inert whenever a saved config exists:
-	 * it is applied ONLY when nothing loaded from flash. Its remaining value is
-	 * that a factory-reset box still lands on the bench network.
-	 *
-	 * DO NOT let it become load-bearing -- it hardcodes an IP in firmware.
-	 * Delete the block and the CMakeLists definitions when the rig outgrows it.
-	 */
-	if (!cfg_loaded) {
-		if (dserv_cfg__parse_ip(BOX_BRINGUP_NET_IP, cfg.net_ip) == 0) {
-			cfg.net_mode = NET_MODE_STATIC;
-		}
-		dserv_cfg__parse_ip(BOX_BRINGUP_NET_MASK, cfg.net_sn);
-		dserv_cfg__parse_ip(BOX_BRINGUP_DSERV_IP, cfg.net_gw);
-		dserv_cfg__parse_ip(BOX_BRINGUP_DSERV_IP, cfg.dserv_ip);
+
+#if defined(CONFIG_PTP_CLOCK)
+	for (int i = 0; i < BOX_NPINS; i++) {
+		k_timer_init(&abs_timer[i], abs_fire, NULL);
 	}
 #endif
-
 	box_uplink_init(&cfg);       /* USB (and Ethernet where present) up */
 
 	box_console_init(&cfg);      /* binds CDC or console UART per console_mode */

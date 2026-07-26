@@ -30,10 +30,19 @@ HERE=$(dirname "$0")
 # ptp0 to ptp1 after a Pi restart, and a hardcoded path then silently measured
 # the wrong clock (or, here, failed outright).
 if [ -z "$PHC" ]; then
-  IDX=$(sudo ethtool -T "$IFACE" 2>/dev/null | awk '/provider index/ {print $NF}')
-  [ -n "$IDX" ] || IDX=$(ethtool -T "$IFACE" 2>/dev/null | awk '/provider index/ {print $NF}')
-  [ -n "$IDX" ] || { echo "cannot resolve PHC index for $IFACE" >&2; exit 1; }
-  PHC=/dev/ptp$IDX
+  # sysfs, because it is readable WITHOUT root -- `ethtool -T` is not, and sudo
+  # expiring mid-session is a real failure mode on this rig.
+  # NOTE /sys/class/net/<if>/device/ptp/ does NOT exist on the Pi 5's macb, so
+  # enumerate /sys/class/ptp instead. With exactly one PHC that is unambiguous
+  # (here: clock_name=gem-ptp-timer); with several, fall back to ethtool.
+  N=$(ls -1d /sys/class/ptp/ptp* 2>/dev/null | wc -l | tr -d ' ')
+  if [ "$N" = "1" ]; then
+    PHC=/dev/$(basename "$(ls -1d /sys/class/ptp/ptp* 2>/dev/null | head -1)")
+  else
+    IDX=$(sudo ethtool -T "$IFACE" 2>/dev/null | awk '/provider index/ {print $NF}')
+    [ -n "$IDX" ] && PHC=/dev/ptp$IDX
+  fi
+  [ -n "$PHC" ] || { echo "cannot resolve PHC for $IFACE" >&2; exit 1; }
   echo "PHC for $IFACE: $PHC"
 fi
 
