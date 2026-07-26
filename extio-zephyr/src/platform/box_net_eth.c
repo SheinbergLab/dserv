@@ -509,6 +509,74 @@ int box_net_eth_stack_stats(box_eth_stack_stats_t *out)
  * loop -- a blocking connect against an unreachable dserv stalls for the full
  * TCP timeout, which would wedge the registration thread and stop the retry
  * watchdog from ever running again. (Same lesson as box_net_eth_connect.) */
+/* Send SEVERAL %reg/%match lines over ONE connection.
+ *
+ * Registration used to open a separate short-lived TCP connection per line.
+ * That races dserv's per-client teardown: measured 2026-07-26 on an RW612,
+ * `%getmatch <box> 5010` showed dserv holding only ONE of the three matches --
+ * which one depended purely on timing (the first without inter-line delays, the
+ * last with them). The box is then left PUBLISHING BUT DEAF: state/* keeps
+ * flowing, cmd/* never arrives, and it looks like a perfectly healthy box.
+ *
+ * Sending them down a single connection lands all of them, verified by hand
+ * against the same dserv. Returns the number of lines that were NOT accepted.
+ */
+int box_net_eth_send_commands(const uint8_t dserv_ip[4], uint16_t port,
+			      const char *const *cmds, int ncmds)
+{
+	int fails = ncmds;
+	int s = zsock_socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+
+	if (s < 0) {
+		return fails;
+	}
+	zsock_fcntl(s, ZVFS_F_SETFL, ZVFS_O_NONBLOCK);
+
+	struct sockaddr_in a = { 0 };
+	a.sin_family = AF_INET;
+	a.sin_port = htons(port);
+	memcpy(&a.sin_addr, dserv_ip, 4);
+
+	if (zsock_connect(s, (struct sockaddr *) &a, sizeof a) < 0 &&
+	    errno != EINPROGRESS && errno != EALREADY) {
+		goto out;
+	}
+	struct zsock_pollfd pfd = { .fd = s, .events = ZSOCK_POLLOUT };
+	if (zsock_poll(&pfd, 1, 300) <= 0) {
+		goto out;
+	}
+	int err = 0;
+	socklen_t elen = sizeof err;
+	zsock_getsockopt(s, SOL_SOCKET, SO_ERROR, &err, &elen);
+	if (err != 0) {
+		goto out;
+	}
+
+	fails = 0;
+	for (int i = 0; i < ncmds; i++) {
+		size_t len = strlen(cmds[i]);
+
+		if (zsock_send(s, cmds[i], len, 0) != (int) len) {
+			fails++;
+			continue;
+		}
+		pfd.events = ZSOCK_POLLIN;
+		if (zsock_poll(&pfd, 1, 300) <= 0) {
+			fails++;
+			continue;
+		}
+		char rep[16] = { 0 };
+		int n = zsock_recv(s, rep, sizeof rep - 1, 0);
+
+		if (!(n > 0 && rep[0] == '1')) {
+			fails++;
+		}
+	}
+out:
+	zsock_close(s);
+	return fails;
+}
+
 int box_net_eth_send_command(const uint8_t dserv_ip[4], uint16_t port,
 			     const char *cmd)
 {

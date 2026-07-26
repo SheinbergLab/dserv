@@ -125,6 +125,34 @@ static void reg_request(const box_config_t *c, int full)
 	k_sem_give(&reg_wake);
 }
 
+/* Send one %reg/%match line, RETRYING.
+ *
+ * A registration round opens a separate short-lived TCP connection per line,
+ * back to back. Measured on an RW612 against dserv 2026-07-26: only the FIRST
+ * %match of a round lands -- `%getmatch <box> 5010` showed dserv holding
+ * `extio/box/config/*` alone, with `extio/box/cmd/*` and `ess/in_obs` missing.
+ *
+ * That failure is nearly invisible and genuinely dangerous: the box keeps
+ * PUBLISHING normally (state/watchdog advances, uplink datapoints flow) while
+ * being completely DEAF to cmd/*. It reads as a healthy box right up until you
+ * try to command it. The old code just counted these as `fails` and left the
+ * watchdog to retry the whole round -- but every round fails the same way, so
+ * it never converged.
+ *
+ * A short gap plus a retry fixes it. Verified by hand: injecting the two missing
+ * %match lines with a 300 ms spacing restored the downlink immediately.
+ */
+static int reg_send_retry(const uint8_t dip[4], uint16_t port, const char *cmd)
+{
+	for (int attempt = 0; attempt < 4; attempt++) {
+		if (box_net_eth_send_command(dip, port, cmd) == 0) {
+			return 0;
+		}
+		k_msleep(120);
+	}
+	return -1;
+}
+
 static void reg_thread_fn(void *a, void *b, void *cc)
 {
 	ARG_UNUSED(a); ARG_UNUSED(b); ARG_UNUSED(cc);
@@ -153,25 +181,52 @@ static void reg_thread_fn(void *a, void *b, void *cc)
 			continue;
 		}
 
-		char cmd[160];
+		/* ALL the %match lines go down ONE connection -- see
+		 * box_net_eth_send_commands(). One connection per line races dserv's
+		 * client teardown and silently lands only one of them. */
+		char mcmd[3][160];
+		const char *mptr[3];
 		int fails = 0;
 
 		if (full) {
-			snprintf(cmd, sizeof cmd, "%%reg %u.%u.%u.%u %u 1\n",
+			char rcmd[160];
+
+			snprintf(rcmd, sizeof rcmd, "%%reg %u.%u.%u.%u %u 1\n",
 				 bip[0], bip[1], bip[2], bip[3], BOX_ETH_CFG_PORT);
-			if (box_net_eth_send_command(dip, port, cmd) != 0) fails++;
+			/* %reg is its own connection: it makes dserv connect BACK to us,
+			 * so let that settle before the matches follow. */
+			if (reg_send_retry(dip, port, rcmd) != 0) fails++;
+			k_msleep(150);
 		}
+
 		static const char *const pats[] = { "%s/config/*", "%s/cmd/*" };
+		int n = 0;
+
 		for (int i = 0; i < (int) ARRAY_SIZE(pats); i++) {
 			char pat[96];
+
 			snprintf(pat, sizeof pat, pats[i], pfx);
-			snprintf(cmd, sizeof cmd, "%%match %u.%u.%u.%u %u %s 1\n",
+			snprintf(mcmd[n], sizeof mcmd[n], "%%match %u.%u.%u.%u %u %s 1\n",
 				 bip[0], bip[1], bip[2], bip[3], BOX_ETH_CFG_PORT, pat);
-			if (box_net_eth_send_command(dip, port, cmd) != 0) fails++;
+			mptr[n] = mcmd[n];
+			n++;
 		}
-		snprintf(cmd, sizeof cmd, "%%match %u.%u.%u.%u %u %s 1\n",
+		snprintf(mcmd[n], sizeof mcmd[n], "%%match %u.%u.%u.%u %u %s 1\n",
 			 bip[0], bip[1], bip[2], bip[3], BOX_ETH_CFG_PORT, SYNC_DP);
-		if (box_net_eth_send_command(dip, port, cmd) != 0) fails++;
+		mptr[n] = mcmd[n];
+		n++;
+
+		for (int attempt = 0; attempt < 4; attempt++) {
+			int bad = box_net_eth_send_commands(dip, port, mptr, n);
+
+			if (bad == 0) {
+				break;
+			}
+			if (attempt == 3) {
+				fails += bad;
+			}
+			k_msleep(150);
+		}
 
 		printk("reg: %s as %s%s\n", full ? "registered" : "matches refreshed",
 		       pfx, fails ? " (INCOMPLETE, watchdog will retry)" : "");

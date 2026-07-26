@@ -110,6 +110,12 @@ void box_net_eth_rx_wake_start(void);
  * Runs on the registration thread, never the service loop -- it blocks for up to
  * a few hundred ms and the loop is what gates DI publish latency. One command
  * per connection: dserv's '%' reader is greedy and will swallow a second line. */
+/* Several %reg/%match lines over ONE connection -- separate connections race
+ * dserv's client teardown and silently drop all but one match. Returns the
+ * number of lines not accepted. */
+int box_net_eth_send_commands(const uint8_t dserv_ip[4], uint16_t port,
+			      const char *const *cmds, int ncmds);
+
 int box_net_eth_send_command(const uint8_t dserv_ip[4], uint16_t port,
 			     const char *cmd);
 
