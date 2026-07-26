@@ -2517,3 +2517,77 @@ budget; tail behaviour is not bounded by the same budget (see the NVS-GC and
   cost of putting a switch in the path.
 - The RW612 ran `mode eth` (data pipe stripped) — the correct configuration for
   an Ethernet box, and required to avoid the ~370 us double-forwarding tax.
+
+---
+
+## 2026-07-26 — PTP WORKS: RW612 locked to the Pi at ~±100 ns
+
+Step 1 of PTP integration, done. RW612 (`CONFIG_PTP=y`) as TIME_RECEIVER against
+`ptp4l` on the Pi 5, hardware timestamping at BOTH ends, direct cable (no switch,
+so no path asymmetry).
+
+```
+Port 1 State   : TIME_RECEIVER
+grandmaster    : 2C:CF:67:FF:FE:B3:39:F4 (the Pi)   steps_rm 1
+offset_from_tt : -16 / -11 / -29 / -109 / -78 / -37 ns
+mean_delay     : 1229-1287 ns          sync status : stable
+PHC now        : 1785039984.134287686  (stepped to the Pi's wall clock)
+```
+
+**~±100 ns.** For scale, against the same box's other anchoring methods measured
+with the electrical reference: `hw` TTL edge **35 us**, `swc` −167 us, `sw`
+−181 us. PTP is roughly **350x tighter than the TTL line**, which is exactly the
+outcome the PTP section above predicted for hardware timestamps at both ends.
+
+### THE GOTCHA: `hwts_filter full` is REQUIRED on the Pi 5
+
+Without it PTP appears to work and silently does not. The BMCA completes, roles
+are correct, `sync status` reads `stable` — and `offset_from_tt` and
+`mean_delay` sit at **exactly 0 ns**, because no event message is ever
+timestamped:
+
+```
+ptp4l: port 1 (eth0): received SYNC without timestamp
+ptp4l: port 1 (eth0): received DELAY_REQ without timestamp
+```
+
+Cause: the Pi 5's NIC is `macb` (RP1 Cadence GEM) and advertises only `none` and
+`all` RX filter modes — **no per-protocol PTP filter**. ptp4l's default request
+for `HWTSTAMP_FILTER_PTP_V2_EVENT` is not honoured. `--hwts_filter full` asks
+for `HWTSTAMP_FILTER_ALL` instead, which the driver does support. The messages
+disappear and the offset starts computing.
+
+Note the failure shape, which is this project's recurring one: **a zero that
+looks like perfection.** `offset_from_tt: 0 ns` reads as a perfectly locked
+clock. Check `mean_delay` too — 0 there means the delay exchange never
+completed.
+
+Reproducible setup: `host/start_ptp.sh`.
+
+### What this does NOT yet give us
+
+**Box events are not yet on dserv's timeline.** PTP disciplines the box's 1588
+counter to the Pi's **PHC**. dserv stamps datapoints from `steady_clock` + a
+fixed epoch offset (commit `227315e`) — `CLOCK_MONOTONIC`, a **different
+oscillator** from the NIC's PHC, and one that is NTP-slewed while the PHC is not.
+So the two drift apart and a mapping is still required.
+
+The mapping is, however, **local** — both clocks are on the host, no wire
+involved — via `PTP_SYS_OFFSET_PRECISE`, which reads the PHC and the system
+clock together with hardware assistance. That converts the hard problem (an
+unmeasurable one-way network delay) into an easy one (two clocks on one board).
+Structurally better than the obs-anchor mechanism it would replace.
+
+### Next steps, in order
+
+1. **PHC <-> dserv-clock bridge** (host side). The actual engineering.
+2. **Certify against the electrical reference.** `host/clock_err.sh` already
+   differences one physical edge stamped independently at both ends; PTP becomes
+   a fourth `sync/source` value, measured rather than trusted. **Do not quote the
+   ~100 ns as end-to-end accuracy until this runs** — it is PTP's own estimate of
+   its own offset, which is not the same as a stamped event landing correctly on
+   dserv's timeline.
+3. **Then the interesting one:** `ENET_TIMER0` on Arduino D5 (IO27), left free on
+   purpose, is a 1588 **capture** pin — a TTL edge hardware-timestamped directly
+   into the PTP timebase, no software path at all. That unifies the sync line and
+   PTP into one mechanism.
