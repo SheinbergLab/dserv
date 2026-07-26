@@ -2256,3 +2256,106 @@ semantic for debounced switch inputs, and it happens outside obs regardless.
 If flash writes ever need to be safe at arbitrary times, the fix is to move
 `box_flash_save` off the service loop (workqueue or low-priority thread) rather
 than to deepen any buffer — an erase should never sit on the RT path.
+
+---
+
+## 2026-07-26 — USB-HS on the RW612, and a self-inflicted 12 ms
+
+### THE BUG: `CONFIG_LOG` at default level costs ~12 ms PER USB FRAME
+
+Enabling `CONFIG_LOG=y` + `CONFIG_LOG_MODE_MINIMAL=y` (added hours earlier to
+surface the KSZ8081 PHY messages) silently destroyed USB performance.
+
+`LOG_MODE_MINIMAL` is **synchronous** — it formats and writes inline, to a
+115200 baud UART. Zephyr's default log level is INFO, and
+`subsys/usb/device_next/class/usbd_cdc_acm.c` contains:
+
+```c
+static void cdc_acm_irq_tx_enable(const struct device *dev)
+{
+	atomic_set_bit(&data->state, CDC_ACM_IRQ_TX_ENABLED);
+	if (ring_buf_space_get(data->tx_fifo.rb)) {
+		LOG_INF("tx_en: trigger irq_cb_work");     /* EVERY FRAME */
+		cdc_acm_work_submit(&data->irq_cb_work);
+	}
+}
+```
+
+So every frame the box sent paid a blocking UART write. ~12 ms is very close to
+the time to shift that string out at 115200.
+
+| | with default log level | `CONFIG_LOG_DEFAULT_LEVEL=1` |
+| --- | --- | --- |
+| `dbg/usb_send_us` | 12,044 | **53** |
+| `dbg/usb_send_max_us` | 3,084,644 (3.1 s) | **258** |
+| `dbg/disp_us` | 12,254 | **778** |
+| `dbg/loop_max_us` | 11,243,054 (11.2 s) | **2,453** |
+| raw inter-frame gap, med | 12,152 | **256** |
+| raw gaps < 1 ms | **0 %** | **94 %** |
+| loopback RTT | ~86,000 | ~870 |
+
+**Fix:** `CONFIG_LOG_DEFAULT_LEVEL=1` (errors), raising individual modules
+explicitly (`CONFIG_PHY_LOG_LEVEL_INF=y`). Never leave the default level on a
+board whose logging backend is synchronous.
+
+**Why this one is worth remembering.** It was invisible from outside: the
+watchdog still ticked at exactly 1 Hz, the box stayed registered, `show` was
+normal, and Ethernet was unaffected (the `LOG_INF` is on the CDC TX path only).
+Only `dbg/usb_send_us` — the box's own instrumentation — showed it. A diagnostic
+change made for one subsystem silently crippled another, and **the same commit
+that added the logging also took the Ethernet measurements**, so those numbers
+were taken under an unrelated 12 ms hazard that happened not to touch them.
+Cross-check a config change against the transports it is *not* aimed at.
+
+### Localisation, for method
+
+The hunt went: harness returns no samples -> manual toggle shows ~86 ms RTT ->
+split into legs (`L1` 74 ms, `L2` **12.19 ms, sd ~30 us**) -> a rock-steady 12 ms
+on a leg carrying frames the box emits ~62 us apart says *fixed per-frame cost*,
+not poll quantization -> stop dserv, read the tty raw (`host/rawpipe.py`, pure
+stdlib, no pyserial) -> the announce burst STILL arrives 12 ms apart with no
+host software in the path -> therefore box-side -> `box_net_usb_client_send` is
+non-blocking by construction (ring_buf_put + `uart_irq_tx_enable`), so a 12 ms
+measurement across those two calls indicts `uart_irq_tx_enable` -> read it.
+
+`host/rawpipe.py` is worth keeping: it removes dserv, Tcl and `usbio.c` from the
+USB path exactly as `eth_listen.py` does for Ethernet.
+
+### USB-HS vs Ethernet — same box, same host, same session
+
+480 Mbps negotiated (`/sys/bus/usb/devices/*/speed`), Pi 5 on `performance`,
+load ~0.1, D4->D3 loopback:
+
+| leg | **USB-HS** | Ethernet |
+| --- | --- | --- |
+| loopback median | **866–890** | 948–999 |
+| loopback min | **756–758** | 892–910 |
+| loopback p99 | **1002–1022** | 1073–1126 |
+| `L1` cmd -> do_echo | **650–673** | 813 |
+| `L2` do_echo -> di | 198 | 209 |
+
+**USB-HS wins on every metric** — ~90 us faster median, ~140 us lower floor,
+tighter tail. This CONFIRMS the projection recorded on 2026-07-26 above, which
+deliberately refused to claim it ("Measure it; do not cite this paragraph as a
+finding"). It is now a finding. The mechanism is the one predicted: USB's cost
+is off the RT loop by construction (ring + TX interrupt), and High Speed cuts the
+frame quantization 8x versus USB-FS.
+
+### CLOSED: the Teensy USB harness disagreement is Teensy-specific
+
+`loopback_rtt` 866–890 vs `lb_split` total 857–884 — **within ~30 us, i.e. they
+agree**. The unexplained ~426 us disagreement on the Teensy's USB path does NOT
+reproduce on this box, over the same ingest path (`extio` subprocess ->
+`usbio.c`). Combined with the pico agreeing, the anomaly is neither
+"USB ingest in general" nor "Zephyr in general" — it is Teensy-specific.
+
+### Operational notes
+
+- `pgrep -f <pat>` / `pkill -f <pat>` **match their own command line**. This bit
+  twice: `pkill -f cmd_rtt` killed the ssh session running it, and
+  `pgrep -c -f "local/dserv/dserv"` reported dserv alive when it was stopped
+  (counting itself). Use `systemctl is-active`, or a pattern that cannot self-match.
+- `dbg/usb_drops` counts whole dropped frames and is the real "too many
+  datapoints" signal on USB. It reached 210 during the 12 ms period and stopped
+  rising afterwards — a useful confirmation that the fix took.
+- The Pi has no `lsof` and `sudo` is not passwordless.
