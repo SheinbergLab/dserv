@@ -2777,3 +2777,50 @@ source port over `55000..55007` with `SO_REUSEADDR`. So `INCOMPLETE` is dserv
 **Diagnostic that matters:** `state/watchdog` advancing proves only the UPLINK.
 Test the downlink explicitly (`cmd/do/<pin>` -> `state/do/<pin>`) before trusting
 a box, and treat `INCOMPLETE` in the boot log as "this box cannot be commanded".
+
+### STEP 3 DONE: box_clock anchored from PTP
+
+```
+ptp/offset_us      -36999999      (D = dserv_us - ptp_us; the 37 s TAI offset)
+sync/source        ptp            (fourth source, beside hw / swc / sw)
+sync/ptp_window_us 1-2 us         (box pairs its local clock and PTP clock)
+```
+
+Re-anchoring once a second, sampled over 16 s:
+
+```
+offset delta per re-anchor : 0, +2, 0, 0, +1, 0, +1, 0 us
+total drift                : 4 us / 16 s = ~0.25 ppm
+```
+
+**The step is the point.** This document's "Never anchor mid-obs" rule exists
+because a re-anchor STEPS the offset by the transport jitter -- hundreds of us
+for an obs anchor, which silently corrupts any interval computed across it. A
+PTP re-anchor steps by **0-2 us**, because there is no transport in the path: the
+box reads its own two clocks, and the host-supplied D is a constant derived from
+two LOCAL clock reads. The obs gate is kept anyway (correctness, not magnitude).
+
+Error chain, each link measured:
+
+| link | mechanism | accuracy |
+| --- | --- | --- |
+| box 1588 <-> Pi PHC | `ptp4l`, hw timestamps both ends | ~±100 ns |
+| box local <-> box 1588 | sandwich read, `sync/ptp_window_us` | ~±1 us |
+| PHC rate <-> system clock | `phc2sys` | 0.002 ppm |
+| PHC <-> `CLOCK_MONOTONIC` | `host/phc_offset.c` | ±703 ns |
+| `CLOCK_MONOTONIC` -> dserv | `dservClockEpochOffset` | exact |
+
+**~±2 us end to end**, against the TTL hardware anchor's 35 us -- about 17x
+better -- and ~500x inside the 1 ms requirement. Dominated now by the two
+software pair-reads (box-local<->1588 and PHC<->MONOTONIC), not by PTP.
+
+**What is still NOT established.** This is internal consistency, not absolute
+accuracy: every number above is the mechanism's estimate of itself. Certifying it
+needs `host/clock_err.sh`, which differences one physical edge stamped
+independently at both ends -- the same way `hw` / `swc` / `sw` were certified.
+Until that runs, do not quote ±2 us as end-to-end timestamp accuracy.
+
+Operating notes: `ptp4l` AND `phc2sys` must both be running (`host/start_ptp.sh`,
+`host/start_phc2sys.sh`); without phc2sys the PHC free-runs at ~46 ppm and D is
+not constant. Re-run `host/ptp_anchor.sh` every ~400 s, or once a session --
+the box re-anchors itself from D in between, costing zero packets.
