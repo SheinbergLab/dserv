@@ -2907,3 +2907,72 @@ box re-registering with its persisted identity and the same 76 keys as baseline.
 `storage_partition` at `0x620000` is outside both slots, so "config survives an
 update" is a property of the layout — but the *write* path under MCUboot is now
 tested too, which is the part the layout does not give you for free.
+
+## 2026-07-27 (later) — OTA step 2: slot1 writes, and what they cost the RT loop
+
+`src/platform/box_ota_flash.c` opens `slot1_partition` via
+`flash_area_open(FIXED_PARTITION_ID(slot1_partition))` and erases / programs /
+reads it in area-relative offsets, so the caller cannot reach slot0 and never
+touches the `zephyr,mapped-partition` XIP-address trap that `box_flash.c`
+documents. `cmd/ota/flashtest <kb>` drives it with a deterministic pattern and
+reads three pages back, so a pass means the bytes LANDED, not that the calls
+returned 0. Rig-green afterwards: 12/12.
+
+Slot geometry confirmed live: **3,145,728 B, 4 kB sectors**, `verify=1`, `rc=0`
+at every size tried. Writing 512 kB of pattern into slot1 while XIP-ing out of
+slot0 works — that was the open question, and the answer is yes.
+
+### Measured (box1, MCUboot, slot1)
+
+| size | wall | erase max | prog max (256 B) |
+|---|---|---|---|
+| 64 kB | 1010 ms | 56.0 ms | 885 us |
+| 128 kB | 2065 / 2089 ms | 59.4 / 59.5 ms | 937 / 987 us |
+| 256 kB | 4074 / 4117 ms | 57.7 / 59.4 ms | 928 / 992 us |
+| 512 kB | 8297 / 8351 / 8409 ms | 60.7 / 61.2 / 62.9 ms | 861-954 us |
+
+Linear at **~16 ms/kB (~62 kB/s)**, so a 640 kB image is **~10.5 s** of flash
+work. Erase dominates: 16 sectors x ~56 ms = ~0.9 s of the 64 kB run's 1.01 s.
+
+### The number that actually constrains the design
+
+**Flash work blocks the service loop completely, for its whole duration.**
+`state/watchdog` sat frozen at 554 for the entire 8 s of a 512 kB burst and then
+jumped straight to 563 — it did not tick once. The box is deaf for the duration:
+no watchdog, no downlink, no publishes.
+
+I initially read this the other way. `dbg/loop_max_us` peaked at ~1 ms during a
+burst, which looks like "the loop kept running" — but that counter is published
+BY the loop and reset after publishing, so a stalled loop simply cannot report
+its own stall. **A counter that has to be published to be seen cannot measure the
+thing that stops publishing.** The watchdog freeze is the honest instrument.
+
+So the receive path in step 3 must be **incremental — one chunk per frame,
+returning to the service loop between chunks**. Then the RT hole is bounded by a
+single sector erase (**~63 ms worst seen**) instead of the whole image. Cumulative
+deafness over a 640 kB image is still ~10 s, in ~60 ms slices, so an OTA WILL
+make the box miss watchdog beats: keep it obs-gated (it is — the handler refuses
+with `-EBUSY` while `box_obs_active()`), and do not let a fleet monitor read those
+missed beats as a dead box.
+
+### A telemetry trap that cost a wrong diagnosis, again
+
+For several runs `state/ota/dbg/bytes` stayed at the first run's 65536 while the
+box console showed every run completing correctly at the right size. The results
+were not missing, they were **dropped**.
+
+Mechanism: the 1 Hz gate is `next_wd += 1000`, so after an 8 s stall it fires
+**eight times in eight consecutive ~1 ms passes**, each pushing a full status
+burst — several hundred frames into a 40-deep queue (`dbg/pubq_dropped` 128 ->
+358). Anything published once, right at the end of a long stall, is exactly what
+gets dropped. Note the first fix failed too: re-announcing for "5 ticks" is spent
+in ~5 ms inside that same storm. Only a **wall-clock deadline**
+(`ota_dbg_until = k_uptime_get() + 6000`) survives it.
+
+This is the third appearance of the same shape — OTA.md's RP2350 "nothing that
+would show success was visible, even though it succeeded", and this morning's
+MCUboot hunt. **When box state and box console disagree, believe the console.**
+
+Related, NOT fixed here because it touches the shared RT loop: the `next_wd +=
+1000` catch-up burst is itself worth reconsidering (resync to `now + 1000` after
+a long stall) — it converts any stall into a telemetry outage on top of the stall.

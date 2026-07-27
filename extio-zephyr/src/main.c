@@ -40,6 +40,9 @@
 #if defined(CONFIG_BT)
 #include "box_ble.h"
 #endif
+#if defined(BOX_HAVE_OTA_SLOT)
+#include "box_ota_flash.h"
+#endif
 
 static box_config_t   cfg;
 static dserv_framer_t rx_framer;
@@ -181,6 +184,33 @@ static uint8_t pubq_bypass;
  * a few microseconds, not because a setting is known to be better. The queue
  * itself is justified by bounded work per pass, nothing more. */
 static uint8_t pubq_per_pass = PUBQ_PER_PASS_DEF;
+
+#if defined(BOX_HAVE_OTA_SLOT)
+/* Last cmd/ota/flashtest result, held in statics and RE-ANNOUNCED over several
+ * 1 Hz ticks instead of enqueued inline.
+ *
+ * A flash burst blocks the service loop for its whole duration (MEASURED: 512 kB
+ * = ~8 s, over which state/watchdog does not advance at all). When the loop
+ * finally resumes, every missed 1 Hz tick fires back-to-back and each pushes a
+ * full status burst, which overruns the 40-deep publish queue -- so the frames
+ * enqueued inline right at the end of the test are precisely the ones dropped.
+ * The test then looks like it never ran (state/ota/dbg/bytes stuck at the
+ * previous run's value) while the box console shows it ran perfectly.
+ *
+ * That is the same trap OTA.md records on the RP2350 ("nothing that would show
+ * success was visible, even though it succeeded"), and it produced a wrong
+ * diagnosis here before the console was consulted. Re-announcing for a few
+ * seconds lets the catch-up storm drain first. */
+static uint32_t ota_dbg_bytes, ota_dbg_wall_ms, ota_dbg_e_max, ota_dbg_p_max;
+static uint32_t ota_dbg_e_n, ota_dbg_p_n, ota_dbg_slot, ota_dbg_sector;
+static int32_t  ota_dbg_verify, ota_dbg_rc;
+/* WALL-CLOCK deadline, not a tick count. The 1 Hz gate is `next_wd += 1000`, so
+ * after an 8 s stall it fires eight times in eight consecutive ~1 ms passes --
+ * a countdown of N ticks is spent in milliseconds, entirely inside the very
+ * catch-up storm it was meant to outlast. Re-announcing until a real wall-clock
+ * deadline is the only form of this that survives. */
+static int64_t  ota_dbg_until;
+#endif
 
 static void pub_enqueue(const uint8_t *f)
 {
@@ -609,6 +639,114 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 		}
 	}
 #endif
+
+#if defined(BOX_HAVE_OTA_SLOT)
+	/* <prefix>/cmd/ota/flashtest <kb> -- OTA step 2's execute-while-write probe.
+	 *
+	 * The hazard: slot1 writes hit the same FlexSPI device slot0 is XIP-ing
+	 * from, so every erase/program suspends instruction fetch, and the stall
+	 * lands on our single service loop. `cmd/save` already writes NVS while
+	 * running, but that is a ~1 kB blob -- a 640 kB image is a completely
+	 * different duty cycle, and "it worked for 1 kB" is not evidence.
+	 *
+	 * So measure it before building the receive path on top. What matters is
+	 * NOT the burst total (a real OTA interleaves writes with service passes)
+	 * but the worst SINGLE operation, because that is the atomic hole the loop
+	 * cannot be scheduled through. Read ota/dbg/erase_max_us and
+	 * ota/dbg/prog_max_us, and watch dbg/loop_max_us over the same window.
+	 *
+	 * Writes a deterministic pattern and reads it back, so this also proves the
+	 * slot is actually writable rather than merely accepting the calls -- the
+	 * same "check it RAN, not that the register took the write" lesson the TDDR
+	 * PLL bug taught. Nothing here touches slot0 or the running image. */
+	if (leaf && strcmp(leaf, "cmd/ota/flashtest") == 0) {
+		int32_t  verify_ok = 0;
+		int      rc;
+		uint32_t done = 0, wall_us = 0;
+
+		if (box_obs_active()) {          /* never program flash mid-trial */
+			ota_dbg_rc    = -EBUSY;
+			ota_dbg_until = k_uptime_get() + 6000;
+			return;
+		}
+
+		long kb = dserv_msg_as_long(&m);
+		if (kb <= 0)    kb = 64;
+		if (kb > 1024)  kb = 1024;       /* bounded: this stalls the loop */
+
+		rc = box_ota_flash_open();
+		if (rc == 0) {
+			uint32_t want   = (uint32_t) kb * 1024u;
+			uint32_t sector = box_ota_flash_sector();
+			uint32_t cap    = box_ota_flash_size();
+
+			if (want > cap) {
+				want = cap;
+			}
+			box_ota_flash_stats_reset();
+
+			uint8_t  page[256];
+			uint32_t c0 = k_cycle_get_32();
+
+			for (done = 0; done < want && rc == 0; done += sizeof page) {
+				if (sector && (done % sector) == 0) {
+					rc = box_ota_flash_erase(done);
+					if (rc != 0) break;
+				}
+				for (uint32_t i = 0; i < sizeof page; i++) {
+					page[i] = (uint8_t) ((done + i) * 31u + 7u);
+				}
+				rc = box_ota_flash_program(done, page, sizeof page);
+			}
+			wall_us = k_cyc_to_us_floor32(k_cycle_get_32() - c0);
+
+			/* Read back a sample rather than the whole span: the point is
+			 * "did the bytes land", and re-reading 1 MB adds stall for no
+			 * extra information. First, last and middle page. */
+			if (rc == 0 && done) {
+				uint32_t probes[3] = { 0, (done / 2) & ~255u,
+						       done - sizeof page };
+				verify_ok = 1;
+				for (int p = 0; p < 3 && verify_ok; p++) {
+					uint8_t got[256];
+
+					if (box_ota_flash_read(probes[p], got, sizeof got) != 0) {
+						verify_ok = 0;
+						break;
+					}
+					for (uint32_t i = 0; i < sizeof got; i++) {
+						if (got[i] != (uint8_t) ((probes[p] + i) * 31u + 7u)) {
+							verify_ok = 0;
+							break;
+						}
+					}
+				}
+			}
+
+			ota_dbg_slot   = cap;
+			ota_dbg_sector = sector;
+		}
+
+		uint32_t e_max = 0, p_max = 0, e_n = 0, p_n = 0;
+		box_ota_flash_stats(&e_max, &p_max, &e_n, &p_n);
+
+		ota_dbg_bytes   = done;
+		ota_dbg_wall_ms = wall_us / 1000u;
+		ota_dbg_e_max   = e_max;
+		ota_dbg_p_max   = p_max;
+		ota_dbg_e_n     = e_n;
+		ota_dbg_p_n     = p_n;
+		ota_dbg_verify  = verify_ok;
+		ota_dbg_rc      = (int32_t) rc;
+		ota_dbg_until   = k_uptime_get() + 6000;   /* outlast the catch-up storm */
+
+		box_console_printf("cmd/ota/flashtest -> %u B in %u ms, "
+				   "erase_max %u us, prog_max %u us, verify %s (rc %d)\n",
+				   done, wall_us / 1000u, e_max, p_max,
+				   verify_ok ? "ok" : "FAILED", rc);
+		return;
+	}
+#endif /* BOX_HAVE_OTA_SLOT */
 
 	if (dserv_msg_name_eq(&m, BOX_SYNC_DP)) {
 		int obs = (int) dserv_msg_as_long(&m);
@@ -1085,6 +1223,35 @@ int main(void)
 			dserv_state_name(&cfg, name, sizeof name, "dbg/pubq_dropped");
 			dserv_msg_int(f, name, 0, (int32_t) pubq_dropped);
 			pub_enqueue(f);
+
+#if defined(BOX_HAVE_OTA_SLOT)
+			/* Re-announce the last flashtest result for a few ticks --
+			 * see the ota_dbg_* declarations for why once is not enough. */
+			if (ota_dbg_until && k_uptime_get() < ota_dbg_until) {
+				static const struct { const char *k; uint32_t *v; } ota_kv[] = {
+					{ "ota/slot/size",        &ota_dbg_slot    },
+					{ "ota/slot/sector",      &ota_dbg_sector  },
+					{ "ota/dbg/bytes",        &ota_dbg_bytes   },
+					{ "ota/dbg/wall_ms",      &ota_dbg_wall_ms },
+					{ "ota/dbg/erase_max_us", &ota_dbg_e_max   },
+					{ "ota/dbg/prog_max_us",  &ota_dbg_p_max   },
+					{ "ota/dbg/erase_n",      &ota_dbg_e_n     },
+					{ "ota/dbg/prog_n",       &ota_dbg_p_n     },
+				};
+
+				for (unsigned i = 0; i < ARRAY_SIZE(ota_kv); i++) {
+					dserv_state_name(&cfg, name, sizeof name, ota_kv[i].k);
+					dserv_msg_int(f, name, 0, (int32_t) *ota_kv[i].v);
+					pub_enqueue(f);
+				}
+				dserv_state_name(&cfg, name, sizeof name, "ota/dbg/verify");
+				dserv_msg_int(f, name, 0, ota_dbg_verify);
+				pub_enqueue(f);
+				dserv_state_name(&cfg, name, sizeof name, "ota/dbg/rc");
+				dserv_msg_int(f, name, 0, ota_dbg_rc);
+				pub_enqueue(f);
+			}
+#endif
 
 #if defined(CONFIG_NETWORKING)
 			/* Publish-latency investigation: how long does one

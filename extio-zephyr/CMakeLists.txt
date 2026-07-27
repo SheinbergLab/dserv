@@ -42,6 +42,14 @@ if(CONFIG_SOC_SERIES_RW6XX AND CONFIG_BOOTLOADER_MCUBOOT)
 	target_sources(app PRIVATE src/platform/box_soc_rw612.c)
 endif()
 
+# OTA step 2: writing the inactive MCUboot slot. Needs a real slot1_partition,
+# so it rides on the same MCUboot gate -- a non-MCUboot build has no A/B pair to
+# write into and links the app across where slot1 would be.
+if(CONFIG_BOOTLOADER_MCUBOOT AND CONFIG_FLASH_MAP)
+	target_sources(app PRIVATE src/platform/box_ota_flash.c)
+	target_compile_definitions(app PRIVATE BOX_HAVE_OTA_SLOT=1)
+endif()
+
 # Ethernet + PTP: frdm_rw612 and teensy41 (teensy40 has no PHY).
 if(CONFIG_NETWORKING)
 	target_sources(app PRIVATE
