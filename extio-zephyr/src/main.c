@@ -154,14 +154,40 @@ static volatile uint32_t abs_pub_pending;
  * TELEMETRY goes in here: it is last-value-wins by nature, which is what makes
  * dropping the oldest on overflow the right policy. Events (DI edges, fired
  * pins) keep their own paths -- they must not be dropped. */
-#define PUBQ_DEPTH      40   /* > one full burst, so a burst never self-drops */
-#define PUBQ_PER_PASS   2    /* 20 us loop + 2 sends stays well under 1 ms     */
+#define PUBQ_DEPTH        40  /* > one full burst, so a burst never self-drops */
+#define PUBQ_PER_PASS_DEF  2  /* frames drained per service pass (runtime knob) */
 
 static uint8_t pubq[PUBQ_DEPTH][DSERV_MSG_LEN];
 static uint16_t pubq_head, pubq_tail, pubq_dropped;
 
+/* cmd/pubq/bypass 1 -> send inline, i.e. the pre-queue behaviour. Exists ONLY
+ * so the queue can be A/B'd at RUNTIME: reflashing between arms would reset the
+ * boxes, re-anchor PTP and shift thermal state, confounding exactly the
+ * difference being measured. With a runtime switch the two arms can be
+ * interleaved instead, so slow drift cannot alias into the comparison. */
+static uint8_t pubq_bypass;
+/* Drain rate, runtime-settable via cmd/pubq/per_pass so it can be A/B'd without
+ * reflashing.
+ *
+ * SETTLED 2026-07-27: it does not matter. Three arms (inline / 2 per pass /
+ * 8 per pass), 5 interleaved reps each, 100 shots per run: two-box skew medians
+ * 15.2 / 14.3 / 15.6 us, p90 37.8 / 36.2 / 37.0 us -- indistinguishable, with
+ * within-arm spread far exceeding any between-arm difference. An earlier
+ * 5-pair run that showed 2/pass ~4 us WORSE on p90 did NOT replicate; p90 from
+ * 100 shots carries ~10 samples' worth of information and five reps agreeing is
+ * ~6% likely by chance.
+ *
+ * So the knob exists for re-opening the question with a method that can resolve
+ * a few microseconds, not because a setting is known to be better. The queue
+ * itself is justified by bounded work per pass, nothing more. */
+static uint8_t pubq_per_pass = PUBQ_PER_PASS_DEF;
+
 static void pub_enqueue(const uint8_t *f)
 {
+	if (pubq_bypass) {
+		box_uplink_send(f, DSERV_MSG_LEN);
+		return;
+	}
 	uint16_t nxt = (uint16_t)((pubq_head + 1) % PUBQ_DEPTH);
 
 	if (nxt == pubq_tail) {                 /* full: drop the OLDEST sample */
@@ -511,6 +537,32 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 	 * persisted: turn it on against a live box, read sched/dbg_*, turn it off.
 	 * See sched_dbg_publish() for why it may only run after the timer is armed. */
 	{
+		if (leaf && strcmp(leaf, "cmd/pubq/per_pass") == 0) {
+			long v = dserv_msg_as_long(&m);
+
+			if (v < 1)  v = 1;
+			if (v > PUBQ_DEPTH) v = PUBQ_DEPTH;
+			pubq_per_pass = (uint8_t) v;
+
+			uint8_t f5[DSERV_MSG_LEN];
+			char nm5[80];
+			dserv_state_name(&cfg, nm5, sizeof nm5, "pubq/per_pass");
+			dserv_msg_int(f5, nm5, 0, (int32_t) pubq_per_pass);
+			pub_enqueue(f5);
+			return;
+		}
+
+		if (leaf && strcmp(leaf, "cmd/pubq/bypass") == 0) {
+			pubq_bypass = dserv_msg_as_long(&m) ? 1 : 0;
+
+			uint8_t f4[DSERV_MSG_LEN];
+			char nm4[80];
+			dserv_state_name(&cfg, nm4, sizeof nm4, "pubq/bypass");
+			dserv_msg_int(f4, nm4, 0, (int32_t) pubq_bypass);
+			pub_enqueue(f4);
+			return;
+		}
+
 		if (leaf && strcmp(leaf, "cmd/sched/debug") == 0) {
 			sched_dbg = dserv_msg_as_long(&m) ? 1 : 0;
 
@@ -880,7 +932,7 @@ int main(void)
 		/* A couple of queued telemetry frames per pass. Bounded ON PURPOSE:
 		 * the point is that no single pass can be held hostage by the backlog,
 		 * so command latency stays flat instead of spiking once a second. */
-		pub_drain(PUBQ_PER_PASS);
+		pub_drain(pubq_per_pass);
 
 		int n = box_uplink_poll(rx, sizeof rx);
 		if (n == BOX_NET_RESET) {
