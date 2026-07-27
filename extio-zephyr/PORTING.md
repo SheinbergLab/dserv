@@ -3071,3 +3071,88 @@ predicted exactly this, and it held.
 Note the whole step was validated without deploying `extioconf.tcl` (that needs
 sudo on the rig): the procs were loaded into the live subprocess with
 `dservctl extio "source /tmp/otadp.tcl"`. Good pattern for orchestrator work.
+
+## 2026-07-27 — office-stim: a second PTP host, and a better-instrumented one
+
+A second site (office) now has a PTP-capable host. It matters beyond convenience:
+every clock number in this document so far came from ONE host (rpi500), and
+single-host measurement has confounded conclusions here repeatedly. This is the
+independent cross-check that was missing.
+
+**Hardware:** `office-stim`, Intel **I226-V** (`igc`), `enp86s0`, PHC `/dev/ptp0`,
+Debian 13 / kernel 6.12. MikroTik **hEX** (RB750Gr3, RouterOS 7.23) between it
+and the boxes.
+
+### It is better than the Pi 5 on the term that was limiting us
+
+The `igc` driver implements **`PTP_SYS_OFFSET_PRECISE`** (PCIe PTM hardware
+cross-timestamp). The Pi 5 does not, so on the rig the PHC <-> `CLOCK_MONOTONIC`
+term can only be measured by sandwich reads and is bounded by the read window.
+
+| | rpi500 (Pi 5) | office-stim (I226-V) |
+|---|---|---|
+| method B available | no | **yes** |
+| `phc_offset --once` error bound | +/-704 ns (method A) | **+/-11 ns (method B)** |
+| PHC<->MONO drift, disciplined | -- | **-0.3 ns/s = 0.000 ppm** |
+| re-measure interval for 1 us | ~400 s | **~3200 s** |
+
+That is a **64x** tightening of one of the two software pair-reads that dominate
+the ~+/-2 us end-to-end budget (2026-07-26 section), and it is measured, not
+inferred: B's first->last samples moved 5 ns over 29.8 s, independently agreeing
+with the -0.3 ns/s fit.
+
+**phc2sys is what buys the drift figure.** Undisciplined, the same host measured
+229.8 ns/s (0.230 ppm) -- a ~750x difference. Do not quote a drift number without
+saying whether phc2sys was running.
+
+### Two traps this host re-taught
+
+**`--hwts_filter full` is NOT Pi-specific.** `ethtool -T enp86s0` lists exactly
+`none` and `all` under Hardware Receive Filter Modes -- same as the Pi 5's macb.
+So ptp4l's default per-protocol PTP filter is not honoured here either, and
+without the flag every event message arrives untimestamped, leaving `mean_delay`
+and `offset_from_tt` at 0. **Check that list on any new host** before assuming
+the default works. `host/start_ptp.sh` now takes an interface argument
+(defaults to `eth0`, so the rig is unchanged).
+
+**An NTP daemon is not a conflict in this direction.** `phc2sys -c <iface> -s
+CLOCK_REALTIME` disciplines the PHC FROM the system clock, so it is a consumer;
+`systemd-timesyncd` steering that clock is fine and the PHC follows. The clash to
+avoid is the opposite direction (`-s <iface> -c CLOCK_REALTIME`), where phc2sys
+and NTP both steer. I initially advised stopping the NTP daemon here, which was
+wrong for the configuration the rig actually uses.
+
+### Method A is noisy on this host -- and that is why drift comes from B
+
+A's read window measures **min 3.2 us but MEDIAN 170 us**, a ~50x spread that is
+preemption and C-states, not the PCIe read. Its drift fit is correspondingly
+useless (mean |resid| 1584 ns vs B's 16 ns), and in the disciplined run A and B
+report 116.7 vs -0.3 ns/s. **That disagreement is not a stop condition**: the
+cross-check the tool enforces is on the OFFSET, which agreed to -135 ns inside
+A's 3213 ns window. If method A is ever needed on a host without
+cross-timestamping, put the box on the `performance` governor first.
+
+### The switch is already correct -- do not repeat the rig's fix
+
+`/interface bridge port print` shows the **`H` flag on all four ports**, i.e.
+hardware offload IS active despite `protocol-mode=rstp`. The rig's failure --
+RSTP silently disabling offload and costing 45 us of CPU forwarding -- **does not
+reproduce on this hardware/RouterOS**. Do not disable RSTP here; there is no
+measured gain and it removes loop protection.
+
+Also: the hEX has **no radio**, so the rig's "WiFi bridged with the wired ports
+floods the 100 Mb box link" failure cannot happen. And `ether1` (uplink) is
+outside the bridge, so office LAN broadcast traffic does not reach the box ports.
+
+Worth knowing for later: the hEX is **not** PTP-capable hardware (transparent /
+boundary clock is CRS3xx-class), so its residence time stays inside the error
+budget rather than being cancelled. Expect worse than the rig's direct-cable
++/-100 ns when measuring through it -- quantifying that gap is the interesting
+measurement, not a fault.
+
+**A speed-mismatch worry I raised and then withdrew:** a 1 G host port feeding a
+100 Mb box port does NOT inject a large fixed asymmetry. Each direction crosses
+both speeds exactly once (fast-in/slow-out vs slow-in/fast-out), so serialisation
+largely cancels, and PTP's four message types are all similar sizes. Pinning both
+ports to 100 Mb would cost host bandwidth for no real gain. The real risk through
+a store-and-forward switch is queuing VARIABILITY, not the speed step.
