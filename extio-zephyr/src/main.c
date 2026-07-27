@@ -137,6 +137,50 @@ static uint64_t       abs_target_us[BOX_NPINS];   /* intended dserv time */
  * drained by the main loop -- one bit per pin, so BOX_NPINS must stay <= 32. */
 BUILD_ASSERT(BOX_NPINS <= 32, "abs_pub_pending is a uint32_t bitmask");
 static volatile uint32_t abs_pub_pending;
+#endif /* CONFIG_PTP_CLOCK */
+
+/* ---- deferred telemetry queue ----
+ * The 1 Hz status burst pushed ~28 frames back-to-back, each a BLOCKING send of
+ * 81-410 us. Measured on both boxes: the service loop's typical pass is 20 us,
+ * its MAX was ~9.5 ms. Once a second the box stopped serving commands for that
+ * long.
+ *
+ * Timing accuracy never depended on this -- timer callbacks preempt from the
+ * timer ISR, and DI edges are stamped in their own ISR -- but an immediate
+ * cmd/do/<pin> landing in the burst waited up to 9.5 ms, which is an order of
+ * magnitude worse than the transport jitter time-triggering exists to remove.
+ *
+ * So the burst is now queued and drained a couple of frames per pass. Only
+ * TELEMETRY goes in here: it is last-value-wins by nature, which is what makes
+ * dropping the oldest on overflow the right policy. Events (DI edges, fired
+ * pins) keep their own paths -- they must not be dropped. */
+#define PUBQ_DEPTH      40   /* > one full burst, so a burst never self-drops */
+#define PUBQ_PER_PASS   2    /* 20 us loop + 2 sends stays well under 1 ms     */
+
+static uint8_t pubq[PUBQ_DEPTH][DSERV_MSG_LEN];
+static uint16_t pubq_head, pubq_tail, pubq_dropped;
+
+static void pub_enqueue(const uint8_t *f)
+{
+	uint16_t nxt = (uint16_t)((pubq_head + 1) % PUBQ_DEPTH);
+
+	if (nxt == pubq_tail) {                 /* full: drop the OLDEST sample */
+		pubq_tail = (uint16_t)((pubq_tail + 1) % PUBQ_DEPTH);
+		pubq_dropped++;
+	}
+	memcpy(pubq[pubq_head], f, DSERV_MSG_LEN);
+	pubq_head = nxt;
+}
+
+static void pub_drain(int max)
+{
+	while (max-- > 0 && pubq_tail != pubq_head) {
+		box_uplink_send(pubq[pubq_tail], DSERV_MSG_LEN);
+		pubq_tail = (uint16_t)((pubq_tail + 1) % PUBQ_DEPTH);
+	}
+}
+
+#if defined(CONFIG_PTP_CLOCK)
 
 static uint64_t dserv_to_box_us(const box_clock_t *c, uint64_t dserv_us)
 {
@@ -805,6 +849,11 @@ int main(void)
 		box_uplink_service(&cfg);         /* carrier/strap selection + (re)connect */
 		box_console_service(&cfg);        /* two-way CLI (non-blocking, bounded) */
 
+		/* A couple of queued telemetry frames per pass. Bounded ON PURPOSE:
+		 * the point is that no single pass can be held hostage by the backlog,
+		 * so command latency stays flat instead of spiking once a second. */
+		pub_drain(PUBQ_PER_PASS);
+
 		int n = box_uplink_poll(rx, sizeof rx);
 		if (n == BOX_NET_RESET) {
 			dserv_framer_reset(&rx_framer);
@@ -925,16 +974,16 @@ int main(void)
 				 * budget rather than a guess. */
 				uint32_t ul = 0, um = 0, ud = 0;
 				box_net_usb_send_stats(&ul, &um, &ud);
-				box_uplink_send(f, DSERV_MSG_LEN);
+				pub_enqueue(f);
 				dserv_state_name(&cfg, name, sizeof name, "dbg/usb_send_us");
 				dserv_msg_int(f, name, 0, (int32_t) ul);
-				box_uplink_send(f, DSERV_MSG_LEN);
+				pub_enqueue(f);
 				dserv_state_name(&cfg, name, sizeof name, "dbg/usb_send_max_us");
 				dserv_msg_int(f, name, 0, (int32_t) um);
-				box_uplink_send(f, DSERV_MSG_LEN);
+				pub_enqueue(f);
 				dserv_state_name(&cfg, name, sizeof name, "dbg/usb_drops");
 				dserv_msg_int(f, name, 0, (int32_t) ud);
-				box_uplink_send(f, DSERV_MSG_LEN);
+				pub_enqueue(f);
 				dserv_state_name(&cfg, name, sizeof name, "watchdog");
 				dserv_msg_int(f, name, 0, watchdog - 1);
 			}
@@ -947,7 +996,15 @@ int main(void)
 			 * read healthy. */
 			dserv_state_name(&cfg, name, sizeof name, "cmds_rx");
 			dserv_msg_int(f, name, 0, (int32_t) cmds_rx);
-			box_uplink_send(f, DSERV_MSG_LEN);
+			pub_enqueue(f);
+
+			/* Telemetry the queue itself dropped. Non-zero means the burst is
+			 * outrunning the drain. Published rather than left silent: a
+			 * queue that quietly discards data is exactly the failure shape
+			 * this project keeps getting caught by. */
+			dserv_state_name(&cfg, name, sizeof name, "dbg/pubq_dropped");
+			dserv_msg_int(f, name, 0, (int32_t) pubq_dropped);
+			pub_enqueue(f);
 
 #if defined(CONFIG_NETWORKING)
 			/* Publish-latency investigation: how long does one
@@ -962,31 +1019,38 @@ int main(void)
 				box_net_eth_send_stats(&sl, &sm);
 				dserv_state_name(&cfg, name, sizeof name, "dbg/send_us");
 				dserv_msg_int(f, name, 0, (int32_t) sl);
-				box_uplink_send(f, DSERV_MSG_LEN);
+				pub_enqueue(f);
 				dserv_state_name(&cfg, name, sizeof name, "dbg/send_max_us");
 				dserv_msg_int(f, name, 0, (int32_t) sm);
-				box_uplink_send(f, DSERV_MSG_LEN);
+				pub_enqueue(f);
 				dserv_state_name(&cfg, name, sizeof name, "dbg/loop_us");
 				dserv_msg_int(f, name, 0, (int32_t) loop_last_us);
-				box_uplink_send(f, DSERV_MSG_LEN);
+				pub_enqueue(f);
 				dserv_state_name(&cfg, name, sizeof name, "dbg/loop_max_us");
 				dserv_msg_int(f, name, 0, (int32_t) loop_max_us);
-				box_uplink_send(f, DSERV_MSG_LEN);
+				/* WINDOWED: reset after publishing, so this reads "worst pass
+				 * in the last second" rather than "worst pass since boot".
+				 * The since-boot form cannot distinguish a one-off from a
+				 * recurring stall, and reading recurrence into it produced a
+				 * confidently wrong diagnosis on 2026-07-26. */
+				loop_max_us = 0;
+				pub_enqueue(f);
 				{
 					uint32_t wu = 0, wm = 0, ru = 0, rm = 0;
 					box_net_eth_rx_stats(&wu, &wm, &ru, &rm);
 					dserv_state_name(&cfg, name, sizeof name, "dbg/wake_us");
 					dserv_msg_int(f, name, 0, (int32_t) wu);
-					box_uplink_send(f, DSERV_MSG_LEN);
+					pub_enqueue(f);
 					dserv_state_name(&cfg, name, sizeof name, "dbg/recv_us");
 					dserv_msg_int(f, name, 0, (int32_t) ru);
-					box_uplink_send(f, DSERV_MSG_LEN);
+					pub_enqueue(f);
 					dserv_state_name(&cfg, name, sizeof name, "dbg/disp_us");
 					dserv_msg_int(f, name, 0, (int32_t) disp_last_us);
-					box_uplink_send(f, DSERV_MSG_LEN);
+					pub_enqueue(f);
 					dserv_state_name(&cfg, name, sizeof name, "dbg/disp_max_us");
 					dserv_msg_int(f, name, 0, (int32_t) disp_max_us);
-					box_uplink_send(f, DSERV_MSG_LEN);
+					disp_max_us = 0;          /* windowed, see loop_max_us */
+					pub_enqueue(f);
 				}
 				{
 					/* The previously-dark segment: the stack's own
@@ -1000,10 +1064,10 @@ int main(void)
 						if (ss.rx_count) {
 							dserv_state_name(&cfg, name, sizeof name, "dbg/rxstack_us");
 							dserv_msg_int(f, name, 0, (int32_t) ss.rx_avg_us);
-							box_uplink_send(f, DSERV_MSG_LEN);
+							pub_enqueue(f);
 							dserv_state_name(&cfg, name, sizeof name, "dbg/rxstack_n");
 							dserv_msg_int(f, name, 0, (int32_t) ss.rx_count);
-							box_uplink_send(f, DSERV_MSG_LEN);
+							pub_enqueue(f);
 						}
 						if (ss.rx_count && ss.rx_detail_n) {
 							off = 0;
@@ -1014,15 +1078,15 @@ int main(void)
 							}
 							dserv_state_name(&cfg, name, sizeof name, "dbg/rxstack_detail");
 							dserv_msg_string(f, name, 0, d);
-							box_uplink_send(f, DSERV_MSG_LEN);
+							pub_enqueue(f);
 						}
 						if (ss.tx_count) {
 							dserv_state_name(&cfg, name, sizeof name, "dbg/txstack_us");
 							dserv_msg_int(f, name, 0, (int32_t) ss.tx_avg_us);
-							box_uplink_send(f, DSERV_MSG_LEN);
+							pub_enqueue(f);
 							dserv_state_name(&cfg, name, sizeof name, "dbg/txstack_n");
 							dserv_msg_int(f, name, 0, (int32_t) ss.tx_count);
-							box_uplink_send(f, DSERV_MSG_LEN);
+							pub_enqueue(f);
 						}
 						if (ss.tx_count && ss.tx_detail_n) {
 							off = 0;
@@ -1033,7 +1097,7 @@ int main(void)
 							}
 							dserv_state_name(&cfg, name, sizeof name, "dbg/txstack_detail");
 							dserv_msg_string(f, name, 0, d);
-							box_uplink_send(f, DSERV_MSG_LEN);
+							pub_enqueue(f);
 						}
 					}
 				}
@@ -1052,25 +1116,25 @@ int main(void)
 						 (unsigned long) box_gpio_di_isr_count());
 					dserv_state_name(&cfg, name, sizeof name, "dbg/gpio");
 					dserv_msg_string(f, name, 0, g);
-					box_uplink_send(f, DSERV_MSG_LEN);
+					pub_enqueue(f);
 				}
 #endif
 				dserv_state_name(&cfg, name, sizeof name, "watchdog");
 				dserv_msg_int(f, name, 0, watchdog - 1);
 			}
 #endif
-			box_uplink_send(f, DSERV_MSG_LEN);
+			pub_enqueue(f);
 
 			/* box status as datapoints -- observable any time over the active
 			 * uplink, not just at boot: active transport, and (where present)
 			 * the Ethernet link/lease and the PTP hardware clock. */
 			dserv_state_name(&cfg, name, sizeof name, "uplink");
 			dserv_msg_string(f, name, 0, box_uplink_active_name());
-			box_uplink_send(f, DSERV_MSG_LEN);
+			pub_enqueue(f);
 #if defined(CONFIG_NETWORKING)
 			dserv_state_name(&cfg, name, sizeof name, "net/link");
 			dserv_msg_int(f, name, 0, box_net_eth_link());
-			box_uplink_send(f, DSERV_MSG_LEN);
+			pub_enqueue(f);
 
 			uint8_t ip[4];
 			if (box_net_eth_get_ip(ip)) {
@@ -1078,11 +1142,11 @@ int main(void)
 				snprintf(ips, sizeof ips, "%u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]);
 				dserv_state_name(&cfg, name, sizeof name, "net/ip");
 				dserv_msg_string(f, name, 0, ips);
-				box_uplink_send(f, DSERV_MSG_LEN);
+				pub_enqueue(f);
 			}
 			dserv_state_name(&cfg, name, sizeof name, "ptp/ns");
 			dserv_msg_int64(f, name, 0, (int64_t) box_ptp_now_ns());
-			box_uplink_send(f, DSERV_MSG_LEN);
+			pub_enqueue(f);
 
 #if defined(CONFIG_PTP_CLOCK)
 			/* Re-anchor from PTP once a second. Costs NO packets -- the
@@ -1101,12 +1165,12 @@ int main(void)
 					dserv_state_name(&cfg, name, sizeof name,
 							 "sync/ptp_window_us");
 					dserv_msg_int(f, name, 0, (int32_t) win);
-					box_uplink_send(f, DSERV_MSG_LEN);
+					pub_enqueue(f);
 
 					dserv_state_name(&cfg, name, sizeof name,
 							 "sync/offset_us");
 					dserv_msg_int64(f, name, 0, boxclk.offset_us);
-					box_uplink_send(f, DSERV_MSG_LEN);
+					pub_enqueue(f);
 				}
 			}
 #endif
