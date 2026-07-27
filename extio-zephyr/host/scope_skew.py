@@ -118,6 +118,13 @@ def main():
     ap.add_argument("--boxes", nargs=2, default=["extio/box1", "extio/box2"])
     ap.add_argument("--window-us", type=float, default=400.0,
                     help="capture span; must comfortably exceed the largest skew")
+    ap.add_argument("--same-box", metavar="BOX", default=None,
+                    help="fire TWO PINS on ONE box instead of one pin on two boxes. "
+                         "Both pins share a clock and a tick phase, so PTP and tick "
+                         "quantisation contribute exactly ZERO -- whatever skew "
+                         "remains is pure fire-path variance. Use with --pins.")
+    ap.add_argument("--pins", nargs=2, type=int, metavar=("P1", "P2"), default=[18, 20],
+                    help="the two pins for --same-box (DIO0=P1, DIO1=P2)")
     a = ap.parse_args()
 
     d, hdwf = open_device()
@@ -127,8 +134,33 @@ def main():
           % (nsamp, rate / 1e6, ns_per, nsamp / rate * 1e6))
     print("firing %s and %s, pin %d, lead %d ms\n" % (a.boxes[0], a.boxes[1], a.pin, a.lead_ms))
 
-    fire = ("cd ~/extio-bench && sh sync_fire.sh %d %d %s %s"
-            % (a.lead_ms, a.pin, a.boxes[0], a.boxes[1]))
+    if a.same_box:
+        # sync_fire.sh is one-pin/N-boxes; this is one-box/two-pins, so build it
+        # inline. sched/abs_err is per-BOX (the second at_abs overwrites the
+        # first), so it cannot verify two pins -- verify from each pin's own
+        # state/do/<n> and its stamp instead, which the box sets to the INTENDED
+        # time T. A leftover from an earlier round shows as a wild delta.
+        p1, p2 = a.pins
+        fire = (
+            "D=%s; "
+            "dservctl -c \"dservSet $D/cmd/do/%d 0\" >/dev/null 2>&1; "
+            "dservctl -c \"dservSet $D/cmd/do/%d 0\" >/dev/null 2>&1; sleep 0.2; "
+            "N=$(dservctl -c now|tr -d '[:space:]'); T=$((N + %d)); "
+            "dservctl -c \"dservSet $D/cmd/do/%d/at_abs $T\" >/dev/null 2>&1; "
+            "dservctl -c \"dservSet $D/cmd/do/%d/at_abs $T\" >/dev/null 2>&1; "
+            "sleep %.2f; "
+            "V1=$(dservctl -c \"dservGet $D/state/do/%d\" 2>/dev/null|head -1); "
+            "V2=$(dservctl -c \"dservGet $D/state/do/%d\" 2>/dev/null|head -1); "
+            "S1=$(dservctl -c \"dservTimestamp $D/state/do/%d\" 2>/dev/null|tr -d '[:space:]'); "
+            "S2=$(dservctl -c \"dservTimestamp $D/state/do/%d\" 2>/dev/null|tr -d '[:space:]'); "
+            "echo RESULT $V1 $((S1-T)) $V2 $((S2-T))"
+            % (a.same_box, p1, p2, a.lead_ms * 1000, p1, p2,
+               a.lead_ms / 1000.0 + 0.6, p1, p2, p1, p2))
+        print("SAME-BOX mode: %s pins %d (DIO0) and %d (DIO1)" % (a.same_box, p1, p2))
+        print("  PTP and tick quantisation contribute ZERO here -- any skew is the fire path.\n")
+    else:
+        fire = ("cd ~/extio-bench && sh sync_fire.sh %d %d %s %s"
+                % (a.lead_ms, a.pin, a.boxes[0], a.boxes[1]))
 
     deltas, skipped = [], 0
     buf = (ctypes.c_uint8 * nsamp)()
@@ -167,11 +199,34 @@ def main():
         # NOTE explains what "armed" means, so a substring count over stdout
         # matches the help text and passes every shot. That bug reported
         # "both armed" for boxes that were answering `unsynced` and never fired.
-        armed = set()
-        for line in out.splitlines():
-            f = line.split()
-            if len(f) >= 2 and f[0] in a.boxes and f[1] == "armed":
-                armed.add(f[0])
+        if a.same_box:
+            ok, why = False, "no RESULT line"
+            for line in out.splitlines():
+                f = line.split()
+                if len(f) == 5 and f[0] == "RESULT":
+                    try:
+                        v1, d1, v2, d2 = f[1], int(f[2]), f[3], int(f[4])
+                    except ValueError:
+                        why = "unparsable RESULT"
+                        break
+                    if v1 != "1" or v2 != "1":
+                        why = "pin levels %s/%s (a pin did not fire)" % (v1, v2)
+                    elif abs(d1) > 1000000 or abs(d2) > 1000000:
+                        why = "stale stamps (%d/%d us from T)" % (d1, d2)
+                    else:
+                        ok = True
+                    break
+            if not ok:
+                skipped += 1
+                print("shot %3d: SKIP (%s)" % (shot, why))
+                continue
+            armed = {1, 2}          # satisfy the shared check below
+        else:
+            armed = set()
+            for line in out.splitlines():
+                f = line.split()
+                if len(f) >= 2 and f[0] in a.boxes and f[1] == "armed":
+                    armed.add(f[0])
         if len(armed) != 2:
             skipped += 1
             status = {}

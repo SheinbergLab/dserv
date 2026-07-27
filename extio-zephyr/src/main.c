@@ -133,6 +133,10 @@ static void publish_do(uint8_t pin, uint8_t level, uint64_t stamp);
 #if defined(CONFIG_PTP_CLOCK)
 static struct k_timer abs_timer[BOX_NPINS];
 static uint64_t       abs_target_us[BOX_NPINS];   /* intended dserv time */
+/* Pins that have fired and still owe a publish. Written from the timer callback,
+ * drained by the main loop -- one bit per pin, so BOX_NPINS must stay <= 32. */
+BUILD_ASSERT(BOX_NPINS <= 32, "abs_pub_pending is a uint32_t bitmask");
+static volatile uint32_t abs_pub_pending;
 
 static uint64_t dserv_to_box_us(const box_clock_t *c, uint64_t dserv_us)
 {
@@ -155,10 +159,22 @@ static void abs_fire(struct k_timer *t)
 	}
 	gpio_cmd_t c = { .op = GPIO_OP_SET, .pin = (uint8_t) pin, .value = 1 };
 	box_gpio_exec(&cfg, &c);
-	/* Stamp with the INTENDED time, not the actual fire time: that is the
-	 * instant the host asked for and the one every node agrees on. Timer slop
-	 * shows up on the scope, not in the data. */
-	publish_do((uint8_t) pin, 1, abs_target_us[pin]);
+
+	/* DO NOT PUBLISH HERE. publish_do() ends in a BLOCKING box_uplink_send(),
+	 * and this is a k_timer callback: two pins scheduled for the same instant
+	 * run their callbacks back-to-back, so the first one's send delays the
+	 * second one's GPIO write by a whole network round.
+	 *
+	 * Measured on a scope, two pins on ONE box at one T (so PTP and tick
+	 * quantisation contribute exactly zero): 30/30 shots landed 127-254 us
+	 * apart, median 208, with the sign varying -- i.e. whichever callback ran
+	 * second paid for the first one's publish. That matches dbg/send_us
+	 * (median 142 us) almost exactly.
+	 *
+	 * Set the pin, flag it, get out. The main loop publishes. Accuracy is
+	 * untouched: abs_target_us[] already holds the INTENDED time, which is what
+	 * gets stamped whenever the publish actually goes out. */
+	abs_pub_pending |= (1u << pin);
 }
 
 /* Every term behind the armed/late decision, for when a box insists it is late
@@ -807,6 +823,22 @@ int main(void)
 				disp_max_us = dd;
 			}
 		}
+
+#if defined(CONFIG_PTP_CLOCK)
+		/* Publishes owed by scheduled fires (see abs_fire): done HERE, off the
+		 * timer callback, so a blocking send can never sit between one pin's
+		 * edge and another's. The stamp is abs_target_us[], the intended time,
+		 * so nothing about the reported instant depends on when this runs. */
+		if (abs_pub_pending) {
+			uint32_t due = abs_pub_pending;
+			abs_pub_pending = 0;
+			for (int p = 0; p < BOX_NPINS; p++) {
+				if (due & (1u << p)) {
+					publish_do((uint8_t) p, 1, abs_target_us[p]);
+				}
+			}
+		}
+#endif
 
 		box_di_event_t ev;
 		while (box_gpio_poll_di(&cfg, &ev)) {
