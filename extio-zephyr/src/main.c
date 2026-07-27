@@ -388,6 +388,37 @@ static void groups_resync(void)
  * whether the path works at all. */
 static uint32_t cmds_rx;
 
+/* "<prefix>/foo/bar" -> "foo/bar", once per frame.
+ *
+ * The matchers below used to rebuild a full key per candidate and compare the
+ * whole thing -- and the at_abs one did that BOX_NPINS times, so every inbound
+ * frame cost ~30 snprintf + strcmp whether or not it matched anything. Measured
+ * dbg/disp_us: ~470 us per frame, nearly all of it string formatting.
+ *
+ * This is the same strip dserv_dispatch() already does (memcmp the prefix, work
+ * on the leaf); these Zephyr-only matchers just never used it because src/core/
+ * is shared verbatim with the Pico and they live here instead. */
+static const char *frame_leaf(const dserv_msg_t *m, char *buf, size_t buflen)
+{
+	char pfx[64];
+	int plen = dserv_cfg_prefix(&cfg, pfx, sizeof pfx);
+
+	if (plen <= 0 || m->namelen < (uint16_t)(plen + 1)) {
+		return NULL;
+	}
+	if (memcmp(m->name, pfx, (size_t) plen) != 0 || m->name[plen] != '/') {
+		return NULL;                       /* not addressed to this box */
+	}
+	uint16_t sl = (uint16_t)(m->namelen - (plen + 1));
+
+	if (sl >= buflen) {
+		sl = (uint16_t)(buflen - 1);
+	}
+	memcpy(buf, m->name + plen + 1, sl);
+	buf[sl] = '\0';
+	return buf;
+}
+
 static void on_usb_frame(const uint8_t *frame, void *ud)
 {
 	ARG_UNUSED(ud);
@@ -396,6 +427,9 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 		return;
 	}
 	cmds_rx++;
+
+	char leafbuf[112];
+	const char *leaf = frame_leaf(&m, leafbuf, sizeof leafbuf);
 
 #if defined(CONFIG_PTP_CLOCK)
 	/* <prefix>/cmd/ptp/offset <us> -- the host's PHC->dserv constant.
@@ -412,15 +446,15 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 	 */
 	/* <prefix>/cmd/do/<pin>/at_abs <dserv_us> -- fire at an ABSOLUTE instant. */
 	{
-		char pfx2[64], k2[112];
-		int pin2;
+		int pin2, pos = -1;
 
-		dserv_cfg_prefix(&cfg, pfx2, sizeof pfx2);
-		for (pin2 = 0; pin2 < BOX_NPINS; pin2++) {
-			snprintf(k2, sizeof k2, "%s/cmd/do/%d/at_abs", pfx2, pin2);
-			if (!dserv_msg_name_eq(&m, k2)) {
-				continue;
-			}
+		/* ONE parse of the leaf, not BOX_NPINS candidate keys. %n + the
+		 * explicit NUL check is the same guard dserv_config.h uses, so
+		 * "cmd/do/18/at_absXYZ" cannot match pin 18. */
+		if (leaf &&
+		    sscanf(leaf, "cmd/do/%d/at_abs%n", &pin2, &pos) == 1 &&
+		    pos > 0 && leaf[pos] == '\0' &&
+		    pin2 >= 0 && pin2 < BOX_NPINS) {
 			uint64_t T   = (uint64_t) dserv_msg_as_ll(&m);
 			uint64_t now = box_gpio_now_us();
 			uint8_t  f3[DSERV_MSG_LEN];
@@ -477,10 +511,7 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 	 * persisted: turn it on against a live box, read sched/dbg_*, turn it off.
 	 * See sched_dbg_publish() for why it may only run after the timer is armed. */
 	{
-		char pfx[64], key[96];
-		dserv_cfg_prefix(&cfg, pfx, sizeof pfx);
-		snprintf(key, sizeof key, "%s/cmd/sched/debug", pfx);
-		if (dserv_msg_name_eq(&m, key)) {
+		if (leaf && strcmp(leaf, "cmd/sched/debug") == 0) {
 			sched_dbg = dserv_msg_as_long(&m) ? 1 : 0;
 
 			uint8_t f2[DSERV_MSG_LEN];
@@ -494,10 +525,7 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 #endif /* CONFIG_PTP_CLOCK */
 
 	{
-		char pfx[64], key[96];
-		dserv_cfg_prefix(&cfg, pfx, sizeof pfx);
-		snprintf(key, sizeof key, "%s/cmd/ptp/offset", pfx);
-		if (dserv_msg_name_eq(&m, key)) {
+		if (leaf && strcmp(leaf, "cmd/ptp/offset") == 0) {
 			ptp_offset_us    = dserv_msg_as_ll(&m);
 			ptp_offset_valid = 1;
 
