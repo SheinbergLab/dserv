@@ -42,6 +42,7 @@
 #endif
 #if defined(BOX_HAVE_OTA_SLOT)
 #include "box_ota_flash.h"
+#include "box_ota.h"
 #endif
 
 static box_config_t   cfg;
@@ -216,6 +217,35 @@ static int32_t  ota_dbg_verify, ota_dbg_rc;
  * not do -- "5 ticks" is spent in ~5 ms whenever the gate is catching up, which
  * is the one moment it needs to survive. */
 static int64_t  ota_dbg_until;
+
+/* ---- OTA receive state (step 3) ----
+ * cmd/ota/begin "<sha256-hex> <size>" opens a transfer into slot1; cmd/ota/chunk
+ * carries the image as a strictly sequential byte stream; state/ota/ack reports
+ * the contiguous cursor so the host paces and resumes. See box_ota.h.
+ *
+ * Delivery rides ORDINARY DATAPOINTS rather than the RP2350's raw 'D' frames.
+ * The framer here does accept DSERV_OTA_CHAR, but on an Ethernet box there is no
+ * host path that can inject raw bytes into the box's link: dserv owns the single
+ * connect-back socket on BOX_ETH_CFG_PORT, and a second connection would displace
+ * it -- taking the downlink down for the duration of the OTA, i.e. exactly when
+ * we need it. A datapoint costs payload (name "extio/<box>/cmd/ota/chunk" eats
+ * 24 of the 109-byte budget, leaving 85 -> 77 after the chunk header, vs 117 for
+ * a 'D' frame) and buys a path that already works, unchanged, on both eth and
+ * USB. The sink behind it is front-end agnostic, so a 'D'-frame or pull path can
+ * be added later without touching box_ota.h. */
+#define BOX_OTA_ACK_EVERY   8192u   /* ack the cursor at least this often */
+#define BOX_OTA_CHUNK_HDR   8u      /* seq u32 LE + crc32 u32 LE */
+
+static int64_t   ota_res_until;   /* re-announce window for the TERMINAL result */
+static box_ota_t g_ota;
+static uint8_t   g_ota_active;
+static uint32_t  g_ota_size;
+static uint32_t  g_ota_ack_at;
+
+static const box_ota_flash_t g_ota_flash_ops = {
+	.erase   = box_ota_flash_erase,
+	.program = box_ota_flash_program,
+};
 #endif
 
 static void pub_enqueue(const uint8_t *f)
@@ -241,6 +271,40 @@ static void pub_drain(int max)
 		pubq_tail = (uint16_t)((pubq_tail + 1) % PUBQ_DEPTH);
 	}
 }
+
+#if defined(BOX_HAVE_OTA_SLOT)
+static void ota_pub_int(const char *leaf, int32_t v)
+{
+	uint8_t f[DSERV_MSG_LEN];
+	char nm[80];
+
+	dserv_state_name(&cfg, nm, sizeof nm, leaf);
+	dserv_msg_int(f, nm, 0, v);
+	pub_enqueue(f);
+}
+
+static void ota_pub_str(const char *leaf, const char *v)
+{
+	uint8_t f[DSERV_MSG_LEN];
+	char nm[80];
+
+	dserv_state_name(&cfg, nm, sizeof nm, leaf);
+	dserv_msg_string(f, nm, 0, v);
+	pub_enqueue(f);
+}
+
+/* Terminal outcome: state + result together, and mark them for re-announce.
+ * Anything published exactly once at the end of an OTA is the frame most likely
+ * to be lost -- see the ota_dbg_until comment. */
+static void ota_pub_done(void)
+{
+	ota_pub_str("ota/state",  box_ota_state_str(g_ota.state));
+	ota_pub_str("ota/result", box_ota_err_str(g_ota.err));
+	ota_pub_int("ota/progress", box_ota_progress_pct(&g_ota));
+	ota_pub_int("ota/ack", (int32_t) g_ota.received);
+	ota_res_until = k_uptime_get() + 6000;
+}
+#endif /* BOX_HAVE_OTA_SLOT */
 
 #if defined(CONFIG_PTP_CLOCK)
 
@@ -750,6 +814,196 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 				   "erase_max %u us, prog_max %u us, verify %s (rc %d)\n",
 				   done, wall_us / 1000u, e_max, p_max,
 				   verify_ok ? "ok" : "FAILED", rc);
+		return;
+	}
+
+	/* <prefix>/cmd/ota/begin "<sha256-hex> <size>" -- open a transfer into slot1. */
+	if (leaf && strcmp(leaf, "cmd/ota/begin") == 0) {
+		char     arg[96];
+		uint8_t  sha[BOX_OTA_SHA_BYTES];
+		uint32_t size = 0;
+
+		dserv_msg_copy_cstr(&m, arg, sizeof arg);
+
+		/* An OTA blocks the service loop in ~60 ms slices for the whole
+		 * image (PORTING.md), so it must never overlap a trial. */
+		if (box_obs_active()) {
+			g_ota.state = BOX_OTA_DONE_FAIL;
+			g_ota.err   = BOX_OTA_ERR_STATE;
+			ota_pub_done();
+			box_console_printf("cmd/ota/begin -> refused, in_obs\n");
+			return;
+		}
+		if (strlen(arg) < 65 || box_ota_parse_sha(arg, sha) != 0) {
+			g_ota.state = BOX_OTA_DONE_FAIL;
+			g_ota.err   = BOX_OTA_ERR_SHA_INIT;
+			ota_pub_done();
+			box_console_printf("cmd/ota/begin -> bad sha argument\n");
+			return;
+		}
+		size = (uint32_t) strtoul(arg + 64, NULL, 0);
+
+		int rc = box_ota_flash_open();
+		if (rc != 0) {
+			g_ota.state = BOX_OTA_DONE_FAIL;
+			g_ota.err   = BOX_OTA_ERR_FLASH;
+			ota_pub_done();
+			box_console_printf("cmd/ota/begin -> slot open failed (%d)\n", rc);
+			return;
+		}
+		if (box_ota_begin(&g_ota, &g_ota_flash_ops, box_ota_flash_size(),
+				  box_ota_flash_sector(), sha, size) != 0) {
+			g_ota_active = 0;
+			ota_pub_done();
+			box_console_printf("cmd/ota/begin -> refused (%s)\n",
+					   box_ota_err_str(g_ota.err));
+			return;
+		}
+		box_ota_flash_stats_reset();
+		g_ota_size    = size;
+		g_ota_ack_at  = BOX_OTA_ACK_EVERY;
+		g_ota_active  = 1;
+		ota_res_until = 0;
+
+		ota_pub_str("ota/state", box_ota_state_str(g_ota.state));
+		ota_pub_int("ota/progress", 0);
+		ota_pub_int("ota/ack", 0);
+		box_console_printf("cmd/ota/begin -> staging %u B into slot1 "
+				   "(cap %u, sector %u)\n",
+				   size, box_ota_flash_size(), box_ota_flash_sector());
+		return;
+	}
+
+	/* <prefix>/cmd/ota/chunk -- one sequential span of image bytes.
+	 *   [0..3] seq_off u32 LE   [4..7] crc32 u32 LE   [8..] data
+	 * Strictly sequential: seq_off must equal the sink cursor. EVERY reject
+	 * re-acks the current cursor rather than staying silent, so the host always
+	 * has something to resume from and a lost frame costs one retry instead of
+	 * a stalled transfer. Rejecting is therefore idempotent by construction. */
+	if (leaf && strcmp(leaf, "cmd/ota/chunk") == 0) {
+		uint32_t seq, crc;
+
+		if (!g_ota_active) {
+			return;                       /* stray frame, no transfer open */
+		}
+		/* A trial started mid-transfer: hold, do not abort. Re-acking the
+		 * cursor lets the host retry and make progress once the obs ends,
+		 * which is friendlier than throwing away a part-written image. */
+		if (box_obs_active()) {
+			ota_pub_int("ota/ack", (int32_t) g_ota.received);
+			return;
+		}
+		if (m.datalen <= BOX_OTA_CHUNK_HDR) {
+			ota_pub_int("ota/ack", (int32_t) g_ota.received);
+			return;
+		}
+
+		const uint8_t *p = m.data;
+		uint32_t n = m.datalen - BOX_OTA_CHUNK_HDR;
+
+		memcpy(&seq, p, 4);
+		memcpy(&crc, p + 4, 4);
+		p += BOX_OTA_CHUNK_HDR;
+
+		if (seq != g_ota.received || box_crc32(p, n) != crc) {
+			ota_pub_int("ota/ack", (int32_t) g_ota.received);
+			return;
+		}
+		if (box_ota_sink(&g_ota, p, n) != 0) {
+			g_ota_active = 0;
+			box_ota_finish(&g_ota, -1);
+			ota_pub_done();
+			box_console_printf("cmd/ota/chunk -> abort (%s) at %u\n",
+					   box_ota_err_str(g_ota.err), g_ota.received);
+			return;
+		}
+		if (g_ota.received >= g_ota_size) {          /* all bytes in -> verify */
+			uint32_t e_max = 0, p_max = 0, e_n = 0, p_n = 0;
+
+			g_ota_active = 0;
+			box_ota_finish(&g_ota, 0);
+			box_ota_flash_stats(&e_max, &p_max, &e_n, &p_n);
+			ota_pub_done();
+			box_console_printf("cmd/ota/chunk -> %s (%s), %u B, "
+					   "erase_max %u us, prog_max %u us\n",
+					   box_ota_state_str(g_ota.state),
+					   box_ota_err_str(g_ota.err), g_ota.received,
+					   e_max, p_max);
+			return;
+		}
+		if (g_ota.received >= g_ota_ack_at) {
+			g_ota_ack_at = g_ota.received + BOX_OTA_ACK_EVERY;
+			ota_pub_int("ota/ack", (int32_t) g_ota.received);
+			ota_pub_int("ota/progress", box_ota_progress_pct(&g_ota));
+		}
+		return;
+	}
+
+	/* <prefix>/cmd/ota/verify -- re-hash the image BY READING IT BACK OUT OF
+	 * slot1, and compare against the sha from cmd/ota/begin.
+	 *
+	 * This is not redundant with the transfer's own sha. That one hashes bytes
+	 * as they ARRIVE, so `ota/state=ok` means "the image crossed the link
+	 * intact and no flash call reported an error" -- it says nothing about what
+	 * is actually in the slot. Only a read-back does. It is the same distinction
+	 * cmd/ota/flashtest draws by reading its pattern back, and the same lesson
+	 * as the TDDR PLL bug: confirm the operation HAPPENED, do not infer it from
+	 * a call that returned 0.
+	 *
+	 * Step 4 must run this before arming a TBYB trial: MCUboot will happily
+	 * try to boot a slot we merely believe we wrote. */
+	if (leaf && strcmp(leaf, "cmd/ota/verify") == 0) {
+		ota_sha_t vs;
+		uint8_t   buf[256], out[BOX_OTA_SHA_BYTES];
+		uint32_t  off = 0, left = g_ota.expected_size;
+		int       rc = 0, match = 0;
+
+		if (box_obs_active()) {
+			ota_pub_int("ota/flash_verify", -1);
+			return;
+		}
+		if (left == 0 || box_ota_flash_open() != 0) {
+			ota_pub_int("ota/flash_verify", -1);
+			box_console_printf("cmd/ota/verify -> nothing staged\n");
+			return;
+		}
+
+		uint32_t c0 = k_cycle_get_32();
+
+		ota_sha_start(&vs);
+		while (left) {
+			uint32_t n = (left > sizeof buf) ? (uint32_t) sizeof buf : left;
+
+			rc = box_ota_flash_read(off, buf, n);
+			if (rc != 0) {
+				break;
+			}
+			ota_sha_update(&vs, buf, n);
+			off  += n;
+			left -= n;
+		}
+		ota_sha_finish(&vs, out);
+		match = (rc == 0) &&
+			memcmp(out, g_ota.expected_sha, BOX_OTA_SHA_BYTES) == 0;
+
+		uint32_t ms = k_cyc_to_us_floor32(k_cycle_get_32() - c0) / 1000u;
+
+		ota_pub_int("ota/flash_verify", match ? 1 : 0);
+		ota_pub_int("ota/flash_ms", (int32_t) ms);
+		ota_res_until = k_uptime_get() + 6000;
+		box_console_printf("cmd/ota/verify -> slot1 sha %s (%u B read in %u ms, rc %d)\n",
+				   match ? "MATCHES" : "DIFFERS", off, ms, rc);
+		return;
+	}
+
+	/* <prefix>/cmd/ota/abort -- drop a transfer in progress. */
+	if (leaf && strcmp(leaf, "cmd/ota/abort") == 0) {
+		if (g_ota_active) {
+			g_ota_active = 0;
+			box_ota_finish(&g_ota, -1);
+		}
+		ota_pub_done();
+		box_console_printf("cmd/ota/abort -> %s\n", box_ota_state_str(g_ota.state));
 		return;
 	}
 #endif /* BOX_HAVE_OTA_SLOT */
@@ -1273,6 +1527,13 @@ int main(void)
 #if defined(BOX_HAVE_OTA_SLOT)
 			/* Re-announce the last flashtest result for a few ticks --
 			 * see the ota_dbg_* declarations for why once is not enough. */
+			if (ota_res_until && k_uptime_get() < ota_res_until) {
+				ota_pub_str("ota/state",  box_ota_state_str(g_ota.state));
+				ota_pub_str("ota/result", box_ota_err_str(g_ota.err));
+				ota_pub_int("ota/progress", box_ota_progress_pct(&g_ota));
+				ota_pub_int("ota/ack", (int32_t) g_ota.received);
+			}
+
 			if (ota_dbg_until && k_uptime_get() < ota_dbg_until) {
 				static const struct { const char *k; uint32_t *v; } ota_kv[] = {
 					{ "ota/slot/size",        &ota_dbg_slot    },

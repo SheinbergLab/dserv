@@ -3002,3 +3002,72 @@ The wall-clock re-announce on the OTA result is deliberately KEPT even though it
 provoking cause is gone: a terminal result published exactly once, at the end of
 the operation most likely to have disturbed the link, is the worst-placed frame in
 the system. It is now defence rather than the only thing holding the report up.
+
+## 2026-07-27 (later still) — OTA step 3: the image actually lands in slot1
+
+`cmd/ota/begin "<sha-hex> <size>"` → `cmd/ota/chunk` × N → `state/ota/ack` →
+verify. **Rig-proven end to end on box1: a real 644,544 B signed image staged in
+slot1 and confirmed present.** Rig 12/12 after.
+
+`src/core/box_ota.h` is the RP2350's `pico_ota.h` ported (`pico_*` → `box_*`):
+page buffering, erase-as-you-go, sha256, STAGING/VERIFY/DONE. Two deliberate
+changes: the **erase granularity is a runtime field** taken from
+`flash_get_page_info_by_offs()` rather than a hardcoded 4096 (a module that
+disagrees with the device about sector boundaries erases the wrong span and eats
+already-written data), and `box_ota_begin()` validates that a sector is a whole
+number of pages instead of trusting the caller.
+
+### Carrier: datapoints, not 'D' frames
+
+The framer here already accepts `DSERV_OTA_CHAR`, so 'D' frames looked free — but
+they are raw bytes on the box's link, and **on an Ethernet box no host can inject
+those**: dserv owns the single connect-back socket on `BOX_ETH_CFG_PORT`, and a
+second connection displaces it, killing the downlink for exactly the operation
+that needs it. The RP2350's other carrier, the `<`-get pull, needs box-side socket
+code this port does not have.
+
+So the image rides ordinary datapoints. It costs payload — the name
+`extio/box1/cmd/ota/chunk` eats 24 of the 109-byte budget, leaving 85, minus an
+8-byte `[seq u32][crc32 u32]` header = **77 B/chunk** vs 117 for a 'D' frame — and
+buys a path that works today over both carriers with no new transport. The chunk
+size is computed per box, not hardcoded: a longer box name silently shrinks it and
+a fixed 77 would overflow the frame builder and drop every chunk. `box_ota.h` is
+front-end agnostic, so a 'D'-frame or pull carrier can be added later untouched.
+
+Host side is `extio_ota_push_dp` in `config/extioconf.tcl`, reusing the USB path's
+debounced ack-driven tail-resend verbatim — only the frame emitter differs.
+`extio_ota_push` dispatches to it on `state/board` matching `frdm_*`.
+
+### Measured, box1, 644,544 B
+
+| | |
+|---|---|
+| transfer + verify | **17 s** (~8,371 chunks; flash work alone is ~10.5 s) |
+| erase max / prog max | 63.2 ms / 1.25 ms |
+| **`dbg/wd_skipped`** | **0** |
+| `dbg/pubq_dropped` | 0 |
+
+**`wd_skipped = 0` is the headline.** Step 2 showed a 512 kB burst freezing the
+loop for 8 s straight; done incrementally — one chunk per frame, back to the loop
+between — the same volume of flash work costs **not one missed 1 Hz beat**. A
+63 ms hole per sector is invisible at a 1 s heartbeat. The step-2 measurement
+predicted exactly this, and it held.
+
+### Two things that are checked, and one that is not
+
+- **Wrong sha is rejected**: pushing with a zeroed sha gives `state=fail`,
+  `result=sha_mismatch`. Verify is real, not decorative.
+- **`cmd/ota/verify` re-hashes the image BY READING IT BACK OUT OF slot1**
+  (`flash_verify=1`, 644 kB read + hashed in 200 ms). This is NOT redundant with
+  the transfer sha, which hashes bytes as they ARRIVE: `ota/state=ok` means "the
+  image crossed the link intact and no flash call returned an error", which says
+  nothing about what is in the slot. Step 4 must run this before arming a trial —
+  MCUboot will happily try to boot a slot we merely believe we wrote.
+- **Not checked: that the staged image is BOOTABLE.** Nothing here inspects the
+  MCUboot header, and the slot still ends with 512 kB of `flashtest` pattern past
+  the image. Step 4's `boot_request_upgrade()` is where that gets real, and note
+  swap-using-offset wants the update at slot1's SECOND sector.
+
+Note the whole step was validated without deploying `extioconf.tcl` (that needs
+sudo on the rig): the procs were loaded into the live subprocess with
+`dservctl extio "source /tmp/otadp.tcl"`. Good pattern for orchestrator work.
