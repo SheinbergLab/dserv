@@ -34,6 +34,14 @@ elseif(CONFIG_FILE_SYSTEM)
 	target_compile_definitions(app PRIVATE BOX_HAVE_PERSIST=1)
 endif()
 
+# MCUboot chainload repair: the RW6xx SoC init powers the TDDR PLL down in any
+# image without Ethernet (i.e. MCUboot), and nothing ever powers it back up, so
+# our ENET 1588 clock arrives dead and the first PTP read spins forever with
+# interrupts disabled. Only needed when something boots before us.
+if(CONFIG_SOC_SERIES_RW6XX AND CONFIG_BOOTLOADER_MCUBOOT)
+	target_sources(app PRIVATE src/platform/box_soc_rw612.c)
+endif()
+
 # Ethernet + PTP: frdm_rw612 and teensy41 (teensy40 has no PHY).
 if(CONFIG_NETWORKING)
 	target_sources(app PRIVATE

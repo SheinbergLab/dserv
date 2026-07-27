@@ -2824,3 +2824,86 @@ Operating notes: `ptp4l` AND `phc2sys` must both be running (`host/start_ptp.sh`
 `host/start_phc2sys.sh`); without phc2sys the PHC free-runs at ~46 ppm and D is
 not constant. Re-run `host/ptp_anchor.sh` every ~400 s, or once a session --
 the box re-anchors itself from D in between, costing zero packets.
+
+## 2026-07-27 — MCUboot on the RW612, and the PLL the bootloader takes with it
+
+Step 1 of the OTA port (`sysbuild.conf`, `SB_CONFIG_BOOTLOADER_MCUBOOT=y`).
+**Done and rig-green: 12/12 with box1 running under MCUboot.** The build side
+was free — the board's DTS already had the A/B layout, `zephyr,code-partition`
+already pointed at `slot0_partition`, and `NXP_RW6XX_BOOT_HEADER` is already
+`default y if !BOOTLOADER_MCUBOOT`, so the app drops its boot header and relinks
+to `0x18020000` on its own. MCUboot fits in 45.6% of the 128 KB boot partition;
+the signed app is 639 KB = **20.4% of a 3 MB slot**. Swap mode resolves to
+`BOOT_SWAP_USING_OFFSET` (no scratch partition in the DTS) — note for step 2/3:
+**offset mode wants the update written at the SECOND sector of slot1, not the
+first.** Signing is still MCUboot's published dev key; a real key is step 4 work.
+
+### The failure, because it is worth recognising again
+
+First boot under MCUboot: bootloader banner fine, image validated, `Jumping to
+the first image slot` fine, app banner fine, `PHY (2) is entering autonegotiation
+sequence` — then nothing, forever. No DHCP, no ARP, no crash, no fault message.
+`rig_check` cannot see this box at all.
+
+What it actually was, via SWD:
+
+- `curr_tick` frozen at a **repeatable** 8.37 s (10.43 s with BT built in).
+- OS timer IRQ 41 **enabled and pending and never taken**; VTOR correct.
+- PC in `ENET_Ptp1588CaptureBlocking()`, `PRIMASK=1`.
+- `ATCR` `0x291` → `0xA91`: bit 11 `CAPTURE` set and never self-clearing.
+  `ATPER` = 1e9 and `EN` = 1 — the timer is *configured*, `ATVR` stays 0.
+
+The mechanism is in `soc/nxp/rw/soc.c`:
+
+```c
+#if DT_NODE_HAS_STATUS_OKAY(DT_NODELABEL(enet)) && CONFIG_NET_L2_ETHERNET && CONFIG_ETH_DRIVER
+        RESET_PeripheralReset(kENET_IPG_RST_SHIFT_RSTn);
+        RESET_PeripheralReset(kENET_IPG_S_RST_SHIFT_RSTn);
+#else
+        CLOCK_DeinitTddrRefClk();      /* powers the TDDR PLL DOWN */
+#endif
+```
+
+MCUboot has no networking, so **the bootloader powers down the TDDR PLL** — the
+source of `tddr_mci_enet_clk`, the 1588 timer clock. Our app takes the other
+branch, which only resets the peripheral. **Nothing in the whole Zephyr tree ever
+calls `CLOCK_InitTddrRefClk()`**; the ENET path silently assumes the boot ROM
+left that PLL up, which is true booting from ROM and false the instant a
+bootloader sits in front. This is an upstream defect, not a config mistake.
+
+Two things make it nastier than "Ethernet is broken". The IPG bus clock is
+untouched, so ENET registers read normally and MDIO works well enough to *start*
+autonegotiation — the box looks like it is trying. And the SDK's capture wait is
+an **unbounded spin held under `DisableGlobalIRQ()`**, so a dead clock on a
+peripheral we merely *read* takes the entire box down, interrupts and all. Same
+family as the `ENET_Ptp1588StartTimer` rate bug of 2026-07-25: check that the
+clock is RUNNING, not that the register accepted the write.
+
+Fix: `src/platform/box_soc_rw612.c`, a `PRE_KERNEL_1` `SYS_INIT` that mirrors the
+deinit in reverse — only when the PLL is actually found powered down, so the
+non-MCUboot image keeps its long-validated path byte for byte. Note
+`CLOCK_InitTddrRefClk()` does **not** clear the output gates its own deinit sets,
+so `TDDR_MCI_ENET_CLK_CG` has to be cleared by hand. `TDDR_MCI_FLEXSPI_CLK` is
+deliberately left gated exactly as MCUboot left it: FlexSPI runs from the TCPU
+branch here, and the proof is empirical — MCUboot calls that deinit and keeps
+XIP-ing out of the same flash.
+
+### Method note
+
+The cheap discriminator was the A/B, not the theory. Reflashing the pre-MCUboot
+image brought box1 straight back (ping, watchdog, DHCP, PTP anchored), which
+killed "the PHY is marginal on this board" — a real documented failure mode that
+fit the symptom perfectly and was wrong. The BT-off build then killed the BT/NBU
+theory that the 10.43 s freeze had made attractive (10 s is exactly Zephyr's
+`HCI_CMD_TIMEOUT`): with BT out it still froze, just at 8.37 s. **BT only moved
+when the first PTP read happened.** Two plausible, well-motivated theories, both
+wrong, both cost one flash each to rule out.
+
+### NVS
+
+Confirmed by round-trip, not by inspection: set `config/desc`, `cmd/save`,
+`cmd/reboot`, and the value came back from flash on a fresh boot (`watchdog=1`),
+box re-registering with its persisted identity and the same 76 keys as baseline.
+`storage_partition` at `0x620000` is outside both slots, so "config survives an
+update" is a property of the layout — but the *write* path under MCUboot is now
+tested too, which is the part the layout does not give you for free.
