@@ -2976,3 +2976,29 @@ MCUboot hunt. **When box state and box console disagree, believe the console.**
 Related, NOT fixed here because it touches the shared RT loop: the `next_wd +=
 1000` catch-up burst is itself worth reconsidering (resync to `now + 1000` after
 a long stall) — it converts any stall into a telemetry outage on top of the stall.
+
+### Follow-up: the 1 Hz catch-up burst, fixed at the source
+
+The `next_wd += 1000` behaviour noted above is now fixed rather than just
+documented, because step 3 streams chunks through exactly this path.
+
+The gate still advances phase-preservingly in the normal case (no drift). What
+changed is that falling a full period behind no longer fires the gate once per
+missed period: it emits ONE status burst, adds the missed beats to the count, and
+resyncs. `state/watchdog` therefore still reads as seconds-since-boot -- rig_check
+and any historical comparison are unaffected -- and the gap is now published as
+**`dbg/wd_skipped`** rather than being inferable only from a jump in the watchdog
+value. A stall is easier to see than before, not harder.
+
+Measured across an identical 512 kB burst, before -> after:
+
+| | before | after |
+|---|---|---|
+| `dbg/pubq_dropped` | +230 | **0** |
+| `dbg/wd_skipped` | (did not exist) | 7-8 |
+| `state/ota/dbg/*` | dropped; read as "never ran" | lands first time |
+
+The wall-clock re-announce on the OTA result is deliberately KEPT even though its
+provoking cause is gone: a terminal result published exactly once, at the end of
+the operation most likely to have disturbed the link, is the worst-placed frame in
+the system. It is now defence rather than the only thing holding the report up.

@@ -204,11 +204,17 @@ static uint8_t pubq_per_pass = PUBQ_PER_PASS_DEF;
 static uint32_t ota_dbg_bytes, ota_dbg_wall_ms, ota_dbg_e_max, ota_dbg_p_max;
 static uint32_t ota_dbg_e_n, ota_dbg_p_n, ota_dbg_slot, ota_dbg_sector;
 static int32_t  ota_dbg_verify, ota_dbg_rc;
-/* WALL-CLOCK deadline, not a tick count. The 1 Hz gate is `next_wd += 1000`, so
- * after an 8 s stall it fires eight times in eight consecutive ~1 ms passes --
- * a countdown of N ticks is spent in milliseconds, entirely inside the very
- * catch-up storm it was meant to outlast. Re-announcing until a real wall-clock
- * deadline is the only form of this that survives. */
+/* WALL-CLOCK deadline, not a tick count -- and it must stay that way even though
+ * the storm that forced it is now fixed at the source (see the catch-up policy on
+ * the 1 Hz gate, which no longer fires once per missed period; measured drops
+ * during a 512 kB burst went 230 -> 0).
+ *
+ * Keeping the re-announce is deliberate defence, not leftovers: a terminal OTA
+ * result published exactly once, at the end of the operation most likely to have
+ * disturbed the link, is the single worst-placed frame in the system, and
+ * OTA.md's RP2350 hunt was prolonged by exactly that. Note a tick COUNTDOWN would
+ * not do -- "5 ticks" is spent in ~5 ms whenever the gate is catching up, which
+ * is the one moment it needs to survive. */
 static int64_t  ota_dbg_until;
 #endif
 
@@ -1059,6 +1065,7 @@ int main(void)
 	uint8_t rx[256];
 	int watchdog = 0;
 	uint32_t loop_last_us = 0, loop_max_us = 0, loop_t0 = 0;
+	uint32_t wd_skipped = 0;          /* 1 Hz beats skipped after a loop stall */
 	uint32_t disp_last_us = 0, disp_max_us = 0;
 	int64_t next_wd = k_uptime_get() + 1000;
 	char name[80];
@@ -1180,8 +1187,40 @@ int main(void)
 		}
 #endif
 
-		if (k_uptime_get() >= next_wd) {
+		int64_t wd_now = k_uptime_get();
+
+		if (wd_now >= next_wd) {
+			/* Normal case is `next_wd += 1000` -- phase-preserving, so the
+			 * heartbeat does not drift. The extra clause is the CATCH-UP
+			 * policy, and it is not cosmetic.
+			 *
+			 * Anything that blocks the service loop for seconds (a flash
+			 * burst does: 512 kB into slot1 = ~8 s, OTA step 2) leaves
+			 * next_wd many periods in the past. `+= 1000` alone then fires
+			 * the gate once per MISSED period, i.e. N full ~28-frame status
+			 * bursts in N consecutive ~1 ms passes -- hundreds of frames into
+			 * a 40-deep queue. Measured: dbg/pubq_dropped 128 -> 358 across
+			 * two bursts. So a stall became a telemetry OUTAGE on top of the
+			 * stall, and the frames dropped were preferentially the
+			 * single-shot ones published at the end of the stalling operation
+			 * -- which is precisely how an OTA result reads as "never ran".
+			 *
+			 * Emit ONE burst and skip the rest. The missed beats are still
+			 * ADDED to the count, so state/watchdog keeps meaning
+			 * seconds-since-boot rather than becoming a count of beats that
+			 * happened to be emitted -- rig_check and any historical reading
+			 * are unaffected. And the gap is now published explicitly as
+			 * dbg/wd_skipped instead of only being inferable from a jump in
+			 * the watchdog value, so a stall is easier to see, not harder. */
 			next_wd += 1000;
+			if (next_wd <= wd_now) {
+				uint32_t miss = (uint32_t)((wd_now - next_wd) / 1000) + 1u;
+
+				watchdog   += (int) miss;
+				wd_skipped += miss;
+				next_wd     = wd_now + 1000;
+			}
+
 			uint8_t f[DSERV_MSG_LEN];
 			dserv_state_name(&cfg, name, sizeof name, "watchdog");
 			dserv_msg_int(f, name, 0, watchdog++);
@@ -1222,6 +1261,13 @@ int main(void)
 			 * this project keeps getting caught by. */
 			dserv_state_name(&cfg, name, sizeof name, "dbg/pubq_dropped");
 			dserv_msg_int(f, name, 0, (int32_t) pubq_dropped);
+			pub_enqueue(f);
+
+			/* Cumulative 1 Hz beats the loop was too stalled to emit. Nonzero
+			 * means something held the loop for >1 s -- an OTA burst does this
+			 * legitimately; anything else wants explaining. */
+			dserv_state_name(&cfg, name, sizeof name, "dbg/wd_skipped");
+			dserv_msg_int(f, name, 0, (int32_t) wd_skipped);
 			pub_enqueue(f);
 
 #if defined(BOX_HAVE_OTA_SLOT)
