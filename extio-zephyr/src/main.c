@@ -253,7 +253,7 @@ static void sched_dbg_publish(uint64_t T, uint64_t now, uint64_t target_box,
 	for (unsigned i = 0; i < ARRAY_SIZE(val); i++) {
 		dserv_state_name(&cfg, nm, sizeof nm, leaf[i]);
 		dserv_msg_int64(f, nm, 0, val[i]);
-		box_uplink_send(f, DSERV_MSG_LEN);
+		pub_enqueue(f);
 	}
 }
 #endif /* CONFIG_PTP_CLOCK */
@@ -429,7 +429,7 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 			if (!boxclk.synced) {
 				dserv_state_name(&cfg, nm3, sizeof nm3, "sched/abs_err");
 				dserv_msg_string(f3, nm3, 0, "unsynced");
-				box_uplink_send(f3, DSERV_MSG_LEN);
+				pub_enqueue(f3);
 				return;
 			}
 
@@ -442,10 +442,10 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 			if (lead_us <= 0) {
 				dserv_state_name(&cfg, nm3, sizeof nm3, "sched/abs_late_us");
 				dserv_msg_int64(f3, nm3, 0, -lead_us);
-				box_uplink_send(f3, DSERV_MSG_LEN);
+				pub_enqueue(f3);
 				dserv_state_name(&cfg, nm3, sizeof nm3, "sched/abs_err");
 				dserv_msg_string(f3, nm3, 0, "late");
-				box_uplink_send(f3, DSERV_MSG_LEN);
+				pub_enqueue(f3);
 				if (sched_dbg) {
 					sched_dbg_publish(T, now, target_box, lead_us);
 				}
@@ -461,10 +461,10 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 			 * -- shrinking lead is the early warning before anything is late. */
 			dserv_state_name(&cfg, nm3, sizeof nm3, "sched/abs_lead_us");
 			dserv_msg_int64(f3, nm3, 0, lead_us);
-			box_uplink_send(f3, DSERV_MSG_LEN);
+			pub_enqueue(f3);
 			dserv_state_name(&cfg, nm3, sizeof nm3, "sched/abs_err");
 			dserv_msg_string(f3, nm3, 0, "armed");
-			box_uplink_send(f3, DSERV_MSG_LEN);
+			pub_enqueue(f3);
 			if (sched_dbg) {
 				sched_dbg_publish(T, now, target_box, lead_us);
 			}
@@ -487,7 +487,7 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 			char nm[80];
 			dserv_state_name(&cfg, nm, sizeof nm, "sched/debug");
 			dserv_msg_int(f2, nm, 0, (int32_t) sched_dbg);
-			box_uplink_send(f2, DSERV_MSG_LEN);
+			pub_enqueue(f2);
 			return;
 		}
 	}
@@ -508,22 +508,22 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 			char nm[80];
 			dserv_state_name(&cfg, nm, sizeof nm, "ptp/offset_us");
 			dserv_msg_int64(f2, nm, 0, ptp_offset_us);
-			box_uplink_send(f2, DSERV_MSG_LEN);
+			pub_enqueue(f2);
 
 			if (ok == 0) {
 				/* A FOURTH sync source beside hw / swc / sw, so a datafile
 				 * records which mechanism produced its timestamps. */
 				dserv_state_name(&cfg, nm, sizeof nm, "sync/source");
 				dserv_msg_string(f2, nm, 0, "ptp");
-				box_uplink_send(f2, DSERV_MSG_LEN);
+				pub_enqueue(f2);
 
 				dserv_state_name(&cfg, nm, sizeof nm, "sync/ptp_window_us");
 				dserv_msg_int(f2, nm, 0, (int32_t) win);
-				box_uplink_send(f2, DSERV_MSG_LEN);
+				pub_enqueue(f2);
 
 				dserv_state_name(&cfg, nm, sizeof nm, "sync/offset_us");
 				dserv_msg_int64(f2, nm, 0, boxclk.offset_us);
-				box_uplink_send(f2, DSERV_MSG_LEN);
+				pub_enqueue(f2);
 			}
 			return;
 		}
