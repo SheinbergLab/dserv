@@ -437,9 +437,9 @@ public:
   void set_point(ds_datapoint_t *dp);
   int queue_size(void);
   void shutdown_message(SharedQueue<client_request_t> *queue);
-  std::string eval(char *s);
+  std::string eval(const char *s);
   std::string eval(std::string script);
-  void eval_noreply(char *s);
+  void eval_noreply(const char *s);
   void eval_noreply(std::string script);
 };
 

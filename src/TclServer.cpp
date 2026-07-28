@@ -3945,7 +3945,7 @@ void TclServer::shutdown_message(SharedQueue<client_request_t> *q)
   q->push_back(client_request);
 }
 
-std::string TclServer::eval(char *s)
+std::string TclServer::eval(const char *s)
 {
   std::string script(s);
   return eval(script);
@@ -3968,7 +3968,7 @@ std::string TclServer::eval(std::string script)
   return s;
 }
 
-void TclServer::eval_noreply(char *s)
+void TclServer::eval_noreply(const char *s)
 {
   std::string script(s);
   eval_noreply(script);
