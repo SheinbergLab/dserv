@@ -262,12 +262,25 @@ proc ptp_anchor_all {{why sweep}} {
 # could tell whether the anchoring SERVICE was working, only whether a given box
 # happened to look right. No side effects: this reads state we already read.
 proc ptp_publish_anchored {} {
+    set live [ptp_boxes]
     set n 0
-    foreach b [ptp_boxes] {
+    foreach b $live {
         set src ""
         catch { set src [dservGet extio/$b/state/sync/source] }
         if { $src eq "ptp" } { incr n }
     }
+    # Publish BOTH, together, from the same box list.
+    #
+    # They are meant to be compared (`anchored < boxes` = a live box is not
+    # anchored), and a comparison is only meaningful if both sides describe the
+    # same instant. `boxes` used to be published ONLY from the 300 s sweep, so
+    # the pair could disagree for up to five minutes purely from staleness:
+    # box3 registering at the office read `anchored=1 boxes=0`, and a box
+    # unplugged just after a sweep would read the opposite and fail rig_check's
+    # step 7 spuriously. Same family as the retained-datapoint bug this
+    # subprocess exists to close -- two numbers that must agree, published at
+    # different times.
+    ptp_pub boxes    [llength $live]
     ptp_pub anchored $n
     return $n
 }
