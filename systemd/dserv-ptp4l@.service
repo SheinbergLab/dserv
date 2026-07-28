@@ -35,11 +35,14 @@ After=network-online.target sys-subsystem-net-devices-%i.device
 
 [Service]
 Type=simple
-ExecStart=/usr/sbin/ptp4l -i %i -H -m --priority1 127 --hwts_filter full
+ExecStart=/usr/sbin/ptp4l -i %i -H -m -q --priority1 127 --hwts_filter full
 Restart=always
 RestartSec=5
 
-# -m sends messages to stdout rather than syslog, so journald owns them.
+# -m prints to stdout, which journald captures. -q is what actually stops the
+# DUPLICATION: -m does not disable syslog, so without it linuxptp logs every
+# message twice into the journal -- once via stdout and once via syslog. Verified
+# on the rig 2026-07-28 before adding it.
 # This replaces host/start_ptp.sh, which setsid'd into /tmp/ptp4l.log with no
 # supervision and did not survive a host reboot.
 StandardOutput=journal
