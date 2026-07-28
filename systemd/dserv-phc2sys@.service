@@ -35,10 +35,12 @@ After=network-online.target dserv-ptp4l@%i.service
 
 [Service]
 Type=simple
-ExecStart=/usr/sbin/phc2sys -c %i -s CLOCK_REALTIME -w -m
+ExecStart=/usr/sbin/phc2sys -c %i -s CLOCK_REALTIME -w -m -q
 Restart=always
 RestartSec=5
 
+# -m to stdout for journald; -q to suppress syslog, or every line lands in the
+# journal twice (see the ptp4l unit).
 StandardOutput=journal
 StandardError=journal
 
