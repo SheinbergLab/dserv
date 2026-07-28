@@ -176,6 +176,8 @@ proc ptp_anchor_all {{why sweep}} {
     foreach b [ptp_boxes] {
         if { [ptp_anchor_box $b $d] } { incr n } else { incr bad }
     }
+    foreach b [ptp_boxes] { dservAfter 3000 [list ptp_verify $b 8] }
+
     ptp_pub boxes  $n
     ptp_pub failed $bad
     ptp_pub last   [dservClockEpochOffset]
@@ -189,6 +191,37 @@ proc ptp_anchor_all {{why sweep}} {
 # Anchor just that box, reusing the last known D when we have one -- a box that
 # has only just rebooted should not wait up to a full sweep period, and D is a
 # host property that has not changed in the meantime.
+# Push-and-VERIFY. A box announces sync/source=none the moment it connects, which
+# is BEFORE ITS DOWNLINK EXISTS. Traced on the rig 2026-07-28 by watching
+# cmds_rx across a reboot:
+#
+#   t=15s  sync/source=none   cmds_rx=0   <-- announces, but %match not yet up
+#   t=18s  sync/source=sw     cmds_rx=2       downlink live
+#   t=21s  sync/source=ptp    cmds_rx=3       the RETRY landed
+#
+# cmds_rx=0 at the moment of the announcement is the whole story: the immediate
+# push had nowhere to go. That is why the first attempt vanished while an
+# identical manual push minutes later took instantly -- it was never about the
+# value, only about whether the box could hear yet.
+#
+# The anchor is idempotent and the box is the authority on whether it took, so
+# retry until it reports ptp. Give up loudly rather than quietly: an anchor that
+# silently fails to land leaves a box refusing every at_abs while everything
+# around it looks healthy.
+proc ptp_verify {box tries} {
+    set src ""
+    catch { set src [dservGet extio/$box/state/sync/source] }
+    if { $src eq "ptp" } return                     ;# took
+
+    if { $tries <= 0 } {
+        puts "ptp: $box never took the anchor (last sync/source='$src')"
+        ptp_pub error "$box did not take the anchor"
+        return
+    }
+    if { $::ptp_d_us ne "" } { ptp_anchor_box $box $::ptp_d_us }
+    dservAfter 3000 [list ptp_verify $box [expr {$tries - 1}]]
+}
+
 proc ptp_on_sync_source {dp data} {
     if { ![regexp {^extio/([^/]+)/state/sync/source$} $dp -> box] } return
     if { $data ne "none" } return                 ;# "ptp"/"hw"/"sw" = already anchored
@@ -198,6 +231,7 @@ proc ptp_on_sync_source {dp data} {
     } else {
         if { [ptp_anchor_box $box $::ptp_d_us] } {
             puts "ptp: $box announced unanchored -> pushed D=$::ptp_d_us us"
+            dservAfter 3000 [list ptp_verify $box 8]
         }
     }
 }
