@@ -94,6 +94,21 @@ static int u_eth_send(const uint8_t *b, int l)    { return box_net_eth_send(b, l
  * send_command state machine -- an RTOS thread does the same job with none of
  * the interleaving. The loop only ever sets a flag and moves on. */
 #define REG_RETRY_MS     5000            /* config link down -> retry cadence   */
+/* ...except for the FIRST registration after boot, which is guaranteed to fail.
+ *
+ * box_uplink_init() fires a registration as part of bringing the transport up,
+ * and on a cold boot that necessarily runs BEFORE DHCP has produced an address
+ * -- so the box is not registered, the watchdog notices, and then charges the
+ * full 5 s cadence before trying again even though the box has been ready the
+ * whole time. Measured on box3: a consistent 5.17 s between the service loop
+ * starting and `reg: registered`, in every boot, on a rig where the actual
+ * register round takes 170 ms.
+ *
+ * So retry FAST until the first success, then settle into the 5 s cadence. The
+ * slow cadence exists for a dserv that is down or restarting, where hammering
+ * buys nothing; a box that has never once been up is a different situation, and
+ * it is also the one a person is standing there watching. */
+#define REG_FIRST_MS     250             /* ...until the first successful one    */
 #define MATCH_REFRESH_MS 30000           /* re-assert matches (a lost one is silent) */
 
 #define SYNC_DP "ess/in_obs"             /* obs edge -> box clock anchor */
@@ -333,12 +348,13 @@ static void eth_reg_watchdog(const box_config_t *cfg)
 {
 	static int64_t down_ms, fresh_ms;
 	static uint16_t rereg;
+	static bool ever_up;      /* have we EVER completed a registration? */
 	int64_t now = k_uptime_get();
 
 	if (!box_net_eth_server_up()) {
 		fresh_ms = now;
 		if (!down_ms) { down_ms = now; return; }
-		if (now - down_ms < REG_RETRY_MS) { return; }
+		if (now - down_ms < (ever_up ? REG_RETRY_MS : REG_FIRST_MS)) { return; }
 		down_ms = now;
 		reg_request(cfg, 1);
 		if (++rereg <= 3 || (rereg % 12) == 0) {   /* first few, then ~1/min */
@@ -347,6 +363,10 @@ static void eth_reg_watchdog(const box_config_t *cfg)
 		return;
 	}
 	down_ms = 0;
+	if (!ever_up) {
+		ever_up = true;
+		printk("reg: first registration at %lld ms\n", now);
+	}
 	if (rereg) { printk("reg: config link restored\n"); rereg = 0; }
 	if (now - fresh_ms >= MATCH_REFRESH_MS) {
 		fresh_ms = now;

@@ -3298,3 +3298,63 @@ datapoints written by the announce burst, so on a box still booting they describ
 the previous connection. It cheerfully reported the pre-reflash firmware. Moved
 after the liveness checks, because `cmds_rx` advancing is what proves the
 connection that wrote them is the current one.
+
+## 2026-07-28 (later) — where the boot time actually goes
+
+"Boot seems long, with a 7-10 s pause in the middle." Measured on box3 by
+stamping both consoles from the host through `kernel reboot cold`
+(`bootstamp.py` pattern: hold the fd across `stty`, macOS discards settings
+applied to a closed `cu` device). Baseline was 13.9-15.9 s from reset to
+`reg: registered`, wandering ~2 s between otherwise identical reboots.
+
+**The pause is dark on purpose and that is half the problem.** Everything in
+that window is printed by `box_console_printf`, which on an Ethernet box goes to
+a USB CDC that `mode eth` never enumerates -- so the most interesting 9 seconds
+of the boot produce no output anywhere. `printk` (Zephyr console, the J-Link
+VCOM) is the only channel that always works; the timing marks used here went
+there, and the one line worth keeping stayed there.
+
+Breakdown, uptime ms (uptime 0 == MCUboot's jump, ~310 ms after reset):
+
+| phase | cost | |
+|---|---|---|
+| MCUboot verify + chainload | 310 ms | signature over 650 kB |
+| Zephyr driver init to `main()` | 2580 ms | before our first instruction runs |
+| `k_msleep(2000)` | 2000 ms | deliberate: let a USB host open the console |
+| LED boot heartbeat | 750 ms | deliberate: 3 hardware-timed pulses |
+| `box_net_eth_wait_ip()` | 0.5-4100 ms | link-up + DHCP |
+| **service loop -> registered** | **5170 ms** | **the bug** |
+
+### The 5.17 s was a defect, not a cost
+
+Identical in every boot, on a rig where a register round takes 170 ms.
+`box_uplink_init()` fires a registration while bringing the transport up, which
+on a cold boot necessarily runs BEFORE DHCP has an address, so it always fails;
+`eth_reg_watchdog` then charged the full `REG_RETRY_MS` (5 s) cadence before
+trying again, while the box sat ready. Now the retry is 250 ms until the FIRST
+successful registration and 5 s after it -- the slow cadence is for a dserv that
+is down, and a box that has never once been up is a different situation (and the
+one someone is standing there watching). `reg: first registration at N ms` is
+now printed, which is the single number that says when the box became useful.
+
+### DHCP was a real find but not the one that showed
+
+`CONFIG_NET_DHCPV4_INITIAL_DELAY_MAX` defaults to 10, and Zephyr implements
+RFC 2131 4.4.1 as `entropy % (MAX - 1) + 1` -- **a random 1-9 s before the first
+DISCOVER, every boot.** That is the reboot-to-reboot wander. Kconfig's range
+floor is 2, which collapses the expression to exactly 1 s. Set on both
+networked boards. Fixing it alone barely moved the total, because the 5 s
+registration penalty was quantising everything behind it -- worth remembering:
+two delays in series, and only the larger one is visible.
+
+**Now 8.7-9.2 s, repeatable to ~0.5 s.** rig_check 11/11 after.
+
+### What is left, deliberately
+
+- **2.58 s of Zephyr driver init before `main()`** -- the largest single item
+  now. `CONFIG_BOOT_DELAY=0`, so this is SYS_INIT work; `CONFIG_BT=y` and the
+  RW612 radio bring-up is the obvious suspect (the step-1 hunt already saw BT
+  move boot timing by ~2 s). Not chased.
+- **2.0 s `k_msleep`** buying nothing on an Ethernet box, where the console CDC
+  is never enumerated. Making it conditional is easy and was left alone rather
+  than risk the USB-console case for 2 s.
