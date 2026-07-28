@@ -7,6 +7,9 @@
 #include "box_obs.h"
 #include "box_event.h"
 #include "box_uplink.h"
+#if defined(CONFIG_BT)
+#include "box_ble.h"
+#endif
 #if defined(CONFIG_NETWORKING)
 #include "box_net_eth.h"
 #endif
@@ -116,6 +119,22 @@ static void run_line(box_config_t *cfg, const char *line)
 	cli_action_t a = box_cli_exec(cfg, line, resp, sizeof resp, &cmd);
 
 	box_console_write(resp);   /* the OK/ERR line box_cli produced */
+
+#if defined(CONFIG_BT)
+	/* `ble enable 1` is documented as live, so honour it here rather than
+	 * making the user reboot. Turning it back OFF needs a reboot: bringing the
+	 * controller down cleanly is not something this module supports, and
+	 * pretending otherwise would be another field that lies. */
+	if (strncmp(line, "ble enable", 10) == 0) {
+		if (cfg->ble_en && !box_ble_active()) {
+			box_console_write(box_ble_init() == 0
+					  ? "  ble: radio up, scanning\r\n"
+					  : "  ble: radio FAILED to start\r\n");
+		} else if (!cfg->ble_en && box_ble_active()) {
+			box_console_write("  ble: still running -- reboot to stop\r\n");
+		}
+	}
+#endif
 
 #if defined(CONFIG_NETWORKING)
 	/* `show` prints the CONFIGURED net fields, so in DHCP mode it reads

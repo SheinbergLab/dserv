@@ -1305,8 +1305,18 @@ int main(void)
 	box_console_printf("active uplink: %s\n", box_uplink_active_name());
 
 #if defined(CONFIG_BT)
-	/* ---- block #6 (ingress): multi-peripheral BLE central ---- */
-	if (box_ble_init() == 0) {
+	/* ---- block #6 (ingress): multi-peripheral BLE central ----
+	 *
+	 * GATED on the persisted flag, matching the RP2350's stated contract
+	 * ("ENABLE CONTRACT: persisted cfg->ble_en, CLI `ble enable 1`, default
+	 * OFF" -- wiznet-io/pico/box_ble_central.h). This port carried the config
+	 * field over but initialised unconditionally, so `show` reported ble.en=0
+	 * while the radio was up and scanning -- a config field that did nothing,
+	 * which is the same "field that lies" class as net.ip and sync/source.
+	 * A wired-only box should not be running a radio it was told to leave off. */
+	if (!cfg.ble_en) {
+		box_console_printf("BLE disabled (ble enable 1 -- live, `save` to persist)\n\n");
+	} else if (box_ble_init() == 0) {
 		box_console_printf("BLE central up; scanning for d5e7000x peripherals (max %d)\n\n",
 		       CONFIG_BT_MAX_CONN);
 	} else {
@@ -1358,6 +1368,7 @@ int main(void)
 			 * a dserv RESTART leaves the box up with its anchor intact -- so
 			 * publishing "none" unconditionally would destroy a good value to
 			 * fix a stale one. Report what is actually true. */
+#if defined(CONFIG_PTP_CLOCK)
 			{
 				uint8_t f0[DSERV_MSG_LEN];
 				char nm0[80];
@@ -1367,6 +1378,7 @@ int main(void)
 						 ptp_offset_valid ? "ptp" : "none");
 				pub_enqueue(f0);
 			}
+#endif
 		} else if (n > 0) {
 			/* Cost of turning received bytes into an executed command
 			 * (framer + dispatch + GPIO write). Completes the inbound

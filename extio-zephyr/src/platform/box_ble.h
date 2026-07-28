@@ -16,8 +16,12 @@
 
 #include <stdint.h>
 
-/* Enable the controller, register callbacks, and start scanning. 0 on success. */
+/* Enable the controller, register callbacks, and start scanning. 0 on success.
+ * IDEMPOTENT -- safe to call again to bring the radio up at runtime. */
 int box_ble_init(void);
+
+/* 1 iff the radio has been brought up. */
+int box_ble_active(void);
 
 /* Dequeue one received frame (128 bytes into out). Returns 1 if a frame was
  * filled, 0 if the queue is empty. Drain in a loop each service pass. */
