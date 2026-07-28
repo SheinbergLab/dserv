@@ -3156,3 +3156,53 @@ both speeds exactly once (fast-in/slow-out vs slow-in/fast-out), so serialisatio
 largely cancels, and PTP's four message types are all similar sizes. Pinning both
 ports to 100 Mb would cost host bandwidth for no real gain. The real risk through
 a store-and-forward switch is queuing VARIABILITY, not the speed step.
+
+## 2026-07-27 (later) — the recurring bug: fields that report memory, not reality
+
+Four distinct hours-costing failures in this document share one shape, and it is
+worth naming rather than rediscovering a fifth time. **A field that looks like
+live state but is actually configuration, a retained value, or a stale snapshot
+is worse than no field**, because it converts "I don't know" into a confident
+wrong answer — and the tooling built on top inherits the lie.
+
+| field | looked like | actually was |
+|---|---|---|
+| `net.ip` in `show` | the address the box holds | the STATIC config field; `0.0.0.0` in DHCP mode no matter what lease exists |
+| `state/sync/source` | whether the box is anchored | a RETAINED datapoint; survives the box reboot that destroyed the anchor |
+| `persist=FAILED` in `show` | current persistence state | a boot-time snapshot |
+| `PHY is still in factory mode!` | a device state bit | a FAILED MDIO READ (all-ones sets the tested bit) |
+| `dbg/loop_max_us` | worst service-loop pass | published BY the loop, so it cannot report the stall that stops publishing |
+
+Two of these were fixed today; the rule they imply:
+
+**1. Report reality, not the last thing you were told.** `show` now prints
+`net.live=<addr> link=N` from `box_net_eth_get_ip()` beside the configured
+`net.ip`, and `dserv.live=<session> uplink=<x> cmds_rx=N`. Both are live samples.
+The configured fields are deliberately KEPT — conflating "what you asked for"
+with "what you got" is how you lose the ability to tell a static config from a
+DHCP lease.
+
+**2. A retained datapoint must be corrected by the thing that invalidated it.**
+`state/sync/source` is now republished on every dserv connect with the box's
+ACTUAL anchor state (`ptp` if `ptp_offset_valid`, else `none`). Conditional on
+purpose: the same path fires on a dserv RESTART, where the box is still up with
+its anchor intact, so an unconditional `none` would destroy a good value to fix
+a stale one.
+
+This one was not hypothetical. `rig_check` step 5 read the retained value and
+**passed while the box refused every at_abs** — observed twice today, on box1
+this morning and box3 this evening (step 5 PASS, step 7 `unsynced`, and the PASS
+was the one lying). Verified fixed: reflashing box3 flipped dserv `ptp` -> `none`
+immediately, matching `sync_fire`, and re-anchoring flipped it back.
+
+**3. `cmds_rx` is now on the box's own console.** main.c's comment for that
+counter ends "no field on the box revealed it" — true until now: it was published
+to dserv but the box could not show it locally, so a box you were holding on a
+bench could not tell you its downlink was dead. `show` reports it.
+
+**Still outstanding, a decision not a bug:** `ble.en=0` in `show` while the radio
+is up and scanning. `box_ble_init()` is called unconditionally under
+`#if defined(CONFIG_BT)` and never consults `cfg.ble_en`, so the persisted flag
+is inert — diverging from the RP2350's stated "ENABLE CONTRACT: persisted
+cfg->ble_en, default OFF" (`box_ble_central.h`). Either gate init on the flag or
+drop the flag; do not leave a config field that does nothing.

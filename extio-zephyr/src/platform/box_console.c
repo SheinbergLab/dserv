@@ -6,6 +6,10 @@
 #include "box_gpio.h"
 #include "box_obs.h"
 #include "box_event.h"
+#include "box_uplink.h"
+#if defined(CONFIG_NETWORKING)
+#include "box_net_eth.h"
+#endif
 
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
@@ -112,6 +116,53 @@ static void run_line(box_config_t *cfg, const char *line)
 	cli_action_t a = box_cli_exec(cfg, line, resp, sizeof resp, &cmd);
 
 	box_console_write(resp);   /* the OK/ERR line box_cli produced */
+
+#if defined(CONFIG_NETWORKING)
+	/* `show` prints the CONFIGURED net fields, so in DHCP mode it reads
+	 * net.ip=0.0.0.0 no matter what lease the box actually holds. That is
+	 * actively misleading rather than merely incomplete -- on 2026-07-27 a box
+	 * that HAD a lease read as unconfigured, and the live address was only
+	 * available from the ONE-SHOT boot banner, so a lease acquired after boot
+	 * (the normal case, DHCP is slower than init) appeared nowhere at all.
+	 *
+	 * Appended here and not in box_cli.h on purpose: the core CLI is
+	 * platform-agnostic and shared with boards that have no Ethernet, so it
+	 * must not reach into box_net_eth.h. */
+	if (strncmp(line, "show", 4) == 0) {
+		uint8_t ip[4];
+		char nl[80];
+
+		if (box_net_eth_get_ip(ip)) {
+			snprintf(nl, sizeof nl, "  net.live=%u.%u.%u.%u link=%d\r\n",
+				 ip[0], ip[1], ip[2], ip[3], box_net_eth_link());
+		} else {
+			snprintf(nl, sizeof nl, "  net.live=none link=%d\r\n",
+				 box_net_eth_link());
+		}
+		box_console_write(nl);
+	}
+#endif
+
+	/* ...and the same question for dserv: the main line shows the CONFIGURED
+	 * target, which says nothing about whether the box is actually talking to
+	 * it. `session` catches a dead/never-established TCP link; `cmds_rx` is the
+	 * one that catches "publishing but deaf", where the session is fine and the
+	 * %match registration is not. A frozen cmds_rx next to a live box IS the
+	 * diagnosis -- see main.c. */
+	if (strncmp(line, "show", 4) == 0) {
+		const char *up   = box_uplink_active_name();
+		const char *sess = "n/a";
+		char nl[96];
+
+#if defined(CONFIG_NETWORKING)
+		if (strcmp(up, "eth") == 0) {
+			sess = box_net_eth_connected() ? "connected" : "down";
+		}
+#endif
+		snprintf(nl, sizeof nl, "  dserv.live=%s uplink=%s cmds_rx=%u\r\n",
+			 sess, up, (unsigned) box_cmds_rx());
+		box_console_write(nl);
+	}
 
 	switch (a) {
 	case CLI_GPIO:

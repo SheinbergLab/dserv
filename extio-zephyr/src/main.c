@@ -514,6 +514,9 @@ static void groups_resync(void)
  * whether the path works at all. */
 static uint32_t cmds_rx;
 
+/* Exposed for the console's `show` (box_console.h). */
+uint32_t box_cmds_rx(void) { return cmds_rx; }
+
 /* "<prefix>/foo/bar" -> "foo/bar", once per frame.
  *
  * The matchers below used to rebuild a full key per candidate and compare the
@@ -1339,6 +1342,31 @@ int main(void)
 			/* A host just opened the pipe. dserv only learns what it is
 			 * told while listening, so describe the box now. */
 			box_announce_burst(&cfg, groups);
+
+			/* ...and CORRECT state/sync/source, which the announce burst
+			 * does not carry.
+			 *
+			 * dserv RETAINS datapoints, and nothing else publishes this leaf
+			 * until an anchor arrives -- so a box that reboots leaves the old
+			 * "ptp" standing and reads as synced when it is not. That is not
+			 * cosmetic: rig_check step 5 passes on the stale value while the
+			 * box refuses every at_abs, which is exactly what happened on
+			 * 2026-07-27 (step 5 PASS, step 7 "unsynced", and the PASS was the
+			 * one lying). An anchor never survives a box reboot.
+			 *
+			 * CONDITIONAL on purpose. This fires on any dserv (re)connect, and
+			 * a dserv RESTART leaves the box up with its anchor intact -- so
+			 * publishing "none" unconditionally would destroy a good value to
+			 * fix a stale one. Report what is actually true. */
+			{
+				uint8_t f0[DSERV_MSG_LEN];
+				char nm0[80];
+
+				dserv_state_name(&cfg, nm0, sizeof nm0, "sync/source");
+				dserv_msg_string(f0, nm0, 0,
+						 ptp_offset_valid ? "ptp" : "none");
+				pub_enqueue(f0);
+			}
 		} else if (n > 0) {
 			/* Cost of turning received bytes into an executed command
 			 * (framer + dispatch + GPIO write). Completes the inbound

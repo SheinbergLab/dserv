@@ -25,9 +25,17 @@ KSZ8081 signature: PHYID1 (reg 2) = `0x0022`, PHYID2 (reg 3) = `0x1561`.
 
 | state | reads |
 |---|---|
-| healthy | `0x0022` / `0x1561` repeatably |
+| **healthy (MEASURED, board 4, brand new)** | **`0x0022` 200/200 AND `0x1561` 200/200 at BOTH addr 0 and addr 2; zero `0xffff`, zero `0x0000`, zero other** |
 | marginal power (recoverable, PORTING.md) | mix of `0x0`, `0xffff`, `0x5`, occasional valid |
-| board 3 (unrecovered) | `0xffff` 200/200, no variation across 94+ passes |
+| board 3 (faulty, RMA) | `0xffff` 200/200, no variation across 94+ passes |
+
+The healthy case is **perfect, not merely good** — so this is a binary test with no
+judgement call in the middle. A board sitting at, say, 150/200 is marginal and
+should be treated as a power/seating problem, not accepted.
+
+Note a healthy KSZ8081 answers at **both address 0 and address 2** (address 0 is
+the broadcast address), which matches PORTING.md's earlier `mdio scan` finding.
+Only addr 2 is the board's configured address.
 
 Board 3 showed two genuine `0x1561` reads early on, then went uniformly silent
 and never recovered across both cable configurations and a full ordered
