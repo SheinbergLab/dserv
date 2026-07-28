@@ -25,6 +25,7 @@
 #include "box_group.h"
 #include "box_clock.h"
 #include "box_announce.h"
+#include "box_boot.h"
 #include "box_obs.h"
 #include "box_console.h"
 #if defined(BOX_HAVE_PERSIST)
@@ -1029,11 +1030,24 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 
 		uint32_t ms = k_cyc_to_us_floor32(k_cycle_get_32() - c0) / 1000u;
 
+		/* ...and the OTHER half of "is this bootable": a readable MCUboot header
+		 * at the offset the bootloader will use. The sha answers "are these the
+		 * right bytes"; this answers "are they in the right place", which is a
+		 * separate question with its own way of going wrong (step 4). Reported
+		 * as its own leaf so a host can tell the two failures apart. */
+		char vver[16];
+		int  vhrc = box_boot_image_ver(1, vver, sizeof vver);
+
+		ota_pub_int("ota/hdr_ok", vhrc == 0 ? 1 : 0);
+		ota_pub_str("ota/staged_ver", vhrc == 0 ? vver : "none");
+
 		ota_pub_int("ota/flash_verify", match ? 1 : 0);
 		ota_pub_int("ota/flash_ms", (int32_t) ms);
 		ota_res_until = k_uptime_get() + 6000;
-		box_console_printf("cmd/ota/verify -> slot1 sha %s (%u B read in %u ms, rc %d)\n",
-				   match ? "MATCHES" : "DIFFERS", off, ms, rc);
+		box_console_printf("cmd/ota/verify -> slot1 sha %s (%u B read in %u ms, rc %d); "
+				   "header %s\n",
+				   match ? "MATCHES" : "DIFFERS", off, ms, rc,
+				   vhrc == 0 ? vver : "UNREADABLE");
 		return;
 	}
 
@@ -1065,6 +1079,27 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 			return;
 		}
 
+		/* Last gate before the box disappears: does slot1 hold a readable
+		 * MCUboot header WHERE THE BOOTLOADER WILL LOOK?
+		 *
+		 * This is not the sha check repeated. The sha proves the bytes we sent
+		 * are the bytes in flash; this proves they are in the right PLACE.
+		 * Step 4 shipped an image at slot offset 0 under swap-using-offset,
+		 * which verified perfectly and then simply never booted -- MCUboot
+		 * reads the header one sector further in and found nothing. A refusal
+		 * here costs a re-push; the alternative cost a reboot, a swap, and a
+		 * silent revert with no explanation anywhere. */
+		char sver[16];
+		int hrc = box_boot_image_ver(1, sver, sizeof sver);
+
+		if (hrc != 0) {
+			ota_pub_str("ota/arm", "refused_no_image_header");
+			ota_pub_int("ota/arm_rc", hrc);
+			box_console_printf("cmd/ota/arm -> refused: no MCUboot header in slot1 (%d) "
+					   "-- image staged at the wrong offset?\n", hrc);
+			return;
+		}
+
 		int rc = boot_request_upgrade(BOOT_UPGRADE_TEST);
 
 		if (rc != 0) {
@@ -1092,7 +1127,22 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 			dserv_msg_int(fa2, nma, 0, 0);
 			box_uplink_send(fa2, DSERV_MSG_LEN);
 		}
-		box_console_printf("cmd/ota/arm -> armed for ONE trial boot; rebooting\n");
+
+		/* Drop the breadcrumb LAST, so it records an arm that actually
+		 * happened. From here the next boot can name its own outcome:
+		 * trial -> revert if it runs and nobody keeps it, rejected if MCUboot
+		 * declines to run it at all. */
+		int brc = box_boot_note_arm(sver);
+
+		if (brc != 0) {
+			/* Not fatal -- MCUboot's trailer is what decides the boot, and it
+			 * is already written. We just lose the ability to EXPLAIN the next
+			 * boot, so say so rather than reverting silently later. */
+			box_console_printf("cmd/ota/arm -> WARNING breadcrumb write failed (%d); "
+					   "a rollback will not be reported\n", brc);
+		}
+		box_console_printf("cmd/ota/arm -> armed for ONE trial boot (slot1 v%s); rebooting\n",
+				   sver);
 		k_msleep(600);                 /* let the wire settle before the reset */
 		sys_reboot(SYS_REBOOT_WARM);
 		return;
@@ -1108,8 +1158,22 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 	if (leaf && strcmp(leaf, "cmd/ota/confirm") == 0) {
 		int rc = boot_write_img_confirmed();
 
+		if (rc == 0) {
+			/* Close the breadcrumb, or the NEXT boot sees an armed record with
+			 * a trial already seen and reports a revert that never happened.
+			 * The record has to track the decision, not just the arming. */
+			(void) box_boot_note_confirm();
+		}
 		ota_pub_str("ota/confirm", rc == 0 ? "confirmed" : "failed");
 		ota_pub_int("ota/confirm_rc", rc);
+		/* The box is no longer on the clock, and the update counted: say both
+		 * now rather than at the next connect. These leaves are otherwise only
+		 * published by the announce burst, so without this they keep reporting
+		 * the state the box booted with -- a stale ota/updates=0 next to a
+		 * fresh ota/confirm=confirmed, which is the same read-the-memory-not-
+		 * the-reality trap the announce path exists to avoid. */
+		ota_pub_int("ota/trial", box_boot_on_trial());
+		ota_pub_int("ota/updates", box_boot_updates());
 		ota_res_until = k_uptime_get() + 6000;
 		box_console_printf("cmd/ota/confirm -> %s (%d)\n",
 				   rc == 0 ? "CONFIRMED, image is permanent" : "FAILED", rc);
@@ -1320,6 +1384,12 @@ int main(void)
 	}
 #endif
 
+	/* Why we booted, and which image this is. AFTER the store mounts, because
+	 * the OTA breadcrumb lives there; BEFORE anything announces, because
+	 * box_announce reports the latch this produces. Also clears the reset-cause
+	 * register, so nothing else may read it directly. */
+	box_boot_init();
+
 
 #if defined(CONFIG_PTP_CLOCK)
 	for (int i = 0; i < BOX_NPINS; i++) {
@@ -1421,14 +1491,29 @@ int main(void)
 	box_console_printf("console: %s (config/console cdc|uart; save+reboot)\n",
 	       dserv_console_str((uint8_t) dserv_cfg_console_mode(&cfg)));
 	box_console_printf("active uplink: %s\n", box_uplink_active_name());
+	/* Why we are running, in the box's own words. The raw mask rides along
+	 * because the word collapses it (both watchdog and software can be set),
+	 * and 0x0 is itself informative on the RW612 -- that SoC has no power-on
+	 * bit, so a clean cold start sets nothing. */
+	box_console_printf("boot: %s (reset cause 0x%02x)\n",
+	       box_boot_reason(), (unsigned) box_boot_reset_cause());
 #if defined(CONFIG_MCUBOOT_IMG_MANAGER)
 	/* Loud on purpose: a trial boot that nobody confirms REVERTS on the next
 	 * reset, and finding that out from a mysterious version rollback later is
 	 * far worse than one line here. */
-	box_console_printf("image: %s\n",
-	       boot_is_img_confirmed()
-	       ? "confirmed"
-	       : "ON TRIAL -- send cmd/ota/confirm or the next reset REVERTS");
+	box_console_printf("image: v%s, %s\n", box_boot_img_ver(),
+	       box_boot_on_trial()
+	       ? "ON TRIAL -- send cmd/ota/confirm or the next reset REVERTS"
+	       : "confirmed");
+	if (strcmp(box_boot_reason(), "revert") == 0) {
+		box_console_printf("image: ROLLED BACK from v%s -- the trial image was never "
+		       "confirmed (%d revert(s) lifetime)\n",
+		       box_boot_last_arm_ver(), box_boot_reverts());
+	} else if (strcmp(box_boot_reason(), "rejected") == 0) {
+		box_console_printf("image: MCUboot REFUSED v%s and it never ran -- bad signature, "
+		       "bad header, or staged at the wrong offset (%d rejection(s) lifetime)\n",
+		       box_boot_last_arm_ver(), box_boot_rejects());
+	}
 #endif
 
 #if defined(CONFIG_BT)
@@ -1495,21 +1580,10 @@ int main(void)
 			 * a dserv RESTART leaves the box up with its anchor intact -- so
 			 * publishing "none" unconditionally would destroy a good value to
 			 * fix a stale one. Report what is actually true. */
-#if defined(CONFIG_MCUBOOT_IMG_MANAGER)
-			/* Is this a TRIAL boot? boot_is_img_confirmed() false means the
-			 * running image has not been kept yet and the next reset reverts.
-			 * Published on every connect because a host that reconnects
-			 * mid-trial has no other way to learn it is on the clock -- and
-			 * if nobody confirms, the box silently goes back. */
-			{
-				uint8_t f1[DSERV_MSG_LEN];
-				char nm1[80];
-
-				dserv_state_name(&cfg, nm1, sizeof nm1, "ota/trial");
-				dserv_msg_int(f1, nm1, 0, boot_is_img_confirmed() ? 0 : 1);
-				pub_enqueue(f1);
-			}
-#endif
+			/* ota/trial and the rest of the bootloader state now ride in the
+			 * announce burst above (box_announce.c, announce_ident) alongside
+			 * state/boot, so that "which image am I and how did I get here" is
+			 * answered by one writer in one place. */
 
 #if defined(CONFIG_PTP_CLOCK)
 			{

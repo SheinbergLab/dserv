@@ -33,4 +33,16 @@ void box_flash_debug(int *pi_rc, uint32_t *pi_size, uint32_t *offset);
 /* Load the stored blob into buf (<= max). Returns byte count, or -1 if none/err. */
 int box_flash_load(uint8_t *buf, uint32_t max);
 
+/* A SECOND, small record, stored independently of the config blob: the OTA/boot
+ * breadcrumb (box_boot.h). Same store, separate key.
+ *
+ * Separate on purpose. The config blob is written by `cmd/save` -- an operator
+ * action carrying whatever the live config happens to be -- while this record is
+ * written by the OTA state machine. Sharing one key would mean arming an update
+ * silently persists unsaved config edits, and an operator `save` clobbers OTA
+ * bookkeeping. Same reason the two have different names here rather than one
+ * "save everything" call. */
+int box_flash_save_boot(const uint8_t *blob, uint32_t len);
+int box_flash_load_boot(uint8_t *buf, uint32_t max);
+
 #endif /* BOX_FLASH_H */

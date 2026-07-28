@@ -2,11 +2,11 @@
  * box_announce.c -- see box_announce.h.
  */
 #include "box_announce.h"
+#include "box_boot.h"
 #include "box_gpio.h"
 #include "box_uplink.h"
 
 #include <zephyr/kernel.h>
-#include <zephyr/drivers/hwinfo.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -45,24 +45,6 @@ static void pub_int(const box_config_t *c, const char *leaf, int64_t val)
 	box_uplink_send(f, DSERV_MSG_LEN);
 }
 
-/* Why the box restarted. Distinguishes a watchdog/fault reboot from a power
- * cycle or a deliberate cmd/reboot -- the first thing you want when a box
- * reappears unexpectedly. */
-static const char *boot_reason(void)
-{
-	uint32_t cause = 0;
-
-	if (hwinfo_get_reset_cause(&cause) != 0) {
-		return "unknown";
-	}
-	if (cause & RESET_WATCHDOG)            return "watchdog";
-	if (cause & (RESET_DEBUG | RESET_SOFTWARE)) return "software";
-	if (cause & RESET_POR)                 return "power";
-	if (cause & RESET_PIN)                 return "pin";
-	if (cause & RESET_BROWNOUT)            return "brownout";
-	return cause ? "other" : "power";
-}
-
 /* ---- identity ---- */
 
 static void announce_ident(const box_config_t *c)
@@ -70,8 +52,28 @@ static void announce_ident(const box_config_t *c)
 	char s[24];
 
 	pub_str(c, "transport", box_uplink_active_name());
-	pub_str(c, "boot",      boot_reason());
+	/* LATCHED at boot by box_boot_init(), not read here: the hardware cause
+	 * register is cleared after that read, and it also carries the OTA verdicts
+	 * (trial/revert/rejected) that no register knows about. */
+	pub_str(c, "boot",      box_boot_reason());
 	pub_str(c, "fw",        BOX_FW_VERSION);
+
+	/* OTA/bootloader facts, on every connect because dserv RETAINS datapoints:
+	 * a box that reverts while dserv is down must still say so when it comes
+	 * back, and a stale "everything is fine" is exactly the failure this whole
+	 * step exists to prevent. NULL = no bootloader on this board, in which case
+	 * none of these leaves would mean anything. */
+	if (box_boot_img_ver() != NULL) {
+		/* The version MCUboot actually booted. state/fw above is a build-time
+		 * string identical in every image we produce, so it cannot show an OTA
+		 * taking effect -- this can. */
+		pub_str(c, "fw_ver",          box_boot_img_ver());
+		pub_int(c, "ota/trial",       box_boot_on_trial());
+		pub_int(c, "ota/reverts",     box_boot_reverts());
+		pub_int(c, "ota/rejects",     box_boot_rejects());
+		pub_int(c, "ota/updates",     box_boot_updates());
+		pub_str(c, "ota/last_arm_ver", box_boot_last_arm_ver());
+	}
 	pub_str(c, "build",     BOX_BUILD_TARGET);   /* shelf image match key   */
 	pub_str(c, "board",     BOX_BOARD_ID);       /* OTA compat filter       */
 	pub_str(c, "channel",   dserv_cfg_channel(c));

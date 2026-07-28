@@ -14,6 +14,7 @@
 #define STORAGE_NODE   DT_NODELABEL(storage_partition)
 #define STORAGE_LABEL  storage_partition   /* PARTITION_* take the LABEL token */
 #define BOX_CFG_ID    1u          /* one NVS entry: the whole box_persist blob */
+#define BOX_BOOT_ID   2u          /* ...and the OTA/boot breadcrumb (box_boot.h) */
 
 /* DO NOT "fill the partition". We store ONE blob of ~1 kB, and the cost of
  * extra sectors is not zero:
@@ -108,5 +109,27 @@ int box_flash_load(uint8_t *buf, uint32_t max)
 		return -1;
 	}
 	ssize_t r = nvs_read(&fs, BOX_CFG_ID, buf, max);
+	return (r < 0) ? -1 : (int) r;
+}
+
+int box_flash_save_boot(const uint8_t *blob, uint32_t len)
+{
+	if (!mounted) {
+		return mount_err ? mount_err : -ENODEV;
+	}
+	ssize_t r = nvs_write(&fs, BOX_BOOT_ID, blob, len);
+
+	/* Does NOT touch mount_err: this record is written from the OTA path, and
+	 * letting it overwrite the errno the config store reports would blame a
+	 * `save` failure on an unrelated write. */
+	return (r < 0) ? (int) r : 0;
+}
+
+int box_flash_load_boot(uint8_t *buf, uint32_t max)
+{
+	if (!mounted) {
+		return -1;
+	}
+	ssize_t r = nvs_read(&fs, BOX_BOOT_ID, buf, max);
 	return (r < 0) ? -1 : (int) r;
 }

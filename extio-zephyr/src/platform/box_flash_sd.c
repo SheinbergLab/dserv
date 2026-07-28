@@ -20,6 +20,7 @@
 LOG_MODULE_REGISTER(box_flash_sd, LOG_LEVEL_INF);
 
 #define CFG_PATH  "/SD:/extio.cfg"
+#define BOOT_PATH "/SD:/extio.boot"   /* the OTA/boot breadcrumb -- see box_flash.h */
 
 static FATFS fat_fs;
 static struct fs_mount_t mp = {
@@ -41,14 +42,14 @@ int box_flash_init(void)
 	return 0;
 }
 
-int box_flash_save(const uint8_t *blob, uint32_t len)
+static int write_file(const char *path, const uint8_t *blob, uint32_t len)
 {
 	if (!mounted) {
 		return -1;
 	}
 	struct fs_file_t f;
 	fs_file_t_init(&f);
-	if (fs_open(&f, CFG_PATH, FS_O_CREATE | FS_O_WRITE | FS_O_TRUNC) != 0) {
+	if (fs_open(&f, path, FS_O_CREATE | FS_O_WRITE | FS_O_TRUNC) != 0) {
 		return -1;
 	}
 	ssize_t w = fs_write(&f, blob, len);
@@ -56,17 +57,37 @@ int box_flash_save(const uint8_t *blob, uint32_t len)
 	return (w == (ssize_t) len) ? 0 : -1;
 }
 
-int box_flash_load(uint8_t *buf, uint32_t max)
+static int read_file(const char *path, uint8_t *buf, uint32_t max)
 {
 	if (!mounted) {
 		return -1;
 	}
 	struct fs_file_t f;
 	fs_file_t_init(&f);
-	if (fs_open(&f, CFG_PATH, FS_O_READ) != 0) {
+	if (fs_open(&f, path, FS_O_READ) != 0) {
 		return -1;              /* no file yet == fresh box */
 	}
 	ssize_t r = fs_read(&f, buf, max);
 	fs_close(&f);
 	return (r < 0) ? -1 : (int) r;
+}
+
+int box_flash_save(const uint8_t *blob, uint32_t len)
+{
+	return write_file(CFG_PATH, blob, len);
+}
+
+int box_flash_load(uint8_t *buf, uint32_t max)
+{
+	return read_file(CFG_PATH, buf, max);
+}
+
+int box_flash_save_boot(const uint8_t *blob, uint32_t len)
+{
+	return write_file(BOOT_PATH, blob, len);
+}
+
+int box_flash_load_boot(uint8_t *buf, uint32_t max)
+{
+	return read_file(BOOT_PATH, buf, max);
 }

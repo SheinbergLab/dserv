@@ -3206,3 +3206,95 @@ is up and scanning. `box_ble_init()` is called unconditionally under
 is inert — diverging from the RP2350's stated "ENABLE CONTRACT: persisted
 cfg->ble_en, default OFF" (`box_ble_central.h`). Either gate init on the flag or
 drop the flag; do not leave a config field that does nothing.
+
+## 2026-07-28 — OTA steps 4 and 5: trial boots, and making a rollback visible
+
+Step 4 gave the box a trial boot (`cmd/ota/arm` → `BOOT_UPGRADE_TEST`,
+`cmd/ota/confirm` → `boot_write_img_confirmed()`) and proved both directions on
+box3: reboot without confirming reverts to the old image, confirm and it is kept.
+Permanent upgrade is deliberately not offered — a one-way door on a box that may
+be physically inaccessible; confirmation must be earned by the running image.
+
+**Step 5 is about the failure that leaves no trace.** A revert is silent by
+construction: MCUboot swaps the old image back and it boots normally. Nothing is
+broken, nothing logs, the fleet page shows a healthy box — running firmware
+nobody chose. That is worse than a crash, because a crash gets investigated.
+
+`src/box_boot.c` answers three questions once at boot and publishes them on every
+connect: why we reset, which image this is, and whether an armed update failed.
+
+### Three verdicts, all proven on silicon
+
+| `state/boot` | meaning | proven by |
+|---|---|---|
+| `trial` | running an unconfirmed image; the next reset undoes it | arm → swap |
+| `revert` | an armed image ran and was not kept | reboot without confirm |
+| `rejected` | an armed image **never ran** — MCUboot would not take it | corrupted payload |
+
+`state/fw_ver` carries the MCUboot header version of the running image
+(`0.0.0+0` → `0.0.2+0` → back), which is what makes a swap self-evident.
+`state/fw` cannot do this job: it is a build-time string, still `"dev"` in every
+image this tree produces.
+
+### Why not compare versions to tell revert from success
+
+Because dev images routinely share a version, and that is exactly how the RP2350
+OTA looked stuck for a day when it had in fact succeeded (OTA.md, 2026-07-14:
+"base and trial shared a version, so `state/fw` never changed on commit"). The
+breadcrumb instead records whether a trial boot was ever **seen**:
+
+- armed, trial seen, now confirmed+old → **revert**
+- armed, trial never seen → **rejected**
+
+Version-independent, and the rejected case is the one worth naming. The test for
+it staged an image with the *same* version the box was already running, so a
+version comparison would have reported a successful update.
+
+### The rejected test is the interesting one
+
+Take the signed image, flip one byte in the middle, push it. Every check we have
+passes — the transfer sha matches (it is the sha of the corrupted file), the
+read-back verify matches, and `ota/hdr_ok=1` because the header is untouched.
+Arm it and MCUboot silently declines to swap. Result: `state/boot=rejected`,
+`ota/rejects=1`, `ota/last_arm_ver=0.0.2+0`. **An image can pass every test the
+application is capable of and still never run**; only the bootloader's verdict
+settles it, and step 5 is how that verdict gets off the box.
+
+### The breadcrumb is in NVS, not RAM
+
+The revert you most want to see is the one after a power cut during a trial —
+exactly the case where a RAM breadcrumb (noinit, retention, watchdog scratch: the
+RP2350 approach) is gone. Stored under its own NVS id, **not** in the
+`box_persist` config blob: that blob is written by an operator's `cmd/save` and
+carries whatever the live config happens to be, so sharing a key would mean
+arming an update silently persists unsaved config edits, and a `save` clobbers
+OTA bookkeeping. Different writer, different lifetime, different record.
+Verified: the lifetime counters survived a full `west flash` of slot0.
+
+### Reset cause was a "field that reports memory" waiting to happen
+
+`box_announce` read `hwinfo_get_reset_cause()` at every connect and never cleared
+it. That register **accumulates**: one watchdog trip and the box answers
+"watchdog" to every boot for the rest of its power cycle. Now read once, latched,
+and cleared — so `state/boot` describes *this* boot. (Same family as `net.ip`,
+`sync/source`, `persist=FAILED`; see the 2026-07-27 section.) Note the RW612 has
+no power-on bit at all — `power_reset_cause_t` stops at `ResetB` — so a clean
+cold start sets nothing and reports cause `0x00`.
+
+### A header check that would have caught step 4's bug
+
+`cmd/ota/verify` now also reads the MCUboot header out of slot1 at the offset the
+bootloader will use, and `cmd/ota/arm` refuses without it (`ota/hdr_ok`,
+`ota/staged_ver`). The sha answers "are these the right bytes"; this answers "are
+they in the right place" — a separate question with its own failure, which is
+precisely what step 4 hit by writing at slot offset 0 under swap-using-offset.
+
+### rig_check step 5, and where it must NOT go
+
+`rig_check.sh` now checks firmware identity: a box that rolled back, or one left
+mid-trial, fails. It was written as step 3 — identity before anything that
+measures — and that was **wrong**, caught on the first run: these are RETAINED
+datapoints written by the announce burst, so on a box still booting they describe
+the previous connection. It cheerfully reported the pre-reflash firmware. Moved
+after the liveness checks, because `cmds_rx` advancing is what proves the
+connection that wrote them is the current one.

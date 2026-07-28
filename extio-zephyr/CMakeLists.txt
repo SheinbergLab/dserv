@@ -12,6 +12,7 @@ project(extio_zephyr LANGUAGES C)
 target_sources(app PRIVATE
 	src/main.c
 	src/box_announce.c             # the box describing itself to dserv
+	src/box_boot.c                 # why we booted + which image (OTA step 5)
 	src/box_obs.c                  # obs-period state + idle-deferred work
 	src/platform/box_gpio.c        # block #3: GPIO + k_timer box-timed pulse
 	src/platform/box_sched.c       # scheduled events (fire at beginobs + N us)

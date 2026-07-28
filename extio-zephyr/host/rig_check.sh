@@ -18,13 +18,24 @@
 #                                      flows, every status field reads healthy,
 #                                      and commands silently never land. Cost
 #                                      hours twice before cmds_rx existed.
-#   5 anchored       sync/source    -- box_clock has a PTP anchor. Without it
+#   5 right firmware boot + fw_ver  -- is this the image someone CHOSE? A box
+#                                      that rolled back is healthy by every
+#                                      other check here and running old code.
+#                                      AFTER 3-4 on purpose: these are RETAINED
+#                                      datapoints written by the announce burst,
+#                                      so on a box that is still booting they
+#                                      describe the PREVIOUS connection -- read
+#                                      too early they reported the pre-reflash
+#                                      firmware. cmds_rx advancing is what proves
+#                                      the connection that wrote them is the
+#                                      current one.
+#   6 anchored       sync/source    -- box_clock has a PTP anchor. Without it
 #                                      at_abs REFUSES to fire (correctly), so an
 #                                      unanchored box drops events rather than
 #                                      firing late. Anchors do NOT survive a
 #                                      box reboot.
-#   6 anchoring SVC  ptp/*          -- is the thing that MAINTAINS anchors alive?
-#                                      Step 5 is a box's own view at one instant
+#   7 anchoring SVC  ptp/*          -- is the thing that MAINTAINS anchors alive?
+#                                      Step 6 is a box's own view at one instant
 #                                      and says nothing about whether anchoring
 #                                      will keep working. If ptpconf dies or
 #                                      starts refusing on a bad window, boxes
@@ -32,8 +43,8 @@
 #                                      ptp/anchored (boxes actually reporting)
 #                                      differing from ptp/boxes (boxes pushed to)
 #                                      is the 2026-07-28 failure, made visible.
-#   7 PTP quality    pmc offset     -- host-side truth, not the box's self-report
-#   8 fire           sync_fire      -- the whole chain, end to end
+#   8 PTP quality    pmc offset     -- host-side truth, not the box's self-report
+#   9 fire           sync_fire      -- the whole chain, end to end
 #
 #   sh rig_check.sh [extio/box1 extio/box2 ...]
 BOXES=${*:-"extio/box1 extio/box2"}
@@ -82,14 +93,40 @@ for B in $BOXES; do
   fi
 done
 
-echo "== 5 PTP anchored =="
+echo "== 5 firmware identity + boot outcome =="
+for B in $BOXES; do
+  FV=$(get "$B/state/fw_ver")
+  BT=$(get "$B/state/boot")
+  TR=$(get "$B/state/ota/trial")
+  RV=$(get "$B/state/ota/reverts")
+  AV=$(get "$B/state/ota/last_arm_ver")
+  if [ -z "$FV" ]; then
+    echo "  SKIP  $B has no bootloader (no state/fw_ver) -- firmware is whatever was flashed"
+    continue
+  fi
+  case "$BT" in
+    revert)
+      bad "$B ROLLED BACK to v$FV -- trial v$AV was never confirmed ($RV lifetime)" ;;
+    rejected)
+      bad "$B REFUSED v$AV and is still v$FV -- bad signature, header, or offset" ;;
+    *)
+      ok "$B running v$FV (boot=$BT)" ;;
+  esac
+  # A box left mid-trial passes every other check in this script and then
+  # reverts on the next reset, so the firmware a run assumed is not the
+  # firmware it ends on.
+  [ "$TR" = "1" ] && bad "$B is ON TRIAL -- next reset REVERTS it (send cmd/ota/confirm)" \
+                  || ok "$B image confirmed"
+done
+
+echo "== 6 PTP anchored =="
 for B in $BOXES; do
   S=$(get "$B/state/sync/source")
   [ "$S" = "ptp" ] && ok "$B sync/source=ptp" \
     || bad "$B sync/source=${S:-none} -- run ptp_anchor.sh (at_abs will REFUSE to fire)"
 done
 
-echo "== 6 anchoring service (ptpconf) =="
+echo "== 7 anchoring service (ptpconf) =="
 PTP_D=$(get "ptp/d_us")
 if [ -z "$PTP_D" ]; then
   echo "  SKIP  ptpconf not running (no ptp/d_us) -- anchors are manual here"
@@ -115,13 +152,13 @@ else
                      || bad "CLOCK STEP of $PTP_STEP us -- re-anchor and distrust timestamps across it"
 fi
 
-echo "== 7 PTP quality (host-side, via pmc) =="
+echo "== 8 PTP quality (host-side, via pmc) =="
 if sudo -n /usr/sbin/pmc -i eth0 -b 1 -t 1 "GET CURRENT_DATA_SET" 2>/dev/null \
      | grep -E 'RESPONSE|offsetFromMaster'; then :; else
   echo "  (pmc needs sudo -- see the 99-rig sudoers drop-in)"
 fi
 
-echo "== 8 end-to-end scheduled fire =="
+echo "== 9 end-to-end scheduled fire =="
 OUT=$(sh "$(dirname "$0")/sync_fire.sh" 150 18 $BOXES 2>&1)
 for B in $BOXES; do
   ST=$(echo "$OUT" | awk -v b="$B" '$1==b {print $2}' | tail -1)
