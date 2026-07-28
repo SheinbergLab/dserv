@@ -54,7 +54,22 @@ if { ![info exists ::ptp_iface] }  { set ::ptp_iface eth0 }
 # driver probe and is NOT stable across reboots (this rig moved ptp0 -> ptp1
 # after a Pi restart, and a hardcoded path then measured the wrong clock).
 if { ![info exists ::ptp_phc] }    { set ::ptp_phc "" }
-if { ![info exists ::ptp_bin] }    { set ::ptp_bin [file join $dspath extio-zephyr host phc_offset] }
+# phc_offset is a tiny C helper (extio-zephyr/host/phc_offset.c) and is NOT part
+# of the dserv install, so search rather than assume: a deployed host is not a
+# repo checkout. On the rig it lives outside $dspath entirely. Override in
+# local/ptp.tcl, or -- better -- install it somewhere standard:
+#     sudo cp phc_offset /usr/local/bin/
+set ::ptp_bin_candidates [list \
+    [file join $dspath extio-zephyr host phc_offset] \
+    [file join $dspath scripts phc_offset] \
+    /usr/local/bin/phc_offset \
+    /usr/bin/phc_offset]
+if { ![info exists ::ptp_bin] } {
+    set ::ptp_bin ""
+    foreach c $::ptp_bin_candidates {
+        if { [file executable $c] } { set ::ptp_bin $c; break }
+    }
+}
 # Re-anchor cadence. D moves only as fast as the PHC<->system-clock drift, which
 # phc2sys holds at ~0.002 ppm => ~400 s to accumulate 1 us on the rig Pi, and
 # ~3200 s on a host with hardware cross-timestamping. 300 s is conservative for
@@ -98,8 +113,10 @@ proc ptp_measure_d {} {
     if { ![file readable $phc] } {
         error "$phc not readable -- add the udev rule in systemd/README.md"
     }
-    if { ![file executable $::ptp_bin] } {
-        error "$::ptp_bin missing -- cc -O2 -Wall -o phc_offset phc_offset.c"
+    if { $::ptp_bin eq "" || ![file executable $::ptp_bin] } {
+        error "phc_offset not found (tried: [join $::ptp_bin_candidates {, }]) --\
+               build it (cc -O2 -Wall -o phc_offset phc_offset.c) and install to\
+               /usr/local/bin, or set ::ptp_bin in local/ptp.tcl"
     }
     set ns [string trim [exec $::ptp_bin --once $phc 2>/dev/null]]
     if { ![string is entier -strict $ns] } {
