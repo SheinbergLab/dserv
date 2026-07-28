@@ -43,7 +43,9 @@
 #                                      ptp/anchored (boxes actually reporting)
 #                                      differing from ptp/boxes (boxes pushed to)
 #                                      is the 2026-07-28 failure, made visible.
-#   8 PTP quality    pmc offset     -- host-side truth, not the box's self-report
+#   8 PTP quality    pmc offset     -- host-side truth, not the box's self-report.
+#                                      Interface auto-resolved (RIG_IFACE overrides):
+#                                      eth0 on the Pi, enp86s0 at the office.
 #   9 fire           sync_fire      -- the whole chain, end to end
 #
 #   sh rig_check.sh [extio/box1 extio/box2 ...]
@@ -161,9 +163,49 @@ else
 fi
 
 echo "== 8 PTP quality (host-side, via pmc) =="
-if sudo -n /usr/sbin/pmc -i eth0 -b 1 -t 1 "GET CURRENT_DATA_SET" 2>/dev/null \
-     | grep -E 'RESPONSE|offsetFromMaster'; then :; else
-  echo "  (pmc needs sudo -- see the 99-rig sudoers drop-in)"
+# The interface is NOT eth0 everywhere -- the rig Pi has eth0, office-stim's I226
+# enumerates as enp86s0 -- and `-i eth0` there fails with "No such device" while
+# the old message blamed sudo. Three causes (no pmc / no sudo / wrong iface)
+# collapsed into one wrong answer, which is the exact failure this whole script
+# exists to prevent. Resolve the interface, and name the real cause.
+#
+# Order of truth: an explicit RIG_IFACE, else the interface ptp4l is ACTUALLY
+# running on (the unit is templated on it), else one that has a PHC, else the
+# default route.
+IFACE=${RIG_IFACE:-}
+[ -z "$IFACE" ] && IFACE=$(systemctl list-units --no-legend --no-pager 'dserv-ptp4l@*' 2>/dev/null \
+                           | sed -n 's/^[^a-zA-Z]*dserv-ptp4l@\([^.]*\)\.service.*/\1/p' | head -1)
+# ...or the -i of a ptp4l that is running without our unit (manual bring-up).
+[ -z "$IFACE" ] && IFACE=$(pgrep -af '[p]tp4l' 2>/dev/null \
+                           | sed -n 's/.*-i[ =]\{1,\}\([^ ]*\).*/\1/p' | head -1)
+if [ -z "$IFACE" ]; then
+  for d in /sys/class/net/*/device/ptp*; do
+    [ -e "$d" ] || continue
+    IFACE=$(echo "$d" | cut -d/ -f5); break
+  done
+fi
+# LAST resort, and deliberately last: the default route is WRONG on the rig Pi,
+# whose default is wlan0 while PTP runs on eth0. Every source above names the
+# interface PTP is actually on; this one only names the way out to the internet.
+[ -z "$IFACE" ] && IFACE=$(ip -o -4 route show default 2>/dev/null | awk '{print $5}' | head -1)
+
+PMC=$(command -v pmc 2>/dev/null || echo /usr/sbin/pmc)
+if [ ! -x "$PMC" ]; then
+  echo "  SKIP  pmc not installed (apt install linuxptp) -- no host-side PTP check"
+elif [ -z "$IFACE" ]; then
+  echo "  SKIP  no PTP interface found -- set RIG_IFACE=<iface> (see: ip -br link)"
+else
+  OUT=$(sudo -n "$PMC" -i "$IFACE" -b 1 -t 1 "GET CURRENT_DATA_SET" 2>&1)
+  case "$OUT" in
+    *offsetFromMaster*)
+      echo "  (via $IFACE)"; echo "$OUT" | grep -E 'RESPONSE|offsetFromMaster' ;;
+    *"No such device"*)
+      echo "  SKIP  interface '$IFACE' does not exist -- set RIG_IFACE=<iface>" ;;
+    *password*|*"no tty"*|*sudo:*)
+      echo "  SKIP  pmc needs passwordless sudo -- add /etc/sudoers.d/99-rig" ;;
+    *)
+      echo "  SKIP  pmc on $IFACE: $(echo "$OUT" | head -1)" ;;
+  esac
 fi
 
 echo "== 9 end-to-end scheduled fire =="
