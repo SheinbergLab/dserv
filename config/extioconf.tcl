@@ -285,6 +285,15 @@ proc extio_ota_push {box file} {
         return [extio_ota_push_usb $box $file $sha $size]
     }
 
+    # The Zephyr boxes (frdm_rw612 and friends) do not implement the `<`-get pull:
+    # they take the image as a sequence of cmd/ota/chunk DATAPOINTS instead. Same
+    # sha/verify contract, same state/ota/* reporting, same ack-driven resend --
+    # only the carrier differs. See extio_ota_push_dp.
+    if { [dservExists extio/$box/state/board] &&
+         [string match "frdm_*" [dservGet extio/$box/state/board]] } {
+        return [extio_ota_push_dp $box $file $sha $size]
+    }
+
     set fp [open $file rb]                    ;# same bytes, staged raw (byte array -> Tcl_GetByteArrayFromObj)
     set bytes [read $fp]
     close $fp
@@ -392,6 +401,76 @@ proc extio_ota_usb_on_ack {dp data} {                  ;# box published a new co
 # box's own stall timeout (OTA_USB_TIMEOUT_US, 10 s) is the mirror-image guard.
 # Progress-checked at fire time: a resend blast can outlive the timer, so an
 # expired deadline racing queued ack events must re-arm, not kill the push.
+# ---- Zephyr/datapoint OTA delivery -----------------------------------------
+# The RP2350 has two carriers: eth boxes PULL (`<`-get of extio/<box>/ota/image)
+# and USB boxes take pushed 'D' frames. The Zephyr boxes take a third: the image
+# arrives as ordinary cmd/ota/chunk DATAPOINTS.
+#
+# Why not just reuse one of the other two. The 'D' frame is the efficient carrier
+# (117 B payload) but it is raw bytes on the box's link, and on an ETHERNET box
+# there is no host path that can inject those: dserv owns the box's single
+# connect-back socket, and opening a second one displaces it -- killing the
+# downlink for exactly the operation that needs it. The pull needs box-side socket
+# code the Zephyr port does not have yet. A datapoint costs payload but works
+# today over both carriers, unchanged.
+#
+# Budget: DSERV_MSG_MAX_PAYLOAD is 109 for varname+data, so the usable chunk is
+# 109 - strlen("extio/<box>/cmd/ota/chunk") - 8 (seq u32 + crc32 u32). For a box
+# named box1 that is 77 B. Computed per box rather than hardcoded -- a longer box
+# name silently shrinks it, and a hardcoded 77 would overflow the frame builder
+# and drop every chunk.
+#
+# Chunk layout matches the box's handler: [seq u32 LE][crc32 u32 LE][data].
+# Strictly sequential; any reject re-acks the cursor, so resend is idempotent.
+proc extio_ota_dp_chunk {box} {
+    set n [expr {109 - [string length "extio/$box/cmd/ota/chunk"] - 8}]
+    if { $n < 16 } { error "extio_ota_push_dp: box name '$box' leaves only $n B per chunk" }
+    return $n
+}
+
+proc extio_ota_push_dp {box file sha size} {
+    set fp [open $file rb]; fconfigure $fp -translation binary
+    set ::extio_ota_img($box)  [read $fp]; close $fp
+    set ::extio_ota_size($box) $size
+    catch { dservAfterCancel $::extio_ota_timer($box) }
+
+    catch { dservClear extio/$box/state/ota/ack }
+    catch { dservClear extio/$box/state/ota/state }
+    catch { dservClear extio/$box/state/ota/result }
+    dservAddMatch   extio/$box/state/ota/ack
+    dpointSetScript extio/$box/state/ota/ack extio_ota_dp_on_ack
+
+    dservSet extio/$box/cmd/ota/begin "$sha $size"
+    exec sleep 1                                    ;# let the box open the slot
+    extio_ota_dp_blast $box 0
+    if { [info exists ::extio_ota_img($box)] } { extio_ota_usb_deadline $box }
+    return "ota dp $box: streaming $size B (sha $sha) in [extio_ota_dp_chunk $box] B chunks -- watch state/ota"
+}
+
+proc extio_ota_dp_blast {box from} {
+    if { ![info exists ::extio_ota_img($box)] } return
+    set data  $::extio_ota_img($box)
+    set size  $::extio_ota_size($box)
+    set chunk [extio_ota_dp_chunk $box]
+    for { set off $from } { $off < $size } { incr off $chunk } {
+        set end [expr {min($off + $chunk, $size)}]
+        set d   [string range $data $off [expr {$end - 1}]]
+        set crc [expr {[zlib crc32 $d] & 0xffffffff}]
+        dservSetData extio/$box/cmd/ota/chunk 0 0 [binary format ii $off $crc]$d
+    }
+}
+
+# Same debounced, ack-driven tail-resend as the USB path: the box's cursor is the
+# only truth about what landed, and a resend only fires once it has been stuck.
+proc extio_ota_dp_on_ack {dp data} {
+    if { ![regexp {^extio/([^/]+)/state/ota/ack$} $dp -> box] } return
+    if { ![info exists ::extio_ota_size($box)] } return
+    if { $data >= $::extio_ota_size($box) } { extio_ota_usb_cleanup $box; return }
+    extio_ota_usb_deadline $box
+    catch { dservAfterCancel $::extio_ota_timer($box) }
+    set ::extio_ota_timer($box) [dservAfter 400 [list extio_ota_dp_blast $box $data]]
+}
+
 proc extio_ota_usb_deadline {box} {
     catch { dservAfterCancel $::extio_ota_dead($box) }
     set at -1

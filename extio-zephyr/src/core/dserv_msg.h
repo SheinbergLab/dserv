@@ -201,6 +201,27 @@ static inline long dserv_msg_as_long(const dserv_msg_t *m)
     }
 }
 
+/* 64-bit-safe variant. MUST be used for anything carrying a dserv TIME: `long`
+ * is 32 bits on every box target, so dserv_msg_as_long() cannot represent a
+ * dserv timestamp (~1.8e15 us, 51 bits). It fails in the worst possible way --
+ * the DSERV_STRING path saturates to LONG_MAX (2147483647) rather than
+ * erroring, and the DSERV_INT64 path silently truncates. That is what made
+ * cmd/do/<pin>/at_abs report "late" for every lead: T arrived as INT32_MAX,
+ * which is ~56 years in the past once the clock offset is subtracted. */
+static inline int64_t dserv_msg_as_ll(const dserv_msg_t *m)
+{
+    if (m->type == DSERV_STRING) {
+        char b[32]; dserv_msg_copy_cstr(m, b, sizeof b);
+        return (int64_t) strtoll(b, NULL, 0);
+    }
+    switch (m->type) {
+    case DSERV_FLOAT:  return (int64_t) dserv_msg_as_float(m);
+    case DSERV_DOUBLE: return (int64_t) dserv_msg_as_double(m);
+    case DSERV_INT64:  return dserv_msg_as_int64(m);
+    default:           return (int64_t) dserv_msg_as_int(m);  /* BYTE/SHORT/INT */
+    }
+}
+
 /* ---- stream framer: TCP is a byte stream; reassemble fixed 128B frames ---- *
  * Zero-alloc. Frames on the leading '>' and emits every complete 128 bytes.
  * Resyncs automatically (skips bytes until a '>' when between frames).       */

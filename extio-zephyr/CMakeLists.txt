@@ -34,6 +34,22 @@ elseif(CONFIG_FILE_SYSTEM)
 	target_compile_definitions(app PRIVATE BOX_HAVE_PERSIST=1)
 endif()
 
+# MCUboot chainload repair: the RW6xx SoC init powers the TDDR PLL down in any
+# image without Ethernet (i.e. MCUboot), and nothing ever powers it back up, so
+# our ENET 1588 clock arrives dead and the first PTP read spins forever with
+# interrupts disabled. Only needed when something boots before us.
+if(CONFIG_SOC_SERIES_RW6XX AND CONFIG_BOOTLOADER_MCUBOOT)
+	target_sources(app PRIVATE src/platform/box_soc_rw612.c)
+endif()
+
+# OTA step 2: writing the inactive MCUboot slot. Needs a real slot1_partition,
+# so it rides on the same MCUboot gate -- a non-MCUboot build has no A/B pair to
+# write into and links the app across where slot1 would be.
+if(CONFIG_BOOTLOADER_MCUBOOT AND CONFIG_FLASH_MAP)
+	target_sources(app PRIVATE src/platform/box_ota_flash.c)
+	target_compile_definitions(app PRIVATE BOX_HAVE_OTA_SLOT=1)
+endif()
+
 # Ethernet + PTP: frdm_rw612 and teensy41 (teensy40 has no PHY).
 if(CONFIG_NETWORKING)
 	target_sources(app PRIVATE
@@ -41,6 +57,7 @@ if(CONFIG_NETWORKING)
 		src/platform/box_ptp.c         # block #5: ENET IEEE-1588 hardware clock
 	)
 endif()
+
 
 # BLE ingress: frdm_rw612 only (no radio on Teensy).
 if(CONFIG_BT)

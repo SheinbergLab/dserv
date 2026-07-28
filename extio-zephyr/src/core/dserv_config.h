@@ -21,11 +21,26 @@
  *   <name>/config/net/ip          (str)  "a.b.c.d" (applied on save/boot)
  *   <name>/config/dserv/ip        (str)  "a.b.c.d"
  *   <name>/config/dserv/port      (int)
- *   <name>/config/save            (any)  persist to flash
  *   <name>/gpio/<n>               (int)  drive pin level 0/1        [transient]
  *   <name>/gpio/<n>/pulse_us      (int)  box-timed high pulse (us)  [transient]
  *
- * config/(keys) are persistent settings; gpio/(keys) are transient commands (never saved).
+ * ACTIONS ARE cmd/, NOT config/ -- the config/ keys above only mutate the struct
+ * in RAM, and nothing is written to flash until:
+ *
+ *   <name>/cmd/save               (any)  persist the whole config blob to flash
+ *   <name>/cmd/reboot             (any)  warm reset
+ *   <name>/cmd/factory            (any)  wipe persisted config
+ *
+ * This block previously documented `<name>/config/save`, which HAS NEVER
+ * EXISTED: the matcher below tests strcmp(k, "save") on the cmd/ leaf, and
+ * main.c's handler prints "cmd/save -> ...". Setting config/save is silently
+ * inert -- it returns CFG_UNKNOWN, prints nothing, and the config you just set
+ * looks perfectly applied in state/* right up until the next reboot loses it.
+ * Verified 2026-07-27: config/save -> no console output, config lost on reboot;
+ * cmd/save -> "cmd/save -> ok (1080 bytes)", config survives.
+ *
+ * config/(keys) are persistent settings ONCE cmd/save is sent; gpio/(keys) are
+ * transient commands (never saved).
  * config_apply mutates the struct (portable); a gpio command is returned as a
  * gpio_cmd_t for the platform layer (real GPIO on device, print in sim).
  *

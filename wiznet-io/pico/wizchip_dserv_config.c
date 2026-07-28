@@ -335,7 +335,13 @@ static void publish_sync(uint64_t dserv_us, uint64_t box_us, int64_t offset_us,
     dserv_state_name(&g_cfg, nm, sizeof nm, "sync/offset_us");
     dserv_msg_int64(f, nm, dserv_us, offset_us);           box_net_client_send(f, DSERV_MSG_LEN);
     dserv_state_name(&g_cfg, nm, sizeof nm, "sync/source");
-    dserv_msg_string(f, nm, dserv_us, hw ? "hw" : "sw");   box_net_client_send(f, DSERV_MSG_LEN);
+    /* hw = latched TTL edge; swc = arrival-anchored but delay-CORRECTED by the
+     * host's measured one-way delay (cmd/sync); sw = naive arrival, wrong by
+     * exactly that delay. Three values not two, so a datafile records WHICH
+     * method produced a timestamp rather than leaving it to be inferred. */
+    dserv_msg_string(f, nm, dserv_us,
+                     hw == 1 ? "hw" : hw == 2 ? "swc" : "sw");
+    box_net_client_send(f, DSERV_MSG_LEN);
     if (transport_us >= 0) {
         dserv_state_name(&g_cfg, nm, sizeof nm, "sync/transport_us");
         dserv_msg_int64(f, nm, dserv_us, transport_us);    box_net_client_send(f, DSERV_MSG_LEN);
@@ -1429,6 +1435,56 @@ static void on_frame(const uint8_t *frame, void *ud)
     else if (r == CFG_PIN_MODE || r == CFG_OBS_PIN || r == CFG_SYNC_PIN) {
         pico_gpio_apply_config(cfg); groups_reset_all();
         publish_manifest();   /* active-pin set OR obs/sync pin changed -> re-announce */
+    }
+    /* ---- software clock anchoring (no TTL sync line) -- see extio_sync.tcl ----
+     * cmd/probe: reflect our OWN turnaround so the host can subtract it from the
+     * round trip. Both reads are box-clock, so our unknown offset cancels and
+     * the host is left with wire+stack time it can halve. Answer FIRST, measure
+     * last: t3 is taken as late as possible so the reported turnaround covers
+     * everything the host would otherwise mistake for transit. */
+    else if (r == CFG_PROBE) {
+        /* NEVER mid-obs. A reply is a blocking send on this one service loop, so
+         * it delays a concurrent DI event's DELIVERY by ~62 us (p99 214) -- the
+         * echo-vs-DI queueing measured in PORTING.md. Timestamps are unaffected
+         * (edge-stamped), but there is no reason to spend it during data
+         * collection: obs boundaries already anchor, and d is stable enough that
+         * a estimate one trial old is fine. */
+        if (!g_in_obs) {
+            char nm[64]; uint8_t f[DSERV_MSG_LEN];
+            uint64_t t3 = time_us_64();
+            dserv_state_name(&g_cfg, nm, sizeof nm, "probe");
+            dserv_msg_int(f, nm, 0, (int32_t)(t3 - now_box));  /* arrival-stamped:
+                                                                * the VALUE is the datum */
+            box_net_client_send(f, DSERV_MSG_LEN);
+        }
+    }
+    /* cmd/sync <d_us>: anchor with the host's measured one-way delay added. A
+     * naive arrival-anchor is wrong by exactly that delay (-202 us measured on
+     * Ethernet, ~-730 us on USB-FS). Deliberately NOT trusted: at a 2 s tick the
+     * inter-anchor drift is ~50 us at 25 ppm, so the rate estimator has nothing
+     * to gain and a noisy estimate could only poison it. A live TTL edge always
+     * wins -- correcting a latched-edge anchor would inject the very error this
+     * removes. */
+    else if (r == CFG_SYNC) {
+        /* NEVER mid-obs, and this one matters more than the probe. Re-anchoring
+         * STEPS the offset, so applying it inside a data-collection window puts
+         * two events in one trial on different mappings and silently corrupts
+         * any interval computed across the step -- precisely the failure dserv's
+         * own monotonic-timebase commit (227315e) exists to prevent on the host.
+         * obs boundaries are the only moments where a clock discontinuity is
+         * provably harmless, and they already anchor. So this ticker's job is
+         * the IDLE GAP between obs (where the 64 ms rot happened), not the
+         * experiment. */
+        int64_t d_us = dserv_msg_as_long(&m);
+        int have_hw = 0;
+        if (pico_gpio_sync_pin >= 0) {
+            uint64_t e = pico_gpio_sync_edge_get(g_in_obs);
+            if (e && now_box - e < SYNC_EDGE_WINDOW_US) have_hw = 1;
+        }
+        if (!g_in_obs && !have_hw && d_us >= 0 && d_us < SYNC_EDGE_WINDOW_US) {
+            box_clock_sync(&g_clock, m.timestamp + (uint64_t) d_us, now_box, 0);
+            publish_sync(m.timestamp, now_box, g_clock.offset_us, 2, d_us);
+        }
     }
     else if (r == CFG_GROUP)     { groups_reset_all(); publish_manifest(); }
     else if (r == CFG_AIN)       { g_ain_reset_req = 1; publish_manifest(); }  /* core0 clears g_ain_rt */

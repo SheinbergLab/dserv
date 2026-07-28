@@ -33,4 +33,15 @@ void box_console_write(const char *s);
 __attribute__((format(printf, 1, 2)))
 void box_console_printf(const char *fmt, ...);
 
+/* Supplied by the APP (main.c), reported by `show`.
+ *
+ * Inbound frames accepted since boot. main.c's cmds_rx comment explains why a
+ * plain counter is the only thing that reveals "publishing but deaf" -- the
+ * uplink works, state/* keeps flowing, every status field reads healthy, and
+ * cmd/* silently never arrives. That comment ends "no field on the box revealed
+ * it", which was true: the counter was published to dserv but the box's OWN
+ * console could not show it, so a box you were holding could not tell you its
+ * downlink was dead. This is that field. */
+uint32_t box_cmds_rx(void);
+
 #endif /* BOX_CONSOLE_H */

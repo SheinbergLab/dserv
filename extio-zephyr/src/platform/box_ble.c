@@ -236,13 +236,27 @@ static void start_scan(void)
 }
 
 /* ---- public API ---- */
+static bool ble_up;
+
+int box_ble_active(void) { return ble_up ? 1 : 0; }
+
 int box_ble_init(void)
 {
-	int err = bt_enable(NULL);
+	int err;
+
+	/* Idempotent: the boot path calls this once when cfg.ble_en is set, and
+	 * `ble enable 1` calls it again to bring the radio up WITHOUT a reboot
+	 * (which is what the CLI has always promised -- "live on radio builds").
+	 * bt_enable() twice returns -EALREADY, so guard rather than rely on that. */
+	if (ble_up) {
+		return 0;
+	}
+	err = bt_enable(NULL);
 	if (err) {
 		LOG_ERR("bt_enable failed (%d)", err);
 		return err;
 	}
+	ble_up = true;
 	start_scan();
 	return 0;
 }

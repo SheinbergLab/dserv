@@ -594,12 +594,54 @@ int now_command(ClientData data, Tcl_Interp * interp, int objc,
   return TCL_OK;
 }
 
+/*
+ * dservKeys ?pattern?
+ *
+ * The optional glob pattern used to be ACCEPTED AND SILENTLY IGNORED -- every
+ * call returned the whole table, so `dservKeys extio/<glob>` looked like it filtered
+ * and did not. Callers then either scanned everything unknowingly or wrote their
+ * own regexp filter over the full list (config/ptpconf.tcl does, which is why it
+ * kept working). An argument that does nothing is worse than no argument.
+ *
+ * No pattern => the exact previous behaviour, a space-separated string.
+ * With a pattern => a filtered Tcl list.
+ */
 int dserv_keys_command(ClientData data, Tcl_Interp * interp, int objc,
 		       Tcl_Obj * const objv[])
 {
   Dataserver *ds = (Dataserver *) data;
-  std::string keys = ds->get_table_keys();
-  Tcl_SetObjResult(interp, Tcl_NewStringObj(keys.c_str(), -1));
+
+  if (objc > 2) {
+    Tcl_WrongNumArgs(interp, 1, objv, "?pattern?");
+    return TCL_ERROR;
+  }
+
+  /* get_table_keys() hands back a strdup'd buffer. Assigning it straight into a
+     std::string leaked it on every call -- and the key list is large. */
+  char *raw = ds->get_table_keys();
+  std::string keys(raw ? raw : "");
+  if (raw) free(raw);
+
+  if (objc < 2) {
+    Tcl_SetObjResult(interp, Tcl_NewStringObj(keys.c_str(), -1));
+    return TCL_OK;
+  }
+
+  const char *pattern = Tcl_GetString(objv[1]);
+  Tcl_Obj *l = Tcl_NewListObj(0, NULL);
+
+  size_t pos = 0;
+  while (pos <= keys.size()) {
+    size_t sp = keys.find(' ', pos);
+    if (sp == std::string::npos) sp = keys.size();
+    if (sp > pos) {
+      std::string k = keys.substr(pos, sp - pos);
+      if (Tcl_StringMatch(k.c_str(), pattern))
+        Tcl_ListObjAppendElement(interp, l, Tcl_NewStringObj(k.c_str(), -1));
+    }
+    pos = sp + 1;
+  }
+  Tcl_SetObjResult(interp, l);
   return TCL_OK;
 }
 

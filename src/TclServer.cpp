@@ -17,6 +17,19 @@
 
 #include <fnmatch.h>  // pattern matching support
 
+/* PHC (PTP hardware clock) access for dservPhcOffset. Linux-only: /dev/ptpN and
+ * PTP_SYS_OFFSET_PRECISE do not exist elsewhere, and dserv also builds on
+ * macOS. The command is registered on every platform regardless -- it FAILS
+ * there rather than silently returning nothing, because a no-op would hand back
+ * an absent offset that a caller cannot tell from a good one. */
+#if defined(__linux__)
+#include <linux/ptp_clock.h>
+#include <sys/ioctl.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <string.h>
+#endif
+
 #include "TclCompletion.h"
 
 extern "C" int TclHttps_RegisterCommands(Tcl_Interp *interp);
@@ -2562,6 +2575,204 @@ static int dpoint_remove_script_command (ClientData data, Tcl_Interp *interp,
   return TCL_OK;
   }
 
+/*
+ * Introspection for the dpoint script registry.
+ *
+ * These exist because the registry was previously WRITE-ONLY: there was no way
+ * to ask what was registered, so a leaked script (see dpointSetScript's empty-
+ * script trap) was invisible and cost a Tcl dispatch per publish indefinitely.
+ * `dpointScripts` lists registered datapoints; `dpointGetScript` returns one.
+ */
+/*
+ * dservClockEpochOffset -- the constant in dserv's timebase, in microseconds.
+ *
+ *   Dataserver::now() = clock_epoch_offset_us() + steady_us()
+ *
+ * i.e. CLOCK_MONOTONIC plus a value captured once at startup. Exposed because
+ * bridging an external hardware clock onto dserv's timeline needs it: a PTP
+ * grandmaster's PHC can be related to CLOCK_MONOTONIC locally (see
+ * extio-zephyr/host/phc_offset.c), but converting that into dserv time requires
+ * this constant, which was previously reachable only from C
+ * (tclserver_clock_epoch_offset_us, used by modules/gpio_input).
+ *
+ *   dserv_us = phc_us - (phc_minus_mono_us) + [dservClockEpochOffset]
+ */
+static int dserv_clock_epoch_offset_command (ClientData data, Tcl_Interp *interp,
+                                             int objc, Tcl_Obj *objv[])
+{
+  Tcl_SetObjResult(interp,
+                   Tcl_NewWideIntObj((Tcl_WideInt) Dataserver::clock_epoch_offset_us()));
+  return TCL_OK;
+}
+
+/*
+ * dservPhcOffset /dev/ptpN -- PHC minus CLOCK_MONOTONIC, the other half of the
+ * constant dservClockEpochOffset provides. Together:
+ *
+ *     D = dserv_us - ptp_us = [dservClockEpochOffset] - (phc_us - mono_us)
+ *
+ * Lives here, beside dservClockEpochOffset, because dserv owns the clock this is
+ * being related TO. It was previously an external helper
+ * (extio-zephyr/host/phc_offset.c) that config/ptpconf.tcl had to exec: that
+ * meant a binary outside the dserv install to locate and keep in sync, a ~2 s
+ * fork+exec per measurement where the ioctl itself costs microseconds, and
+ * stdout as the contract. The standalone tool REMAINS for bench work -- it does
+ * the two-method cross-check, drift fit and residuals this does not.
+ *
+ * Returns a DICT, not a bare integer:
+ *
+ *     ns <n>  window <n>  method A|B  phc <device>
+ *
+ * deliberately, so a caller can judge how much to trust it and refuse to anchor
+ * on a bad measurement. A bare number is a value that cannot say how good it is.
+ *
+ *   method B  PTP_SYS_OFFSET_PRECISE, a hardware cross-timestamp. `window` is
+ *             the tiny CLOCK_MONOTONIC_RAW<->CLOCK_MONOTONIC pair (tens of ns);
+ *             the PHC correlation itself happens in hardware. ~+/-11 ns
+ *             measured on an Intel I226-V.
+ *   method A  fallback where the driver has no getcrosststamp (the Pi 5 does
+ *             not): sandwich a PHC read between two CLOCK_MONOTONIC reads, keep
+ *             the least-interrupted of several. `window` is that read window and
+ *             bounds the error at half of it. ~+/-704 ns on a Pi 5.
+ */
+#if defined(__linux__)
+#define DSERV_PHC_FD_TO_CLOCKID(fd) ((~(clockid_t) (fd) << 3) | 3)
+#define DSERV_PHC_SANDWICH_TRIES    21
+
+static int64_t dserv_phc_ts_ns(const struct timespec *t)
+{
+  return (int64_t) t->tv_sec * 1000000000LL + t->tv_nsec;
+}
+
+static int64_t dserv_phc_pct_ns(const struct ptp_clock_time *t)
+{
+  return (int64_t) t->sec * 1000000000LL + t->nsec;
+}
+#endif
+
+static int dserv_phc_offset_command (ClientData data, Tcl_Interp *interp,
+                                     int objc, Tcl_Obj *objv[])
+{
+  if (objc != 2) {
+    Tcl_WrongNumArgs(interp, 1, objv, "/dev/ptpN");
+    return TCL_ERROR;
+  }
+
+#if !defined(__linux__)
+  Tcl_SetObjResult(interp,
+    Tcl_NewStringObj("dservPhcOffset: PHC access is Linux-only", -1));
+  return TCL_ERROR;
+#else
+  const char *dev = Tcl_GetString(objv[1]);
+  int fd = open(dev, O_RDONLY);
+
+  if (fd < 0) {
+    Tcl_SetObjResult(interp, Tcl_ObjPrintf("dservPhcOffset: cannot open %s: %s",
+                                           dev, strerror(errno)));
+    return TCL_ERROR;
+  }
+
+  int64_t off_ns = 0, win_ns = 0;
+  const char *method = NULL;
+
+  /* Method B first: hardware cross-timestamp, if the driver implements it. */
+  {
+    struct ptp_sys_offset_precise sp;
+
+    memset(&sp, 0, sizeof sp);
+    if (ioctl(fd, PTP_SYS_OFFSET_PRECISE, &sp) == 0) {
+      struct timespec r0, m, r1;
+
+      /* PTP_SYS_OFFSET_PRECISE yields MONOTONIC_RAW, which is NOT NTP-slewed,
+         while dserv's timebase follows CLOCK_MONOTONIC, which is. Relate them
+         locally; this small pair is the only uncertainty method B carries. */
+      if (clock_gettime(CLOCK_MONOTONIC_RAW, &r0) == 0 &&
+          clock_gettime(CLOCK_MONOTONIC,     &m)  == 0 &&
+          clock_gettime(CLOCK_MONOTONIC_RAW, &r1) == 0) {
+        int64_t raw_minus_mono =
+          (dserv_phc_ts_ns(&r0) + dserv_phc_ts_ns(&r1)) / 2 - dserv_phc_ts_ns(&m);
+
+        off_ns = (dserv_phc_pct_ns(&sp.device) -
+                  dserv_phc_pct_ns(&sp.sys_monoraw)) + raw_minus_mono;
+        win_ns = dserv_phc_ts_ns(&r1) - dserv_phc_ts_ns(&r0);
+        method = "B";
+      }
+    }
+  }
+
+  /* Method A: min-filtered sandwich. */
+  if (!method) {
+    clockid_t phc = DSERV_PHC_FD_TO_CLOCKID(fd);
+    int got = 0;
+
+    for (int i = 0; i < DSERV_PHC_SANDWICH_TRIES; i++) {
+      struct timespec m0, p, m1;
+
+      if (clock_gettime(CLOCK_MONOTONIC, &m0)) continue;
+      if (clock_gettime(phc, &p))              continue;
+      if (clock_gettime(CLOCK_MONOTONIC, &m1)) continue;
+
+      int64_t w = dserv_phc_ts_ns(&m1) - dserv_phc_ts_ns(&m0);
+      int64_t o = dserv_phc_ts_ns(&p) -
+                  (dserv_phc_ts_ns(&m0) + dserv_phc_ts_ns(&m1)) / 2;
+
+      if (!got || w < win_ns) { win_ns = w; off_ns = o; got = 1; }
+    }
+    if (got) method = "A";
+  }
+
+  close(fd);
+
+  if (!method) {
+    Tcl_SetObjResult(interp, Tcl_ObjPrintf("dservPhcOffset: no usable read from %s",
+                                           dev));
+    return TCL_ERROR;
+  }
+
+  Tcl_Obj *d = Tcl_NewDictObj();
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("ns", -1),     Tcl_NewWideIntObj(off_ns));
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("window", -1), Tcl_NewWideIntObj(win_ns));
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("method", -1), Tcl_NewStringObj(method, -1));
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("phc", -1),    Tcl_NewStringObj(dev, -1));
+  Tcl_SetObjResult(interp, d);
+  return TCL_OK;
+#endif
+}
+
+static int dpoint_scripts_command (ClientData data, Tcl_Interp *interp,
+                                   int objc, Tcl_Obj *objv[])
+{
+  TclServer *tclserver = (TclServer *) data;
+  Tcl_Obj *l = Tcl_NewListObj(0, NULL);
+
+  for (auto const &k : tclserver->dpoint_scripts.keys()) {
+    Tcl_ListObjAppendElement(interp, l,
+                             Tcl_NewStringObj(k.c_str(), -1));
+  }
+  Tcl_SetObjResult(interp, l);
+  return TCL_OK;
+}
+
+static int dpoint_get_script_command (ClientData data, Tcl_Interp *interp,
+                                      int objc, Tcl_Obj *objv[])
+{
+  TclServer *tclserver = (TclServer *) data;
+
+  if (objc < 2) {
+    Tcl_WrongNumArgs(interp, 1, objv, "varname");
+    return TCL_ERROR;
+  }
+
+  std::string script;
+  if (!tclserver->dpoint_scripts.find(std::string(Tcl_GetString(objv[1])),
+                                      script)) {
+    Tcl_SetObjResult(interp, Tcl_NewStringObj("", -1));
+    return TCL_OK;                     /* not registered -> empty, not an error */
+  }
+  Tcl_SetObjResult(interp, Tcl_NewStringObj(script.c_str(), -1));
+  return TCL_OK;
+}
+
 static int dpoint_remove_all_scripts_command (ClientData data,
                           Tcl_Interp *interp,
                           int objc, Tcl_Obj *objv[])
@@ -2895,6 +3106,10 @@ static void add_tcl_commands(Tcl_Interp *interp, TclServer *tserv)
   Tcl_CreateObjCommand(interp, "now",
                (Tcl_ObjCmdProc *) now_command,
                tserv, NULL);
+  Tcl_CreateObjCommand(interp, "dservClockEpochOffset",
+               (Tcl_ObjCmdProc *) dserv_clock_epoch_offset_command, tserv, NULL);
+  Tcl_CreateObjCommand(interp, "dservPhcOffset",
+               (Tcl_ObjCmdProc *) dserv_phc_offset_command, tserv, NULL);
 
   Tcl_CreateObjCommand(interp, "subprocess",
                (Tcl_ObjCmdProc *) subprocess_command,
@@ -2951,6 +3166,14 @@ static void add_tcl_commands(Tcl_Interp *interp, TclServer *tserv)
                dserv_remove_match_command, tserv, NULL);
   Tcl_CreateObjCommand(interp, "dservRemoveAllMatches",
                dserv_remove_all_matches_command, tserv, NULL);
+  /* dservAddExactMatch existed with no symmetric remove, so the natural call
+   * silently failed and every caller leaked a match (they were all wrapped in
+   * `catch`).  Exact and glob matches share one dict keyed by the match string
+   * -- client_add_match/client_add_exact_match both insert(match, spec) and
+   * client_remove_match removes by that key -- so this is genuinely just the
+   * missing name for the same operation. */
+  Tcl_CreateObjCommand(interp, "dservRemoveExactMatch",
+               dserv_remove_match_command, tserv, NULL);
 
   Tcl_CreateObjCommand(interp, "evtSetScript",
 			 (Tcl_ObjCmdProc *) evt_set_script_command, tserv, NULL);
@@ -2981,6 +3204,10 @@ static void add_tcl_commands(Tcl_Interp *interp, TclServer *tserv)
   Tcl_CreateObjCommand(interp, "dpointRemoveScript",
                (Tcl_ObjCmdProc *) dpoint_remove_script_command,
                tserv, NULL);
+  Tcl_CreateObjCommand(interp, "dpointScripts",
+               (Tcl_ObjCmdProc *) dpoint_scripts_command, tserv, NULL);
+  Tcl_CreateObjCommand(interp, "dpointGetScript",
+               (Tcl_ObjCmdProc *) dpoint_get_script_command, tserv, NULL);
   Tcl_CreateObjCommand(interp, "dpointRemoveAllScripts",
                (Tcl_ObjCmdProc *) dpoint_remove_all_scripts_command,
                tserv, NULL);
@@ -3643,16 +3870,31 @@ static int process_requests(TclServer *tserv)
 	}
         
 	// evaluate a dpoint script
+	//
+	// An EMPTY script is not evaluated. `dpointSetScript <dp> {}` reads like
+	// "clear this" and was used that way throughout the harnesses, but it
+	// stores "" rather than removing the entry -- and this path used to
+	// evaluate it on EVERY publish of that datapoint, forever, which cost a
+	// full Tcl dispatch per delivery and was invisible. Measured at ~130 us
+	// per publish on a Pi 5 (see extio-zephyr/PORTING.md 2026-07-26).
+	//
+	// The entry is deliberately still LOOKED UP: an empty exact entry keeps
+	// shadowing a wildcard script, so this change removes the cost without
+	// changing which script wins. Use dpointRemoveScript to actually remove.
 	std::string script;
 	if (tserv->dpoint_scripts.find(varname, script)) {
-	  ds_datapoint_t *dpoint = req.dpoint;
-	  const char *dpoint_script = script.c_str();
-	  int retcode = dpoint_tcl_script(interp, dpoint_script, dpoint);
+	  if (!script.empty()) {
+	    ds_datapoint_t *dpoint = req.dpoint;
+	    const char *dpoint_script = script.c_str();
+	    int retcode = dpoint_tcl_script(interp, dpoint_script, dpoint);
+	  }
 	}
 	else if (tserv->dpoint_scripts.find_match(varname, script)) {
-	  ds_datapoint_t *dpoint = req.dpoint;
-	  const char *dpoint_script = script.c_str();
-	  int retcode = dpoint_tcl_script(interp, dpoint_script, dpoint);
+	  if (!script.empty()) {
+	    ds_datapoint_t *dpoint = req.dpoint;
+	    const char *dpoint_script = script.c_str();
+	    int retcode = dpoint_tcl_script(interp, dpoint_script, dpoint);
+	  }
 	}
 
 	// fire any predicate-gated dservWhen callbacks for this point

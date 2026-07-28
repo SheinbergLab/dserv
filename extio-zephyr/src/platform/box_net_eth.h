@@ -11,12 +11,19 @@
 
 #include <stdint.h>
 
+#include "dserv_config.h"     /* box_config_t: net_mode/net_ip/net_gw/net_sn */
+
 #ifndef BOX_NET_RESET
 #define BOX_NET_RESET (-1)
 #endif
 
-/* Grab the default iface and start DHCPv4. 0 on success. */
-int box_net_eth_init(void);
+/* Grab the default iface and bring up IPv4 addressing per the persisted
+ * config: net.mode=static applies net.ip/gw/mask (zero mask => /24, zero
+ * gateway => none -- fine on a direct box<->host link, which is exactly the
+ * case static exists for: no DHCP server on a point-to-point cable). Anything
+ * else starts DHCPv4, the default. Parity with the Pico/W6300 box, which has
+ * honored these fields all along. 0 on success. */
+int box_net_eth_init(const box_config_t *cfg);
 
 /* Wait up to timeout_ms for a DHCP IPv4 lease; fills out[4] and returns 1, else 0. */
 int box_net_eth_wait_ip(uint8_t out[4], int timeout_ms);
@@ -70,6 +77,28 @@ void box_net_eth_send_stats(uint32_t *last_us, uint32_t *max_us);
 void box_net_eth_rx_stats(uint32_t *wake_us, uint32_t *wake_max,
 			  uint32_t *recv_us, uint32_t *recv_max);
 
+/* ---- in-stack residence time (CONFIG_NET_PKT_RXTIME/TXTIME_STATS) ----
+ *
+ * The stack's OWN packet measurement -- the segment wake/recv/disp cannot see:
+ *   RX: net_pkt alloc in the ENET RX thread (just after the ISR) -> the moment
+ *       zsock_recv hands the payload to us.
+ *   TX: net_pkt alloc inside zsock_send -> driver TX complete. With
+ *       NET_TC_TX_COUNT=1 this INCLUDES the TX-thread queue wait, which
+ *       dbg/send_us (wall time of the enqueue) structurally cannot.
+ * detail[] holds per-stage means when the _DETAIL configs are on (RX stages:
+ * TC-fifo enqueue / stack entry / socket-fifo put / final recv). */
+typedef struct {
+	uint32_t rx_avg_us, rx_count;      /* mean + frames, since previous call */
+	uint32_t tx_avg_us, tx_count;
+	int rx_detail_n, tx_detail_n;
+	uint32_t rx_detail_us[4];
+	uint32_t tx_detail_us[4];
+} box_eth_stack_stats_t;
+
+/* Fill with the delta since the previous call (first call = since boot).
+ * 0 on success; -1 when the stats API is not in this build or no iface. */
+int box_net_eth_stack_stats(box_eth_stack_stats_t *out);
+
 /* Start the RX wake thread: signals box_event when the config link becomes
  * readable, so an inbound command does not wait out the service loop's 1 ms
  * poll timeout. Call once, after init. */
@@ -81,6 +110,12 @@ void box_net_eth_rx_wake_start(void);
  * Runs on the registration thread, never the service loop -- it blocks for up to
  * a few hundred ms and the loop is what gates DI publish latency. One command
  * per connection: dserv's '%' reader is greedy and will swallow a second line. */
+/* Several %reg/%match lines over ONE connection -- separate connections race
+ * dserv's client teardown and silently drop all but one match. Returns the
+ * number of lines not accepted. */
+int box_net_eth_send_commands(const uint8_t dserv_ip[4], uint16_t port,
+			      const char *const *cmds, int ncmds);
+
 int box_net_eth_send_command(const uint8_t dserv_ip[4], uint16_t port,
 			     const char *cmd);
 

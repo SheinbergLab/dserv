@@ -63,12 +63,48 @@ static void srv_drop(void)
 	}
 }
 
-int box_net_eth_init(void)
+int box_net_eth_init(const box_config_t *cfg)
 {
 	iface = net_if_get_default();
 	if (!iface) {
 		return -1;
 	}
+
+	/* Bring the interface ADMIN UP explicitly. Zephyr's net_config subsystem
+	 * (CONFIG_NET_CONFIG_SETTINGS/AUTO_INIT) normally does this, and we do not
+	 * enable it -- we own our own addressing. Without it the iface stays down,
+	 * the ENET driver never starts the PHY, autonegotiation never runs, and
+	 * BOTH ends report no carrier. That presents as a dead cable: the box says
+	 * link=0, the host says NO-CARRIER, and swapping cables/ports/hosts teaches
+	 * you nothing. Verified 2026-07-25 -- stock samples/net/ptp linked on the
+	 * same board+cable+host purely because it enables net_config.
+	 * Idempotent: net_if_up() on an already-up iface returns 0. */
+	if (!net_if_is_admin_up(iface)) {
+		int rc = net_if_up(iface);
+		if (rc && rc != -EALREADY) {
+			return rc;
+		}
+	}
+
+	if (cfg && cfg->net_mode == NET_MODE_STATIC) {
+		struct in_addr ip, nm, gw;
+
+		memcpy(&ip, cfg->net_ip, 4);
+		if (!net_if_ipv4_addr_add(iface, &ip, NET_ADDR_MANUAL, 0)) {
+			return -1;
+		}
+		memcpy(&nm, cfg->net_sn, 4);
+		if (nm.s_addr == 0) {
+			nm.s_addr = htonl(0xffffff00);    /* zero mask => /24 */
+		}
+		net_if_ipv4_set_netmask_by_addr(iface, &ip, &nm);
+		memcpy(&gw, cfg->net_gw, 4);
+		if (gw.s_addr != 0) {                     /* zero gw => none */
+			net_if_ipv4_set_gw(iface, &gw);
+		}
+		return 0;
+	}
+
 	net_dhcpv4_start(iface);
 	return 0;
 }
@@ -239,7 +275,9 @@ int box_net_eth_server_up(void)
  * touches the socket data -- the service loop still owns every read, so there is no
  * second consumer and no locking. Priority is below the service loop: this only
  * needs to make the loop runnable, not to run before it. */
-static K_THREAD_STACK_DEFINE(eth_rx_stack, 1024);
+/* 2048: zsock_poll + fdtable machinery overflowed the original 1024 -- the
+ * suspected cause of the wake thread dying silently (dbg/wake_us frozen). */
+static K_THREAD_STACK_DEFINE(eth_rx_stack, 2048);
 static struct k_thread eth_rx_thread;
 
 static void eth_rx_thread_fn(void *a, void *b, void *c)
@@ -373,6 +411,89 @@ int box_net_eth_send(const uint8_t *buf, int len)
 	return (n == len) ? 0 : -1;
 }
 
+/* ---- in-stack residence time ----
+ * Deltas of the stack's own rx_time/tx_time accumulators (sum + count, us),
+ * fetched through the public net_mgmt stats request. Everything here is
+ * per-interval: subtract the previous snapshot so a 1 Hz reader sees "mean of
+ * the frames moved since last second", not a boot-lifetime average that a
+ * bench run can no longer move. */
+#if defined(CONFIG_NET_STATISTICS_USER_API) && \
+	(defined(CONFIG_NET_PKT_RXTIME_STATS) || defined(CONFIG_NET_PKT_TXTIME_STATS))
+
+#include <zephyr/net/net_stats.h>
+#include <zephyr/net/net_mgmt.h>
+
+int box_net_eth_stack_stats(box_eth_stack_stats_t *out)
+{
+	static struct net_stats prev;
+	static int primed;
+	struct net_stats cur;
+
+	memset(out, 0, sizeof *out);
+	if (!iface ||
+	    net_mgmt(NET_REQUEST_STATS_GET_ALL, iface, &cur, sizeof cur) != 0) {
+		return -1;
+	}
+
+#if defined(CONFIG_NET_PKT_RXTIME_STATS)
+	{
+		uint64_t s = cur.rx_time.sum - (primed ? prev.rx_time.sum : 0);
+		uint32_t n = cur.rx_time.count - (primed ? prev.rx_time.count : 0);
+
+		out->rx_avg_us = n ? (uint32_t) (s / n) : 0;
+		out->rx_count = n;
+	}
+#if defined(CONFIG_NET_PKT_RXTIME_STATS_DETAIL)
+	out->rx_detail_n = MIN((int) ARRAY_SIZE(cur.rx_time_detail),
+			       (int) ARRAY_SIZE(out->rx_detail_us));
+	for (int i = 0; i < out->rx_detail_n; i++) {
+		uint64_t s = cur.rx_time_detail[i].sum -
+			     (primed ? prev.rx_time_detail[i].sum : 0);
+		uint32_t n = cur.rx_time_detail[i].count -
+			     (primed ? prev.rx_time_detail[i].count : 0);
+
+		out->rx_detail_us[i] = n ? (uint32_t) (s / n) : 0;
+	}
+#endif
+#endif
+
+#if defined(CONFIG_NET_PKT_TXTIME_STATS)
+	{
+		uint64_t s = cur.tx_time.sum - (primed ? prev.tx_time.sum : 0);
+		uint32_t n = cur.tx_time.count - (primed ? prev.tx_time.count : 0);
+
+		out->tx_avg_us = n ? (uint32_t) (s / n) : 0;
+		out->tx_count = n;
+	}
+#if defined(CONFIG_NET_PKT_TXTIME_STATS_DETAIL)
+	out->tx_detail_n = MIN((int) ARRAY_SIZE(cur.tx_time_detail),
+			       (int) ARRAY_SIZE(out->tx_detail_us));
+	for (int i = 0; i < out->tx_detail_n; i++) {
+		uint64_t s = cur.tx_time_detail[i].sum -
+			     (primed ? prev.tx_time_detail[i].sum : 0);
+		uint32_t n = cur.tx_time_detail[i].count -
+			     (primed ? prev.tx_time_detail[i].count : 0);
+
+		out->tx_detail_us[i] = n ? (uint32_t) (s / n) : 0;
+	}
+#endif
+#endif
+
+	prev = cur;
+	primed = 1;
+	return 0;
+}
+
+#else /* stats not in this build */
+
+int box_net_eth_stack_stats(box_eth_stack_stats_t *out)
+{
+	memset(out, 0, sizeof *out);
+	return -1;
+}
+
+#endif
+
 /* One %-command per connection, with a bounded non-blocking connect.
  *
  * ONE COMMAND PER CONNECTION is not tidiness: dserv's '%' reader is greedy and
@@ -388,6 +509,74 @@ int box_net_eth_send(const uint8_t *buf, int len)
  * loop -- a blocking connect against an unreachable dserv stalls for the full
  * TCP timeout, which would wedge the registration thread and stop the retry
  * watchdog from ever running again. (Same lesson as box_net_eth_connect.) */
+/* Send SEVERAL %reg/%match lines over ONE connection.
+ *
+ * Registration used to open a separate short-lived TCP connection per line.
+ * That races dserv's per-client teardown: measured 2026-07-26 on an RW612,
+ * `%getmatch <box> 5010` showed dserv holding only ONE of the three matches --
+ * which one depended purely on timing (the first without inter-line delays, the
+ * last with them). The box is then left PUBLISHING BUT DEAF: state/* keeps
+ * flowing, cmd/* never arrives, and it looks like a perfectly healthy box.
+ *
+ * Sending them down a single connection lands all of them, verified by hand
+ * against the same dserv. Returns the number of lines that were NOT accepted.
+ */
+int box_net_eth_send_commands(const uint8_t dserv_ip[4], uint16_t port,
+			      const char *const *cmds, int ncmds)
+{
+	int fails = ncmds;
+	int s = zsock_socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+
+	if (s < 0) {
+		return fails;
+	}
+	zsock_fcntl(s, ZVFS_F_SETFL, ZVFS_O_NONBLOCK);
+
+	struct sockaddr_in a = { 0 };
+	a.sin_family = AF_INET;
+	a.sin_port = htons(port);
+	memcpy(&a.sin_addr, dserv_ip, 4);
+
+	if (zsock_connect(s, (struct sockaddr *) &a, sizeof a) < 0 &&
+	    errno != EINPROGRESS && errno != EALREADY) {
+		goto out;
+	}
+	struct zsock_pollfd pfd = { .fd = s, .events = ZSOCK_POLLOUT };
+	if (zsock_poll(&pfd, 1, 300) <= 0) {
+		goto out;
+	}
+	int err = 0;
+	socklen_t elen = sizeof err;
+	zsock_getsockopt(s, SOL_SOCKET, SO_ERROR, &err, &elen);
+	if (err != 0) {
+		goto out;
+	}
+
+	fails = 0;
+	for (int i = 0; i < ncmds; i++) {
+		size_t len = strlen(cmds[i]);
+
+		if (zsock_send(s, cmds[i], len, 0) != (int) len) {
+			fails++;
+			continue;
+		}
+		pfd.events = ZSOCK_POLLIN;
+		if (zsock_poll(&pfd, 1, 300) <= 0) {
+			fails++;
+			continue;
+		}
+		char rep[16] = { 0 };
+		int n = zsock_recv(s, rep, sizeof rep - 1, 0);
+
+		if (!(n > 0 && rep[0] == '1')) {
+			fails++;
+		}
+	}
+out:
+	zsock_close(s);
+	return fails;
+}
+
 int box_net_eth_send_command(const uint8_t dserv_ip[4], uint16_t port,
 			     const char *cmd)
 {

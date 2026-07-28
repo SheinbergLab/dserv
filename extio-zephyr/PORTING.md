@@ -75,17 +75,13 @@ quantization dwarfs it. All that is established is that the clock runs at roughl
 the right speed. Real rate measurement needs on-box sampling (the echo/sync
 machinery), not 1 Hz datapoints.
 
-- [ ] **frdm_rw612 will very likely hit the SAME failure, with no easy fix.** Its
-      `enet_ptp_clock` node carries no pinctrl, the board never mentions PTP, and
-      **no `1588` pinmux entries exist anywhere in the RW612 dts or board
-      pinctrl** — yet it is the same driver with the same unconditional
-      `pinctrl_apply_state`. So there is nothing valid to point `pinctrl-0` at.
-      Options, in order of preference: confirm from the RW612 reference manual
-      whether 1588 event pads exist and add the pinmux entries; or carry a small
-      patch making the default pinctrl state optional in the driver (the 1588
-      event pins are genuinely optional hardware) — `wiznet-io/patches/` is the
-      precedent for a locally-applied Zephyr patch; or upstream that fix. Settle
-      this early — PTP is a headline reason the RW612 was chosen.
+- [x] **frdm_rw612 DID hit the same failure — SOLVED 2026-07-25, no patch
+      needed.** The prediction was right; the stated reason was wrong. **1588
+      pinmux entries DO exist**: `IO_MUX_ENET_TIMER0..3` in
+      `modules/hal/nxp/dts/nxp/rw/RW612-pinctrl.h` (pads IO27/IO61/IO24/IO26).
+      So `pinctrl-0` has something valid to point at and neither the driver
+      patch nor the reference-manual dig was necessary. A second, worse defect
+      was hiding behind it. See "2026-07-25 — RW612 first boot" below.
 - [ ] `CONFIG_PTP_CLOCK_SHELL=y` (from `samples/net/ptp`) adds shell commands to
       read/adjust the clock directly — a useful diagnostic now that the console
       works.
@@ -840,10 +836,17 @@ is a worse failure than 400 µs of latency.
 
 ### Also pending, cheaper and lower risk
 
-- **Relocate the remaining net libraries to ITCM.** `subsys__net__lib__sockets`
-  and the top-level `subsys__net` were *not* in commit 6072776. ITCM has ~44 KB
-  free. `recv_us` at 94 µs suggests the socket layer is not dominant, but it is
-  one line to test.
+- **Relocate the remaining net libraries to ITCM.** The sockets layer was *not*
+  in commit 6072776. NAMING GOTCHA (verified 2026-07-25 against the build's .a
+  files): there is **no `subsys__net__lib__sockets` target** —
+  `subsys/net/lib/sockets/CMakeLists.txt` never calls `zephyr_library()`, so
+  `sockets_inet.c` lands in the **`subsys__net`** library opened by
+  `subsys/net/CMakeLists.txt`. Relocate THAT. Also not yet relocated:
+  `modules__hal_nxp`'s `fsl_enet.c` (runs in the ISR under irq_lock and does
+  `ENET_ReadFrame` per frame — use the FILES form; the whole hal_nxp lib is too
+  big) and the per-event kernel files (condvar/queue/poll/sem/work — the wake
+  chain between the stack and the service loop). ITCM has ~41 KB free after the
+  phase-0 stats build.
 - **Preemptive network threads.** We run `CONFIG_NET_TC_THREAD_COOPERATIVE=y`, so
   the RX traffic-class thread runs to completion and the preemptible service loop
   cannot get in. Test `CONFIG_NET_TC_THREAD_PREEMPTIVE=y`, but measure **under
@@ -872,3 +875,2334 @@ IP stack by ~240 µs per frame, structurally" — **is withdrawn**, not merely
 refined: a send now costs 61 µs against the W6300's ~240 µs for a whole frame.
 The comparison must be redone (one-way `host_gpio_rtt` delivery on pi5dev, and
 the four-way transport table) before any hub decision leans on it.
+
+---
+
+## 2026-07-25 — a measurement audit: what the numbers above are worth
+
+Short version: **treat every latency figure earlier in this document as
+provisional.** They were measured through a dserv timebase that changed on
+2026-07-24, on a host whose load was not controlled, with a harness that had no
+way to detect its own error. None of that means they are wrong; it means nothing
+has yet checked them. This section records what was checked, what it changed,
+and what still is not trustworthy.
+
+### The timebase changed under us
+
+dserv commit `227315e` ("monotonic timebase for datapoint timestamps", 2026-07-24
+16:09) replaced `Dataserver::now()`'s `high_resolution_clock` with `steady_clock`
+plus a fixed epoch offset. On Linux — the deployment target and the host for
+every number here — `high_resolution_clock` aliased to `CLOCK_REALTIME`. So the
+old timestamps rode a clock NTP can step, and the new ones do not.
+
+Every latency figure above predates the dserv build carrying that fix. The
+observed effect was not subtle: on the same box, wire, and firmware, updating
+dserv moved the measured loop from 1160 µs to 954 µs, and moved the `cmd →
+do_echo` leg the *other* way, 655 → 923 µs. Both harnesses were wrong, in
+opposite directions, which is exactly the failure mode a single harness cannot
+see.
+
+### The cross-check that should have existed
+
+Two harnesses compute the identical quantity, so **they must agree, and their
+disagreement is a free correctness check**:
+
+- `wiznet-io/host/loopback_rtt.sh` — arrival(`state/di`) − timestamp(`cmd/do`)
+- `lb_split.sh` — the same span as `L1 + L2`, split at the `state/do` echo
+  (`lb_tot` column, added 2026-07-25)
+
+Run both. If they disagree, *stop* — the measurement apparatus is broken and no
+conclusion drawn from it survives. Tonight that check was the whole story:
+
+| dserv | box | transport | `loopback_rtt` | `lb_tot` | gap |
+|---|---|---|---|---|---|
+| pre-fix | teensy41 | eth | 1160 | 696 | ~465 µs |
+| 0.48.10 | teensy41 | eth | 954 | 964 | ~0 |
+| 0.48.10 | teensy41 | **USB** | 1143 | 717 | **~426 µs** |
+| 0.48.10 | office (W6300) | eth | 676 | 654 | ~0 |
+
+Two boxes, two MCUs, two firmware lines agree over Ethernet under 0.48.10. **The
+USB path still does not.** Those frames do not arrive through dserv's client
+socket; they come up through the `extio` subprocess and `modules/usbio/usbio.c`.
+One asymmetry there worth a look: `usbio.c:122` *preserves* a box-supplied
+timestamp (`if (!dpoint->timestamp)`), so USB datapoints can carry box-clock
+times where native ones carry host time. That should not reach these numbers —
+both harnesses stamp with `[now]` inside the callback rather than reading
+`dservTimestamp` on a box datapoint — so the cause is **unidentified**. Until it
+is, **no USB latency number here is usable.**
+
+### What was tested and ruled out
+
+Recorded because each cost real time and none should be re-run:
+
+- **The phase-0 statistics build is free.** A/B against a pristine build with
+  `NET_PKT_RXTIME/TXTIME_STATS[_DETAIL]`, `NET_STATISTICS[_USER_API]` all `=n`:
+  min 844 vs 843, median 1163 vs 1123 — identical floor, medians inside run
+  spread. Leave the instrumentation on.
+- **dserv's script dispatch has no cold-wakeup cost.** Measured with no box and
+  no transport (set a datapoint, time until its callback runs): 116 µs cold vs
+  130 µs warm. Warm is marginally *slower*, as two dispatches should be. An
+  earlier hypothesis that ~450 µs of cold dispatch was hiding in the callback
+  path is **refuted**.
+- **Not harness aliasing.** `SETTLE` at 0.02 / 0.037 / 0.071 → 1160 / 1163 /
+  1161 µs. The effect is insensitive to iteration period across a 3.5× spread.
+- **Not differing box behaviour.** The box publishes `state/do/<n>` whether or
+  not anything is subscribed to it (verified: 47 ms fresh after a run with no
+  match and no script). Frame output is identical in both harness
+  configurations.
+- **Host load scales everything.** On a busy Mac (load 3.04, WindowServer 28 %,
+  `stim2`, Roon) both transports inflated ~1.4× versus the same rig quiet, while
+  the Eth ÷ USB ratio held at 1.36 → 1.38. Absolute µs are not portable across
+  sessions; ratios largely are. **Measure both transports in the same session or
+  report neither.**
+
+### Corrected numbers, such as they are
+
+pi4dev (Pi 4B, governor `performance` @ 1.8 GHz, no throttling, load ~0.0;
+`eth0` = 192.168.11.10/24, box at .41), dserv 0.48.10, phase-0 stats build:
+
+| leg | teensy41 (Zephyr, eth) | office (W6300) |
+|---|---|---|
+| total loop | 954–964 | **654–676** |
+| L1 `cmd → do_echo` | 923 | **581** |
+| L2 `do_echo → di` | 37 | 73 |
+| box-internal (`recv`+`disp`) | ~258 | — |
+| unaccounted in L1 | **~665** | — |
+
+The unaccounted figure is now ~665 µs, not the ~430 µs recorded above. That
+number is the entire premise of the DTCM/ERR050396 work, and it was derived from
+an L1 measurement the timestamp fix moved by 270 µs. **Recompute it before
+touching the errata mitigation** — that item is the riskiest on the list (a
+silicon workaround needing a frame-integrity soak) and it should not be
+justified by a number measured through a since-fixed clock.
+
+### The W6300 comparison, and the retraction above
+
+Measured the same evening, same host, same dserv, same harness: the W6300 box's
+inbound leg is **~342 µs faster** (581 vs 923). This is the redo the retraction
+above demanded, and it points back toward the withdrawn conclusion rather than
+away from it — now at ~342 µs rather than the original ~240 µs.
+
+Hold that loosely. It is one pair of runs, and it is **not a transport-only
+comparison**: pico2 vs RT1062, bare-metal vs Zephyr, and the ICMP floor already
+differs (0.077 ms vs 0.197 ms). It is sufficient to say the retraction is no
+longer supported by evidence; it is *not* sufficient to reinstate the original
+claim. The four-way table still needs running.
+
+Also logged: `loopback_rtt` on the W6300 hit a single **25,966 µs** outlier in 59
+samples (p99 957, so one event rather than a fat tail). A 26 ms stall on an
+acquisition box is worth knowing whether it recurs.
+
+### Does the DO echo delay the DI it causes? Yes — by 62 µs, and it does not matter
+
+Asked because the loopback's `L2` leg carries an extra frame the pure input path
+would not. Both publishes are **blocking `box_net_client_send()` calls on the one
+service loop**: `publish_do()` fires inline in the command handler right after
+`pico_gpio_exec()` (`wizchip_dserv_config.c:1427`), while the DI edge can only go
+out on a *later* pass, when `pico_gpio_poll_di()` drains it (`:1859`). So the DI
+frame's transmission queues behind the echo's. The Zephyr box has the same
+structure — this document's own `disp_us` row is "framer + dispatch + GPIO write
+(+ the `state/do` publish)".
+
+Both frames are nonetheless **edge-stamped**: `publish_do` uses
+`event_stamp(t_act)` taken at the pin write, `publish_di` uses
+`event_stamp(e.t_us)` taken at the IRQ. So the box's *record* of when things
+happened is independent of when it managed to send them. `host/lb_queue.sh`
+separates the two (office box, GP10→GP11, n=60):
+
+| quantity | median |
+| --- | --- |
+| `q_box` = `dservTimestamp(di) − dservTimestamp(do)` (both box clock) | **−1 µs** |
+| `q_arr` = arrival(di) − arrival(do) (both host clock) | 62 µs |
+| `q_que` = `q_arr − q_box` — the serialization | **62 µs** (p90 126, p99 214) |
+
+Each term is a difference *within* one clock, so the box-clock offset and its
+~98 µs sync jitter cancel; only rate error over ~100 µs survives, which is
+nothing. That is what makes `q_que` trustworthy despite mixing two clocks.
+
+`q_box` at −1 µs is also a **positive control**: the jumper and the IRQ cost
+nothing measurable, and the slight negative is correct rather than noise —
+`publish_do` reads `time_us_64()` *after* `pico_gpio_exec()` returns, while the
+DI IRQ fires at the transition itself, so the edge stamp legitimately precedes
+the write stamp by a microsecond. Both are real edge stamps, not drain-time
+artifacts.
+
+Three conclusions:
+
+1. **The DI timestamp is unaffected, which is the part that matters.** Queueing
+   delays when dserv *learns* of an edge, not the time recorded for it. Event
+   logging, the obs timeline, and RT computed from a box onset stamp are all
+   edge-accurate regardless. Only notification latency moves.
+2. **The loopback figure is inflated ~62 µs on ~654 µs, about 9 %** — carrying
+   the extra frame does not badly distort it, but `host_gpio_rtt.sh` remains the
+   correct harness for pure input latency, because the host generates the edge
+   and no echo is in the path.
+3. **The marginal cost of a second frame out the W6300 on the RT path is 62 µs,
+   not ~240 µs.** This is independent evidence against the figure behind the
+   retracted claim above, and it explains why `L2` at 73 µs never squared with a
+   supposed 240 µs send. It does not establish what the original 240 µs
+   measured — one more reason the four-way table needs rerunning.
+
+Note the echo exists **only for `GPIO_OP_SET`**. A scheduled pulse (`do/<n>/at`)
+goes through `sched_arm()` and publishes nothing, so `lb_split` and `lb_queue`
+return no samples on that path.
+
+### Still missing: a hardware reference
+
+Both harnesses stamp inside a Tcl callback via `tclserver_now()` — they share a
+mechanism, so their agreement is evidence but not proof. Nothing measured so far
+is referenced to a real electrical edge. Now that the boxes are on a Pi,
+`host_gpio_rtt.sh` with its native-GPIO baseline can close that gap, and it is
+the one measurement a software timestamp bug cannot fool. Wire it per the
+`box_out_rtt.sh` header diagram — **not** the one in `host_gpio_rtt.sh`, whose
+header puts the native baseline on GPIO22 while `box_out_rtt.sh` drives GPIO22
+from the box (baseline belongs on GPIO23 / phys 16). Following the wrong diagram
+puts two drivers on one pin.
+
+### Operational notes
+
+- **Flashing a Teensy from a dev host needs the soft-reboot flag `west flash`
+  omits:** `teensy_loader_cli --mcu=TEENSY41 -s -v build-teensy41/zephyr/zephyr.hex`.
+  Without `-s` it fails with "Unable to open device". There is no remote path:
+  `main.c:294` — `cmd/bootsel` is unsupported on Teensy because the bootloader is
+  a separate chip watching the Program button. HalfKay does not wipe NVS; pin
+  config survived every reflash tonight.
+- **A box that vanishes leaves stale datapoints.** `dservctl extio
+  "extio_clear_dead"` (config/extioconf.tcl:141) clears `state/*` and `decoded/*`
+  for boxes no longer in `::extio_known`.
+- **Harnesses live in `~/extio-bench/` on pi4dev**: `loopback_rtt.sh`,
+  `lb_split.sh`, `host_gpio_rtt.sh`, `box_out_rtt.sh`, plus `dispatch_test.sh`
+  (dserv-only dispatch latency) and small Tcl state-dump helpers.
+- **Office box loopback** is wired GP10 → GP11 (adjacent header pins 14/15), both
+  free per `wiznet-io/PINMAP.md` with the MCP3204 and OLED enabled.
+
+### What not to depend on yet
+
+1. Any USB latency number, until the harness disagreement is explained.
+2. The ~430 µs unaccounted figure and the DTCM case resting on it.
+3. Any absolute µs measured on an uncontrolled host.
+4. The W6300-vs-native margin as a *transport* result — it is currently a
+   whole-box result.
+
+---
+
+## 2026-07-26 — THE WIZNET REFERENCE SET (electrically referenced)
+
+**These are the numbers to compare against. Everything earlier in this document
+is superseded** — see "What this supersedes" at the end of the section.
+
+### The requirement, stated
+
+**Within 1 ms end-to-end is fine for this work.** Recorded because it changes
+which items are worth doing: it is the difference between "the DTCM errata
+mitigation is the next task" and "the DTCM errata mitigation can wait
+indefinitely". Latency work below this line is optimisation; timestamp accuracy
+and tail behaviour are not, because neither is bounded by the same budget.
+
+### Setup
+
+Host `rpi500` (Pi 5, governor `performance`, load ~1.2 with the ess_control
+Firefox page CLOSED — see the load caveat below), dserv **0.48.10** (has the
+`227315e` monotonic timebase fix). Box `upstairs`: pico2, `build = dual`,
+`transport = w6300`, fw `0.48.7-2-ge9b1e1a`, 192.168.88.28 → 192.168.88.29:4620.
+
+```
+Pi phys 13 (GPIO27, out) ──┬── Pi phys 16 (GPIO23, in)    [native baseline = P]
+                           └── box phys 14 (GP10, in)     "from_pi"
+Pi phys 15 (GPIO22, in) ───── box phys 15 (GP11, out)     "loop_out"
+                                     └───────────────────  box phys 16 (GP12, in) "loop_in"
+Pi phys 14 (GND) ──────────── box GND
+```
+
+The baseline jumper is **Pi-to-Pi**, not to the box. It measures the host's own
+input path off the *identical* electrical edge, which is the only way to remove
+the host from the box's number.
+
+### Measured
+
+| measurement | med | min | p99 | max |
+| --- | --- | --- | --- | --- |
+| **Input: edge → dserv knows** (via box) | **322** | 278 | 358 | 365 |
+| Same edge, Pi sensing directly (**P**) | 72 | 50 | 99 | 110 |
+| **Output: dserv cmd → Pi sees box pin move** | 329 | 288 | 393 | 393 |
+| Loopback total (`loopback_rtt` / `lb_split`) | 676 / 657 | 632 / 610 | 717 / 718 | 717 / 718 |
+| `L1` cmd → do_echo | 554 | 517 | 679 | 679 |
+| `L2` do_echo → di | 100 | 39 | 139 | 139 |
+
+### Derived, and the budget closes
+
+- **Outbound** (dserv command → box pin physically moves) = 329 − 72 = **~257 µs**
+- **Return** (box event → dserv knows) = 554 − 257 = **~297 µs**
+- Cost of routing an edge through the box vs the Pi sensing it directly
+  = 322 − 72 = **~250 µs**
+
+257 + 297 = 554, which is `L1` measured independently by a different harness.
+That closure is the point: the split was unavailable last night (the box-clock
+route gave ±64 ms of accumulated drift) and the electrical reference recovers it.
+
+### Verdict against the requirement
+
+**Input latency 322 µs median, 358 µs p99** — the number that governs "subject
+acts → dserv knows". ~2.8× margin at p99, no outliers in 149 samples. This box
+is comfortably inside spec and its tail is the tightest measured anywhere in this
+exercise.
+
+### Caveats attached to these specific runs
+
+- **The box was UNSYNCED.** It power-cycled during wiring (`uptime_us` reset,
+  `watchdog` 1275 → 942) and had no obs anchor after. So `box_clock_stamp()`
+  returns 0 and **dserv arrival-stamps** those frames — the harness's "box stamp
+  error" column is therefore *delivery measured from the arrival stamp*, NOT
+  clock accuracy. The `sync/*` datapoints visible at the time were 48 minutes
+  stale and sticky in dserv's table, which is precisely the trap
+  `host_gpio_rtt.sh`'s header warns about. Read that column as clock accuracy
+  ONLY after confirming a fresh anchor.
+- The 41 µs between that column (281) and the delivery column (322) is dserv's
+  **arrival-stamp → callback-execution** gap. Free measurement, worth knowing.
+- **A power cycle reverts unsaved config.** Pin modes and labels survive (NVS);
+  anything set at runtime and not followed by `cmd/save` does not.
+- `host_gpio_rtt.sh` labels the box column "(USB)" — hardcoded, wrong for a
+  w6300 box, cosmetic.
+- **Host load dominates everything.** The ess_control page open in Firefox on
+  rpi500 put the box at load 3.36 (Firefox 38.9 % + web content 29.1 %). Close it
+  before measuring. On a loaded Mac the same effect inflated *both* transports
+  ~1.4× while leaving their ratio intact.
+
+### The same box on USB-FS — and why Ethernet wins here
+
+Same host, same dserv, same jumpers; Ethernet unplugged so the arbiter falls back
+(`transport = usb`, `ip = 0.0.0.0`). The box power-cycles when the cable moves, so
+debounce was re-applied.
+
+| | Ethernet (W6300) | USB-FS |
+| --- | --- | --- |
+| **Input: edge → dserv knows**, med | **322** | 525 |
+| — min | 278 | **214** |
+| — p99 | **358** | 1008 |
+| **Output: cmd → pin moves**, med | **329** | 393 |
+| — p99 | **393** | 1147 |
+| Loopback, med | **676** | 1043 |
+| — p99 | **718** | 1430 |
+| Native baseline `P` | 72 | 72 |
+
+**USB's floor is 64 µs FASTER** (min 214 vs 278) — `box_net_usb_client_send` is a
+memcpy into a ring plus a TX interrupt enable, so the wire time happens in the ISR
+and the cost is *off the RT loop by construction*, whereas the Ethernet send IS
+the stack traversal, inline on it. What ruins USB-FS is **frame quantization**:
+1 ms slots, so the median pays ~267 µs of waiting and p99 pays ~650 µs. At p99
+USB-FS **breaches the 1 ms requirement** (1008 µs input, 1430 µs loopback) while
+Ethernet keeps 2.8× margin. Ethernet is correct for this box, for a structural
+reason rather than a measured preference.
+
+`P` came back at **72 µs median in both runs**, across a transport change and a
+dserv restart. The host's input path is a stable constant; that is what makes
+subtracting it legitimate.
+
+**Projection for USB-HS (RT1062), stated as arithmetic, not a result.** On this
+box USB's non-quantization path is ~64 µs cheaper than Ethernet's. High-Speed
+cuts the slot interval 8× (1 ms → 125 µs microframes), so the quantization term
+should fall to ~33 µs median / ~80 µs p99, leaving USB-HS net faster than
+Ethernet with a far tighter tail. Two things that arithmetic does not capture:
+the host-side `extio`/`usbio` hop is unchanged by HS and is already inside these
+numbers, and the Teensy's Ethernet is Zephyr's *software* stack rather than
+hardware TCP offload, so the baseline it must beat is a slower one. Both push the
+same way. **Measure it; do not cite this paragraph as a finding.**
+
+### Hardware obs-sync: anchor quality, measured against a real edge
+
+Wired **Pi phys 37 (GPIO26, out) → box phys 31 (GP26)** and set `sync/pin 26`
+(persisted). Note the config key is **`config/sync/pin`**, not `config/sync_pin`
+— the state datapoint and the config key differ, and setting the wrong one
+silently does nothing (`state/sync_pin` stays `-1`).
+
+The sync pin is **latch-only** (`pico_gpio.h:133`: "TTL obs-sync: latch, don't
+report") — it publishes no DI events, so a sync line costs zero wire traffic.
+On an `ess/in_obs` frame the box pairs that frame's *dserv* timestamp with the
+**latched edge time** if the edge is fresh (`SYNC_EDGE_WINDOW_US` = 250 ms),
+giving `source = hw`; otherwise it degrades to frame-arrival time (`sw`) and says
+so. `box_clock_sync` is `offset_us = dserv_us - box_us` with `box_us` = the
+latched edge — **no transport term**, which is the whole point.
+
+#### Anchor repeatability, and the crystal
+
+Five successive anchors, same transport, ~2.5 s apart:
+
+```
+offset ...926431 / ...926368 / ...926309 / ...926246 / ...926186
+deltas      -63       -59       -63       -60   us
+```
+
+**Repeatability ~±2 µs.** The offset does not scatter; it marches monotonically
+at ~60 µs per ~2.5 s = **~25 ppm**, which is the box's oscillator, in the
+documented +27→+43 ppm band. The anchor is precise; the crystal is what moves —
+and `hw` anchors teach the rate, so this gets corrected rather than accumulating
+into the 64 ms-after-31-minutes seen on `office`.
+
+Per-event **sync quality (spread) is ~90–125 µs**, matching the recorded 98 µs
+Tier A figure.
+
+#### Standing bias is a HOST-side property, not the box's
+
+The bias moved from **+3114 µs to −243 µs** by changing nothing but how tightly
+the edge and the `ess/in_obs` publish were coupled on the host — two separate
+`dservctl` invocations versus both in one interp call. The hw anchor removes the
+box-ward *transport* delay; it does **not** remove host-side skew between driving
+the pin and stamping the datapoint. Whatever gap exists there lands directly in
+the offset. Couple them, or characterise the skew and calibrate it out.
+
+The box reports the frame-behind-edge delay per anchor as
+`state/sync/transport_us` — 2355 µs with the loose two-call sequence, **727 µs**
+on USB-FS and **206 µs** on Ethernet once coupled. Free per-anchor transport
+telemetry, and a direct readout of what a `sw` anchor would have absorbed as
+error.
+
+#### Two things left open, recorded rather than tidied away
+
+- **A 564 µs bias difference between a USB-anchored and an Ethernet-anchored
+  run** is unexplained. It is not anchor noise (that is ±2 µs), but a **reboot
+  intervened** between them, resetting the rate estimator — so they are not a
+  clean pair, and the code has no transport term that could explain it. A clean
+  transport A/B is awkward here because **switching transport requires a
+  reboot** (see below).
+- **Do not copy this section's anchor spacing into a test.** Two anchors 1 s
+  apart clears `BOX_CLOCK_PAIR_MIN_US` (0.5 s) and therefore teaches the rate
+  from a *one-second baseline* — and the first valid sample is taken as the rate
+  outright (`if (!c->rate_valid) c->rate_ppb = sample`). Tens of µs of edge noise
+  over 1 s implies tens of ppm. Real obs anchors are spaced by trial durations
+  and are a far better baseline; the rate quality induced here is worse than a
+  running experiment would produce.
+
+#### Uncertainty budget WITHOUT a hardware sync line
+
+The decisive detail is in `box_clock_sync`: **a `sw` anchor never teaches the
+rate.** `if (!trusted) return;` sits above the rate estimator, so only `hw`
+anchors reach it. Without a sync line the box has no rate correction at all and
+its ~25 ppm crystal error accumulates freely between anchors — the mechanism
+behind the 64 ms found on `office` after 31 idle minutes.
+
+A `sw` anchor pairs the frame's *send* timestamp with the box's *receipt* time,
+i.e. it assumes delivery is instantaneous. Every stamp then reads **early by
+roughly the one-way delivery**, which `transport_us` measures directly.
+
+| source of error | Ethernet | USB-FS |
+| --- | --- | --- |
+| Standing bias (= one-way delivery) | ~200 µs | ~730 µs |
+| Anchor-to-anchor jitter | ~±50–100 µs | up to ±400 µs (frame quantization) |
+| Drift between anchors, 25 ppm | 125 µs per 5 s | same |
+| Per-event sync jitter | ~90–125 µs | ~90–125 µs |
+| **Total, anchors every ~5–10 s** | **~400–600 µs** | **~1.0–1.3 ms** |
+
+**Verdict against the 1 ms requirement: Ethernet without a sync line is fine**
+(about half the budget) *provided obs anchors keep coming*. **USB-FS without a
+sync line is marginal to over budget**, because the 1 ms frame quantization lands
+directly in the anchor.
+
+**The operating rule:** at 25 ppm, drift alone eats 1 ms in **40 seconds**, so
+re-anchor at least every ~10 s. Normal `beginobs`/`endobs` cadence satisfies this
+easily — `ess/in_obs` toggles twice per trial. The danger case is not a running
+experiment but an **idle box between obs**, where the offset silently rots.
+
+**What often makes this moot:** the standing bias is *systematic*, so it cancels
+wherever both endpoints are box-stamped — button press → release, DI edge →
+scheduled pulse, response latency from a box onset stamp. Those see only the
+~90–125 µs jitter and are well inside budget with no sync line at all. The bias
+applies in full only to **box-to-host** intervals (a box event against a stimulus
+onset stamped by dserv or stim2), which is exactly the case the sync line fixes.
+
+#### Why the wire beats every packet transport, and what that implies
+
+Latency for one 128-byte dserv frame decomposes into **waiting for a slot** plus
+**serialising the bits**. Different transports fail in different halves:
+
+| transport | wait for a slot | serialise 128 B | total |
+| --- | --- | --- | --- |
+| UART 115200 | 0 | **11.1 ms** | 11.1 ms |
+| UART 1 Mbaud | 0 | 1.28 ms | 1.28 ms |
+| UART 3 Mbaud | 0 | 0.43 ms | 0.43 ms |
+| UART 12 Mbaud | 0 | 0.11 ms | 0.11 ms |
+| USB-FS | 0–1000 µs | 85 µs | ~0.6 ms avg |
+| USB-HS | 0–125 µs | 2 µs | ~64 µs avg |
+| **Ethernet 100M** | **~0** | **~10 µs** | **~10 µs** |
+
+A true UART has **no bus schedule** — the shift register starts when it is free —
+which is the property USB lacks. But it pays in serialisation, so classic 115200
+is far *worse* than USB-FS. **Ethernet already provides the "unpaced" property
+with 100× less serialisation**, which is exactly what the measurements show
+(Ethernet 322/358 µs vs USB-FS 525/1008). The enemy is USB's polled
+architecture, not modernity — and this vindicates the 2026-07-09 decision in
+BLE.md to supersede the UART sidecar once rigs went wired-Ethernet.
+
+Two traps if serial is ever revisited: a UART behind a **USB-serial adapter
+reintroduces USB pacing** (FTDI latency timer defaults to 16 ms of batching), and
+a real UART's RX interrupt typically fires on a FIFO threshold or a ~4-character
+idle timeout, so a short message can sit in the FIFO. "No pacing" is a property
+of the wire, not of the driver stack above it.
+
+**The synthesis: the packet carries the data, the wire carries the time.** The
+TTL sync line is the one-bit limit case of a parallel interface — no framing, no
+arbitration, no serialisation — which is why it anchors to ~±2 µs while every
+packetised path sits in the hundreds of µs. Those are two different jobs and it
+is correct for them to use different media.
+
+#### Software-only anchoring, for hosts with no GPIO
+
+The standard method is PTP/NTP's four-timestamp exchange — host sends at `T1`,
+box receives at `T2`, replies at `T3`, host receives at `T4`; then
+`RTT = (T4-T1) - (T3-T2)` and `offset = T2 - (T1 + RTT/2)` — with **min-RTT
+filtering** across probes, keeping the least-queued sample where the symmetry
+assumption is least wrong.
+
+**Most of this already exists in tree.** The BLE echo-sync work built exactly
+this pattern (min-RTT estimator feeding `box_clock`) and took the handheld from
+**+22.6 ms to +0.37 ms using software timestamps only**. Porting it to the wired
+path is reuse, not invention. It also closes the rate gap: `sw` anchors never
+teach the rate, an echo estimator naturally can, and **drift is the failure mode
+that produces 64 ms surprises** while bias is merely calibratable.
+
+**Certify it against `upstairs`.** That box has a hardware sync line *and* can run
+the software estimator, so the software answer can be measured against the
+hardware one on the same box at the same time. That converts "probably good
+enough" into a number, after which it can be deployed on GPIO-less hosts knowing
+exactly what was given up. Same validate-the-method-once pattern used throughout
+this document.
+
+#### The `sw` anchor bias IS the one-way delivery — measured, not assumed
+
+Alternating `hw` and `sw` anchors on the same box, bracketing each `sw` sample
+between two `hw` samples to interpolate out the ~25 ppm drift:
+
+```
+sw - hw = -202 us        (predicted -206 us from state/sync/transport_us)
+```
+
+Exact agreement, in the predicted direction. A `sw` anchor pairs the frame's
+*send* timestamp with the box's *receipt* time, i.e. assumes delivery is
+instantaneous, so every stamp reads early by exactly `d`. Script:
+`host/sw_bias.sh`.
+
+#### Stage 1: host-only bias correction, certified
+
+`dservSetData <var> <ts> <type> <bytes>` honours an explicit timestamp
+(`Dataserver.cpp`: `if (!ts) ts = ds->now()`). So publishing the sync datapoint
+**forward-dated by `d`** makes the naive `sw` anchor correct **with no firmware
+change** — the box computes `offset = dserv_us - receipt_box`, and `receipt_box`
+genuinely corresponds to dserv time `T_send + d`.
+
+`d` is estimated without any wire by halving the **minimum** RTT of the existing
+`cmd/do → state/do` echo (least-queued sample = where the symmetry assumption is
+least wrong). Certified against the hardware line on the same box
+(`host/stage1_certify.sh`):
+
+```
+echo RTT: min 500  med 536 us   ->  d_est = min/2 = 250 us
+  sw UNCORRECTED  vs hw:  -190 us
+  sw CORRECTED    vs hw:   -34 us
+```
+
+**Bias ~190 µs → ~34 µs, host-side only.** 34 µs is below the anchor's own
+jitter floor (~90–125 µs), so at this resolution the bias is gone.
+
+**Do not over-trust the residual.** It is the difference of two errors that
+happened to partially cancel: `min-RTT/2` = 250 µs *over*-estimates the true
+`d` = 206 µs by ~44 µs (the echo includes the box's dispatch and GPIO write,
+which the anchor delay does not), while the forward-dating *under*-applies
+because `[now]` is evaluated some tens of µs before the frame actually leaves
+dserv. On another host or transport they will not cancel the same way. The
+dominant term (`d` itself) is measured per-deployment, so the method adapts; the
+residual does not. **Re-certify per deployment**, and note bracket interpolation
+contributes its own ~±50 µs, so read this as "indistinguishable from zero at this
+resolution", not "exactly 34".
+
+**Suppress the correction whenever `state/sync/source = hw`.** Forward-dating a
+frame whose anchor comes from a latched edge would *introduce* precisely the
+error this removes.
+
+`d` is **per-box and per-transport** (206 µs Ethernet, ~730 µs USB-FS), so a
+multi-box rig needs per-box values.
+
+#### Stage 2: implemented, deployed, certified (2026-07-26)
+
+Built and OTA'd to `upstairs`; see `config/extio_sync.tcl` (host) and
+`CFG_PROBE`/`CFG_SYNC` in `common/dserv_config.h` +
+`pico/wizchip_dserv_config.c` (box).
+
+**Protocol.** Two keys under the box's existing `%match <pfx>/cmd/*`, so **no
+registration change**:
+
+```
+cmd/probe <seq>   -> state/probe = the box's OWN turnaround (t_send - t_recv).
+                     Both reads are box-clock, so the box's unknown offset
+                     cancels and the host can subtract box time from the RTT.
+cmd/sync  <d_us>  -> offset = (frame_ts + d_us) - receipt_box, trusted=0.
+                     Skipped when a fresh latched TTL edge exists.
+```
+
+**NAMED `probe`, NOT `echo`.** `state/echo/*` is already the BLE echo-sync
+telemetry (`echo/synced`, `echo/rtt_us`, `echo/offset_us`, `echo/rate_ppb`). The
+leaf `state/echo` would not literally collide, but two unrelated sync mechanisms
+sharing that word on a `BOX_BLE` build is a trap.
+
+**Certified against the hardware line, same box, same session:**
+
+| method | stamp error (median) | spread | vs `hw` |
+| --- | --- | --- | --- |
+| `sw` uncorrected | −202 µs | — | 274 µs |
+| **`sw` + correction** | **−100 µs** | ~70 µs | **172 µs** |
+| `hw` TTL edge | +72 µs | ~83 µs | — |
+
+The correction **halves the bias**, and all three are inside the 1 ms
+requirement. The durable win is not the bias but the **cadence**: anchoring every
+2 s bounds drift at ~50 µs regardless of obs spacing, which is the failure mode
+that produced 64 ms on an idle box.
+
+**The 172 µs residual is a modelling error, not noise.** `d = net/2` halves a
+round trip whose legs are not comparable: the return leg includes **dserv's
+~116 µs Tcl dispatch** (measured independently, `host/dispatch_test.sh`) while
+the outbound leg does not. Note a textbook four-timestamp NTP solve does **not**
+fix this — that formula assumes symmetry too. The actual fix is host-side: take
+`T1` from `dservTimestamp(cmd/probe)` and `T4` from
+`dservTimestamp(state/probe)` (dserv arrival-stamps it, since the box sends
+timestamp 0) instead of bracketing with `[now]` in Tcl. That excludes host
+*processing* from both ends and leaves something much closer to path delay.
+
+#### The box arithmetic is EXACT — the open question is host-side
+
+Sending `cmd/sync 200` and reading the anchor inputs the box already publishes:
+
+```
+ds + d - bx = 1785002151935731 + 200 - 1265180110 = 1785000886755821
+off (state/sync/offset_us)                        = 1785000886755821   ✓
+```
+
+Exact to the microsecond. `publish_sync` has always emitted all three inputs
+(`sync/dserv_us` = `m.timestamp`, `sync/box_us` = `now_box`,
+`sync/offset_us`, plus `transport_us` = applied `d`), so the anchor was auditable
+the whole time — it just was not read. **Check those four datapoints before
+theorising about a sync discrepancy.**
+
+Consequence: the unexplained result below is NOT in the firmware. Changing the
+host estimator moved `d` by 38 µs but the measured bias by 176 µs, and since the
+box demonstrably applies `offset += d` at 1:1, the inconsistency lives in the
+host-side `d` estimate or in the harness. Still open, but a much smaller haystack.
+
+#### Never anchor mid-obs
+
+Re-anchoring **steps** the offset. Applying that inside a data-collection window
+puts two events of one trial on different mappings and silently corrupts any
+interval computed across the step — precisely the failure dserv's own monotonic
+timebase commit (`227315e`) exists to prevent on the host side. **Obs boundaries
+are the only moments where a clock discontinuity is provably harmless**, and they
+already anchor; they are also frequent during real experiments and always outside
+real data.
+
+So both `cmd/probe` and `cmd/sync` are gated on `!g_in_obs` **in the box** (it
+owns the flag, closing the race where an obs begins while a frame is in flight),
+and the host skips too so the frames are not even generated. The probe matters
+less but is gated anyway: a reply is a blocking send on the one service loop, so
+it delays a concurrent DI event's *delivery* by ~62 µs (p99 214) — timestamps are
+edge-stamped and unaffected, but there is no reason to spend it during data
+collection when `d` is stable enough that an estimate one trial old is fine.
+
+**The ticker's job is the IDLE GAP between obs, not the experiment.** That makes
+it strictly additive to a mechanism already correctly placed, and it means an
+imperfect `d` can only ever act while no data is being collected — the next obs
+boundary re-anchors off the better path regardless.
+
+Verified on silicon: `cmd/sync 200` outside obs → `src=swc d=200`; `cmd/sync 333`
+during obs → ignored (`d` stays 200); `cmd/probe` during obs → no `state/probe`
+at all.
+
+#### `sync/source` has three values, not two
+
+`hw` (latched TTL edge) / `swc` (arrival-anchored but delay-corrected via
+`cmd/sync`) / `sw` (naive arrival, wrong by exactly the one-way delay). A
+datafile now records **which** method produced a timestamp instead of leaving it
+to be inferred after the fact.
+
+#### Two wrong guard policies, recorded so they are not re-derived
+
+The host must decide which boxes to sw-correct. Two plausible answers both fail:
+
+1. **`state/sync/source == "hw"`.** That datapoint is **STICKY** in dserv's
+   table — it survives box reboots and means "synced at some point", not "synced
+   now". A 31-minute-old `hw` suppressed correction forever on a box whose line
+   had since been unplugged. (Same trap `host_gpio_rtt.sh`'s header warns about.)
+2. **...plus a freshness window.** Fails the other way: `hw` anchors arrive at
+   obs boundaries, minutes apart between blocks, so *any* window eventually lets
+   the host stomp a good `hw` anchor with a worse `sw` one. Observed directly — a
+   100-sample run took 140 s, aged the anchor past a 30 s window, and the host
+   took over mid-experiment. **Alternating two methods that disagree by 172 µs is
+   worse than committing to either.**
+
+**Correct signal: `state/sync_pin >= 0`** — announced in the manifest, a stable
+property of the box, and it answers the question actually being asked ("does this
+box have a wired anchor?"). Probe *unconditionally* regardless, so `d` stays warm
+and losing the line degrades instantly rather than after a warm-up.
+
+#### The OTA path, which worked cleanly
+
+`sh build.sh dual --tbyb --push` (needs `DSERV_AGENT_FIRMWARE_TOKEN`) publishes
+bin=TBYB trial + uf2=hashed slot-A base to the `dev` shelf, then
+`dservctl extio "extio_ota_push_shelf <box> dev"`. New firmware was running in
+~5 s, `ota/state = committed`, and NVS config (pins, labels, `sync_pin`)
+survived. This is the flash path when the box is on a remote host and the
+toolchain is not.
+
+#### A hardware reference at last — and what it revealed (2026-07-26, later)
+
+dserv now stamps GPIO edges with the kernel's `gpio_v2_line_event.timestamp_ns`
+instead of `tclserver_now()` (commit `b0b1f8d`). That makes the tee'd baseline
+input a genuine hardware time reference, so `host/clock_err.sh` can difference
+**one physical edge stamped independently at both ends** — Pi kernel IRQ vs box
+IRQ — with no software stamp, no delivery time and no Tcl callback in the path.
+
+| sync mode | clock error (median) | spread |
+| --- | --- | --- |
+| **`hw` (TTL edge)** | **+35 µs** | **19 µs** |
+| `swc` (delay-corrected) | −167 µs | ~4 µs (bulk) |
+| `sw` (naive arrival) | −181 µs | ~4 µs (bulk) |
+
+**The hardware anchor is far better than this document previously claimed.** The
++72 µs / ~83 µs spread recorded above was mostly the HOST's own software input
+path (~72 µs median, p99 ~100) being attributed to the box clock. **Supersede
+that figure with 35 µs / 19 µs.** Every earlier GPIO-referenced number carried
+the same contamination.
+
+**Incidental, and a genuine positive:** in `sw` mode the clock ran **130 s with
+no anchor at all** and held a ~4 µs spread. The rate correction — taught by
+earlier `hw` anchors — works properly. It is the *bias* half of the mechanism
+that does not.
+
+#### The correction applies ~195 µs and delivers ~14 µs
+
+`swc` vs `sw` differ by 14 µs while `d = 195` demonstrably reaches the box and is
+applied (`swc` is published only from that branch, and `offset = ds + d - bx` was
+verified exact to the microsecond). The offset moves; the stamps do not follow.
+
+**This is a violated identity, i.e. a bug — not the estimation difficulty below.**
+Keep the two separate. Remaining suspects: the anchor in force during the run is
+not the one assumed, or `box_clock_stamp`'s rate term absorbs the change (`corr`
+scales with time-since-anchor, and anchor cadence differs between the modes
+compared). Both are settled by logging `offset_us` and `anchor_box_us` alongside
+a stamped event. Do that rather than guess again.
+
+#### Why the ~200 µs has been so hard to pin down and subtract
+
+Recorded because the reasons are structural and will recur on the NXP port:
+
+- **One-way delay estimated from a round trip over an asymmetric path.**
+  `d = RTT/2` is valid only if the legs match. Ours do not: the return leg
+  carries dserv's ~116 µs dispatch, the outbound leg never touches it.
+  Min-filtering removes queueing noise, **not** systematic bias. This is the
+  canonical limit in clock sync and is exactly why PTP exists with hardware
+  timestamps at both ends rather than as a better software estimator.
+- **The target is the same size as the instruments' own latencies:** host
+  dispatch 116 µs, host input path 72 µs, box turnaround ~60 µs, USB
+  quantization up to 1000 µs, loose obs-anchor coupling 3100 µs. Each had to be
+  found and removed before the target became visible, and three times a "result"
+  turned out to be one of them.
+- **`d` is not a scalar.** It differs by transport (206 vs ~730 µs), by
+  direction, plausibly by frame type, and inflates ~1.4× under host load.
+- **Two variables kept moving at once** — reboots between comparisons, transport
+  switches that *require* a reboot, dserv restarts, config changes. Most
+  comparisons carried a confound, which is why conclusions kept reversing.
+
+**The hardware line does not solve this; it dissolves it.** A wire has no
+asymmetry to estimate, which is the whole of why 35 µs / 19 µs falls out.
+
+**The shortcut not yet used:** `state/sync/transport_us` on a hw-equipped box
+**is** `d`, measured hardware-to-hardware. So a box with a TTL line can act as a
+**delay calibrator for the fleet** — measure `d` once there, hand that constant
+to boxes without a line on the same host and transport. One careful measurement
+beats a permanently-running estimator that cannot see its own asymmetry.
+
+**Recommendation.** Use the TTL line wherever any trigger source exists. On a
+GPIO-less host expect ~180 µs of *systematic* bias — inside the 1 ms
+requirement, calibratable as a constant, and it **cancels outright for
+box-to-box intervals**. Do not rely on `cmd/sync` to remove it as built; either
+send `d = 0` (keeping the cadence, which does work) or leave it labelled `swc` so
+the data records that a not-fully-effective correction was applied.
+
+#### Building dserv on a fresh Pi (rpi500 notes)
+
+The `dserv` target resolves tcl/jansson/uv/OpenSSL via `find_library` against
+**system** packages — nothing pulls `deps/fltk` or `deps/libharu`, so the full
+recursive submodule init is avoidable. Needed: `libjansson-dev libuv1-dev
+libssl-dev sqlite3` (the `sqlite3` *executable* is a hard `find_program`
+requirement).
+
+**Tcl is the exception and the `deps/tcl` submodule build is the right answer.**
+Debian's `tcl9.0-dev` ships `tcl.h` under `/usr/include/tcl9.0/` and the stub
+library as `libtclstub9.0.a`, while the build expects `tcl.h` and `libtclstub.a`
+at standard prefixes — so the distro package needs per-host `-I` flags and a
+symlink, which is exactly the divergence the submodule exists to avoid.
+`deps/tcl/unix: ./configure --prefix=/usr/local && make && sudo make install`
+takes ~2 min on a Pi 5 and puts everything where CMake expects it. Verify with
+`ldd dserv | grep tcl` that headers and library come from the same place.
+
+Module/binary must be installed **together**: `ENABLE_EXPORTS ON`
+(CMakeLists.txt:247) means modules resolve symbols from the dserv binary at load
+time, and `gpio_input.c` now calls `tclserver_clock_epoch_offset_us`, which
+exists only in the rebuilt binary.
+
+#### PTP applicability, per board
+
+| end | IEEE-1588 hardware timestamping |
+| --- | --- |
+| RT1062 / Teensy | **Yes** — `CONFIG_PTP_CLOCK_NXP_ENET` on, `box_ptp.c` reads the counter today (`state/ptp/ns`) |
+| W6300 / RP2350 | **Almost certainly not** — a hardwired TCP/IP offload chip, not a 1588-capable MAC (verify against the datasheet) |
+| Host | Varies. Pi 5 and Intel server NICs are the credible targets; **USB Ethernet adapters essentially never have it** |
+
+With hardware timestamps at *both* ends PTP reaches sub-µs, which would **beat
+the TTL line** — because our "hardware sync" is only hardware on the box side
+(the host stamps `ess/in_obs` in software, which is why anchor quality tops out
+at ~90–125 µs). With software timestamping at either end, expect tens of µs on a
+quiet LAN — still far better than today's naive `sw` anchor, which assumes zero
+delay. Note `box_ptp.c` currently reads only the **local free-running counter**;
+disciplining it to a grandmaster needs a peer and is not implemented.
+
+Caveat: PTP accuracy depends on **path symmetry**, so non-PTP-aware switches
+inject asymmetric queuing. A direct cable is ideal; transparent/boundary clocks
+fix it but are real infrastructure.
+
+**Reframe worth keeping:** "dserv host with no GPIO" is not "no TTL anywhere in
+the rig". The sync edge need not originate from the dserv host — a stimulus
+computer's sync output, a shared trigger distribution, or a photodiode anchors
+the box just as well, since all the box needs is an edge it can latch paired with
+a datapoint carrying a host timestamp.
+
+#### Transport selection is boot-time only (dual image)
+
+`box_net_dual_impl.c`: the transport comes from the **GP28 strap read in main()**,
+not from flash ("a stale `mode eth` in flash on a box with no cable used to hang
+W6300 init forever; a strap can't go stale"), and there is deliberately no
+boot-time PHY auto-detect. With the strap open the policy is auto: boot USB, then
+sense `CW_GET_PHYLINK` debounced and swap up to Ethernet — **but outside the 10 s
+boot window it refuses to switch while a USB host is mounted** ("an active USB
+session is never yanked out from under dserv"), and it never auto-downgrades.
+
+Practical consequence: plugging Ethernet into a box already serving a USB host
+does nothing. `cmd/reboot` with the cable already in works — inside the boot
+window the USB-host veto is bypassed, and it came up on Ethernet at ~17 s with
+`sync_pin` and pin config intact (they had been `cmd/save`d).
+
+### The USB harness disagreement is NOT generic — it was Teensy-specific
+
+The two-harness agreement check on this box over USB: `loopback_rtt` 1043 vs
+`lb_split` total 1119 — **76 µs apart, i.e. they agree**. The ~426 µs
+disagreement seen on the Teensy's USB path does **not** reproduce here, on the
+same ingest path (`extio` subprocess → `usbio.c` → `tclserver_set_point`). So
+that anomaly is not a property of the USB ingest path in general, and the hunt
+narrows to the Teensy/Zephyr side. Item 1 of "What not to depend on yet" is
+correspondingly narrowed, not cleared.
+
+### Wiring hazard found the hard way
+
+GPIO26 was already held as an **output** (`consumer="dserv output"` — the
+intended sync line), so teeing it to GPIO27 wired two driven outputs together and
+clamped the node low. Symptom: `gpio/output/27` reads back correctly in dserv
+while `pinctrl get` shows `27: op dh … | lo`, and no observer sees an edge.
+**`pinctrl get <lines>` and `gpioinfo` are the diagnostic** — dserv cannot see
+this, because from its side the write succeeded. The baseline belongs on an
+unclaimed line (GPIO23).
+
+### What this supersedes
+
+- The whole-loop figures in "NEXT: Ethernet RX" (2365 → 783 µs etc.) — measured
+  pre-timestamp-fix.
+- The `720 / 294 / 430` L1 split and the DTCM case resting on it.
+- Any USB number for either box, still unresolved (see the harness matrix above).
+- The retracted W6300-vs-native claim stays retracted; this section does not
+  reinstate it, because `upstairs` and the Teensy have not yet been measured
+  under identical conditions with the electrical reference.
+
+---
+
+## 2026-07-25 — RW612 first boot: PTP instantiates, and a silent clock bug
+
+First silicon session on the FRDM-RW612. The headline: **the 1588 clock works,
+and `status = "okay"` alone is not enough to get it.** Two independent defects
+sat behind it, the second far nastier than the first.
+
+Everything below was established against **stock `zephyr/samples/net/ptp`**,
+nothing of ours in the picture, before touching the app — the "run something
+independent first" approach, and it was the right call: both defects are in
+board/driver plumbing, and finding them inside our own build would have mixed
+them with our bugs.
+
+### Toolchain and probe, for the record
+
+The MCU-Link on this board is **already reflashed with SEGGER J-Link firmware**
+(VID `0x1366` / PID `0x1024`), so `west flash -r jlink` works with no LinkServer
+and no NXP tooling. `/dev/cu.usbmodem0010698133301` is the J-Link VCOM carrying
+the **board UART console** (flexcomm3) — that is where Zephyr's `printk`/shell
+live. Our app's own CLI is on the **USB CDC console**, a second cable to the
+RW612's own USB-C port. Both are needed for a full session.
+
+BT links without ceremony — `west blobs fetch hal_nxp` has evidently already
+been run on this machine, so the NBU blob is not a blocker for goal 3.
+
+### Defect 1: the predicted pinctrl failure — real, but the recorded cause was wrong
+
+`ptp_clock_nxp_enet_init()` calls `pinctrl_apply_state(PINCTRL_STATE_DEFAULT)`
+unconditionally. With no `pinctrl-0` the state table is empty,
+`pinctrl_lookup_state()` returns `-ENOENT`, and the device reports **`DISABLED`**
+in the `device list` shell command — i.e. it presents as *absent hardware*
+rather than as a config error. Confirmed on silicon.
+
+**But the fix needed no Zephyr patch and no reference-manual dig.** The PTP
+section above claimed "no `1588` pinmux entries exist anywhere in the RW612 dts
+or board pinctrl". They exist: `IO_MUX_ENET_TIMER0..3` in
+`modules/hal/nxp/dts/nxp/rw/RW612-pinctrl.h`, pads **IO27 / IO61 / IO24 / IO26**.
+A three-line `&pinctrl` group takes the device to **`READY`**.
+
+**Pad choice is a trap, and it cost real time.** Pads **24 and 26 are flexcomm3
+USART — the console**. Muxing `ENET_TIMER2` onto pad 24 boots a completely
+healthy system with **no console at all**: silent, and it reads exactly like a
+boot hang. J-Link said otherwise — `PC` sat in `arch_cpu_idle`, `IPSR` = 0, i.e.
+the idle thread, running fine.
+
+The reason a grep misses it is worth keeping: **the board dts names those pads
+only through the macro `IO_MUX_FC3_USART_DATA`**, never as literal numbers, so
+`grep 24` over the dts finds nothing. The reliable check is the *expanded*
+devicetree — decode `pinmux` cells out of `build/zephyr/zephyr.dts`, where
+`pad = value & 0x7F`, and cross-reference against which groups are actually
+referenced by an enabled node's `pinctrl-0`:
+
+```
+pinmux_flexcomm3_usart  APPLIED  pads [24, 26]      <- the console
+pinmux_enet             APPLIED  pads [21,22,23,25,55,58,59,60,62,63]
+pad 27 (TIMER0, Arduino D5)  FREE
+pad 61 (TIMER1)              FREE
+```
+
+We use **TIMER1 / IO61** — free, off the Arduino header, costs no box pin.
+**TIMER0 / IO27 is deliberately left free**: it is Arduino D5, i.e. the
+header-*reachable* 1588 event pad, and therefore the candidate for a hardware
+**capture** input. That would put a TTL edge directly onto the PTP timebase —
+the TTL sync line and PTP unified in one mechanism, rather than two clocks to
+reconcile. Worth remembering when the sync story reaches this board.
+
+### Defect 2: the counter ran at 0.14996x real time, silently
+
+With pinctrl fixed the device is `READY` and `ptp_clock get` advances. It was
+also **wrong by a factor of 6.67**, rock-steady.
+
+Root cause, and it is a chain of three:
+
+1. The node's stock `clocks = <&clkctl1 MCUX_ENET_PLL>` names a clock ID that
+   **`clock_control_mcux_syscon.c` has no `case` for**. There is a
+   `MCUX_ENET_CLK` case (used by the MAC) and `MCUX_ENET_QOS_PTP_CLK`, but
+   nothing for `MCUX_ENET_PLL`.
+2. That `get_rate()` falls straight out of the `switch` and **`return 0`** —
+   i.e. reports **success** — without ever writing `*rate`.
+3. `ptp_clock_nxp_enet.c:165` casts the return to `(void)`, and
+   `uint32_t enet_ref_pll_rate;` is an **uninitialized stack variable**. It goes
+   directly into `ENET_Ptp1588StartTimer()`, which derives the tick increment
+   from it.
+
+Fix, in our overlay: `clocks = <&clkctl1 MCUX_ENET_CLK>`
+(`CLOCK_GetTddrMciEnetClkFreq()` = **50 MHz**, the ENET module clock). Rate goes
+to 1.00 immediately.
+
+**The lesson is the shape of this failure, not the fix.** A clock that advances
+smoothly, monotonically, and at a perfectly stable wrong rate passes every
+"is the PTP clock alive?" check anyone would naturally write — including
+`main.c`'s own `PTP hw clock: ready=%d now=%llu`. **Check the rate, not the
+motion.** This is the same class as the `sw`-anchor bias above: not noise, not
+intermittent, just quietly wrong.
+
+Both fixes are in `boards/frdm_rw612.overlay` with the reasoning inline.
+
+### What the rate is NOT yet known to be
+
+Two harnesses were run and **they disagreed**, so per the standing rule neither
+is trusted:
+
+| harness | figure |
+| --- | --- |
+| shell `ptp_clock get`, 121 s | −14 ppm |
+| `state/ptp/ns` off the frame pipe, endpoints | +1924 ppm |
+| same, least-squares over 139 samples | +48 ppm |
+
+The +1924 ppm was an artifact of a single late first sample — the DTR-open
+**announce burst** floods the pipe, so the first arrival timestamp lands ~190 ms
+late and compresses the host span. Endpoint arithmetic is the wrong estimator
+against a bursty transport; least-squares over all samples is not.
+
+But the real limit is instrument resolution: **max residual ±104 ms**, because
+arrival times come from a host read loop with a 0.2 s timeout. Estimates swing
+across ~130 ppm depending on which samples are included, which is the tell.
+
+**Established: the rate is 1.000 within about ±100 ppm** — which settles the
+`MCUX_ENET_CLK` fix beyond doubt, since the defect it replaced was 850,000 ppm.
+**Not established: any ppm-level figure.** Do not quote the −14 ppm as a crystal
+characterization. This is exactly what the PTP section above already warned
+about 1 Hz `ptp/ns` datapoints — "the quantization dwarfs it" — and it applies
+to the shell path equally. Real rate measurement needs the PTP stack against a
+grandmaster, or on-box sampling. Which leads to:
+
+### The host side is already capable — measured, not assumed
+
+`ethtool -T eth0` on **rpi500** (Pi 5, RP1 MAC):
+
+```
+hardware-transmit  hardware-receive  hardware-raw-clock
+Hardware timestamp provider qualifier: Precise (IEEE 1588 quality)
+Hardware Transmit Timestamp Modes: off / on / onestep-sync
+```
+
+So the Pi 5 is a **full hardware-timestamping PTP endpoint** with a `/dev/ptp*`
+and one-step sync. Combined with the RW612's now-working 1588 clock, **PTP can
+be closed end-to-end on hardware already owned** — direct cable, to avoid the
+switch asymmetry the PTP section flags. That is the credible route to beating
+the TTL line's 35 µs / 19 µs, and it is the correct next measurement of the RW612
+clock, replacing both harnesses above.
+
+Consequence for the **i.MX93** evaluation: its main differentiator over the Pi 5
+was going to be exactly this capability, and the Pi 5 already has it. It has no
+3D GPU (unlike the i.MX95) so it cannot host stim2, and 2xA55 is slower than the
+Pi 5's A76s, so it is a downgrade as an experiment host. **Parked**, absent a
+specific need. Its one remaining merit is as a second, independent host for
+cross-checks — non-trivial given how many conclusions in this document were
+confounded by single-host measurement.
+
+### Our own app on this board
+
+Builds and runs. Boot banner over the USB CDC console:
+
+```
+gpio: pin 12=out (LED), pin 11=in_pullup
+eth: no lease (link=0)
+PTP hw clock: ready=1  now=8368999580 ns
+console: cdc (config/console cdc|uart; save+reboot)
+active uplink: usb
+BLE central up; scanning for d5e7000x peripherals (max 8)
+```
+
+- **`CONFIG_MAIN_STACK_SIZE=4096` from the shared `prj.conf` overflows on this
+  board** — usage fault in `main`'s prologue, since `main()` here initialises BT
+  + net + USB. Set to **16384** in `boards/frdm_rw612.conf`. That is a working
+  value, **not a measured minimum** — trim it with `CONFIG_THREAD_ANALYZER`
+  rather than leaving a guess in the tree.
+- **The frame pipe is clean on first contact.** 1613 frames decoded straight off
+  the CDC data endpoint with **zero resync-discarded bytes**, 28 distinct
+  `state/*` keys, announce working. Note this is the *raw pipe*, no dserv — a
+  useful harness in its own right (`host/` candidate), because it removes dserv,
+  Tcl dispatch and the `usbio` module from the path.
+- **`lsof` the port, not `pgrep dserv`.** A stale reader produced a mid-run
+  "multiple access on port" failure. `extio-setup` was running and its serial
+  driver probes box ports, which fits the transient far better than dserv does.
+  Same family as the 2026-07-23 lesson ("dserv's own extio subprocess was
+  opening the console port").
+
+### Not yet touched
+
+Ethernet on this board is unproven — `link=0`, no cable during this session, and
+the KSZ8081 autonegotiation timed out in the stock sample for the same reason.
+Goal 1 (rock-solid HS USB) has had no latency measurement at all; the numbers
+above are rate checks, not latency. **No RW612 latency figure exists yet**, and
+when one is taken it must run the two-harness agreement check before it is
+believed.
+
+---
+
+## 2026-07-25 (later) — Ethernet up, and the `save` hunt
+
+### Ethernet works end-to-end
+
+Against dserv on a Pi 5 (`raspberrypi`, eth0 192.168.11.10, direct cable, box .41):
+
+```
+transport = eth   board = frdm_rw612   ip = 192.168.11.41   extio/boxes = box
+ESTAB 192.168.11.10:4620  <- 192.168.11.41:38118   (box -> dserv frames)
+ESTAB 192.168.11.10:37502 -> 192.168.11.41:5010    (dserv connect-back)
+```
+
+Both halves of the handshake: the box self-registered (`%reg`/`%match`) and dserv
+connected back to its config server. ICMP **0.283 ms min / 0.304 avg** (W6300
+0.077, Teensy 0.197 — different hosts, indicative only).
+
+**No latency number was obtained** — see the pin-map blocker below. Nothing here
+is yet comparable to the wiznet reference set.
+
+### `cmd/save` — TWO stacked bugs, and a bad diagnosis in between
+
+Symptom: `save FAILED`, no detail. Resolved; both fixes are in tree.
+
+**Bug 1 (Zephyr-side, real):** stock `samples/subsys/kvss/nvs` failed with
+`nvs_mount -> -45`. **-45 is `EDEADLK`, not `ENOTSUP`** — `nvs_startup`'s "all
+sectors are closed, this is not a nvs fs or irreparably corrupted" branch. The
+64 MB FlexSPI part ships **non-blank** at `storage_partition` (0x620000), so NVS
+sees no valid filesystem and refuses to clobber a region it does not recognise.
+Fix: `CONFIG_NVS_INIT_BAD_MEMORY_REGION=y` in `boards/frdm_rw612.conf`.
+
+**Bug 2 (ours, the actual cause of `save FAILED`):** `box_flash.c` used
+`DT_REG_ADDR(storage_partition)`. This board declares its partitions
+`compatible = "zephyr,mapped-partition"`, so that resolves through the FlexSPI
+controller's `ranges` and yields the **memory-mapped XIP address `0x18620000`**,
+while the flash API wants the **offset within the device, `0x620000`**.
+`flash_get_page_info_by_offs()` therefore returned `-EINVAL`, `sector_size`
+stayed 0, and mount failed. Fix: `PARTITION_OFFSET()` / `PARTITION_SIZE()` /
+`PARTITION_DEVICE()` (the label-token macros the stock sample uses).
+
+**Bug 3 (latent, would have bitten next):** `sector_count` was
+`partition_size / sector_size` — "fill the partition". That partition is 58 MB =
+**14816 sectors**, and with bad-region recovery enabled NVS erases an
+unrecognised region *whole*: ~45 ms per 4 kB sector ≈ **11 minutes**, presenting
+as a hung boot rather than a size error. Now capped at 8 sectors; the blob is
+1080 bytes.
+
+Verified on silicon: `page_info(off=0x620000) rc=0 size=4096`, `NVS 8x4096`,
+`saved (1080 bytes)`, and **`pin18=out` survived a reboot**.
+
+**The diagnostic lesson, which cost the most time here.** Every failure path
+returned a bare `-1`. That single fact produced a wrong root cause held for
+hours: because stock Zephyr also failed, "NVS is broken on this board" looked
+confirmed, and the hunt went to the FlexSPI driver and the XIP-write hazard —
+both irrelevant. The two failures were **different bugs with different errnos**
+that a `-1` made indistinguishable. `box_flash_{init,save}` now return the real
+errno, `box_flash_last_error()`/`box_flash_geometry()`/`box_flash_debug()` expose
+the mount inputs, and the boot banner prints geometry and shouts if the mount
+failed. **Print the errno.** Two independent bugs presenting identically is not
+rare; it is what a discarded return value guarantees.
+
+Corollary worth generalising: *"stock code reproduces it, so it is not our bug"*
+is only valid if the stock failure is the SAME failure. Compare error codes, not
+just outcomes.
+
+### The pin map blocked all I/O measurement — SOLVED
+
+`pinmux_hsgpio0` muxes **only pads [0, 1, 11, 12, 18, 21]** to GPIO. Of those:
+
+| pad | what it is |
+| --- | --- |
+| 11 | **User SW2 button** (`gpio_keys`, active low + pull-up) — also Arduino D2 |
+| 12 | user LED |
+| 21 | **ENET PHY interrupt** (KSZ8081 `int-gpios`) — do not touch |
+| 18 | Arduino D4 — genuinely free |
+| 0 | Arduino D6, but **rejected by the config path** (`pins/in` unchanged, no `state/di/0`) — 0 is a sentinel somewhere |
+
+Every other header pin is not muxed to GPIO at all, and configuring one
+*silently succeeds* while doing nothing electrically — the same silent-failure
+shape as the PTP clock-rate bug. **Fixed** by adding pads **15 (D3), 20 (D7),
+27 (D5)** to `hsgpio0`'s pinctrl in `boards/frdm_rw612.overlay`; usable box pins
+are now **0, 15, 18, 20, 27** (plus 11 = SW2 input, 12 = LED output).
+
+**Retracted: "pin 0 is rejected by the config path / 0 is a sentinel."** Wrong.
+`dserv_cfg__config` accepts `n >= 0 && n < BOX_NPINS`. That test was run against
+a box that was already wedged — the same frozen-`watchdog` corpse described
+below — so the null result meant nothing. Pad 0 (Arduino D6) is muxed by the
+board and works.
+
+**Hazard:** pin 11 was briefly set to `out` while probing this. That is the SW2
+pin — driving it high while the switch is pressed shorts it to ground. Reverted
+before any press. Treat pads 11/12/21 as reserved on this board.
+
+### DI works — there was never any DI silence
+
+Fully explained by the pin map. With pad 15 muxed and D4 -> D3 jumpered,
+`state/di/15` tracks `state/do/18` exactly on every toggle. No RT10xx-style
+hunt was needed; "DI has never been observed on this board" was an artifact of
+driving and sensing pads that were not connected to the GPIO peripheral.
+
+**First loopback, and the two-harness agreement check PASSES:**
+
+| harness | min | med | p90 | p99 | max |
+| --- | --- | --- | --- | --- | --- |
+| `loopback_rtt` | 835 | **1056** | 1192 | 1252 | 3113 |
+| `lb_split` total | 819 | **1078** | 1177 | 4056 | 4056 |
+| — `L1` cmd -> do_echo | 727 | 869 | 940 | 3793 | 3793 |
+| — `L2` do_echo -> di | 23 | 210 | 259 | 318 | 318 |
+
+Medians 22 us apart, i.e. they agree (the recorded failure case was 426 us), so
+the apparatus is sound.
+
+**These are NOT comparable to the wiznet reference set yet**, and must not be
+quoted as such. Three differences remain: the host was on the **`ondemand`**
+governor (the reference set is `performance` — also the likely source of the
+single 3793 us outlier, which is what frequency ramping looks like); it is a
+different Pi from rpi500; and **no electrical reference is wired**, so both ends
+are still software-timestamped. Re-take under `performance` and with
+`host_gpio_rtt.sh` / `box_out_rtt.sh` before drawing any conclusion.
+
+One thing worth watching once conditions match: `L2` at 210 us against the
+W6300's 100 us is the leg carrying the DI event alone, and it is the least
+governor-sensitive of the two.
+
+### RETRACTED: "Ethernet needs the cable present at BOOT"
+
+That was recorded here, and it was wrong. The real bug was **`box_net_eth_init()`
+never brought the interface admin-up.** Zephyr's net_config subsystem
+(`CONFIG_NET_CONFIG_SETTINGS` / `AUTO_INIT`) normally does that; we do not enable
+it, because we own our own addressing. With the interface down the ENET driver
+never starts the PHY, autonegotiation never runs, and **both** ends report no
+carrier. Fixed by an explicit `net_if_up()` (idempotent) in `box_net_eth_init`.
+
+**How it presented, and why it cost an evening.** Identical to a dead cable: box
+`net/link=0`, host `NO-CARRIER`, no link LEDs. So the hunt went to cables, hub
+power, ports, and NetworkManager — none of which could ever have been the cause.
+Two things kept it alive: it worked *intermittently* early on (whatever brought
+the iface up in those boots was incidental), and every host-side observation was
+consistent with a physical fault.
+
+**The test that actually settled it, in one step: run KNOWN-GOOD STOCK FIRMWARE
+on the same hardware.** `samples/net/ptp` linked immediately on the same board,
+cable, port and host — which localises the fault to our firmware and exonerates
+the entire physical layer at once. Reach for that *before* swapping cables. It is
+the same lever that isolated both PTP bugs and the NVS bug.
+
+Second lesson: **`CONFIG_LOG` was off.** The KSZ8081 driver announces "PHY (2) is
+entering autonegotiation sequence" and "PHY 2 is up ... 100 Mb, full duplex" —
+it was reporting the truth all along and nobody was listening. Logging is now
+enabled on the board UART for this board (`boards/frdm_rw612.conf`), separate
+from the box console on USB CDC. On a networked board this is not optional: an
+interface that never came up is otherwise indistinguishable from a bad cable.
+
+### Host-side traps
+
+- **NetworkManager drops the interface address on carrier loss.** When the link
+  flapped, `eth0` went DOWN and **lost 192.168.11.10 entirely**, so the Pi had no
+  address even once carrier returned. Fixed by taking it out of NM:
+  `nmcli dev set eth0 managed no` + `ip addr add 192.168.11.10/24 dev eth0`.
+  Does not survive a Pi reboot — make it a systemd unit if this rig persists.
+- **A frozen counter reads exactly like a healthy one if sampled once.** A wedged
+  box was declared alive off a single `watchdog` = 973 that happened to exceed an
+  earlier reading. It was the *last value it ever sent*. dserv never deletes
+  datapoints, so `transport=eth`, `link=1` and an IP were all being served from a
+  corpse. **Always sample a counter twice.** Same sticky-datapoint family as the
+  `sync/source` trap above.
+- **Bench hygiene.** A USB hub carrying the board, the J-Link probe *and* the
+  Ethernet adapter dropped three times, each time taking the console, the debugger
+  and the network at once — once mid-flash. Several "board failures" chased that
+  day were this. **Never let one hub carry both the thing under test and the means
+  of observing it.**
+
+### Bring-up scaffold now retirable
+
+`BOX_BRINGUP_NET_IP` (CMakeLists + main.c) existed only because `save` was
+broken, making `net/ip` unconfigurable (it applies at boot; changing it needs a
+reboot; a reboot without persistence forgets it). **Persistence works now**, so
+this can go — set the address at runtime and `save`. It is inert while a saved
+config exists, but it hardcodes an IP in firmware and should not become load-
+bearing.
+
+### State at end of session
+
+Working: Ethernet transport + registration (link brought up by the box itself),
+PTP clock at correct rate, USB-HS frame pipe (zero resync discards over thousands
+of frames), BLE central scanning, GPIO output, **persistent config surviving
+reflash** (`pins/out=5,12,18` restored from NVS). ICMP 0.235 ms min.
+DI proven, loopback closed, both harnesses agreeing. Unproven: any latency
+figure comparable to the wiznet set (host not in benchmark configuration, no
+electrical reference).
+
+---
+
+## 2026-07-25 (later still) — first RW612 loopback, and the noise floor
+
+### The loopback closes
+
+D4 (pin 18, out) -> D3 (pin 15, in), host `raspberrypi` on `performance` @ 2.4
+GHz, load ~0.0, dserv over Ethernet:
+
+| harness | min | med | p90 | p99 | max |
+| --- | --- | --- | --- | --- | --- |
+| `loopback_rtt` | 945 | **1051** | 1120 | 1157 | 1164 |
+| `lb_split` total | 808 | **1029** | 1102 | 1190 | 1190 |
+| — `L1` cmd -> do_echo | 719 | 813 | 878 | 975 | 975 |
+| — `L2` do_echo -> di | 32 | 209 | 248 | 276 | 276 |
+
+**Two-harness agreement: 22 us.** The apparatus is sound.
+
+Against the wiznet reference set (rpi500/W6300 — a DIFFERENT Pi, so read the
+ratio, not the absolute): loopback 676, `L1` 554, `L2` 100, ICMP floor 0.077 ms
+vs the RW612's 0.210 ms. **Roughly 1.5x slower on every leg.**
+
+**This is NOT the number the 1 ms requirement is about.** That budget is on
+one-way input latency ("subject acts -> dserv knows"), measured for the W6300 as
+322 us median with `host_gpio_rtt.sh` against a real electrical edge. The
+loopback is a round trip including the outbound command. No electrical reference
+is wired on this rig yet, so the comparable figure does not exist.
+
+### The budget closes — and it is NOT mostly the wire
+
+| term | us | instrument |
+| --- | --- | --- |
+| host dserv dispatch | ~116 | `dispatch_test.sh` |
+| wire + box IP stack, RTT | 210 | ICMP floor |
+| box service-loop wake | 53 | `dbg/wake_us` |
+| box socket recv | 99 | `dbg/recv_us` |
+| box dispatch + GPIO + publish | 300 | `dbg/disp_us` (includes the ~142 us send) |
+| **sum** | **~778** | vs **`L1` = 813 measured** |
+
+~450 us of the 813 is INSIDE THE BOX; only ~210 us is wire-plus-IP-stack round
+trip. "Zephyr's stack is slow" is true but is not the dominant term.
+
+### Where the stack time actually goes (`CONFIG_NET_PKT_*TIME_STATS_DETAIL`)
+
+```
+Avg TX net_pkt (3399) time  69 us   [0->28->41=69 us]
+Avg RX net_pkt  (449) time 212 us   [0->28->13->96->73=210 us]
+```
+
+Tick points: `net_core.c:520` (driver -> `net_recv_data`), `net_tc.c:91` (TC
+thread pickup), `sockets_inet.c:281` (socket layer), `:931` (app read returns).
+
+| RX stage | us |
+| --- | --- |
+| driver -> `net_recv_data` | 28 |
+| -> traffic-class thread | 13 |
+| **-> socket layer (IP + TCP)** | **96** |
+| **-> app read returns** | **73** |
+| TX, whole path | 69 |
+
+**RX is 3x TX.** The target is the 96 us of TCP/IP processing, then the 73 us
+socket->app handoff. **Do not optimise TX** — the entire TX path is 69 us.
+
+### RULED OUT: `CONFIG_ETH_NXP_ENET_TX_BUFFERS`
+
+The driver defaults to 1 TX descriptor and `dbg/send_max_us` was 412, so a
+descriptor stall on the RT path looked plausible. Raised to 6:
+
+| | TX_BUFFERS=1 | TX_BUFFERS=6 |
+| --- | --- | --- |
+| loopback med | 1051 | 1068 |
+| `L1` / `L2` med | 813 / 209 | 820 / 218 |
+| `dbg/send_us` med | 142 | 161 |
+| `dbg/send_max_us` | 412 | **283** |
+
+**No resolvable effect on median latency.** Kept for the send worst case only.
+The packet stats explain why in hindsight: TX is 69 us end to end, so there was
+never 100+ us there to win. **The experiment was picked on a plausible mechanism
+instead of on evidence about where the time goes — instrument first.**
+
+### THE NOISE FLOOR, which invalidates single-run A/B
+
+Same build, four consecutive `loopback_rtt` runs:
+
+```
+med 987 / 999 / 982 / 948      min 910 / 904 / 897 / 892
+```
+
+**Median spread ~50 us within one build**, plus a **warm-up trend of ~100 us**:
+the first run after a reflash is consistently slowest and settles over
+subsequent runs (1051 -> 1068 -> 1005 -> 987 -> 999 -> 982 -> 948).
+
+Consequence: **no single-run A/B can resolve anything below ~100 us**, and every
+optimisation worth chasing here is in that range. Both of this session's A/B
+results dissolved under this: the TX-buffer "regression" was noise, and the
+stats build's apparent 60 us *improvement* was warm-up — instrumentation cannot
+speed up the data path.
+
+**Protocol for any future tuning on this platform:** several runs per build,
+DISCARD THE FIRST after each flash, and interleave A/B/A rather than comparing
+one run to one run. Otherwise the same change can be "confirmed" as a win or a
+regression depending only on which run is read.
+
+Silver lining, and the question that was actually being asked:
+`CONFIG_NET_PKT_RXTIME/TXTIME_STATS[_DETAIL]` + `NET_STATISTICS` + the Zephyr
+shell cost nothing measurable here either — the Teensy finding replicates, so
+leave the instrumentation on.
+
+### A Zephyr shell now lives on the board UART
+
+`CONFIG_SHELL` + `NET_SHELL` + `DEVICE_SHELL` + `PTP_CLOCK_SHELL` on flexcomm3
+(the J-Link VCOM), entirely separate from the box CLI on USB CDC, so the two
+never contend. That is where `net stats` above came from, and `device list` /
+`ptp_clock get` are the commands that isolated the PTP bugs.
+
+### OPEN: `dbg/loop_max_us` = 67,791
+
+A **68 ms** worst-case service-loop pass. If it can occur mid-experiment it
+breaches the 1 ms requirement by ~68x, and no amount of shaving 96 us off the RX
+path touches it. Tail behaviour is not bounded by the same budget as the median.
+Unknown whether it is boot-only (announce burst, NVS write) or recurrent — that
+is the next thing to establish, ahead of any further median tuning.
+
+### RESOLVED: the 68 ms `loop_max_us` — NVS garbage collection
+
+Root-caused by staged sampling (`loop_max_us` is a running max since boot, never
+reset, and excludes the blocking wait):
+
+| stage | `loop_max_us` |
+| --- | --- |
+| boot + registration + announce, no save | **5,957** |
+| after one `cmd/save` (blob unchanged) | 10,583 |
+| forcing 8 distinct saves | 10,583 / **67,970** / … / **72,150** |
+
+Saves 1, 3, 4, 6, 7, 8 were cheap; saves 2 and 5 cost ~68 and ~72 ms. That is
+the NVS **garbage-collection** signature: most writes append cheaply, and every
+~3rd one rotates a sector and pays a ~4 kB erase (8 sectors x 4096 with a
+1080-byte blob = ~3 writes per sector). Not boot, not the announce burst.
+
+**Already correctly gated, so this is a documented cost rather than a bug.**
+BOTH save paths check `box_obs_active()` and `box_obs_defer(BOX_DEFER_SAVE)` —
+the datapoint path (`main.c` `CFG_SAVE`) and the console path (`box_console.c`
+`CLI_SAVE`). Flash programming therefore cannot land inside a trial; it runs at
+the obs boundary, which this document already establishes as the one place a
+discontinuity is provably harmless.
+
+**The precise residual, because it is not what you would guess.** DI is not a
+queue that can overflow during a stall. It is a per-pin COALESCING debouncer:
+the ISR sets an unsettled flag and records `di_first_edge_us`/`di_last_edge_us`,
+and `box_gpio_poll_di` reads the pin's CURRENT level and publishes only when it
+differs from the last published level. So a long stall does not delay a backlog
+and does not drop a queue — it **coalesces**: a pin that toggles an even number
+of times and returns to its starting level publishes **nothing at all**. Events
+that do publish are stamped at the onset edge, so timing stays correct. Right
+semantic for debounced switch inputs, and it happens outside obs regardless.
+
+If flash writes ever need to be safe at arbitrary times, the fix is to move
+`box_flash_save` off the service loop (workqueue or low-priority thread) rather
+than to deepen any buffer — an erase should never sit on the RT path.
+
+---
+
+## 2026-07-26 — USB-HS on the RW612, and a self-inflicted 12 ms
+
+### THE BUG: `CONFIG_LOG` at default level costs ~12 ms PER USB FRAME
+
+Enabling `CONFIG_LOG=y` + `CONFIG_LOG_MODE_MINIMAL=y` (added hours earlier to
+surface the KSZ8081 PHY messages) silently destroyed USB performance.
+
+`LOG_MODE_MINIMAL` is **synchronous** — it formats and writes inline, to a
+115200 baud UART. Zephyr's default log level is INFO, and
+`subsys/usb/device_next/class/usbd_cdc_acm.c` contains:
+
+```c
+static void cdc_acm_irq_tx_enable(const struct device *dev)
+{
+	atomic_set_bit(&data->state, CDC_ACM_IRQ_TX_ENABLED);
+	if (ring_buf_space_get(data->tx_fifo.rb)) {
+		LOG_INF("tx_en: trigger irq_cb_work");     /* EVERY FRAME */
+		cdc_acm_work_submit(&data->irq_cb_work);
+	}
+}
+```
+
+So every frame the box sent paid a blocking UART write. ~12 ms is very close to
+the time to shift that string out at 115200.
+
+| | with default log level | `CONFIG_LOG_DEFAULT_LEVEL=1` |
+| --- | --- | --- |
+| `dbg/usb_send_us` | 12,044 | **53** |
+| `dbg/usb_send_max_us` | 3,084,644 (3.1 s) | **258** |
+| `dbg/disp_us` | 12,254 | **778** |
+| `dbg/loop_max_us` | 11,243,054 (11.2 s) | **2,453** |
+| raw inter-frame gap, med | 12,152 | **256** |
+| raw gaps < 1 ms | **0 %** | **94 %** |
+| loopback RTT | ~86,000 | ~870 |
+
+**Fix:** `CONFIG_LOG_DEFAULT_LEVEL=1` (errors), raising individual modules
+explicitly (`CONFIG_PHY_LOG_LEVEL_INF=y`). Never leave the default level on a
+board whose logging backend is synchronous.
+
+**Why this one is worth remembering.** It was invisible from outside: the
+watchdog still ticked at exactly 1 Hz, the box stayed registered, `show` was
+normal, and Ethernet was unaffected (the `LOG_INF` is on the CDC TX path only).
+Only `dbg/usb_send_us` — the box's own instrumentation — showed it. A diagnostic
+change made for one subsystem silently crippled another, and **the same commit
+that added the logging also took the Ethernet measurements**, so those numbers
+were taken under an unrelated 12 ms hazard that happened not to touch them.
+Cross-check a config change against the transports it is *not* aimed at.
+
+### Localisation, for method
+
+The hunt went: harness returns no samples -> manual toggle shows ~86 ms RTT ->
+split into legs (`L1` 74 ms, `L2` **12.19 ms, sd ~30 us**) -> a rock-steady 12 ms
+on a leg carrying frames the box emits ~62 us apart says *fixed per-frame cost*,
+not poll quantization -> stop dserv, read the tty raw (`host/rawpipe.py`, pure
+stdlib, no pyserial) -> the announce burst STILL arrives 12 ms apart with no
+host software in the path -> therefore box-side -> `box_net_usb_client_send` is
+non-blocking by construction (ring_buf_put + `uart_irq_tx_enable`), so a 12 ms
+measurement across those two calls indicts `uart_irq_tx_enable` -> read it.
+
+`host/rawpipe.py` is worth keeping: it removes dserv, Tcl and `usbio.c` from the
+USB path exactly as `eth_listen.py` does for Ethernet.
+
+### USB-HS vs Ethernet — same box, same host, same session
+
+480 Mbps negotiated (`/sys/bus/usb/devices/*/speed`), Pi 5 on `performance`,
+load ~0.1, D4->D3 loopback:
+
+| leg | **USB-HS** | Ethernet |
+| --- | --- | --- |
+| loopback median | **866–890** | 948–999 |
+| loopback min | **756–758** | 892–910 |
+| loopback p99 | **1002–1022** | 1073–1126 |
+| `L1` cmd -> do_echo | **650–673** | 813 |
+| `L2` do_echo -> di | 198 | 209 |
+
+**USB-HS wins on every metric** — ~90 us faster median, ~140 us lower floor,
+tighter tail. This CONFIRMS the projection recorded on 2026-07-26 above, which
+deliberately refused to claim it ("Measure it; do not cite this paragraph as a
+finding"). It is now a finding. The mechanism is the one predicted: USB's cost
+is off the RT loop by construction (ring + TX interrupt), and High Speed cuts the
+frame quantization 8x versus USB-FS.
+
+### CLOSED: the Teensy USB harness disagreement is Teensy-specific
+
+`loopback_rtt` 866–890 vs `lb_split` total 857–884 — **within ~30 us, i.e. they
+agree**. The unexplained ~426 us disagreement on the Teensy's USB path does NOT
+reproduce on this box, over the same ingest path (`extio` subprocess ->
+`usbio.c`). Combined with the pico agreeing, the anomaly is neither
+"USB ingest in general" nor "Zephyr in general" — it is Teensy-specific.
+
+### Operational notes
+
+- `pgrep -f <pat>` / `pkill -f <pat>` **match their own command line**. This bit
+  twice: `pkill -f cmd_rtt` killed the ssh session running it, and
+  `pgrep -c -f "local/dserv/dserv"` reported dserv alive when it was stopped
+  (counting itself). Use `systemctl is-active`, or a pattern that cannot self-match.
+- `dbg/usb_drops` counts whole dropped frames and is the real "too many
+  datapoints" signal on USB. It reached 210 during the 12 ms period and stopped
+  rising afterwards — a useful confirmation that the fix took.
+- The Pi has no `lsof` and `sudo` is not passwordless.
+
+### THE HARNESS BUG: `dpointSetScript <dp> {}` does not remove a script
+
+Every harness here tore down with `dpointSetScript $DEV/state/... {}`. That does
+**not** remove the script. `TclServer.cpp` `dpoint_set_script_command` does:
+
+```c
+tclserver->dpoint_scripts.insert(varname, script);   /* stores "" */
+```
+
+and the delivery path then does:
+
+```c
+if (tserv->dpoint_scripts.find(varname, script)) {
+    dpoint_tcl_script(interp, script.c_str(), dpoint);   /* fires even when "" */
+}
+```
+
+So an empty script is **stored and evaluated on every publish of that datapoint,
+permanently, until dserv restarts.** There is a proper `dpointRemoveScript`;
+nothing used it. Fixed across 10 harnesses (14 sites) 2026-07-26.
+
+**Effect, measured.** With a stale empty script on `state/do/18` left by earlier
+`lb_split` runs, `loopback_rtt` — which never touches that datapoint — paid an
+extra Tcl dispatch on every `do` echo:
+
+| | `loopback_rtt` | `lb_split` total |
+| --- | --- | --- |
+| stale empty scripts present | 850–875 | 715–733 |
+| after `dpointRemoveScript` | **719–732** | **718–738** |
+
+**This is what the "two-harness disagreement" was.** The harnesses agreed to
+10–15 us once cleaned. `lb_split` overwrote the empty script with a real one and
+so never paid the tax, while `loopback_rtt` did — a systematic ~130 us offset
+that looked like an observer effect and reversed with configuration. **It is
+also the leading candidate for the ~426 us Teensy USB disagreement** recorded
+above and open for days.
+
+**Consequence for every number in this document:** the harnesses accumulate this
+tax across runs on a long-lived dserv, so figures measured late in a session are
+inflated relative to early ones by an amount nobody was tracking. **The wiznet
+reference set was taken with these same harnesses** — so 676 / 322 us and the
+1 ms verdict resting on them are suspect and should be re-taken.
+
+Suggested dserv changes (not yet made — they touch the deployed server):
+1. Treat an empty script at registration as a removal, or skip the eval at
+   delivery. Today any caller can install a permanent invisible tax by accident.
+2. A second `dpointSetScript` on a live datapoint **silently replaces** the
+   first — no error. Two subsystems registering on one datapoint means one
+   loses silently. (`dservWhen` already keeps a separate registry specifically
+   "so it never dislodges a caller's dpointSetScript"; `dpointSetScript` has no
+   such protection against itself.)
+3. Note the delivery asymmetry: a datapoint WITH an entry costs a hash lookup,
+   one WITHOUT falls through to `find_match()`, a wildcard scan. "No script" can
+   therefore cost more than "script".
+
+### RW612 Ethernet, battened down and cleanly measured
+
+`mode eth` (strips the USB data pipe entirely, so dserv cannot double-forward),
+stale scripts cleared, Pi 5 `performance`, load ~0:
+
+| | RW612 | pico2 + W6300 (reference, SUSPECT — see above) |
+| --- | --- | --- |
+| loopback median | **719–738** | 676 |
+| loopback min | **640–681** | 632 |
+| loopback p99 | 872–877 | **717** |
+
+Median within ~7 %, **floor essentially identical**, tail ~20 % worse. This
+supersedes the "~1.4-1.5x slower" reading recorded earlier today: almost all of
+that apparent gap was measurement contamination — ~370 us of USB
+double-forwarding plus ~130 us of stale empty scripts.
+
+### Double-forwarding: a box on BOTH transports pays ~370 us
+
+With the box reachable over USB *and* Ethernet, it stays in `::extio_known` from
+the USB session (so `extio/box/cmd/*` is wired to `usbio_forward`) *and* self-
+registers over Ethernet. Every command is pushed twice — once into a USB pipe
+the box is not draining, because `uplink=eth` means the service loop polls
+Ethernet only. Measured cost: loopback 1227-1234 -> 852-870 on
+`extio_unforward_box`.
+
+**Operational rule: use `mode eth` on an Ethernet box.** It strips the data pipe
+at enumeration (`u_usb_init` registers the console CDC only), so `if02` never
+appears and the host cannot forward over USB. Verified: `by-id` shows `if00`
+alone. The console CDC remains for CLI.
+
+A host-side fix (unforward USB when `state/transport` reports `eth`) would be
+more robust but touches the deployed module shared with production Pico boxes.
+
+---
+
+## 2026-07-26 — pico vs RW612, same host, same session, FIXED harnesses
+
+The comparison this document has needed since the port began. Host
+`raspberrypi` (Pi 5, `performance`, load ~0), one dserv, one direct cable
+(sequential — the Pi has a single Ethernet port), both boxes measured within
+minutes of each other, harnesses with the `dpointRemoveScript` /
+`dservRemoveMatch` fixes, leaked state cleared before each.
+
+| | pico2 + W6300 | RW612 (Ethernet) |
+| --- | --- | --- |
+| loopback median | **616–625** | 715–739 |
+| loopback min | **584–592** | 640–681 |
+| loopback p99 | **647–668** | 872–877 |
+| `L1` cmd -> do_echo | **523** | 667 |
+| `L2` do_echo -> di | 85 | **54** |
+| ICMP floor | **0.101 ms** | 0.170–0.198 ms |
+
+Both harnesses agree to ~10 us on both boxes.
+
+### The reference set WAS inflated — confirmed, ~50-60 us
+
+`office` measures **616–625** here against the **676** recorded in the wiznet
+reference set, with `L1`/`L2` at 523/85 against the recorded 554/100. Same box,
+same host class, same harnesses — except the harnesses no longer leak an empty
+script and a match per run. **That is the predicted harness-leak tax, measured.**
+
+**Every figure in the 2026-07-26 reference section should be read ~50-60 us
+high**, including the **322 us input latency** the "2.8x margin against the 1 ms
+requirement" verdict rests on. The verdict survives (it gets better, not worse),
+but the numbers want re-taking.
+
+### The gap is entirely in the COMMAND path — and reverses on the EVENT path
+
+- `L1` is **144 us slower** on the RW612. Of that, ~80 us is raw transport (the
+  ICMP floor difference: W6300 hardwired TCP/IP offload vs Zephyr's software
+  stack on the CPU), leaving ~64 us of box-side processing.
+- `L2` is **31 us FASTER on the RW612** (54 vs 85).
+
+**`L2` is the leg the 1 ms requirement is about.** "Subject acts -> dserv knows"
+is the input path, and the RW612 is ~35 % better on it. The round-trip figure
+that makes the RW612 look worse is dominated by the outbound command leg, which
+matters far less for these paradigms — a scheduled pulse or a stimulus onset is
+not on the critical path the way a subject response is.
+
+So: **lagging ~16-19 % on the round trip, ahead on input.** Not the "1.4-1.5x
+slower" recorded earlier today, which was almost entirely measurement
+contamination (USB double-forwarding + leaked scripts).
+
+### The real deficit is the TAIL
+
+p99 **872–877 vs 647–668** — ~32 % worse, and it is the one metric where the
+RW612 loses on every reading. That is jitter, not throughput, and it is the
+right target for further work. Median latency on this board is already inside
+budget; tail behaviour is not bounded by the same budget (see the NVS-GC and
+12 ms-logging entries above — both were tail events invisible in the median).
+
+### Caveats
+
+- `L2` is a PROXY for one-way input latency, not the measurement. The real
+  figure needs the Pi-GPIO electrical reference (`box_out_rtt.sh` wiring — NOT
+  `host_gpio_rtt.sh`'s header diagram, which collides on GPIO22). Both boxes'
+  numbers here are software-stamped at both ends.
+- Sequential, not simultaneous. The boxes cannot share the single Ethernet port
+  on a direct link; a small switch would allow both registered at once, at the
+  cost of putting a switch in the path.
+- The RW612 ran `mode eth` (data pipe stripped) — the correct configuration for
+  an Ethernet box, and required to avoid the ~370 us double-forwarding tax.
+
+---
+
+## 2026-07-26 — PTP WORKS: RW612 locked to the Pi at ~±100 ns
+
+Step 1 of PTP integration, done. RW612 (`CONFIG_PTP=y`) as TIME_RECEIVER against
+`ptp4l` on the Pi 5, hardware timestamping at BOTH ends, direct cable (no switch,
+so no path asymmetry).
+
+```
+Port 1 State   : TIME_RECEIVER
+grandmaster    : 2C:CF:67:FF:FE:B3:39:F4 (the Pi)   steps_rm 1
+offset_from_tt : -16 / -11 / -29 / -109 / -78 / -37 ns
+mean_delay     : 1229-1287 ns          sync status : stable
+PHC now        : 1785039984.134287686  (stepped to the Pi's wall clock)
+```
+
+**~±100 ns.** For scale, against the same box's other anchoring methods measured
+with the electrical reference: `hw` TTL edge **35 us**, `swc` −167 us, `sw`
+−181 us. PTP is roughly **350x tighter than the TTL line**, which is exactly the
+outcome the PTP section above predicted for hardware timestamps at both ends.
+
+### THE GOTCHA: `hwts_filter full` is REQUIRED on the Pi 5
+
+Without it PTP appears to work and silently does not. The BMCA completes, roles
+are correct, `sync status` reads `stable` — and `offset_from_tt` and
+`mean_delay` sit at **exactly 0 ns**, because no event message is ever
+timestamped:
+
+```
+ptp4l: port 1 (eth0): received SYNC without timestamp
+ptp4l: port 1 (eth0): received DELAY_REQ without timestamp
+```
+
+Cause: the Pi 5's NIC is `macb` (RP1 Cadence GEM) and advertises only `none` and
+`all` RX filter modes — **no per-protocol PTP filter**. ptp4l's default request
+for `HWTSTAMP_FILTER_PTP_V2_EVENT` is not honoured. `--hwts_filter full` asks
+for `HWTSTAMP_FILTER_ALL` instead, which the driver does support. The messages
+disappear and the offset starts computing.
+
+Note the failure shape, which is this project's recurring one: **a zero that
+looks like perfection.** `offset_from_tt: 0 ns` reads as a perfectly locked
+clock. Check `mean_delay` too — 0 there means the delay exchange never
+completed.
+
+Reproducible setup: `host/start_ptp.sh`.
+
+### What this does NOT yet give us
+
+**Box events are not yet on dserv's timeline.** PTP disciplines the box's 1588
+counter to the Pi's **PHC**. dserv stamps datapoints from `steady_clock` + a
+fixed epoch offset (commit `227315e`) — `CLOCK_MONOTONIC`, a **different
+oscillator** from the NIC's PHC, and one that is NTP-slewed while the PHC is not.
+So the two drift apart and a mapping is still required.
+
+The mapping is, however, **local** — both clocks are on the host, no wire
+involved — via `PTP_SYS_OFFSET_PRECISE`, which reads the PHC and the system
+clock together with hardware assistance. That converts the hard problem (an
+unmeasurable one-way network delay) into an easy one (two clocks on one board).
+Structurally better than the obs-anchor mechanism it would replace.
+
+### Next steps, in order
+
+1. **PHC <-> dserv-clock bridge** (host side). The actual engineering.
+2. **Certify against the electrical reference.** `host/clock_err.sh` already
+   differences one physical edge stamped independently at both ends; PTP becomes
+   a fourth `sync/source` value, measured rather than trusted. **Do not quote the
+   ~100 ns as end-to-end accuracy until this runs** — it is PTP's own estimate of
+   its own offset, which is not the same as a stamped event landing correctly on
+   dserv's timeline.
+3. **Then the interesting one:** `ENET_TIMER0` on Arduino D5 (IO27), left free on
+   purpose, is a 1588 **capture** pin — a TTL edge hardware-timestamped directly
+   into the PTP timebase, no software path at all. That unifies the sync line and
+   PTP into one mechanism.
+
+### The PHC -> dserv-clock bridge (step 2) — measured, and the drift removed
+
+The chain from a box event to dserv's timeline, each link measured:
+
+| link | mechanism | accuracy |
+| --- | --- | --- |
+| box 1588 clock <-> Pi PHC | `ptp4l`, hw timestamps both ends | **~±100 ns** |
+| PHC rate <-> system clock | `phc2sys` | **0.002 ppm** (was −46.4) |
+| PHC <-> `CLOCK_MONOTONIC` | `host/phc_offset.c` | **±703 ns** |
+| `CLOCK_MONOTONIC` -> dserv | `dservClockEpochOffset` (new) | exact |
+
+```
+dserv_us = phc_us - (phc_minus_mono_us) + dservClockEpochOffset
+```
+
+**Total ~±0.8 us**, dominated entirely by the third link. Against the TTL
+hardware anchor at 35 us that is ~44x better, and it is ~1250x inside the 1 ms
+requirement.
+
+**`phc2sys` is not optional.** The Pi is the PTP grandmaster, so its PHC is
+free-running: measured at **−46.4 ppm** against `CLOCK_MONOTONIC`, i.e. ~46 us of
+divergence per second, which would need re-measuring every ~21 ms to hold 1 us.
+`phc2sys -c eth0 -s CLOCK_REALTIME` disciplines the PHC to the system clock, and
+because Linux applies the same frequency adjustment to `CLOCK_MONOTONIC` as to
+`CLOCK_REALTIME`, that rate-locks the PHC to *dserv's* timebase. Drift collapses
+to 0.002 ppm — re-measure every ~400 s instead. Confirmation that the mechanism
+is the one intended: phc2sys reports `freq -46636` ppb, matching the −46.4 ppm
+measured independently by `phc_offset`. Script: `host/start_phc2sys.sh`.
+
+**`PTP_SYS_OFFSET_PRECISE` is NOT available here** — `macb` implements no
+`getcrosststamp`, so there is no hardware cross-timestamp and the two-method
+cross-check degrades to one method. `phc_offset` reports its own error bound
+(half the MONO-PHC-MONO read window, min-filtered: 1407 ns window -> ±703 ns) so
+the uncertainty is stated rather than assumed. On a NIC that supports it, method
+B would tighten this link by ~10x and make the whole chain PTP-limited.
+
+**Why this link is tractable at all:** both clocks are on the host. There is no
+wire, so no one-way delay to estimate and no asymmetry to model — precisely the
+problem that made the obs-anchor mechanism hard (see "Why the ~200 us has been so
+hard to pin down and subtract"). The hard half of clock sync is now handled by
+PTP in hardware, and what remains is two local clock reads.
+
+### What is still missing (step 3)
+
+Nothing yet APPLIES this to event timestamps. Two options:
+
+1. **Box-side (recommended):** feed `box_clock` a single offset
+   `D = dserv_us - ptp_us` computed on the host, in place of the obs-boundary
+   anchor. The existing `cmd/sync` plumbing already does exactly this shape, but
+   with a network round trip whose asymmetry is unmeasurable; here D comes from
+   two local reads and carries **no transport term at all**. Refresh every few
+   minutes, per the drift above.
+2. **Host-side:** convert on ingest in dserv. Avoids firmware change but puts a
+   per-datapoint conversion in the hot path and loses the box's own view.
+
+Then **certify with `host/clock_err.sh`**, which differences one physical edge
+stamped independently at both ends. PTP becomes a fourth `sync/source` value
+measured against a real edge rather than trusted. **Until that runs, the ±100 ns
+is PTP's estimate of its own offset — not evidence that a stamped event lands
+correctly on dserv's timeline.**
+
+### HARDWARE: the MDIO bus on this board is intermittent — and it explains a lot
+
+`E: phy_mc_ksz8081: PHY is still in factory mode!` and no link, on **stock
+Zephyr** (`samples/net/ptp`) as well as ours, across power cycles, with
+`CONFIG_PTP=n` as well as `=y`. Not our firmware.
+
+The message is **misleading**. `phy_mc_ksz8081_phy_readiness_check` reads the
+OMSO register and tests one bit; an MDIO read that returns all-ones sets that bit
+and aborts init. So it reports "factory mode" for any failed read.
+
+Proved with `CONFIG_MDIO_SHELL`, reading the same registers repeatedly:
+
+| reg | successive reads |
+| --- | --- |
+| 2 (PHYID1) | `0x0`, `0xffff`, `0xffff`, `0x5`  (should be `0x0022`) |
+| 1 (BMSR) | **`0x7849`** — valid, autoneg-capable, link down — then `0xffff` |
+| 0 (BMCR) | `0x1000`, `0x1000` — stable, autoneg enabled |
+
+`mdio scan` finds devices at 0x0 and 0x2, and PHYID2 reads `0x1561` (a genuine
+KSZ8081). **The PHY is alive and answers correctly some of the time.** Reads fail
+intermittently; when the factory-mode check lands on a bad read, Ethernet never
+comes up.
+
+There is **no software lever**: `nxp,enet-mdio` exposes only `pinctrl-0`, and MDC
+is derived inside the driver — no clock-rate knob to slow the bus down.
+
+**What this retroactively explains, and corrects:**
+
+- The link that came up and dropped twice earlier, and the cable swap that
+  changed nothing. It was never the cable.
+- **"Ethernet needs the cable present at BOOT" — retracted a second time, and
+  this time for the right reason.** It was neither a PHY-monitor gap nor a
+  missing `net_if_up()`; it was whether the MDIO reads at init happened to
+  succeed. Boots that worked were boots that got clean reads.
+- The `net_if_up()` addition (commit `c97c11b`) stays — bringing the interface up
+  explicitly is correct regardless — but **its claimed effect is unproven**, and
+  the commit message overstates it. Cable-at-boot worked before that change too.
+- Several hours of firmware hypotheses (PTP stack, the TIMER1 pinmux, config
+  ordering) were all wrong. **Stock firmware on the same hardware would have
+  partitioned this in one flash**, and it is the second time today that lever was
+  reached for last instead of first.
+
+**Standing lesson:** when a driver reports a specific device state, check whether
+that state is *inferred from a read that could have failed*. "Factory mode",
+`ptp/ns` advancing at 0.15x, `offset_from_tt: 0 ns`, `save FAILED (-1)` — four
+times today a confident-sounding report was a failed measurement in disguise.
+
+**Practically:** USB-HS on this box is unaffected and measured clean (866–890 us
+loopback, zero resync discards over thousands of frames), so development
+continues there. The PTP result (±100 ns, `host/start_ptp.sh`) was taken while
+the link was healthy and stands, but cannot be re-verified until the MDIO issue
+is resolved. Worth checking power delivery first — the board is fed from two USB
+cables — before concluding the board is faulty.
+
+### CORRECTION + the actual rule: the RW612 needs a FULL power discharge
+
+**Retracting "the MDIO bus is intermittent (hardware)" from earlier today.** It
+is not a marginal bus. Two things were going on, and both are recoverable:
+
+1. **A partially-seated USB-C connector.** With it loose, reading PHYID1
+   repeatedly gave `0x0 / 0xffff / 0xffff / 0x5`. With it properly seated, the
+   same read gives `0x22` three times out of three, and BMSR `0x784d` twice out
+   of two. The "flaky MDIO" was marginal power, not silicon.
+2. **The PHY latching a bad state at power-up**, which a quick USB unplug does
+   NOT clear.
+
+**THE RECOVERY RECIPE (verified):**
+
+```
+1. remove EVERYTHING -- both USB cables AND the Ethernet cable
+2. wait ~10 s for the rails to actually drain
+3. connect the ETHERNET cable FIRST
+4. then power (USB)
+```
+
+Ordering matters: the PHY latches its straps when reset deasserts, within
+milliseconds of power arriving. A board still partly charged, or powering up
+with no link partner present, latches differently. A quick unplug/replug is NOT
+enough and reproducibly leaves the box with no Ethernet.
+
+**What this supersedes.** This single quirk explains essentially every Ethernet
+mystery in this document from 2026-07-25 onwards:
+- the link that came up and dropped twice, and the cable swap that changed
+  nothing (the cable was always fine);
+- **"Ethernet needs the cable present at BOOT" -- retracted for the third and
+  final time.** The real rule is the discharge, of which cable-at-boot is one
+  necessary part;
+- the `E: PHY is still in factory mode!` abort -- that message reports a failed
+  MDIO read, not a device state;
+- OMSO reading `0x22` (NAND-tree bit set) and CTRL2 reading `0x0`. **Both read
+  the same when the link WORKS**, so they were never the fault. Do not chase
+  them; that diagnosis was wrong.
+
+**A driver patch that is still worth keeping** (`patches/ksz8081-retry-mdio.patch`):
+upstream runs reset -> readiness-check -> static-cfg exactly ONCE, so a single
+bad MDIO read aborts Ethernet permanently for that boot. Retrying costs nothing
+on a healthy board and removes one whole failure mode. It is not a fix for the
+discharge issue and should not be described as one.
+
+### Registration DOES survive a dserv restart -- but lands INCOMPLETE
+
+Verified by restarting dserv while watching the box console:
+
+```
+reg: config link down -> re-registering (x1)
+reg: config link restored
+reg: registered as extio/box (INCOMPLETE, watchdog will retry)
+```
+
+So the `server_up` watchdog fires correctly and the connect-back is
+re-established (`%reg` succeeds -- dserv reconnects to the box's port 5010).
+What fails is one or more of the `%match` lines, leaving the box **publishing
+but deaf**: uplink datapoints keep flowing while `cmd/*` never arrives, which
+reads exactly like a working box.
+
+Not the Pico's old fire-and-forget bug -- this port already waits for dserv's
+`1 ...` acknowledgement (`box_net_eth_send_command`), and already rotates the
+source port over `55000..55007` with `SO_REUSEADDR`. So `INCOMPLETE` is dserv
+*declining* a `%match`, not a dropped write. Direct testing shows dserv accepts
+`%match` fine from a fresh connection, so the cause is still open.
+
+**Diagnostic that matters:** `state/watchdog` advancing proves only the UPLINK.
+Test the downlink explicitly (`cmd/do/<pin>` -> `state/do/<pin>`) before trusting
+a box, and treat `INCOMPLETE` in the boot log as "this box cannot be commanded".
+
+### STEP 3 DONE: box_clock anchored from PTP
+
+```
+ptp/offset_us      -36999999      (D = dserv_us - ptp_us; the 37 s TAI offset)
+sync/source        ptp            (fourth source, beside hw / swc / sw)
+sync/ptp_window_us 1-2 us         (box pairs its local clock and PTP clock)
+```
+
+Re-anchoring once a second, sampled over 16 s:
+
+```
+offset delta per re-anchor : 0, +2, 0, 0, +1, 0, +1, 0 us
+total drift                : 4 us / 16 s = ~0.25 ppm
+```
+
+**The step is the point.** This document's "Never anchor mid-obs" rule exists
+because a re-anchor STEPS the offset by the transport jitter -- hundreds of us
+for an obs anchor, which silently corrupts any interval computed across it. A
+PTP re-anchor steps by **0-2 us**, because there is no transport in the path: the
+box reads its own two clocks, and the host-supplied D is a constant derived from
+two LOCAL clock reads. The obs gate is kept anyway (correctness, not magnitude).
+
+Error chain, each link measured:
+
+| link | mechanism | accuracy |
+| --- | --- | --- |
+| box 1588 <-> Pi PHC | `ptp4l`, hw timestamps both ends | ~±100 ns |
+| box local <-> box 1588 | sandwich read, `sync/ptp_window_us` | ~±1 us |
+| PHC rate <-> system clock | `phc2sys` | 0.002 ppm |
+| PHC <-> `CLOCK_MONOTONIC` | `host/phc_offset.c` | ±703 ns |
+| `CLOCK_MONOTONIC` -> dserv | `dservClockEpochOffset` | exact |
+
+**~±2 us end to end**, against the TTL hardware anchor's 35 us -- about 17x
+better -- and ~500x inside the 1 ms requirement. Dominated now by the two
+software pair-reads (box-local<->1588 and PHC<->MONOTONIC), not by PTP.
+
+**What is still NOT established.** This is internal consistency, not absolute
+accuracy: every number above is the mechanism's estimate of itself. Certifying it
+needs `host/clock_err.sh`, which differences one physical edge stamped
+independently at both ends -- the same way `hw` / `swc` / `sw` were certified.
+Until that runs, do not quote ±2 us as end-to-end timestamp accuracy.
+
+Operating notes: `ptp4l` AND `phc2sys` must both be running (`host/start_ptp.sh`,
+`host/start_phc2sys.sh`); without phc2sys the PHC free-runs at ~46 ppm and D is
+not constant. Re-run `host/ptp_anchor.sh` every ~400 s, or once a session --
+the box re-anchors itself from D in between, costing zero packets.
+
+## 2026-07-27 — MCUboot on the RW612, and the PLL the bootloader takes with it
+
+Step 1 of the OTA port (`sysbuild.conf`, `SB_CONFIG_BOOTLOADER_MCUBOOT=y`).
+**Done and rig-green: 12/12 with box1 running under MCUboot.** The build side
+was free — the board's DTS already had the A/B layout, `zephyr,code-partition`
+already pointed at `slot0_partition`, and `NXP_RW6XX_BOOT_HEADER` is already
+`default y if !BOOTLOADER_MCUBOOT`, so the app drops its boot header and relinks
+to `0x18020000` on its own. MCUboot fits in 45.6% of the 128 KB boot partition;
+the signed app is 639 KB = **20.4% of a 3 MB slot**. Swap mode resolves to
+`BOOT_SWAP_USING_OFFSET` (no scratch partition in the DTS) — note for step 2/3:
+**offset mode wants the update written at the SECOND sector of slot1, not the
+first.** Signing is still MCUboot's published dev key; a real key is step 4 work.
+
+### The failure, because it is worth recognising again
+
+First boot under MCUboot: bootloader banner fine, image validated, `Jumping to
+the first image slot` fine, app banner fine, `PHY (2) is entering autonegotiation
+sequence` — then nothing, forever. No DHCP, no ARP, no crash, no fault message.
+`rig_check` cannot see this box at all.
+
+What it actually was, via SWD:
+
+- `curr_tick` frozen at a **repeatable** 8.37 s (10.43 s with BT built in).
+- OS timer IRQ 41 **enabled and pending and never taken**; VTOR correct.
+- PC in `ENET_Ptp1588CaptureBlocking()`, `PRIMASK=1`.
+- `ATCR` `0x291` → `0xA91`: bit 11 `CAPTURE` set and never self-clearing.
+  `ATPER` = 1e9 and `EN` = 1 — the timer is *configured*, `ATVR` stays 0.
+
+The mechanism is in `soc/nxp/rw/soc.c`:
+
+```c
+#if DT_NODE_HAS_STATUS_OKAY(DT_NODELABEL(enet)) && CONFIG_NET_L2_ETHERNET && CONFIG_ETH_DRIVER
+        RESET_PeripheralReset(kENET_IPG_RST_SHIFT_RSTn);
+        RESET_PeripheralReset(kENET_IPG_S_RST_SHIFT_RSTn);
+#else
+        CLOCK_DeinitTddrRefClk();      /* powers the TDDR PLL DOWN */
+#endif
+```
+
+MCUboot has no networking, so **the bootloader powers down the TDDR PLL** — the
+source of `tddr_mci_enet_clk`, the 1588 timer clock. Our app takes the other
+branch, which only resets the peripheral. **Nothing in the whole Zephyr tree ever
+calls `CLOCK_InitTddrRefClk()`**; the ENET path silently assumes the boot ROM
+left that PLL up, which is true booting from ROM and false the instant a
+bootloader sits in front. This is an upstream defect, not a config mistake.
+
+Two things make it nastier than "Ethernet is broken". The IPG bus clock is
+untouched, so ENET registers read normally and MDIO works well enough to *start*
+autonegotiation — the box looks like it is trying. And the SDK's capture wait is
+an **unbounded spin held under `DisableGlobalIRQ()`**, so a dead clock on a
+peripheral we merely *read* takes the entire box down, interrupts and all. Same
+family as the `ENET_Ptp1588StartTimer` rate bug of 2026-07-25: check that the
+clock is RUNNING, not that the register accepted the write.
+
+Fix: `src/platform/box_soc_rw612.c`, a `PRE_KERNEL_1` `SYS_INIT` that mirrors the
+deinit in reverse — only when the PLL is actually found powered down, so the
+non-MCUboot image keeps its long-validated path byte for byte. Note
+`CLOCK_InitTddrRefClk()` does **not** clear the output gates its own deinit sets,
+so `TDDR_MCI_ENET_CLK_CG` has to be cleared by hand. `TDDR_MCI_FLEXSPI_CLK` is
+deliberately left gated exactly as MCUboot left it: FlexSPI runs from the TCPU
+branch here, and the proof is empirical — MCUboot calls that deinit and keeps
+XIP-ing out of the same flash.
+
+### Method note
+
+The cheap discriminator was the A/B, not the theory. Reflashing the pre-MCUboot
+image brought box1 straight back (ping, watchdog, DHCP, PTP anchored), which
+killed "the PHY is marginal on this board" — a real documented failure mode that
+fit the symptom perfectly and was wrong. The BT-off build then killed the BT/NBU
+theory that the 10.43 s freeze had made attractive (10 s is exactly Zephyr's
+`HCI_CMD_TIMEOUT`): with BT out it still froze, just at 8.37 s. **BT only moved
+when the first PTP read happened.** Two plausible, well-motivated theories, both
+wrong, both cost one flash each to rule out.
+
+### NVS
+
+Confirmed by round-trip, not by inspection: set `config/desc`, `cmd/save`,
+`cmd/reboot`, and the value came back from flash on a fresh boot (`watchdog=1`),
+box re-registering with its persisted identity and the same 76 keys as baseline.
+`storage_partition` at `0x620000` is outside both slots, so "config survives an
+update" is a property of the layout — but the *write* path under MCUboot is now
+tested too, which is the part the layout does not give you for free.
+
+## 2026-07-27 (later) — OTA step 2: slot1 writes, and what they cost the RT loop
+
+`src/platform/box_ota_flash.c` opens `slot1_partition` via
+`flash_area_open(FIXED_PARTITION_ID(slot1_partition))` and erases / programs /
+reads it in area-relative offsets, so the caller cannot reach slot0 and never
+touches the `zephyr,mapped-partition` XIP-address trap that `box_flash.c`
+documents. `cmd/ota/flashtest <kb>` drives it with a deterministic pattern and
+reads three pages back, so a pass means the bytes LANDED, not that the calls
+returned 0. Rig-green afterwards: 12/12.
+
+Slot geometry confirmed live: **3,145,728 B, 4 kB sectors**, `verify=1`, `rc=0`
+at every size tried. Writing 512 kB of pattern into slot1 while XIP-ing out of
+slot0 works — that was the open question, and the answer is yes.
+
+### Measured (box1, MCUboot, slot1)
+
+| size | wall | erase max | prog max (256 B) |
+|---|---|---|---|
+| 64 kB | 1010 ms | 56.0 ms | 885 us |
+| 128 kB | 2065 / 2089 ms | 59.4 / 59.5 ms | 937 / 987 us |
+| 256 kB | 4074 / 4117 ms | 57.7 / 59.4 ms | 928 / 992 us |
+| 512 kB | 8297 / 8351 / 8409 ms | 60.7 / 61.2 / 62.9 ms | 861-954 us |
+
+Linear at **~16 ms/kB (~62 kB/s)**, so a 640 kB image is **~10.5 s** of flash
+work. Erase dominates: 16 sectors x ~56 ms = ~0.9 s of the 64 kB run's 1.01 s.
+
+### The number that actually constrains the design
+
+**Flash work blocks the service loop completely, for its whole duration.**
+`state/watchdog` sat frozen at 554 for the entire 8 s of a 512 kB burst and then
+jumped straight to 563 — it did not tick once. The box is deaf for the duration:
+no watchdog, no downlink, no publishes.
+
+I initially read this the other way. `dbg/loop_max_us` peaked at ~1 ms during a
+burst, which looks like "the loop kept running" — but that counter is published
+BY the loop and reset after publishing, so a stalled loop simply cannot report
+its own stall. **A counter that has to be published to be seen cannot measure the
+thing that stops publishing.** The watchdog freeze is the honest instrument.
+
+So the receive path in step 3 must be **incremental — one chunk per frame,
+returning to the service loop between chunks**. Then the RT hole is bounded by a
+single sector erase (**~63 ms worst seen**) instead of the whole image. Cumulative
+deafness over a 640 kB image is still ~10 s, in ~60 ms slices, so an OTA WILL
+make the box miss watchdog beats: keep it obs-gated (it is — the handler refuses
+with `-EBUSY` while `box_obs_active()`), and do not let a fleet monitor read those
+missed beats as a dead box.
+
+### A telemetry trap that cost a wrong diagnosis, again
+
+For several runs `state/ota/dbg/bytes` stayed at the first run's 65536 while the
+box console showed every run completing correctly at the right size. The results
+were not missing, they were **dropped**.
+
+Mechanism: the 1 Hz gate is `next_wd += 1000`, so after an 8 s stall it fires
+**eight times in eight consecutive ~1 ms passes**, each pushing a full status
+burst — several hundred frames into a 40-deep queue (`dbg/pubq_dropped` 128 ->
+358). Anything published once, right at the end of a long stall, is exactly what
+gets dropped. Note the first fix failed too: re-announcing for "5 ticks" is spent
+in ~5 ms inside that same storm. Only a **wall-clock deadline**
+(`ota_dbg_until = k_uptime_get() + 6000`) survives it.
+
+This is the third appearance of the same shape — OTA.md's RP2350 "nothing that
+would show success was visible, even though it succeeded", and this morning's
+MCUboot hunt. **When box state and box console disagree, believe the console.**
+
+Related, NOT fixed here because it touches the shared RT loop: the `next_wd +=
+1000` catch-up burst is itself worth reconsidering (resync to `now + 1000` after
+a long stall) — it converts any stall into a telemetry outage on top of the stall.
+
+### Follow-up: the 1 Hz catch-up burst, fixed at the source
+
+The `next_wd += 1000` behaviour noted above is now fixed rather than just
+documented, because step 3 streams chunks through exactly this path.
+
+The gate still advances phase-preservingly in the normal case (no drift). What
+changed is that falling a full period behind no longer fires the gate once per
+missed period: it emits ONE status burst, adds the missed beats to the count, and
+resyncs. `state/watchdog` therefore still reads as seconds-since-boot -- rig_check
+and any historical comparison are unaffected -- and the gap is now published as
+**`dbg/wd_skipped`** rather than being inferable only from a jump in the watchdog
+value. A stall is easier to see than before, not harder.
+
+Measured across an identical 512 kB burst, before -> after:
+
+| | before | after |
+|---|---|---|
+| `dbg/pubq_dropped` | +230 | **0** |
+| `dbg/wd_skipped` | (did not exist) | 7-8 |
+| `state/ota/dbg/*` | dropped; read as "never ran" | lands first time |
+
+The wall-clock re-announce on the OTA result is deliberately KEPT even though its
+provoking cause is gone: a terminal result published exactly once, at the end of
+the operation most likely to have disturbed the link, is the worst-placed frame in
+the system. It is now defence rather than the only thing holding the report up.
+
+## 2026-07-27 (later still) — OTA step 3: the image actually lands in slot1
+
+`cmd/ota/begin "<sha-hex> <size>"` → `cmd/ota/chunk` × N → `state/ota/ack` →
+verify. **Rig-proven end to end on box1: a real 644,544 B signed image staged in
+slot1 and confirmed present.** Rig 12/12 after.
+
+`src/core/box_ota.h` is the RP2350's `pico_ota.h` ported (`pico_*` → `box_*`):
+page buffering, erase-as-you-go, sha256, STAGING/VERIFY/DONE. Two deliberate
+changes: the **erase granularity is a runtime field** taken from
+`flash_get_page_info_by_offs()` rather than a hardcoded 4096 (a module that
+disagrees with the device about sector boundaries erases the wrong span and eats
+already-written data), and `box_ota_begin()` validates that a sector is a whole
+number of pages instead of trusting the caller.
+
+### Carrier: datapoints, not 'D' frames
+
+The framer here already accepts `DSERV_OTA_CHAR`, so 'D' frames looked free — but
+they are raw bytes on the box's link, and **on an Ethernet box no host can inject
+those**: dserv owns the single connect-back socket on `BOX_ETH_CFG_PORT`, and a
+second connection displaces it, killing the downlink for exactly the operation
+that needs it. The RP2350's other carrier, the `<`-get pull, needs box-side socket
+code this port does not have.
+
+So the image rides ordinary datapoints. It costs payload — the name
+`extio/box1/cmd/ota/chunk` eats 24 of the 109-byte budget, leaving 85, minus an
+8-byte `[seq u32][crc32 u32]` header = **77 B/chunk** vs 117 for a 'D' frame — and
+buys a path that works today over both carriers with no new transport. The chunk
+size is computed per box, not hardcoded: a longer box name silently shrinks it and
+a fixed 77 would overflow the frame builder and drop every chunk. `box_ota.h` is
+front-end agnostic, so a 'D'-frame or pull carrier can be added later untouched.
+
+Host side is `extio_ota_push_dp` in `config/extioconf.tcl`, reusing the USB path's
+debounced ack-driven tail-resend verbatim — only the frame emitter differs.
+`extio_ota_push` dispatches to it on `state/board` matching `frdm_*`.
+
+### Measured, box1, 644,544 B
+
+| | |
+|---|---|
+| transfer + verify | **17 s** (~8,371 chunks; flash work alone is ~10.5 s) |
+| erase max / prog max | 63.2 ms / 1.25 ms |
+| **`dbg/wd_skipped`** | **0** |
+| `dbg/pubq_dropped` | 0 |
+
+**`wd_skipped = 0` is the headline.** Step 2 showed a 512 kB burst freezing the
+loop for 8 s straight; done incrementally — one chunk per frame, back to the loop
+between — the same volume of flash work costs **not one missed 1 Hz beat**. A
+63 ms hole per sector is invisible at a 1 s heartbeat. The step-2 measurement
+predicted exactly this, and it held.
+
+### Two things that are checked, and one that is not
+
+- **Wrong sha is rejected**: pushing with a zeroed sha gives `state=fail`,
+  `result=sha_mismatch`. Verify is real, not decorative.
+- **`cmd/ota/verify` re-hashes the image BY READING IT BACK OUT OF slot1**
+  (`flash_verify=1`, 644 kB read + hashed in 200 ms). This is NOT redundant with
+  the transfer sha, which hashes bytes as they ARRIVE: `ota/state=ok` means "the
+  image crossed the link intact and no flash call returned an error", which says
+  nothing about what is in the slot. Step 4 must run this before arming a trial —
+  MCUboot will happily try to boot a slot we merely believe we wrote.
+- **Not checked: that the staged image is BOOTABLE.** Nothing here inspects the
+  MCUboot header, and the slot still ends with 512 kB of `flashtest` pattern past
+  the image. Step 4's `boot_request_upgrade()` is where that gets real, and note
+  swap-using-offset wants the update at slot1's SECOND sector.
+
+Note the whole step was validated without deploying `extioconf.tcl` (that needs
+sudo on the rig): the procs were loaded into the live subprocess with
+`dservctl extio "source /tmp/otadp.tcl"`. Good pattern for orchestrator work.
+
+## 2026-07-27 — office-stim: a second PTP host, and a better-instrumented one
+
+A second site (office) now has a PTP-capable host. It matters beyond convenience:
+every clock number in this document so far came from ONE host (rpi500), and
+single-host measurement has confounded conclusions here repeatedly. This is the
+independent cross-check that was missing.
+
+**Hardware:** `office-stim`, Intel **I226-V** (`igc`), `enp86s0`, PHC `/dev/ptp0`,
+Debian 13 / kernel 6.12. MikroTik **hEX** (RB750Gr3, RouterOS 7.23) between it
+and the boxes.
+
+### It is better than the Pi 5 on the term that was limiting us
+
+The `igc` driver implements **`PTP_SYS_OFFSET_PRECISE`** (PCIe PTM hardware
+cross-timestamp). The Pi 5 does not, so on the rig the PHC <-> `CLOCK_MONOTONIC`
+term can only be measured by sandwich reads and is bounded by the read window.
+
+| | rpi500 (Pi 5) | office-stim (I226-V) |
+|---|---|---|
+| method B available | no | **yes** |
+| `phc_offset --once` error bound | +/-704 ns (method A) | **+/-11 ns (method B)** |
+| PHC<->MONO drift, disciplined | -- | **-0.3 ns/s = 0.000 ppm** |
+| re-measure interval for 1 us | ~400 s | **~3200 s** |
+
+That is a **64x** tightening of one of the two software pair-reads that dominate
+the ~+/-2 us end-to-end budget (2026-07-26 section), and it is measured, not
+inferred: B's first->last samples moved 5 ns over 29.8 s, independently agreeing
+with the -0.3 ns/s fit.
+
+**phc2sys is what buys the drift figure.** Undisciplined, the same host measured
+229.8 ns/s (0.230 ppm) -- a ~750x difference. Do not quote a drift number without
+saying whether phc2sys was running.
+
+### Two traps this host re-taught
+
+**`--hwts_filter full` is NOT Pi-specific.** `ethtool -T enp86s0` lists exactly
+`none` and `all` under Hardware Receive Filter Modes -- same as the Pi 5's macb.
+So ptp4l's default per-protocol PTP filter is not honoured here either, and
+without the flag every event message arrives untimestamped, leaving `mean_delay`
+and `offset_from_tt` at 0. **Check that list on any new host** before assuming
+the default works. `host/start_ptp.sh` now takes an interface argument
+(defaults to `eth0`, so the rig is unchanged).
+
+**An NTP daemon is not a conflict in this direction.** `phc2sys -c <iface> -s
+CLOCK_REALTIME` disciplines the PHC FROM the system clock, so it is a consumer;
+`systemd-timesyncd` steering that clock is fine and the PHC follows. The clash to
+avoid is the opposite direction (`-s <iface> -c CLOCK_REALTIME`), where phc2sys
+and NTP both steer. I initially advised stopping the NTP daemon here, which was
+wrong for the configuration the rig actually uses.
+
+### Method A is noisy on this host -- and that is why drift comes from B
+
+A's read window measures **min 3.2 us but MEDIAN 170 us**, a ~50x spread that is
+preemption and C-states, not the PCIe read. Its drift fit is correspondingly
+useless (mean |resid| 1584 ns vs B's 16 ns), and in the disciplined run A and B
+report 116.7 vs -0.3 ns/s. **That disagreement is not a stop condition**: the
+cross-check the tool enforces is on the OFFSET, which agreed to -135 ns inside
+A's 3213 ns window. If method A is ever needed on a host without
+cross-timestamping, put the box on the `performance` governor first.
+
+### The switch is already correct -- do not repeat the rig's fix
+
+`/interface bridge port print` shows the **`H` flag on all four ports**, i.e.
+hardware offload IS active despite `protocol-mode=rstp`. The rig's failure --
+RSTP silently disabling offload and costing 45 us of CPU forwarding -- **does not
+reproduce on this hardware/RouterOS**. Do not disable RSTP here; there is no
+measured gain and it removes loop protection.
+
+Also: the hEX has **no radio**, so the rig's "WiFi bridged with the wired ports
+floods the 100 Mb box link" failure cannot happen. And `ether1` (uplink) is
+outside the bridge, so office LAN broadcast traffic does not reach the box ports.
+
+Worth knowing for later: the hEX is **not** PTP-capable hardware (transparent /
+boundary clock is CRS3xx-class), so its residence time stays inside the error
+budget rather than being cancelled. Expect worse than the rig's direct-cable
++/-100 ns when measuring through it -- quantifying that gap is the interesting
+measurement, not a fault.
+
+**A speed-mismatch worry I raised and then withdrew:** a 1 G host port feeding a
+100 Mb box port does NOT inject a large fixed asymmetry. Each direction crosses
+both speeds exactly once (fast-in/slow-out vs slow-in/fast-out), so serialisation
+largely cancels, and PTP's four message types are all similar sizes. Pinning both
+ports to 100 Mb would cost host bandwidth for no real gain. The real risk through
+a store-and-forward switch is queuing VARIABILITY, not the speed step.
+
+## 2026-07-27 (later) — the recurring bug: fields that report memory, not reality
+
+Four distinct hours-costing failures in this document share one shape, and it is
+worth naming rather than rediscovering a fifth time. **A field that looks like
+live state but is actually configuration, a retained value, or a stale snapshot
+is worse than no field**, because it converts "I don't know" into a confident
+wrong answer — and the tooling built on top inherits the lie.
+
+| field | looked like | actually was |
+|---|---|---|
+| `net.ip` in `show` | the address the box holds | the STATIC config field; `0.0.0.0` in DHCP mode no matter what lease exists |
+| `state/sync/source` | whether the box is anchored | a RETAINED datapoint; survives the box reboot that destroyed the anchor |
+| `persist=FAILED` in `show` | current persistence state | a boot-time snapshot |
+| `PHY is still in factory mode!` | a device state bit | a FAILED MDIO READ (all-ones sets the tested bit) |
+| `dbg/loop_max_us` | worst service-loop pass | published BY the loop, so it cannot report the stall that stops publishing |
+
+Two of these were fixed today; the rule they imply:
+
+**1. Report reality, not the last thing you were told.** `show` now prints
+`net.live=<addr> link=N` from `box_net_eth_get_ip()` beside the configured
+`net.ip`, and `dserv.live=<session> uplink=<x> cmds_rx=N`. Both are live samples.
+The configured fields are deliberately KEPT — conflating "what you asked for"
+with "what you got" is how you lose the ability to tell a static config from a
+DHCP lease.
+
+**2. A retained datapoint must be corrected by the thing that invalidated it.**
+`state/sync/source` is now republished on every dserv connect with the box's
+ACTUAL anchor state (`ptp` if `ptp_offset_valid`, else `none`). Conditional on
+purpose: the same path fires on a dserv RESTART, where the box is still up with
+its anchor intact, so an unconditional `none` would destroy a good value to fix
+a stale one.
+
+This one was not hypothetical. `rig_check` step 5 read the retained value and
+**passed while the box refused every at_abs** — observed twice today, on box1
+this morning and box3 this evening (step 5 PASS, step 7 `unsynced`, and the PASS
+was the one lying). Verified fixed: reflashing box3 flipped dserv `ptp` -> `none`
+immediately, matching `sync_fire`, and re-anchoring flipped it back.
+
+**3. `cmds_rx` is now on the box's own console.** main.c's comment for that
+counter ends "no field on the box revealed it" — true until now: it was published
+to dserv but the box could not show it locally, so a box you were holding on a
+bench could not tell you its downlink was dead. `show` reports it.
+
+**Still outstanding, a decision not a bug:** `ble.en=0` in `show` while the radio
+is up and scanning. `box_ble_init()` is called unconditionally under
+`#if defined(CONFIG_BT)` and never consults `cfg.ble_en`, so the persisted flag
+is inert — diverging from the RP2350's stated "ENABLE CONTRACT: persisted
+cfg->ble_en, default OFF" (`box_ble_central.h`). Either gate init on the flag or
+drop the flag; do not leave a config field that does nothing.

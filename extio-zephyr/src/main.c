@@ -40,12 +40,349 @@
 #if defined(CONFIG_BT)
 #include "box_ble.h"
 #endif
+#if defined(BOX_HAVE_OTA_SLOT)
+#include "box_ota_flash.h"
+#include "box_ota.h"
+#endif
 
 static box_config_t   cfg;
 static dserv_framer_t rx_framer;
 static group_rt_t     groups[BOX_NGROUPS];   /* DI chord-settle state machines */
 static box_clock_t    boxclk;                /* box time -> dserv time alignment */
 static uint64_t       obs_begin_us;          /* box time of the last beginobs anchor */
+#if defined(BOX_HAVE_PERSIST)
+static int            box_persist_mount_err;   /* 0 = NVS mounted; else the errno */
+#endif
+
+/* ---- PTP anchoring -------------------------------------------------------
+ *
+ * When the box's 1588 clock is disciplined to the host NIC's PHC by PTP, the
+ * host can hand us ONE constant:
+ *
+ *     ptp_offset_us = dserv_us - ptp_us
+ *
+ * It is constant because both terms are: dserv time is CLOCK_MONOTONIC plus a
+ * fixed epoch offset, and the PHC is rate-locked to that same clock by phc2sys
+ * (0.002 ppm -- see PORTING.md). The host measures it locally, with no wire
+ * involved, so unlike an obs anchor it carries NO TRANSPORT TERM AT ALL. That is
+ * the whole point: the one-way delay that has been so hard to subtract simply is
+ * not in this path.
+ *
+ * With it we can re-anchor box_clock from the PTP clock alone, as often as we
+ * like, without exchanging a single packet.
+ */
+#if defined(CONFIG_PTP_CLOCK)
+static int64_t  ptp_offset_us;        /* dserv_us - ptp_us, from the host */
+static int      ptp_offset_valid;
+
+/* Sandwich a PTP read between two local reads, exactly as host/phc_offset.c
+ * does: the midpoint pairs the two clocks and the spread bounds our own error.
+ * Returns 0 and fills *box_us / *ptp_us, or -1 if the PTP clock is not ready. */
+static int ptp_pair_read(uint64_t *box_us, uint64_t *ptp_us, uint32_t *window_us)
+{
+	if (!box_ptp_ready()) {
+		return -1;
+	}
+	uint64_t b0 = box_gpio_now_us();
+	uint64_t p  = box_ptp_now_ns();
+	uint64_t b1 = box_gpio_now_us();
+
+	if (!p) {
+		return -1;
+	}
+	*box_us = (b0 + b1) / 2;
+	*ptp_us = p / 1000u;
+	if (window_us) {
+		*window_us = (uint32_t)(b1 - b0);
+	}
+	return 0;
+}
+
+/* Re-anchor box_clock from PTP. Trusted, so it also teaches the rate estimator
+ * the box-local-vs-PTP crystal error -- which is exactly what that estimator
+ * was built for, now fed by a source with no transport jitter. */
+static int ptp_reanchor(uint32_t *window_us)
+{
+	uint64_t box_us, ptp_us;
+
+	if (!ptp_offset_valid || ptp_pair_read(&box_us, &ptp_us, window_us) != 0) {
+		return -1;
+	}
+	box_clock_sync(&boxclk, (uint64_t)((int64_t) ptp_us + ptp_offset_us),
+		       box_us, 1 /* trusted */);
+	return 0;
+}
+#endif /* CONFIG_PTP_CLOCK */
+
+static void publish_do(uint8_t pin, uint8_t level, uint64_t stamp);
+
+/* ---- absolute-time triggering (`cmd/do/<pin>/at_abs <dserv_us>`) ----------
+ *
+ * The point of PTP: instead of "fire when this packet arrives" (transport delay
+ * IN the path, hundreds of us of jitter), the host says "fire at absolute time
+ * T" well in advance and every node schedules locally against its own synced
+ * clock. Delivery jitter stops mattering entirely -- a frame only has to arrive
+ * BEFORE T. Simultaneity across boxes is then bounded by clock sync (~us), not
+ * by the network (~hundreds of us).
+ *
+ * T is in DSERV time. box_clock maps box->dserv; we need the inverse, and it
+ * must undo the rate correction too or a distant T lands skewed:
+ *
+ *   stamp: dserv = box + offset + (box - anchor) * rate
+ *   here : box   = dserv - offset - (box - anchor) * rate
+ *
+ * Solved by one fixed-point pass -- the correction is ppb-scale, so a single
+ * refinement is far below the timer's own resolution.
+ */
+#if defined(CONFIG_PTP_CLOCK)
+static struct k_timer abs_timer[BOX_NPINS];
+static uint64_t       abs_target_us[BOX_NPINS];   /* intended dserv time */
+/* Pins that have fired and still owe a publish. Written from the timer callback,
+ * drained by the main loop -- one bit per pin, so BOX_NPINS must stay <= 32. */
+BUILD_ASSERT(BOX_NPINS <= 32, "abs_pub_pending is a uint32_t bitmask");
+static volatile uint32_t abs_pub_pending;
+#endif /* CONFIG_PTP_CLOCK */
+
+/* ---- deferred telemetry queue ----
+ * The 1 Hz status burst pushed ~28 frames back-to-back, each a BLOCKING send of
+ * 81-410 us. Measured on both boxes: the service loop's typical pass is 20 us,
+ * its MAX was ~9.5 ms. Once a second the box stopped serving commands for that
+ * long.
+ *
+ * Timing accuracy never depended on this -- timer callbacks preempt from the
+ * timer ISR, and DI edges are stamped in their own ISR -- but an immediate
+ * cmd/do/<pin> landing in the burst waited up to 9.5 ms, which is an order of
+ * magnitude worse than the transport jitter time-triggering exists to remove.
+ *
+ * So the burst is now queued and drained a couple of frames per pass. Only
+ * TELEMETRY goes in here: it is last-value-wins by nature, which is what makes
+ * dropping the oldest on overflow the right policy. Events (DI edges, fired
+ * pins) keep their own paths -- they must not be dropped. */
+#define PUBQ_DEPTH        40  /* > one full burst, so a burst never self-drops */
+#define PUBQ_PER_PASS_DEF  2  /* frames drained per service pass (runtime knob) */
+
+static uint8_t pubq[PUBQ_DEPTH][DSERV_MSG_LEN];
+static uint16_t pubq_head, pubq_tail, pubq_dropped;
+
+/* cmd/pubq/bypass 1 -> send inline, i.e. the pre-queue behaviour. Exists ONLY
+ * so the queue can be A/B'd at RUNTIME: reflashing between arms would reset the
+ * boxes, re-anchor PTP and shift thermal state, confounding exactly the
+ * difference being measured. With a runtime switch the two arms can be
+ * interleaved instead, so slow drift cannot alias into the comparison. */
+static uint8_t pubq_bypass;
+/* Drain rate, runtime-settable via cmd/pubq/per_pass so it can be A/B'd without
+ * reflashing.
+ *
+ * SETTLED 2026-07-27: it does not matter. Three arms (inline / 2 per pass /
+ * 8 per pass), 5 interleaved reps each, 100 shots per run: two-box skew medians
+ * 15.2 / 14.3 / 15.6 us, p90 37.8 / 36.2 / 37.0 us -- indistinguishable, with
+ * within-arm spread far exceeding any between-arm difference. An earlier
+ * 5-pair run that showed 2/pass ~4 us WORSE on p90 did NOT replicate; p90 from
+ * 100 shots carries ~10 samples' worth of information and five reps agreeing is
+ * ~6% likely by chance.
+ *
+ * So the knob exists for re-opening the question with a method that can resolve
+ * a few microseconds, not because a setting is known to be better. The queue
+ * itself is justified by bounded work per pass, nothing more. */
+static uint8_t pubq_per_pass = PUBQ_PER_PASS_DEF;
+
+#if defined(BOX_HAVE_OTA_SLOT)
+/* Last cmd/ota/flashtest result, held in statics and RE-ANNOUNCED over several
+ * 1 Hz ticks instead of enqueued inline.
+ *
+ * A flash burst blocks the service loop for its whole duration (MEASURED: 512 kB
+ * = ~8 s, over which state/watchdog does not advance at all). When the loop
+ * finally resumes, every missed 1 Hz tick fires back-to-back and each pushes a
+ * full status burst, which overruns the 40-deep publish queue -- so the frames
+ * enqueued inline right at the end of the test are precisely the ones dropped.
+ * The test then looks like it never ran (state/ota/dbg/bytes stuck at the
+ * previous run's value) while the box console shows it ran perfectly.
+ *
+ * That is the same trap OTA.md records on the RP2350 ("nothing that would show
+ * success was visible, even though it succeeded"), and it produced a wrong
+ * diagnosis here before the console was consulted. Re-announcing for a few
+ * seconds lets the catch-up storm drain first. */
+static uint32_t ota_dbg_bytes, ota_dbg_wall_ms, ota_dbg_e_max, ota_dbg_p_max;
+static uint32_t ota_dbg_e_n, ota_dbg_p_n, ota_dbg_slot, ota_dbg_sector;
+static int32_t  ota_dbg_verify, ota_dbg_rc;
+/* WALL-CLOCK deadline, not a tick count -- and it must stay that way even though
+ * the storm that forced it is now fixed at the source (see the catch-up policy on
+ * the 1 Hz gate, which no longer fires once per missed period; measured drops
+ * during a 512 kB burst went 230 -> 0).
+ *
+ * Keeping the re-announce is deliberate defence, not leftovers: a terminal OTA
+ * result published exactly once, at the end of the operation most likely to have
+ * disturbed the link, is the single worst-placed frame in the system, and
+ * OTA.md's RP2350 hunt was prolonged by exactly that. Note a tick COUNTDOWN would
+ * not do -- "5 ticks" is spent in ~5 ms whenever the gate is catching up, which
+ * is the one moment it needs to survive. */
+static int64_t  ota_dbg_until;
+
+/* ---- OTA receive state (step 3) ----
+ * cmd/ota/begin "<sha256-hex> <size>" opens a transfer into slot1; cmd/ota/chunk
+ * carries the image as a strictly sequential byte stream; state/ota/ack reports
+ * the contiguous cursor so the host paces and resumes. See box_ota.h.
+ *
+ * Delivery rides ORDINARY DATAPOINTS rather than the RP2350's raw 'D' frames.
+ * The framer here does accept DSERV_OTA_CHAR, but on an Ethernet box there is no
+ * host path that can inject raw bytes into the box's link: dserv owns the single
+ * connect-back socket on BOX_ETH_CFG_PORT, and a second connection would displace
+ * it -- taking the downlink down for the duration of the OTA, i.e. exactly when
+ * we need it. A datapoint costs payload (name "extio/<box>/cmd/ota/chunk" eats
+ * 24 of the 109-byte budget, leaving 85 -> 77 after the chunk header, vs 117 for
+ * a 'D' frame) and buys a path that already works, unchanged, on both eth and
+ * USB. The sink behind it is front-end agnostic, so a 'D'-frame or pull path can
+ * be added later without touching box_ota.h. */
+#define BOX_OTA_ACK_EVERY   8192u   /* ack the cursor at least this often */
+#define BOX_OTA_CHUNK_HDR   8u      /* seq u32 LE + crc32 u32 LE */
+
+static int64_t   ota_res_until;   /* re-announce window for the TERMINAL result */
+static box_ota_t g_ota;
+static uint8_t   g_ota_active;
+static uint32_t  g_ota_size;
+static uint32_t  g_ota_ack_at;
+
+static const box_ota_flash_t g_ota_flash_ops = {
+	.erase   = box_ota_flash_erase,
+	.program = box_ota_flash_program,
+};
+#endif
+
+static void pub_enqueue(const uint8_t *f)
+{
+	if (pubq_bypass) {
+		box_uplink_send(f, DSERV_MSG_LEN);
+		return;
+	}
+	uint16_t nxt = (uint16_t)((pubq_head + 1) % PUBQ_DEPTH);
+
+	if (nxt == pubq_tail) {                 /* full: drop the OLDEST sample */
+		pubq_tail = (uint16_t)((pubq_tail + 1) % PUBQ_DEPTH);
+		pubq_dropped++;
+	}
+	memcpy(pubq[pubq_head], f, DSERV_MSG_LEN);
+	pubq_head = nxt;
+}
+
+static void pub_drain(int max)
+{
+	while (max-- > 0 && pubq_tail != pubq_head) {
+		box_uplink_send(pubq[pubq_tail], DSERV_MSG_LEN);
+		pubq_tail = (uint16_t)((pubq_tail + 1) % PUBQ_DEPTH);
+	}
+}
+
+#if defined(BOX_HAVE_OTA_SLOT)
+static void ota_pub_int(const char *leaf, int32_t v)
+{
+	uint8_t f[DSERV_MSG_LEN];
+	char nm[80];
+
+	dserv_state_name(&cfg, nm, sizeof nm, leaf);
+	dserv_msg_int(f, nm, 0, v);
+	pub_enqueue(f);
+}
+
+static void ota_pub_str(const char *leaf, const char *v)
+{
+	uint8_t f[DSERV_MSG_LEN];
+	char nm[80];
+
+	dserv_state_name(&cfg, nm, sizeof nm, leaf);
+	dserv_msg_string(f, nm, 0, v);
+	pub_enqueue(f);
+}
+
+/* Terminal outcome: state + result together, and mark them for re-announce.
+ * Anything published exactly once at the end of an OTA is the frame most likely
+ * to be lost -- see the ota_dbg_until comment. */
+static void ota_pub_done(void)
+{
+	ota_pub_str("ota/state",  box_ota_state_str(g_ota.state));
+	ota_pub_str("ota/result", box_ota_err_str(g_ota.err));
+	ota_pub_int("ota/progress", box_ota_progress_pct(&g_ota));
+	ota_pub_int("ota/ack", (int32_t) g_ota.received);
+	ota_res_until = k_uptime_get() + 6000;
+}
+#endif /* BOX_HAVE_OTA_SLOT */
+
+#if defined(CONFIG_PTP_CLOCK)
+
+static uint64_t dserv_to_box_us(const box_clock_t *c, uint64_t dserv_us)
+{
+	int64_t box = (int64_t) dserv_us - c->offset_us;
+
+	for (int i = 0; i < 2; i++) {
+		int64_t dt   = box - (int64_t) c->anchor_box_us;
+		int64_t corr = (dt * (int64_t) c->rate_ppb) / 1000000000LL;
+		box = (int64_t) dserv_us - c->offset_us - corr;
+	}
+	return (uint64_t) box;
+}
+
+static void abs_fire(struct k_timer *t)
+{
+	int pin = (int) (intptr_t) k_timer_user_data_get(t);
+
+	if (pin < 0 || pin >= BOX_NPINS) {
+		return;
+	}
+	gpio_cmd_t c = { .op = GPIO_OP_SET, .pin = (uint8_t) pin, .value = 1 };
+	box_gpio_exec(&cfg, &c);
+
+	/* DO NOT PUBLISH HERE. publish_do() ends in a BLOCKING box_uplink_send(),
+	 * and this is a k_timer callback: two pins scheduled for the same instant
+	 * run their callbacks back-to-back, so the first one's send delays the
+	 * second one's GPIO write by a whole network round.
+	 *
+	 * Measured on a scope, two pins on ONE box at one T (so PTP and tick
+	 * quantisation contribute exactly zero): 30/30 shots landed 127-254 us
+	 * apart, median 208, with the sign varying -- i.e. whichever callback ran
+	 * second paid for the first one's publish. That matches dbg/send_us
+	 * (median 142 us) almost exactly.
+	 *
+	 * Set the pin, flag it, get out. The main loop publishes. Accuracy is
+	 * untouched: abs_target_us[] already holds the INTENDED time, which is what
+	 * gets stamped whenever the publish actually goes out. */
+	abs_pub_pending |= (1u << pin);
+}
+
+/* Every term behind the armed/late decision, for when a box insists it is late
+ * and the clock looks fine. This is how the at_abs 64-bit truncation was found:
+ * reading the source could not settle it, dbg_T = 2147483647 did instantly.
+ *
+ * OFF by default, and the CALLER must invoke this only AFTER k_timer_start():
+ * lead_us is measured from a `now` read before the publishes, so seven uplink
+ * frames sitting between the two would delay the fire by exactly that much --
+ * the one thing this path must never do.
+ *
+ * Enable live, no reflash:  dservSet <prefix>/cmd/sched/debug 1
+ * Deliberately NOT persisted, so a box always boots quiet. */
+static uint8_t sched_dbg;
+
+static void sched_dbg_publish(uint64_t T, uint64_t now, uint64_t target_box,
+			      int64_t lead_us)
+{
+	static const char *const leaf[] = {
+		"sched/dbg_T",      "sched/dbg_now",    "sched/dbg_off",
+		"sched/dbg_anchor", "sched/dbg_rate",   "sched/dbg_target",
+		"sched/dbg_lead",
+	};
+	const int64_t val[] = {
+		(int64_t) T, (int64_t) now, boxclk.offset_us,
+		(int64_t) boxclk.anchor_box_us, (int64_t) boxclk.rate_ppb,
+		(int64_t) target_box, lead_us,
+	};
+	uint8_t f[DSERV_MSG_LEN];
+	char    nm[80];
+
+	for (unsigned i = 0; i < ARRAY_SIZE(val); i++) {
+		dserv_state_name(&cfg, nm, sizeof nm, leaf[i]);
+		dserv_msg_int64(f, nm, 0, val[i]);
+		pub_enqueue(f);
+	}
+}
+#endif /* CONFIG_PTP_CLOCK */
 
 /* A hardware sync edge may anchor an obs toggle only if it is RECENT: well under
  * the shortest obs on/off cadence (seconds), so a stale latched edge from the
@@ -163,6 +500,54 @@ static void groups_resync(void)
 
 /* One inbound 128-byte frame (config/cmd/ess-in_obs) from the host module:
  * dispatch it into the config, and run any GPIO command it produced. */
+/* Inbound frames accepted, published once a second as state/cmds_rx.
+ *
+ * This exists because "publishing but deaf" is the nastiest failure this box
+ * has: the uplink works, state/* keeps flowing, and every status field says
+ * healthy -- while the %match registration is gone and cmd/* silently never
+ * arrives. It has cost hours twice now, and no field on the box revealed it.
+ *
+ * A COUNTER does, and needs no interpretation: watch any state/* timestamp
+ * advance while cmds_rx sits still and the downlink is dead. It is monotonic
+ * from boot, so a host can also spot a reboot it missed (the count drops).
+ * Counts every accepted inbound frame, not just pin commands -- the question is
+ * whether the path works at all. */
+static uint32_t cmds_rx;
+
+/* Exposed for the console's `show` (box_console.h). */
+uint32_t box_cmds_rx(void) { return cmds_rx; }
+
+/* "<prefix>/foo/bar" -> "foo/bar", once per frame.
+ *
+ * The matchers below used to rebuild a full key per candidate and compare the
+ * whole thing -- and the at_abs one did that BOX_NPINS times, so every inbound
+ * frame cost ~30 snprintf + strcmp whether or not it matched anything. Measured
+ * dbg/disp_us: ~470 us per frame, nearly all of it string formatting.
+ *
+ * This is the same strip dserv_dispatch() already does (memcmp the prefix, work
+ * on the leaf); these Zephyr-only matchers just never used it because src/core/
+ * is shared verbatim with the Pico and they live here instead. */
+static const char *frame_leaf(const dserv_msg_t *m, char *buf, size_t buflen)
+{
+	char pfx[64];
+	int plen = dserv_cfg_prefix(&cfg, pfx, sizeof pfx);
+
+	if (plen <= 0 || m->namelen < (uint16_t)(plen + 1)) {
+		return NULL;
+	}
+	if (memcmp(m->name, pfx, (size_t) plen) != 0 || m->name[plen] != '/') {
+		return NULL;                       /* not addressed to this box */
+	}
+	uint16_t sl = (uint16_t)(m->namelen - (plen + 1));
+
+	if (sl >= buflen) {
+		sl = (uint16_t)(buflen - 1);
+	}
+	memcpy(buf, m->name + plen + 1, sl);
+	buf[sl] = '\0';
+	return buf;
+}
+
 static void on_usb_frame(const uint8_t *frame, void *ud)
 {
 	ARG_UNUSED(ud);
@@ -170,6 +555,461 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 	if (dserv_msg_parse(frame, &m) != 0) {
 		return;
 	}
+	cmds_rx++;
+
+	char leafbuf[112];
+	const char *leaf = frame_leaf(&m, leafbuf, sizeof leafbuf);
+
+#if defined(CONFIG_PTP_CLOCK)
+	/* <prefix>/cmd/ptp/offset <us> -- the host's PHC->dserv constant.
+	 *
+	 * Handled HERE rather than in dserv_cfg__cmd() because src/core/ is shared
+	 * verbatim with the Pico and this is Zephyr/PTP-only. Same precedent as
+	 * ess/in_obs below, which is also intercepted before dispatch.
+	 *
+	 * Anchoring is gated on !in_obs for the reason PORTING.md records: a
+	 * re-anchor STEPS the offset, and applying that inside a data-collection
+	 * window puts two events of one trial on different mappings. With PTP the
+	 * step is sub-us rather than the hundreds of us an obs anchor moves, but
+	 * the rule is about correctness, not magnitude.
+	 */
+	/* <prefix>/cmd/do/<pin>/at_abs <dserv_us> -- fire at an ABSOLUTE instant. */
+	{
+		int pin2, pos = -1;
+
+		/* ONE parse of the leaf, not BOX_NPINS candidate keys. %n + the
+		 * explicit NUL check is the same guard dserv_config.h uses, so
+		 * "cmd/do/18/at_absXYZ" cannot match pin 18. */
+		if (leaf &&
+		    sscanf(leaf, "cmd/do/%d/at_abs%n", &pin2, &pos) == 1 &&
+		    pos > 0 && leaf[pos] == '\0' &&
+		    pin2 >= 0 && pin2 < BOX_NPINS) {
+			uint64_t T   = (uint64_t) dserv_msg_as_ll(&m);
+			uint64_t now = box_gpio_now_us();
+			uint8_t  f3[DSERV_MSG_LEN];
+			char     nm3[80];
+
+			if (!boxclk.synced) {
+				dserv_state_name(&cfg, nm3, sizeof nm3, "sched/abs_err");
+				dserv_msg_string(f3, nm3, 0, "unsynced");
+				pub_enqueue(f3);
+				return;
+			}
+
+			uint64_t target_box = dserv_to_box_us(&boxclk, T);
+			int64_t  lead_us    = (int64_t) target_box - (int64_t) now;
+
+			/* NEVER fire late. A box that silently fires milliseconds after T
+			 * is far worse than one that says it missed -- the whole value of
+			 * time-triggering is that every node agrees on the instant. */
+			if (lead_us <= 0) {
+				dserv_state_name(&cfg, nm3, sizeof nm3, "sched/abs_late_us");
+				dserv_msg_int64(f3, nm3, 0, -lead_us);
+				pub_enqueue(f3);
+				dserv_state_name(&cfg, nm3, sizeof nm3, "sched/abs_err");
+				dserv_msg_string(f3, nm3, 0, "late");
+				pub_enqueue(f3);
+				if (sched_dbg) {
+					sched_dbg_publish(T, now, target_box, lead_us);
+				}
+				return;
+			}
+
+			abs_target_us[pin2] = T;
+			k_timer_stop(&abs_timer[pin2]);
+			k_timer_user_data_set(&abs_timer[pin2], (void *) (intptr_t) pin2);
+			k_timer_start(&abs_timer[pin2], K_USEC(lead_us), K_NO_WAIT);
+
+			/* Publish the lead so the host can see the margin it actually got
+			 * -- shrinking lead is the early warning before anything is late. */
+			dserv_state_name(&cfg, nm3, sizeof nm3, "sched/abs_lead_us");
+			dserv_msg_int64(f3, nm3, 0, lead_us);
+			pub_enqueue(f3);
+			dserv_state_name(&cfg, nm3, sizeof nm3, "sched/abs_err");
+			dserv_msg_string(f3, nm3, 0, "armed");
+			pub_enqueue(f3);
+			if (sched_dbg) {
+				sched_dbg_publish(T, now, target_box, lead_us);
+			}
+			return;
+		}
+	}
+
+#if defined(CONFIG_PTP_CLOCK)
+	/* <prefix>/cmd/sched/debug 0|1 -- arm the at_abs diagnostics. Runtime, not
+	 * persisted: turn it on against a live box, read sched/dbg_*, turn it off.
+	 * See sched_dbg_publish() for why it may only run after the timer is armed. */
+	{
+		if (leaf && strcmp(leaf, "cmd/pubq/per_pass") == 0) {
+			long v = dserv_msg_as_long(&m);
+
+			if (v < 1)  v = 1;
+			if (v > PUBQ_DEPTH) v = PUBQ_DEPTH;
+			pubq_per_pass = (uint8_t) v;
+
+			uint8_t f5[DSERV_MSG_LEN];
+			char nm5[80];
+			dserv_state_name(&cfg, nm5, sizeof nm5, "pubq/per_pass");
+			dserv_msg_int(f5, nm5, 0, (int32_t) pubq_per_pass);
+			pub_enqueue(f5);
+			return;
+		}
+
+		if (leaf && strcmp(leaf, "cmd/pubq/bypass") == 0) {
+			pubq_bypass = dserv_msg_as_long(&m) ? 1 : 0;
+
+			uint8_t f4[DSERV_MSG_LEN];
+			char nm4[80];
+			dserv_state_name(&cfg, nm4, sizeof nm4, "pubq/bypass");
+			dserv_msg_int(f4, nm4, 0, (int32_t) pubq_bypass);
+			pub_enqueue(f4);
+			return;
+		}
+
+		if (leaf && strcmp(leaf, "cmd/sched/debug") == 0) {
+			sched_dbg = dserv_msg_as_long(&m) ? 1 : 0;
+
+			uint8_t f2[DSERV_MSG_LEN];
+			char nm[80];
+			dserv_state_name(&cfg, nm, sizeof nm, "sched/debug");
+			dserv_msg_int(f2, nm, 0, (int32_t) sched_dbg);
+			pub_enqueue(f2);
+			return;
+		}
+	}
+#endif /* CONFIG_PTP_CLOCK */
+
+	{
+		if (leaf && strcmp(leaf, "cmd/ptp/offset") == 0) {
+			ptp_offset_us    = dserv_msg_as_ll(&m);
+			ptp_offset_valid = 1;
+
+			uint32_t win = 0;
+			int ok = box_obs_active() ? -1 : ptp_reanchor(&win);
+
+			uint8_t f2[DSERV_MSG_LEN];
+			char nm[80];
+			dserv_state_name(&cfg, nm, sizeof nm, "ptp/offset_us");
+			dserv_msg_int64(f2, nm, 0, ptp_offset_us);
+			pub_enqueue(f2);
+
+			if (ok == 0) {
+				/* A FOURTH sync source beside hw / swc / sw, so a datafile
+				 * records which mechanism produced its timestamps. */
+				dserv_state_name(&cfg, nm, sizeof nm, "sync/source");
+				dserv_msg_string(f2, nm, 0, "ptp");
+				pub_enqueue(f2);
+
+				dserv_state_name(&cfg, nm, sizeof nm, "sync/ptp_window_us");
+				dserv_msg_int(f2, nm, 0, (int32_t) win);
+				pub_enqueue(f2);
+
+				dserv_state_name(&cfg, nm, sizeof nm, "sync/offset_us");
+				dserv_msg_int64(f2, nm, 0, boxclk.offset_us);
+				pub_enqueue(f2);
+			}
+			return;
+		}
+	}
+#endif
+
+#if defined(BOX_HAVE_OTA_SLOT)
+	/* <prefix>/cmd/ota/flashtest <kb> -- OTA step 2's execute-while-write probe.
+	 *
+	 * The hazard: slot1 writes hit the same FlexSPI device slot0 is XIP-ing
+	 * from, so every erase/program suspends instruction fetch, and the stall
+	 * lands on our single service loop. `cmd/save` already writes NVS while
+	 * running, but that is a ~1 kB blob -- a 640 kB image is a completely
+	 * different duty cycle, and "it worked for 1 kB" is not evidence.
+	 *
+	 * So measure it before building the receive path on top. What matters is
+	 * NOT the burst total (a real OTA interleaves writes with service passes)
+	 * but the worst SINGLE operation, because that is the atomic hole the loop
+	 * cannot be scheduled through. Read ota/dbg/erase_max_us and
+	 * ota/dbg/prog_max_us, and watch dbg/loop_max_us over the same window.
+	 *
+	 * Writes a deterministic pattern and reads it back, so this also proves the
+	 * slot is actually writable rather than merely accepting the calls -- the
+	 * same "check it RAN, not that the register took the write" lesson the TDDR
+	 * PLL bug taught. Nothing here touches slot0 or the running image. */
+	if (leaf && strcmp(leaf, "cmd/ota/flashtest") == 0) {
+		int32_t  verify_ok = 0;
+		int      rc;
+		uint32_t done = 0, wall_us = 0;
+
+		if (box_obs_active()) {          /* never program flash mid-trial */
+			ota_dbg_rc    = -EBUSY;
+			ota_dbg_until = k_uptime_get() + 6000;
+			return;
+		}
+
+		long kb = dserv_msg_as_long(&m);
+		if (kb <= 0)    kb = 64;
+		if (kb > 1024)  kb = 1024;       /* bounded: this stalls the loop */
+
+		rc = box_ota_flash_open();
+		if (rc == 0) {
+			uint32_t want   = (uint32_t) kb * 1024u;
+			uint32_t sector = box_ota_flash_sector();
+			uint32_t cap    = box_ota_flash_size();
+
+			if (want > cap) {
+				want = cap;
+			}
+			box_ota_flash_stats_reset();
+
+			uint8_t  page[256];
+			uint32_t c0 = k_cycle_get_32();
+
+			for (done = 0; done < want && rc == 0; done += sizeof page) {
+				if (sector && (done % sector) == 0) {
+					rc = box_ota_flash_erase(done);
+					if (rc != 0) break;
+				}
+				for (uint32_t i = 0; i < sizeof page; i++) {
+					page[i] = (uint8_t) ((done + i) * 31u + 7u);
+				}
+				rc = box_ota_flash_program(done, page, sizeof page);
+			}
+			wall_us = k_cyc_to_us_floor32(k_cycle_get_32() - c0);
+
+			/* Read back a sample rather than the whole span: the point is
+			 * "did the bytes land", and re-reading 1 MB adds stall for no
+			 * extra information. First, last and middle page. */
+			if (rc == 0 && done) {
+				uint32_t probes[3] = { 0, (done / 2) & ~255u,
+						       done - sizeof page };
+				verify_ok = 1;
+				for (int p = 0; p < 3 && verify_ok; p++) {
+					uint8_t got[256];
+
+					if (box_ota_flash_read(probes[p], got, sizeof got) != 0) {
+						verify_ok = 0;
+						break;
+					}
+					for (uint32_t i = 0; i < sizeof got; i++) {
+						if (got[i] != (uint8_t) ((probes[p] + i) * 31u + 7u)) {
+							verify_ok = 0;
+							break;
+						}
+					}
+				}
+			}
+
+			ota_dbg_slot   = cap;
+			ota_dbg_sector = sector;
+		}
+
+		uint32_t e_max = 0, p_max = 0, e_n = 0, p_n = 0;
+		box_ota_flash_stats(&e_max, &p_max, &e_n, &p_n);
+
+		ota_dbg_bytes   = done;
+		ota_dbg_wall_ms = wall_us / 1000u;
+		ota_dbg_e_max   = e_max;
+		ota_dbg_p_max   = p_max;
+		ota_dbg_e_n     = e_n;
+		ota_dbg_p_n     = p_n;
+		ota_dbg_verify  = verify_ok;
+		ota_dbg_rc      = (int32_t) rc;
+		ota_dbg_until   = k_uptime_get() + 6000;   /* outlast the catch-up storm */
+
+		box_console_printf("cmd/ota/flashtest -> %u B in %u ms, "
+				   "erase_max %u us, prog_max %u us, verify %s (rc %d)\n",
+				   done, wall_us / 1000u, e_max, p_max,
+				   verify_ok ? "ok" : "FAILED", rc);
+		return;
+	}
+
+	/* <prefix>/cmd/ota/begin "<sha256-hex> <size>" -- open a transfer into slot1. */
+	if (leaf && strcmp(leaf, "cmd/ota/begin") == 0) {
+		char     arg[96];
+		uint8_t  sha[BOX_OTA_SHA_BYTES];
+		uint32_t size = 0;
+
+		dserv_msg_copy_cstr(&m, arg, sizeof arg);
+
+		/* An OTA blocks the service loop in ~60 ms slices for the whole
+		 * image (PORTING.md), so it must never overlap a trial. */
+		if (box_obs_active()) {
+			g_ota.state = BOX_OTA_DONE_FAIL;
+			g_ota.err   = BOX_OTA_ERR_STATE;
+			ota_pub_done();
+			box_console_printf("cmd/ota/begin -> refused, in_obs\n");
+			return;
+		}
+		if (strlen(arg) < 65 || box_ota_parse_sha(arg, sha) != 0) {
+			g_ota.state = BOX_OTA_DONE_FAIL;
+			g_ota.err   = BOX_OTA_ERR_SHA_INIT;
+			ota_pub_done();
+			box_console_printf("cmd/ota/begin -> bad sha argument\n");
+			return;
+		}
+		size = (uint32_t) strtoul(arg + 64, NULL, 0);
+
+		int rc = box_ota_flash_open();
+		if (rc != 0) {
+			g_ota.state = BOX_OTA_DONE_FAIL;
+			g_ota.err   = BOX_OTA_ERR_FLASH;
+			ota_pub_done();
+			box_console_printf("cmd/ota/begin -> slot open failed (%d)\n", rc);
+			return;
+		}
+		if (box_ota_begin(&g_ota, &g_ota_flash_ops, box_ota_flash_size(),
+				  box_ota_flash_sector(), sha, size) != 0) {
+			g_ota_active = 0;
+			ota_pub_done();
+			box_console_printf("cmd/ota/begin -> refused (%s)\n",
+					   box_ota_err_str(g_ota.err));
+			return;
+		}
+		box_ota_flash_stats_reset();
+		g_ota_size    = size;
+		g_ota_ack_at  = BOX_OTA_ACK_EVERY;
+		g_ota_active  = 1;
+		ota_res_until = 0;
+
+		ota_pub_str("ota/state", box_ota_state_str(g_ota.state));
+		ota_pub_int("ota/progress", 0);
+		ota_pub_int("ota/ack", 0);
+		box_console_printf("cmd/ota/begin -> staging %u B into slot1 "
+				   "(cap %u, sector %u)\n",
+				   size, box_ota_flash_size(), box_ota_flash_sector());
+		return;
+	}
+
+	/* <prefix>/cmd/ota/chunk -- one sequential span of image bytes.
+	 *   [0..3] seq_off u32 LE   [4..7] crc32 u32 LE   [8..] data
+	 * Strictly sequential: seq_off must equal the sink cursor. EVERY reject
+	 * re-acks the current cursor rather than staying silent, so the host always
+	 * has something to resume from and a lost frame costs one retry instead of
+	 * a stalled transfer. Rejecting is therefore idempotent by construction. */
+	if (leaf && strcmp(leaf, "cmd/ota/chunk") == 0) {
+		uint32_t seq, crc;
+
+		if (!g_ota_active) {
+			return;                       /* stray frame, no transfer open */
+		}
+		/* A trial started mid-transfer: hold, do not abort. Re-acking the
+		 * cursor lets the host retry and make progress once the obs ends,
+		 * which is friendlier than throwing away a part-written image. */
+		if (box_obs_active()) {
+			ota_pub_int("ota/ack", (int32_t) g_ota.received);
+			return;
+		}
+		if (m.datalen <= BOX_OTA_CHUNK_HDR) {
+			ota_pub_int("ota/ack", (int32_t) g_ota.received);
+			return;
+		}
+
+		const uint8_t *p = m.data;
+		uint32_t n = m.datalen - BOX_OTA_CHUNK_HDR;
+
+		memcpy(&seq, p, 4);
+		memcpy(&crc, p + 4, 4);
+		p += BOX_OTA_CHUNK_HDR;
+
+		if (seq != g_ota.received || box_crc32(p, n) != crc) {
+			ota_pub_int("ota/ack", (int32_t) g_ota.received);
+			return;
+		}
+		if (box_ota_sink(&g_ota, p, n) != 0) {
+			g_ota_active = 0;
+			box_ota_finish(&g_ota, -1);
+			ota_pub_done();
+			box_console_printf("cmd/ota/chunk -> abort (%s) at %u\n",
+					   box_ota_err_str(g_ota.err), g_ota.received);
+			return;
+		}
+		if (g_ota.received >= g_ota_size) {          /* all bytes in -> verify */
+			uint32_t e_max = 0, p_max = 0, e_n = 0, p_n = 0;
+
+			g_ota_active = 0;
+			box_ota_finish(&g_ota, 0);
+			box_ota_flash_stats(&e_max, &p_max, &e_n, &p_n);
+			ota_pub_done();
+			box_console_printf("cmd/ota/chunk -> %s (%s), %u B, "
+					   "erase_max %u us, prog_max %u us\n",
+					   box_ota_state_str(g_ota.state),
+					   box_ota_err_str(g_ota.err), g_ota.received,
+					   e_max, p_max);
+			return;
+		}
+		if (g_ota.received >= g_ota_ack_at) {
+			g_ota_ack_at = g_ota.received + BOX_OTA_ACK_EVERY;
+			ota_pub_int("ota/ack", (int32_t) g_ota.received);
+			ota_pub_int("ota/progress", box_ota_progress_pct(&g_ota));
+		}
+		return;
+	}
+
+	/* <prefix>/cmd/ota/verify -- re-hash the image BY READING IT BACK OUT OF
+	 * slot1, and compare against the sha from cmd/ota/begin.
+	 *
+	 * This is not redundant with the transfer's own sha. That one hashes bytes
+	 * as they ARRIVE, so `ota/state=ok` means "the image crossed the link
+	 * intact and no flash call reported an error" -- it says nothing about what
+	 * is actually in the slot. Only a read-back does. It is the same distinction
+	 * cmd/ota/flashtest draws by reading its pattern back, and the same lesson
+	 * as the TDDR PLL bug: confirm the operation HAPPENED, do not infer it from
+	 * a call that returned 0.
+	 *
+	 * Step 4 must run this before arming a TBYB trial: MCUboot will happily
+	 * try to boot a slot we merely believe we wrote. */
+	if (leaf && strcmp(leaf, "cmd/ota/verify") == 0) {
+		ota_sha_t vs;
+		uint8_t   buf[256], out[BOX_OTA_SHA_BYTES];
+		uint32_t  off = 0, left = g_ota.expected_size;
+		int       rc = 0, match = 0;
+
+		if (box_obs_active()) {
+			ota_pub_int("ota/flash_verify", -1);
+			return;
+		}
+		if (left == 0 || box_ota_flash_open() != 0) {
+			ota_pub_int("ota/flash_verify", -1);
+			box_console_printf("cmd/ota/verify -> nothing staged\n");
+			return;
+		}
+
+		uint32_t c0 = k_cycle_get_32();
+
+		ota_sha_start(&vs);
+		while (left) {
+			uint32_t n = (left > sizeof buf) ? (uint32_t) sizeof buf : left;
+
+			rc = box_ota_flash_read(off, buf, n);
+			if (rc != 0) {
+				break;
+			}
+			ota_sha_update(&vs, buf, n);
+			off  += n;
+			left -= n;
+		}
+		ota_sha_finish(&vs, out);
+		match = (rc == 0) &&
+			memcmp(out, g_ota.expected_sha, BOX_OTA_SHA_BYTES) == 0;
+
+		uint32_t ms = k_cyc_to_us_floor32(k_cycle_get_32() - c0) / 1000u;
+
+		ota_pub_int("ota/flash_verify", match ? 1 : 0);
+		ota_pub_int("ota/flash_ms", (int32_t) ms);
+		ota_res_until = k_uptime_get() + 6000;
+		box_console_printf("cmd/ota/verify -> slot1 sha %s (%u B read in %u ms, rc %d)\n",
+				   match ? "MATCHES" : "DIFFERS", off, ms, rc);
+		return;
+	}
+
+	/* <prefix>/cmd/ota/abort -- drop a transfer in progress. */
+	if (leaf && strcmp(leaf, "cmd/ota/abort") == 0) {
+		if (g_ota_active) {
+			g_ota_active = 0;
+			box_ota_finish(&g_ota, -1);
+		}
+		ota_pub_done();
+		box_console_printf("cmd/ota/abort -> %s\n", box_ota_state_str(g_ota.state));
+		return;
+	}
+#endif /* BOX_HAVE_OTA_SLOT */
 
 	if (dserv_msg_name_eq(&m, BOX_SYNC_DP)) {
 		int obs = (int) dserv_msg_as_long(&m);
@@ -346,7 +1186,11 @@ int main(void)
 	 * printk/LOG is on the board UART (chosen zephyr,console) and still works --
 	 * the boot-log channel PORTING.md documents. */
 #if defined(BOX_HAVE_PERSIST)
-	if (box_flash_init() == 0) {
+	int frc = box_flash_init();
+	if (frc != 0) {
+		box_persist_mount_err = frc;   /* surfaced in the boot banner */
+	}
+	if (frc == 0) {
 		uint8_t lb[BOX_PERSIST_BLOB_MAX];
 		int ln = box_flash_load(lb, sizeof lb);
 
@@ -358,6 +1202,12 @@ int main(void)
 	}
 #endif
 
+
+#if defined(CONFIG_PTP_CLOCK)
+	for (int i = 0; i < BOX_NPINS; i++) {
+		k_timer_init(&abs_timer[i], abs_fire, NULL);
+	}
+#endif
 	box_uplink_init(&cfg);       /* USB (and Ethernet where present) up */
 
 	box_console_init(&cfg);      /* binds CDC or console UART per console_mode */
@@ -427,6 +1277,24 @@ int main(void)
 	} else {
 		box_console_printf("eth: no lease (link=%d)\n", box_net_eth_link());
 	}
+#if defined(BOX_HAVE_PERSIST)
+	/* Say so LOUDLY when persistence is dead: every `save` will fail and every
+	 * reboot silently reverts to defaults, which reads as a firmware bug. */
+	if (box_persist_mount_err) {
+		/* Everything needed to diagnose it, in one line: a bare "FAILED" sent
+		 * this hunt into the FlexSPI driver for hours when the answer was a
+		 * wrong partition offset. See PORTING.md 2026-07-25. */
+		int pirc = 0; uint32_t pisz = 0, poff = 0, ss = 0, sc = 0;
+		box_flash_debug(&pirc, &pisz, &poff);
+		box_flash_geometry(&ss, &sc);
+		box_console_printf("persist: NVS MOUNT FAILED err=%d -- `save` will fail, "
+		                   "config will NOT survive reboot\n", box_persist_mount_err);
+		box_console_printf("persist:   page_info(off=0x%x) rc=%d size=%u; "
+		                   "sectors %ux%u\n",
+		                   (unsigned) poff, pirc, (unsigned) pisz,
+		                   (unsigned) sc, (unsigned) ss);
+	}
+#endif
 	box_console_printf("PTP hw clock: ready=%d  now=%llu ns\n",
 	       (int) box_ptp_ready(), (unsigned long long) box_ptp_now_ns());
 #else
@@ -437,8 +1305,18 @@ int main(void)
 	box_console_printf("active uplink: %s\n", box_uplink_active_name());
 
 #if defined(CONFIG_BT)
-	/* ---- block #6 (ingress): multi-peripheral BLE central ---- */
-	if (box_ble_init() == 0) {
+	/* ---- block #6 (ingress): multi-peripheral BLE central ----
+	 *
+	 * GATED on the persisted flag, matching the RP2350's stated contract
+	 * ("ENABLE CONTRACT: persisted cfg->ble_en, CLI `ble enable 1`, default
+	 * OFF" -- wiznet-io/pico/box_ble_central.h). This port carried the config
+	 * field over but initialised unconditionally, so `show` reported ble.en=0
+	 * while the radio was up and scanning -- a config field that did nothing,
+	 * which is the same "field that lies" class as net.ip and sync/source.
+	 * A wired-only box should not be running a radio it was told to leave off. */
+	if (!cfg.ble_en) {
+		box_console_printf("BLE disabled (ble enable 1 -- live, `save` to persist)\n\n");
+	} else if (box_ble_init() == 0) {
 		box_console_printf("BLE central up; scanning for d5e7000x peripherals (max %d)\n\n",
 		       CONFIG_BT_MAX_CONN);
 	} else {
@@ -454,6 +1332,7 @@ int main(void)
 	uint8_t rx[256];
 	int watchdog = 0;
 	uint32_t loop_last_us = 0, loop_max_us = 0, loop_t0 = 0;
+	uint32_t wd_skipped = 0;          /* 1 Hz beats skipped after a loop stall */
 	uint32_t disp_last_us = 0, disp_max_us = 0;
 	int64_t next_wd = k_uptime_get() + 1000;
 	char name[80];
@@ -462,12 +1341,44 @@ int main(void)
 		box_uplink_service(&cfg);         /* carrier/strap selection + (re)connect */
 		box_console_service(&cfg);        /* two-way CLI (non-blocking, bounded) */
 
+		/* A couple of queued telemetry frames per pass. Bounded ON PURPOSE:
+		 * the point is that no single pass can be held hostage by the backlog,
+		 * so command latency stays flat instead of spiking once a second. */
+		pub_drain(pubq_per_pass);
+
 		int n = box_uplink_poll(rx, sizeof rx);
 		if (n == BOX_NET_RESET) {
 			dserv_framer_reset(&rx_framer);
 			/* A host just opened the pipe. dserv only learns what it is
 			 * told while listening, so describe the box now. */
 			box_announce_burst(&cfg, groups);
+
+			/* ...and CORRECT state/sync/source, which the announce burst
+			 * does not carry.
+			 *
+			 * dserv RETAINS datapoints, and nothing else publishes this leaf
+			 * until an anchor arrives -- so a box that reboots leaves the old
+			 * "ptp" standing and reads as synced when it is not. That is not
+			 * cosmetic: rig_check step 5 passes on the stale value while the
+			 * box refuses every at_abs, which is exactly what happened on
+			 * 2026-07-27 (step 5 PASS, step 7 "unsynced", and the PASS was the
+			 * one lying). An anchor never survives a box reboot.
+			 *
+			 * CONDITIONAL on purpose. This fires on any dserv (re)connect, and
+			 * a dserv RESTART leaves the box up with its anchor intact -- so
+			 * publishing "none" unconditionally would destroy a good value to
+			 * fix a stale one. Report what is actually true. */
+#if defined(CONFIG_PTP_CLOCK)
+			{
+				uint8_t f0[DSERV_MSG_LEN];
+				char nm0[80];
+
+				dserv_state_name(&cfg, nm0, sizeof nm0, "sync/source");
+				dserv_msg_string(f0, nm0, 0,
+						 ptp_offset_valid ? "ptp" : "none");
+				pub_enqueue(f0);
+			}
+#endif
 		} else if (n > 0) {
 			/* Cost of turning received bytes into an executed command
 			 * (framer + dispatch + GPIO write). Completes the inbound
@@ -480,6 +1391,22 @@ int main(void)
 				disp_max_us = dd;
 			}
 		}
+
+#if defined(CONFIG_PTP_CLOCK)
+		/* Publishes owed by scheduled fires (see abs_fire): done HERE, off the
+		 * timer callback, so a blocking send can never sit between one pin's
+		 * edge and another's. The stamp is abs_target_us[], the intended time,
+		 * so nothing about the reported instant depends on when this runs. */
+		if (abs_pub_pending) {
+			uint32_t due = abs_pub_pending;
+			abs_pub_pending = 0;
+			for (int p = 0; p < BOX_NPINS; p++) {
+				if (due & (1u << p)) {
+					publish_do((uint8_t) p, 1, abs_target_us[p]);
+				}
+			}
+		}
+#endif
 
 		box_di_event_t ev;
 		while (box_gpio_poll_di(&cfg, &ev)) {
@@ -554,8 +1481,40 @@ int main(void)
 		}
 #endif
 
-		if (k_uptime_get() >= next_wd) {
+		int64_t wd_now = k_uptime_get();
+
+		if (wd_now >= next_wd) {
+			/* Normal case is `next_wd += 1000` -- phase-preserving, so the
+			 * heartbeat does not drift. The extra clause is the CATCH-UP
+			 * policy, and it is not cosmetic.
+			 *
+			 * Anything that blocks the service loop for seconds (a flash
+			 * burst does: 512 kB into slot1 = ~8 s, OTA step 2) leaves
+			 * next_wd many periods in the past. `+= 1000` alone then fires
+			 * the gate once per MISSED period, i.e. N full ~28-frame status
+			 * bursts in N consecutive ~1 ms passes -- hundreds of frames into
+			 * a 40-deep queue. Measured: dbg/pubq_dropped 128 -> 358 across
+			 * two bursts. So a stall became a telemetry OUTAGE on top of the
+			 * stall, and the frames dropped were preferentially the
+			 * single-shot ones published at the end of the stalling operation
+			 * -- which is precisely how an OTA result reads as "never ran".
+			 *
+			 * Emit ONE burst and skip the rest. The missed beats are still
+			 * ADDED to the count, so state/watchdog keeps meaning
+			 * seconds-since-boot rather than becoming a count of beats that
+			 * happened to be emitted -- rig_check and any historical reading
+			 * are unaffected. And the gap is now published explicitly as
+			 * dbg/wd_skipped instead of only being inferable from a jump in
+			 * the watchdog value, so a stall is easier to see, not harder. */
 			next_wd += 1000;
+			if (next_wd <= wd_now) {
+				uint32_t miss = (uint32_t)((wd_now - next_wd) / 1000) + 1u;
+
+				watchdog   += (int) miss;
+				wd_skipped += miss;
+				next_wd     = wd_now + 1000;
+			}
+
 			uint8_t f[DSERV_MSG_LEN];
 			dserv_state_name(&cfg, name, sizeof name, "watchdog");
 			dserv_msg_int(f, name, 0, watchdog++);
@@ -566,19 +1525,81 @@ int main(void)
 				 * budget rather than a guess. */
 				uint32_t ul = 0, um = 0, ud = 0;
 				box_net_usb_send_stats(&ul, &um, &ud);
-				box_uplink_send(f, DSERV_MSG_LEN);
+				pub_enqueue(f);
 				dserv_state_name(&cfg, name, sizeof name, "dbg/usb_send_us");
 				dserv_msg_int(f, name, 0, (int32_t) ul);
-				box_uplink_send(f, DSERV_MSG_LEN);
+				pub_enqueue(f);
 				dserv_state_name(&cfg, name, sizeof name, "dbg/usb_send_max_us");
 				dserv_msg_int(f, name, 0, (int32_t) um);
-				box_uplink_send(f, DSERV_MSG_LEN);
+				pub_enqueue(f);
 				dserv_state_name(&cfg, name, sizeof name, "dbg/usb_drops");
 				dserv_msg_int(f, name, 0, (int32_t) ud);
-				box_uplink_send(f, DSERV_MSG_LEN);
+				pub_enqueue(f);
 				dserv_state_name(&cfg, name, sizeof name, "watchdog");
 				dserv_msg_int(f, name, 0, watchdog - 1);
 			}
+
+			/* Deliberately alongside watchdog: watchdog proves the UPLINK
+			 * is alive, cmds_rx proves the DOWNLINK is. Together they make
+			 * "publishing but deaf" a one-glance diagnosis -- watchdog
+			 * climbing while cmds_rx sits frozen -- instead of the hours it
+			 * has cost twice, hiding behind a box whose every status field
+			 * read healthy. */
+			dserv_state_name(&cfg, name, sizeof name, "cmds_rx");
+			dserv_msg_int(f, name, 0, (int32_t) cmds_rx);
+			pub_enqueue(f);
+
+			/* Telemetry the queue itself dropped. Non-zero means the burst is
+			 * outrunning the drain. Published rather than left silent: a
+			 * queue that quietly discards data is exactly the failure shape
+			 * this project keeps getting caught by. */
+			dserv_state_name(&cfg, name, sizeof name, "dbg/pubq_dropped");
+			dserv_msg_int(f, name, 0, (int32_t) pubq_dropped);
+			pub_enqueue(f);
+
+			/* Cumulative 1 Hz beats the loop was too stalled to emit. Nonzero
+			 * means something held the loop for >1 s -- an OTA burst does this
+			 * legitimately; anything else wants explaining. */
+			dserv_state_name(&cfg, name, sizeof name, "dbg/wd_skipped");
+			dserv_msg_int(f, name, 0, (int32_t) wd_skipped);
+			pub_enqueue(f);
+
+#if defined(BOX_HAVE_OTA_SLOT)
+			/* Re-announce the last flashtest result for a few ticks --
+			 * see the ota_dbg_* declarations for why once is not enough. */
+			if (ota_res_until && k_uptime_get() < ota_res_until) {
+				ota_pub_str("ota/state",  box_ota_state_str(g_ota.state));
+				ota_pub_str("ota/result", box_ota_err_str(g_ota.err));
+				ota_pub_int("ota/progress", box_ota_progress_pct(&g_ota));
+				ota_pub_int("ota/ack", (int32_t) g_ota.received);
+			}
+
+			if (ota_dbg_until && k_uptime_get() < ota_dbg_until) {
+				static const struct { const char *k; uint32_t *v; } ota_kv[] = {
+					{ "ota/slot/size",        &ota_dbg_slot    },
+					{ "ota/slot/sector",      &ota_dbg_sector  },
+					{ "ota/dbg/bytes",        &ota_dbg_bytes   },
+					{ "ota/dbg/wall_ms",      &ota_dbg_wall_ms },
+					{ "ota/dbg/erase_max_us", &ota_dbg_e_max   },
+					{ "ota/dbg/prog_max_us",  &ota_dbg_p_max   },
+					{ "ota/dbg/erase_n",      &ota_dbg_e_n     },
+					{ "ota/dbg/prog_n",       &ota_dbg_p_n     },
+				};
+
+				for (unsigned i = 0; i < ARRAY_SIZE(ota_kv); i++) {
+					dserv_state_name(&cfg, name, sizeof name, ota_kv[i].k);
+					dserv_msg_int(f, name, 0, (int32_t) *ota_kv[i].v);
+					pub_enqueue(f);
+				}
+				dserv_state_name(&cfg, name, sizeof name, "ota/dbg/verify");
+				dserv_msg_int(f, name, 0, ota_dbg_verify);
+				pub_enqueue(f);
+				dserv_state_name(&cfg, name, sizeof name, "ota/dbg/rc");
+				dserv_msg_int(f, name, 0, ota_dbg_rc);
+				pub_enqueue(f);
+			}
+#endif
+
 #if defined(CONFIG_NETWORKING)
 			/* Publish-latency investigation: how long does one
 			 * zsock_send() actually take, and how long is a full
@@ -592,48 +1613,122 @@ int main(void)
 				box_net_eth_send_stats(&sl, &sm);
 				dserv_state_name(&cfg, name, sizeof name, "dbg/send_us");
 				dserv_msg_int(f, name, 0, (int32_t) sl);
-				box_uplink_send(f, DSERV_MSG_LEN);
+				pub_enqueue(f);
 				dserv_state_name(&cfg, name, sizeof name, "dbg/send_max_us");
 				dserv_msg_int(f, name, 0, (int32_t) sm);
-				box_uplink_send(f, DSERV_MSG_LEN);
+				pub_enqueue(f);
 				dserv_state_name(&cfg, name, sizeof name, "dbg/loop_us");
 				dserv_msg_int(f, name, 0, (int32_t) loop_last_us);
-				box_uplink_send(f, DSERV_MSG_LEN);
+				pub_enqueue(f);
 				dserv_state_name(&cfg, name, sizeof name, "dbg/loop_max_us");
 				dserv_msg_int(f, name, 0, (int32_t) loop_max_us);
-				box_uplink_send(f, DSERV_MSG_LEN);
+				/* WINDOWED: reset after publishing, so this reads "worst pass
+				 * in the last second" rather than "worst pass since boot".
+				 * The since-boot form cannot distinguish a one-off from a
+				 * recurring stall, and reading recurrence into it produced a
+				 * confidently wrong diagnosis on 2026-07-26. */
+				loop_max_us = 0;
+				pub_enqueue(f);
 				{
 					uint32_t wu = 0, wm = 0, ru = 0, rm = 0;
 					box_net_eth_rx_stats(&wu, &wm, &ru, &rm);
 					dserv_state_name(&cfg, name, sizeof name, "dbg/wake_us");
 					dserv_msg_int(f, name, 0, (int32_t) wu);
-					box_uplink_send(f, DSERV_MSG_LEN);
+					pub_enqueue(f);
 					dserv_state_name(&cfg, name, sizeof name, "dbg/recv_us");
 					dserv_msg_int(f, name, 0, (int32_t) ru);
-					box_uplink_send(f, DSERV_MSG_LEN);
+					pub_enqueue(f);
 					dserv_state_name(&cfg, name, sizeof name, "dbg/disp_us");
 					dserv_msg_int(f, name, 0, (int32_t) disp_last_us);
-					box_uplink_send(f, DSERV_MSG_LEN);
+					pub_enqueue(f);
 					dserv_state_name(&cfg, name, sizeof name, "dbg/disp_max_us");
 					dserv_msg_int(f, name, 0, (int32_t) disp_max_us);
-					box_uplink_send(f, DSERV_MSG_LEN);
+					disp_max_us = 0;          /* windowed, see loop_max_us */
+					pub_enqueue(f);
 				}
+				{
+					/* The previously-dark segment: the stack's own
+					 * residence measurement (see box_net_eth.h).
+					 * Interval means; a side with no traffic since
+					 * the last tick publishes nothing. */
+					box_eth_stack_stats_t ss;
+					if (box_net_eth_stack_stats(&ss) == 0) {
+						char d[64];
+						int off;
+						if (ss.rx_count) {
+							dserv_state_name(&cfg, name, sizeof name, "dbg/rxstack_us");
+							dserv_msg_int(f, name, 0, (int32_t) ss.rx_avg_us);
+							pub_enqueue(f);
+							dserv_state_name(&cfg, name, sizeof name, "dbg/rxstack_n");
+							dserv_msg_int(f, name, 0, (int32_t) ss.rx_count);
+							pub_enqueue(f);
+						}
+						if (ss.rx_count && ss.rx_detail_n) {
+							off = 0;
+							for (int i = 0; i < ss.rx_detail_n; i++) {
+								off += snprintf(d + off, sizeof d - off,
+										i ? "/%u" : "%u",
+										ss.rx_detail_us[i]);
+							}
+							dserv_state_name(&cfg, name, sizeof name, "dbg/rxstack_detail");
+							dserv_msg_string(f, name, 0, d);
+							pub_enqueue(f);
+						}
+						if (ss.tx_count) {
+							dserv_state_name(&cfg, name, sizeof name, "dbg/txstack_us");
+							dserv_msg_int(f, name, 0, (int32_t) ss.tx_avg_us);
+							pub_enqueue(f);
+							dserv_state_name(&cfg, name, sizeof name, "dbg/txstack_n");
+							dserv_msg_int(f, name, 0, (int32_t) ss.tx_count);
+							pub_enqueue(f);
+						}
+						if (ss.tx_count && ss.tx_detail_n) {
+							off = 0;
+							for (int i = 0; i < ss.tx_detail_n; i++) {
+								off += snprintf(d + off, sizeof d - off,
+										i ? "/%u" : "%u",
+										ss.tx_detail_us[i]);
+							}
+							dserv_state_name(&cfg, name, sizeof name, "dbg/txstack_detail");
+							dserv_msg_string(f, name, 0, d);
+							pub_enqueue(f);
+						}
+					}
+				}
+#if defined(CONFIG_SOC_SERIES_IMXRT10XX)
+				{
+					/* TEMP: DI-silence hunt. Raw IGPIO interrupt
+					 * state + ISR entry count, once a second. */
+					uint32_t r[5];
+					char g[96];
+					box_gpio_dbg_regs(r);
+					snprintf(g, sizeof g,
+						 "imr=%lx isr=%lx icr1=%lx edge=%lx psr=%lx isrn=%lu",
+						 (unsigned long) r[0], (unsigned long) r[1],
+						 (unsigned long) r[2], (unsigned long) r[3],
+						 (unsigned long) r[4],
+						 (unsigned long) box_gpio_di_isr_count());
+					dserv_state_name(&cfg, name, sizeof name, "dbg/gpio");
+					dserv_msg_string(f, name, 0, g);
+					pub_enqueue(f);
+				}
+#endif
 				dserv_state_name(&cfg, name, sizeof name, "watchdog");
 				dserv_msg_int(f, name, 0, watchdog - 1);
 			}
 #endif
-			box_uplink_send(f, DSERV_MSG_LEN);
+			pub_enqueue(f);
 
 			/* box status as datapoints -- observable any time over the active
 			 * uplink, not just at boot: active transport, and (where present)
 			 * the Ethernet link/lease and the PTP hardware clock. */
 			dserv_state_name(&cfg, name, sizeof name, "uplink");
 			dserv_msg_string(f, name, 0, box_uplink_active_name());
-			box_uplink_send(f, DSERV_MSG_LEN);
+			pub_enqueue(f);
 #if defined(CONFIG_NETWORKING)
 			dserv_state_name(&cfg, name, sizeof name, "net/link");
 			dserv_msg_int(f, name, 0, box_net_eth_link());
-			box_uplink_send(f, DSERV_MSG_LEN);
+			pub_enqueue(f);
 
 			uint8_t ip[4];
 			if (box_net_eth_get_ip(ip)) {
@@ -641,11 +1736,38 @@ int main(void)
 				snprintf(ips, sizeof ips, "%u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]);
 				dserv_state_name(&cfg, name, sizeof name, "net/ip");
 				dserv_msg_string(f, name, 0, ips);
-				box_uplink_send(f, DSERV_MSG_LEN);
+				pub_enqueue(f);
 			}
 			dserv_state_name(&cfg, name, sizeof name, "ptp/ns");
 			dserv_msg_int64(f, name, 0, (int64_t) box_ptp_now_ns());
-			box_uplink_send(f, DSERV_MSG_LEN);
+			pub_enqueue(f);
+
+#if defined(CONFIG_PTP_CLOCK)
+			/* Re-anchor from PTP once a second. Costs NO packets -- the
+			 * offset the host gave us is constant, so this is two local
+			 * clock reads. Contrast the obs anchor, which needs a frame to
+			 * arrive and inherits its transport delay.
+			 *
+			 * Skipped during an obs (a re-anchor steps the offset), which is
+			 * also why the 1 Hz cadence is harmless: the drift it corrects is
+			 * the box crystal against PTP, and box_clock's rate estimator
+			 * covers the gap across a trial. */
+			if (ptp_offset_valid && !box_obs_active()) {
+				uint32_t win = 0;
+
+				if (ptp_reanchor(&win) == 0) {
+					dserv_state_name(&cfg, name, sizeof name,
+							 "sync/ptp_window_us");
+					dserv_msg_int(f, name, 0, (int32_t) win);
+					pub_enqueue(f);
+
+					dserv_state_name(&cfg, name, sizeof name,
+							 "sync/offset_us");
+					dserv_msg_int64(f, name, 0, boxclk.offset_us);
+					pub_enqueue(f);
+				}
+			}
+#endif
 #endif
 			/* status is available on demand via the `show` CLI command and as
 			 * these datapoints -- no periodic console spam. */
@@ -662,8 +1784,17 @@ int main(void)
 				uint8_t blob[BOX_PERSIST_BLOB_MAX];
 				uint32_t bn = box_persist_serialize(&cfg, blob, sizeof blob);
 
-				box_console_printf("deferred save -> %s (%u bytes)\n",
-				       box_flash_save(blob, bn) == 0 ? "ok" : "FAILED", bn);
+				int src = box_flash_save(blob, bn);
+				if (src == 0) {
+					box_console_printf("deferred save -> ok (%u bytes)\n", bn);
+				} else {
+					/* Report the errno. A bare "FAILED" sent the
+					 * RW612 hunt toward the FlexSPI driver when the
+					 * answer was -EDEADLK (-45): NVS refusing an
+					 * unrecognised region. */
+					box_console_printf("deferred save -> FAILED (%u bytes, err=%d)\n",
+					       bn, src);
+				}
 			}
 #else
 			(void) due;

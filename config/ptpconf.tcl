@@ -54,22 +54,14 @@ if { ![info exists ::ptp_iface] }  { set ::ptp_iface eth0 }
 # driver probe and is NOT stable across reboots (this rig moved ptp0 -> ptp1
 # after a Pi restart, and a hardcoded path then measured the wrong clock).
 if { ![info exists ::ptp_phc] }    { set ::ptp_phc "" }
-# phc_offset is a tiny C helper (extio-zephyr/host/phc_offset.c) and is NOT part
-# of the dserv install, so search rather than assume: a deployed host is not a
-# repo checkout. On the rig it lives outside $dspath entirely. Override in
-# local/ptp.tcl, or -- better -- install it somewhere standard:
-#     sudo cp phc_offset /usr/local/bin/
-set ::ptp_bin_candidates [list \
-    [file join $dspath extio-zephyr host phc_offset] \
-    [file join $dspath scripts phc_offset] \
-    /usr/local/bin/phc_offset \
-    /usr/bin/phc_offset]
-if { ![info exists ::ptp_bin] } {
-    set ::ptp_bin ""
-    foreach c $::ptp_bin_candidates {
-        if { [file executable $c] } { set ::ptp_bin $c; break }
-    }
-}
+# Reject a measurement whose own uncertainty is too large rather than anchoring
+# on it: dservPhcOffset reports `window`, and the error is bounded by half of it.
+# A bad D looks authoritative once it is on every box, so refusing is better than
+# publishing. Method B windows are tens of ns; a min-filtered method A sandwich
+# is ~1.4-3.2 us on the hosts measured. 20 us is generous for both and still
+# rejects a pathological read.
+if { ![info exists ::ptp_window_max_ns] } { set ::ptp_window_max_ns 20000 }
+
 # Re-anchor cadence. D moves only as fast as the PHC<->system-clock drift, which
 # phc2sys holds at ~0.002 ppm => ~400 s to accumulate 1 us on the rig Pi, and
 # ~3200 s on a host with hardware cross-timestamping. 300 s is conservative for
@@ -104,27 +96,35 @@ proc ptp_resolve_phc {} {
     error "cannot resolve a PHC for $::ptp_iface ([llength $l] ptp devices present)"
 }
 
-# D in microseconds, or an error. phc_offset --once prints ONE integer (ns) on
-# stdout and its diagnostics on stderr, so this stays parseable; it prefers the
-# hardware cross-timestamp where the driver has one (+/-11 ns on an Intel I226)
-# and falls back to min-filtered sandwich reads (+/-704 ns on a Pi 5).
+# D in microseconds, or an error.
+#
+# dservPhcOffset is BUILT INTO dserv (src/TclServer.cpp), beside
+# dservClockEpochOffset -- the two halves of the same sum. This used to exec
+# extio-zephyr/host/phc_offset, which meant a binary outside the dserv install to
+# locate and keep in sync (it is not under $dspath on a deployed host, and that
+# broke on the first real sweep), a ~2 s fork+exec where the ioctl costs
+# microseconds, and stdout as the contract. The standalone tool remains for bench
+# work -- it does the two-method cross-check, drift fit and residuals this does
+# not need.
 proc ptp_measure_d {} {
     set phc [ptp_resolve_phc]
-    if { ![file readable $phc] } {
-        error "$phc not readable -- add the udev rule in systemd/README.md"
+    set r   [dservPhcOffset $phc]          ;# dict: ns window method phc
+
+    set ns     [dict get $r ns]
+    set window [dict get $r window]
+    set method [dict get $r method]
+
+    if { $window > $::ptp_window_max_ns } {
+        error "PHC read window ${window} ns > ${::ptp_window_max_ns} (method\
+               $method) -- refusing to anchor on it"
     }
-    if { $::ptp_bin eq "" || ![file executable $::ptp_bin] } {
-        error "phc_offset not found (tried: [join $::ptp_bin_candidates {, }]) --\
-               build it (cc -O2 -Wall -o phc_offset phc_offset.c) and install to\
-               /usr/local/bin, or set ::ptp_bin in local/ptp.tcl"
-    }
-    set ns [string trim [exec $::ptp_bin --once $phc 2>/dev/null]]
-    if { ![string is entier -strict $ns] } {
-        error "phc_offset gave '$ns'"
-    }
+
+    ptp_pub phc       $phc
+    ptp_pub method    $method
+    ptp_pub window_ns $window
+
     # PHC - MONOTONIC is hugely positive (PHC counts from the epoch, MONOTONIC
     # from boot), so integer division needs no rounding care here.
-    ptp_pub phc $phc
     return [expr {[dservClockEpochOffset] - ($ns / 1000)}]
 }
 

@@ -46,6 +46,7 @@ static volatile uint64_t sync_edge[2];                 /* [0]=fall(end) [1]=rise
 
 static struct gpio_callback di_cb;
 static bool                 cb_added;
+static volatile uint32_t    di_isr_n;      /* TEMP diagnostic: ISR entries */
 
 /* single ISR for every configured input + the sync pin. 64-bit fields are
  * written here and read under irq_lock in the poller (single-core CM33). */
@@ -56,6 +57,8 @@ static void di_isr(const struct device *dev, struct gpio_callback *cb,
 	ARG_UNUSED(cb);
 	uint64_t t = now_us();
 	bool woke = false;
+
+	di_isr_n++;                          /* TEMP diagnostic */
 
 	for (int i = 0; i < BOX_NPINS; i++) {
 		if (!(pins & BIT(i))) {
@@ -247,6 +250,31 @@ uint64_t box_gpio_now_us(void)
 {
 	return now_us();
 }
+
+/* ---- TEMP diagnostics for the one-DI-event-then-silence hunt ----
+ * Raw IGPIO interrupt state for the box port, read live: IMR (is the pin
+ * still unmasked?), ISR (pending flag stuck?), ICR1, EDGE_SEL (both-edge
+ * armed?), PSR (the actual pad level -- proves the jumper conducts without a
+ * meter). Register map: DR 0x00, GDIR 0x04, PSR 0x08, ICR1 0x0C, ICR2 0x10,
+ * IMR 0x14, ISR 0x18, EDGE_SEL 0x1C. */
+uint32_t box_gpio_di_isr_count(void)
+{
+	return di_isr_n;
+}
+
+#if defined(CONFIG_SOC_SERIES_IMXRT10XX)
+void box_gpio_dbg_regs(uint32_t out[5])    /* imr, isr, icr1, edge_sel, psr */
+{
+	volatile uint32_t *b =
+		(volatile uint32_t *) DT_REG_ADDR(DT_ALIAS(box_gpio_port));
+
+	out[0] = b[0x14 / 4];
+	out[1] = b[0x18 / 4];
+	out[2] = b[0x0C / 4];
+	out[3] = b[0x1C / 4];
+	out[4] = b[0x08 / 4];
+}
+#endif
 
 void box_gpio_read_di_levels(const box_config_t *c, uint8_t levels[BOX_NPINS])
 {
