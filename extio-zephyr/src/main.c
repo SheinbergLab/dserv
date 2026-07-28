@@ -26,6 +26,9 @@
 #include "box_clock.h"
 #include "box_announce.h"
 #include "box_boot.h"
+#if defined(BOX_HAVE_ADC)
+#include "box_ain.h"
+#endif
 #include "box_obs.h"
 #include "box_console.h"
 #if defined(BOX_HAVE_PERSIST)
@@ -1390,6 +1393,14 @@ int main(void)
 	 * register, so nothing else may read it directly. */
 	box_boot_init();
 
+#if defined(BOX_HAVE_ADC)
+	/* After the persisted config (rate/groups come from it) and before the
+	 * service loop, so the first blocks are already queued when the uplink
+	 * comes up. Returns -ENODEV on a box with no Click fitted, which is the
+	 * ordinary case and not worth reporting as a failure. */
+	(void) box_ain_init(&cfg);
+#endif
+
 
 #if defined(CONFIG_PTP_CLOCK)
 	for (int i = 0; i < BOX_NPINS; i++) {
@@ -1557,6 +1568,38 @@ int main(void)
 		 * the point is that no single pass can be held hostage by the backlog,
 		 * so command latency stays flat instead of spiking once a second. */
 		pub_drain(pubq_per_pass);
+
+#if defined(BOX_HAVE_ADC)
+		/* Analog blocks, built on the sampling thread and sent from HERE:
+		 * exactly one thread ever writes the uplink. Bounded per pass for the
+		 * same reason as pub_drain -- a burst of blocks must not hold the loop
+		 * hostage and spike command latency. */
+		for (int ai = 0; ai < 2; ai++) {
+			ain_block_t blk;
+			uint8_t payload[12 + AIN_BLOCK_MAX * 2];
+			uint8_t f[DSERV_MSG_LEN];
+			char leaf[BOX_LABEL_MAX + 8], nm[80];
+
+			if (!box_ain_pop(&blk)) {
+				break;
+			}
+			int plen = ain_block_payload(&blk, payload);
+
+			dserv_ain_group_leaf(&cfg, blk.gidx, leaf, sizeof leaf);
+			dserv_state_name(&cfg, nm, sizeof nm, leaf);
+			/* The block's own t0 is the frame timestamp -- sample k of column
+			 * c is at t0 + k*interval_us, so the host reshapes from the block
+			 * alone. Publish time is NOT the sample time and must not be
+			 * substituted here. */
+			/* > 0, NOT == 0: dserv_msg_build returns the FRAME LENGTH on
+			 * success and -1 only when name+payload overflow the 109-byte
+			 * payload. Checking for 0 silently publishes nothing, which on
+			 * the bench is indistinguishable from a dead ADC. */
+			if (dserv_msg_bytes(f, nm, blk.t0_us, payload, (uint32_t) plen) > 0) {
+				pub_enqueue(f);
+			}
+		}
+#endif
 
 		int n = box_uplink_poll(rx, sizeof rx);
 		if (n == BOX_NET_RESET) {

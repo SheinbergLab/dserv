@@ -43,14 +43,25 @@
 #include <stdlib.h>
 #include "dserv_config.h"
 
-#define AIN_MAX_CH     4    /* MCP3204: 4 single-ended channels */
+/* 8, not the MCP3204's 4: the ADC 20 Click (TLA2518) is 8-channel, and this
+ * header is the part that must not change when one is fitted. THE WIRE FORMAT IS
+ * UNTOUCHED -- the block header has always carried `mask` (a byte) and `nchan`,
+ * so eight channels was already representable and a host decodes it with no
+ * change. Costs a few bytes of per-group RAM on a 4-channel box. */
+#define AIN_MAX_CH     8
 #define AIN_BLOCK_MAX  24   /* max int16 samples per block: 12B header + 48B + a
                              * long "extio/<name>/ain/<label>" varname must fit
-                             * the 128B frame (varlen+datalen <= 109). */
+                             * the 128B frame (varlen+datalen <= 109).
+                             * UNCHANGED at 8 channels, so batch caps at 3 there
+                             * (24/8) instead of 6 -- ain_group_batch_eff()
+                             * already clamps it, which is why widening the part
+                             * needs no arithmetic here. */
 #define AIN_BLOCK_VER  0x01
 
-/* One packed block handed core0 -> core1 (g_ain_q). core1 builds the DSERV_BYTE
- * frame (name from dserv_ain_group_leaf(gidx)) and sends it. */
+/* One packed block handed from the SAMPLING THREAD to the service loop (box_ain's
+ * k_msgq), which builds the DSERV_BYTE frame (name from dserv_ain_group_leaf)
+ * and enqueues it. Same split as the RP2350's core0 -> core1 queue and for the
+ * same reason: exactly one thread ever touches the uplink. */
 typedef struct {
     uint64_t t0_us;                 /* sample instant of scan 0 (on-change: the event sample) */
     uint8_t  gidx;                  /* source group index -> leaf/name on core 1 */
@@ -62,7 +73,7 @@ typedef struct {
     int16_t  v[AIN_BLOCK_MAX];      /* count*nchan samples, scan-major ascending channel */
 } ain_block_t;
 
-/* Per-group runtime (one per BOX_NAGROUPS slot; lives on core 0). */
+/* Per-group runtime (one per BOX_NAGROUPS slot; owned by the sampling thread). */
 typedef struct {
     uint8_t  dec_count;             /* base scans accumulated toward the next take */
     int32_t  acc[AIN_MAX_CH];       /* boxcar sums for the current decimate window (avg) */

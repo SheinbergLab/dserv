@@ -55,7 +55,10 @@ endif()
 # itself degrades to stubs when the board declares no `box_adc` node, so a board
 # with CONFIG_ADC on for some other reason still links.
 if(CONFIG_ADC)
-	target_sources(app PRIVATE src/platform/box_adc.c)
+	target_sources(app PRIVATE
+		src/platform/box_adc.c         # one sweep, over Zephyr's ADC API
+		src/platform/box_ain.c         # the sampling thread + group packing
+	)
 	target_compile_definitions(app PRIVATE BOX_HAVE_ADC=1)
 endif()
 
