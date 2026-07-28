@@ -23,8 +23,17 @@
 #                                      unanchored box drops events rather than
 #                                      firing late. Anchors do NOT survive a
 #                                      box reboot.
-#   6 PTP quality    pmc offset     -- host-side truth, not the box's self-report
-#   7 fire           sync_fire      -- the whole chain, end to end
+#   6 anchoring SVC  ptp/*          -- is the thing that MAINTAINS anchors alive?
+#                                      Step 5 is a box's own view at one instant
+#                                      and says nothing about whether anchoring
+#                                      will keep working. If ptpconf dies or
+#                                      starts refusing on a bad window, boxes
+#                                      drift silently until someone notices.
+#                                      ptp/anchored (boxes actually reporting)
+#                                      differing from ptp/boxes (boxes pushed to)
+#                                      is the 2026-07-28 failure, made visible.
+#   7 PTP quality    pmc offset     -- host-side truth, not the box's self-report
+#   8 fire           sync_fire      -- the whole chain, end to end
 #
 #   sh rig_check.sh [extio/box1 extio/box2 ...]
 BOXES=${*:-"extio/box1 extio/box2"}
@@ -80,13 +89,39 @@ for B in $BOXES; do
     || bad "$B sync/source=${S:-none} -- run ptp_anchor.sh (at_abs will REFUSE to fire)"
 done
 
-echo "== 6 PTP quality (host-side, via pmc) =="
+echo "== 6 anchoring service (ptpconf) =="
+PTP_D=$(get "ptp/d_us")
+if [ -z "$PTP_D" ]; then
+  echo "  SKIP  ptpconf not running (no ptp/d_us) -- anchors are manual here"
+else
+  PTP_ERR=$(get "ptp/error")
+  PTP_ANCH=$(get "ptp/anchored")
+  PTP_STEP=$(get "ptp/step_us")
+  PTP_WIN=$(get "ptp/window_ns")
+  NBOX=$(echo "$BOXES" | wc -w | tr -d ' ')
+
+  [ -z "$PTP_ERR" ] && ok "ptpconf healthy (D=$PTP_D us, window=${PTP_WIN}ns)" \
+                    || bad "ptpconf error: $PTP_ERR"
+
+  if [ -n "$PTP_ANCH" ] && [ "$PTP_ANCH" -ge "$NBOX" ] 2>/dev/null; then
+    ok "ptp/anchored=$PTP_ANCH covers the $NBOX box(es) under test"
+  else
+    bad "ptp/anchored=${PTP_ANCH:-none} < $NBOX under test -- a push is not landing"
+  fi
+
+  # Only ever published when D jumped past the step threshold. Its presence means
+  # every box was anchored to a timeline that moved; drift never sets this.
+  [ -z "$PTP_STEP" ] && ok "no clock step detected" \
+                     || bad "CLOCK STEP of $PTP_STEP us -- re-anchor and distrust timestamps across it"
+fi
+
+echo "== 7 PTP quality (host-side, via pmc) =="
 if sudo -n /usr/sbin/pmc -i eth0 -b 1 -t 1 "GET CURRENT_DATA_SET" 2>/dev/null \
      | grep -E 'RESPONSE|offsetFromMaster'; then :; else
   echo "  (pmc needs sudo -- see the 99-rig sudoers drop-in)"
 fi
 
-echo "== 7 end-to-end scheduled fire =="
+echo "== 8 end-to-end scheduled fire =="
 OUT=$(sh "$(dirname "$0")/sync_fire.sh" 150 18 $BOXES 2>&1)
 for B in $BOXES; do
   ST=$(echo "$OUT" | awk -v b="$B" '$1==b {print $2}' | tail -1)

@@ -231,9 +231,27 @@ proc ptp_anchor_all {{why sweep}} {
 # retry until it reports ptp. Give up loudly rather than quietly: an anchor that
 # silently fails to land leaves a box refusing every at_abs while everything
 # around it looks healthy.
+# How many boxes are ACTUALLY reporting anchored, which is a different question
+# from how many we pushed to (ptp/boxes). Those two differing is precisely the
+# failure seen on 2026-07-28 -- pushes landing nowhere while everything else read
+# healthy -- and until now only the retry loop knew about it. Nothing outside
+# could tell whether the anchoring SERVICE was working, only whether a given box
+# happened to look right. No side effects: this reads state we already read.
+proc ptp_publish_anchored {} {
+    set n 0
+    foreach b [ptp_boxes] {
+        set src ""
+        catch { set src [dservGet extio/$b/state/sync/source] }
+        if { $src eq "ptp" } { incr n }
+    }
+    ptp_pub anchored $n
+    return $n
+}
+
 proc ptp_verify {box tries} {
     set src ""
     catch { set src [dservGet extio/$box/state/sync/source] }
+    ptp_publish_anchored
     if { $src eq "ptp" } return                     ;# took
 
     if { $tries <= 0 } {
