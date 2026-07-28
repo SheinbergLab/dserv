@@ -17,7 +17,11 @@
  * Ordering these three deliberately is the whole reason the ADC thread's default
  * of 0 -- identical to the service loop -- was worth overriding. */
 #define AIN_THREAD_PRIO   2
-#define AIN_STACK_SIZE    1024
+/* 4096, not 1024. CONFIG_HW_STACK_PROTECTION would catch an overflow as a loud
+ * fatal rather than silent corruption, so this is insurance, not a fix -- but
+ * this thread calls down through adc_read into the SPI stack and 1 KB was a
+ * guess. */
+#define AIN_STACK_SIZE    4096
 #define AIN_QUEUE_DEPTH   8
 
 K_THREAD_STACK_DEFINE(ain_stack, AIN_STACK_SIZE);
@@ -33,7 +37,26 @@ static uint32_t applied_gen;
 static uint8_t  union_mask;          /* channels any active group wants */
 static uint32_t period_us;
 
-static uint32_t st_sweeps, st_blocks, st_dropped, st_late;
+static uint32_t st_sweeps, st_blocks, st_dropped, st_late, st_throttled;
+static int64_t  last_block_ms[BOX_NAGROUPS];
+
+/* Ceiling on how often ONE group may publish.
+ *
+ * Not a preference -- a safety limit. In on-change mode the publish rate is set
+ * by INPUT NOISE, not by config: a 12-bit joystick wanders well past a deadband
+ * of 8, so at a 1 kHz base rate a resting stick can emit ~1000 blocks/s. Each is
+ * a 128-byte frame costing 275-864 us of CPU to send (measured, see
+ * CMakeLists.txt), i.e. 0.28-0.86 SECONDS of CPU per second: the service loop
+ * saturates, the watchdog stops advancing and the net stack starves. That is not
+ * a crash and it does not look like one -- box3 simply went silent on
+ * 2026-07-28, and with no published stats there was nothing to see.
+ *
+ * Continuous mode does not need this: batching already packs many scans into one
+ * frame, which is what makes a 1 kHz eye feed affordable (2 channels, batch 12 ->
+ * ~83 frames/s). This bounds the mode that has no such control.
+ *
+ * Blocks refused here are COUNTED (ain/dbg/throttled), never silently lost. */
+#define AIN_MAX_BLOCKS_PER_S  200
 
 /* Derive what the sampler needs from the live config.
  *
@@ -55,6 +78,14 @@ static void recompute(void)
 	uint8_t have = box_adc_channels();
 	if (have < 8) {
 		union_mask &= (uint8_t) ((1u << have) - 1u);
+	}
+
+	/* mcp_en is the documented master switch ("mcp_en stays the master switch"
+	 * -- dserv_config.h). Honour it: without this, `mcp enable 0` left the
+	 * sampler running, so there was no way to stop it short of clearing every
+	 * group. */
+	if (!cfg->mcp_en) {
+		union_mask = 0;
 	}
 
 	int rate = dserv_cfg_mcp_rate(cfg);
@@ -124,6 +155,13 @@ static void ain_thread_fn(void *a, void *b, void *c)
 
 			if (ain_group_feed(&rt[g], cfg, g, scan, t_us,
 					   running_period, &blk)) {
+				int64_t now_ms = k_uptime_get();
+
+				if (now_ms - last_block_ms[g] < (1000 / AIN_MAX_BLOCKS_PER_S)) {
+					st_throttled++;
+					continue;
+				}
+				last_block_ms[g] = now_ms;
 				if (k_msgq_put(&ain_q, &blk, K_NO_WAIT) != 0) {
 					/* The service loop is not draining. Drop the
 					 * NEWEST rather than block: sampling must not
@@ -176,24 +214,26 @@ int box_ain_pop(ain_block_t *out)
 	return k_msgq_get(&ain_q, out, K_NO_WAIT) == 0 ? 1 : 0;
 }
 
-void box_ain_stats(uint32_t *sweeps, uint32_t *blocks,
-		   uint32_t *dropped, uint32_t *late)
+void box_ain_stats(uint32_t *sweeps, uint32_t *blocks, uint32_t *dropped,
+		   uint32_t *late, uint32_t *throttled)
 {
-	if (sweeps)  *sweeps  = st_sweeps;
-	if (blocks)  *blocks  = st_blocks;
-	if (dropped) *dropped = st_dropped;
-	if (late)    *late    = st_late;
+	if (sweeps)    *sweeps    = st_sweeps;
+	if (blocks)    *blocks    = st_blocks;
+	if (dropped)   *dropped   = st_dropped;
+	if (late)      *late      = st_late;
+	if (throttled) *throttled = st_throttled;
 }
 
-void box_ain_stats_reset(void) { st_sweeps = st_blocks = st_dropped = st_late = 0; }
+void box_ain_stats_reset(void)
+{ st_sweeps = st_blocks = st_dropped = st_late = st_throttled = 0; }
 
 #else  /* no ADC on this board */
 
 int  box_ain_init(const box_config_t *c) { ARG_UNUSED(c); return -ENODEV; }
 void box_ain_apply(void) { }
 int  box_ain_pop(ain_block_t *out) { ARG_UNUSED(out); return 0; }
-void box_ain_stats(uint32_t *s, uint32_t *b, uint32_t *d, uint32_t *l)
-{ if (s) *s = 0; if (b) *b = 0; if (d) *d = 0; if (l) *l = 0; }
+void box_ain_stats(uint32_t *s, uint32_t *b, uint32_t *d, uint32_t *l, uint32_t *t)
+{ if (s) *s = 0; if (b) *b = 0; if (d) *d = 0; if (l) *l = 0; if (t) *t = 0; }
 void box_ain_stats_reset(void) { }
 
 #endif

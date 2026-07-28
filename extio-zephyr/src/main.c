@@ -28,6 +28,7 @@
 #include "box_boot.h"
 #if defined(BOX_HAVE_ADC)
 #include "box_ain.h"
+#include "box_adc.h"
 #endif
 #include "box_obs.h"
 #include "box_console.h"
@@ -1267,6 +1268,16 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 			publish_do(cmd.pin, (uint8_t) (cmd.value ? 1 : 0),
 				   event_stamp(box_gpio_now_us()));
 		}
+#if defined(BOX_HAVE_ADC)
+	} else if (r == CFG_AIN || r == CFG_MCP_EN) {
+		/* Tell the sampler its policy changed. Without this the running
+		 * thread keeps its old channel mask forever: on 2026-07-28 a rescue
+		 * that set `channels off` was accepted, persisted, and had NO effect
+		 * on the live sampler, which carried on saturating the uplink until
+		 * the box went silent. Config that applies only after a reboot is a
+		 * config field that lies. */
+		box_ain_apply();
+#endif
 	} else if (r == CFG_CONSOLE) {
 		box_console_printf("console=%s -- save+reboot to apply\n",
 		       dserv_console_str((uint8_t) dserv_cfg_console_mode(&cfg)));
@@ -1394,6 +1405,12 @@ int main(void)
 	box_boot_init();
 
 #if defined(BOX_HAVE_ADC)
+	/* Same synthesizer the RP2350 runs: with the ADC enabled and no group
+	 * defined, give ch0/ch1 an on-change "joystick" group so a freshly fitted
+	 * Click does something visible instead of nothing. No-op once any group
+	 * exists, and no-op while mcp_en is clear. */
+	dserv_cfg_ain_default(&cfg);
+
 	/* After the persisted config (rate/groups come from it) and before the
 	 * service loop, so the first blocks are already queued when the uplink
 	 * comes up. Returns -ENODEV on a box with no Click fitted, which is the
@@ -1502,6 +1519,15 @@ int main(void)
 	box_console_printf("console: %s (config/console cdc|uart; save+reboot)\n",
 	       dserv_console_str((uint8_t) dserv_cfg_console_mode(&cfg)));
 	box_console_printf("active uplink: %s\n", box_uplink_active_name());
+#if defined(BOX_HAVE_ADC)
+	if (box_adc_ready()) {
+		box_console_printf("analog: %s, %u ch, %u-bit, %u mV fs; %d group(s) at %d Hz base\n",
+		       box_adc_name(), box_adc_channels(), box_adc_bits(), box_adc_vref_mv(),
+		       dserv_ain_active_count(&cfg), dserv_cfg_mcp_rate(&cfg));
+	} else {
+		box_console_printf("analog: no ADC fitted\n");
+	}
+#endif
 	/* Why we are running, in the box's own words. The raw mask rides along
 	 * because the word collapses it (both watchdog and software can be set),
 	 * and 0x0 is itself informative on the RW612 -- that SoC has no power-on
@@ -1795,6 +1821,33 @@ int main(void)
 				dserv_state_name(&cfg, name, sizeof name, "dbg/usb_drops");
 				dserv_msg_int(f, name, 0, (int32_t) ud);
 				pub_enqueue(f);
+#if defined(BOX_HAVE_ADC)
+				/* Analog health, published because its absence cost a box.
+				 * box3 went silent on 2026-07-28 and there was NOTHING to
+				 * look at -- the sampler had stats and published none of
+				 * them, so a runaway publish rate was invisible from the
+				 * host. `blocks` climbing fast, or any `throttled`, is that
+				 * failure in one glance. Only sent when an ADC is fitted. */
+				if (box_adc_ready()) {
+					uint32_t asw = 0, abl = 0, adr = 0, alt = 0, ath = 0, amx = 0, an = 0;
+					box_ain_stats(&asw, &abl, &adr, &alt, &ath);
+					box_adc_stats(&amx, &an);
+					struct { const char *leaf; uint32_t v; } as[] = {
+						{ "ain/dbg/sweeps",    asw },
+						{ "ain/dbg/blocks",    abl },
+						{ "ain/dbg/dropped",   adr },
+						{ "ain/dbg/late",      alt },
+						{ "ain/dbg/throttled", ath },
+						{ "ain/dbg/sweep_max_us", amx },
+						{ "ain/dbg/chans",     box_adc_channels() },
+					};
+					for (unsigned ai2 = 0; ai2 < ARRAY_SIZE(as); ai2++) {
+						dserv_state_name(&cfg, name, sizeof name, as[ai2].leaf);
+						dserv_msg_int(f, name, 0, (int32_t) as[ai2].v);
+						pub_enqueue(f);
+					}
+				}
+#endif
 				dserv_state_name(&cfg, name, sizeof name, "watchdog");
 				dserv_msg_int(f, name, 0, watchdog - 1);
 			}

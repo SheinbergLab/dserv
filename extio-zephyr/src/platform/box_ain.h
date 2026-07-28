@@ -51,9 +51,13 @@ int box_ain_pop(ain_block_t *out);
  * late    -- ticks where the cadence had already expired again before we ran,
  *            i.e. sampling fell behind. NOT the same as dropped, and the more
  *            important of the two: dropped loses data the box knows about,
- *            late means samples were never taken. */
+ *            late means samples were never taken.
+ * throttled -- blocks refused by the per-group rate ceiling. Non-zero means a
+ *            group is trying to publish faster than the uplink can afford,
+ *            which in on-change mode is driven by INPUT NOISE rather than by
+ *            config -- the failure that took box3 off the air on 2026-07-28. */
 void box_ain_stats(uint32_t *sweeps, uint32_t *blocks,
-		   uint32_t *dropped, uint32_t *late);
+		   uint32_t *dropped, uint32_t *late, uint32_t *throttled);
 void box_ain_stats_reset(void);
 
 #endif /* BOX_AIN_H */

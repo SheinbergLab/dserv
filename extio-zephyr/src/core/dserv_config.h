@@ -554,7 +554,13 @@ static inline cfg_result_t dserv_cfg__config(box_config_t *c, const char *k,
         if (strcmp(sub, "channels") == 0) {
             char w[32]; dserv_msg_copy_cstr(m, w, sizeof w);
             uint32_t mask;
-            if (dserv_parse_pins(w, &mask) < 0 || (mask & ~0x0Fu)) return CFG_UNKNOWN;  /* MCP3204: ch 0..3 */
+            /* 0xFF, not 0x0F: the ADC 20 Click (TLA2518) is 8-channel, and a
+             * hardcoded 4-channel limit here would reject its upper half with a
+             * bare CFG_UNKNOWN. box_ain masks the request down to what the part
+             * actually reports, so asking for a channel that is not fitted is
+             * ignored rather than refused -- the driver is the authority on
+             * channel count, not this parser. */
+            if (dserv_parse_pins(w, &mask) < 0 || (mask & ~0xFFu)) return CFG_UNKNOWN;
             c->ain_group_chans[ng] = (uint8_t) mask; c->applied_count++; return CFG_AIN;
         }
         if (strcmp(sub, "label") == 0) {

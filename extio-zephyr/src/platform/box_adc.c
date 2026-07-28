@@ -23,18 +23,32 @@ static uint16_t vref_mv;
 static uint8_t  ready;
 static uint32_t sweep_max_us, sweep_n;
 
-/* Channel count and resolution come from the DRIVER, not from a #define.
+/* How many channels the fitted part has.
  *
- * Zephyr's mcp320x driver stores the part's channel count in its config (4 for
- * the MCP3204, 8 for the 3208) and rejects a channel outside it, so probing is
- * both cheap and authoritative: set up channel n and see if it is accepted. A
- * box that reported 4 while an 8-channel part was fitted would be the same kind
- * of field-that-lies as a config flag that does nothing. */
+ * FROM THE DEVICETREE, not by probing. The first version walked channels upward
+ * until adc_channel_setup() refused one -- authoritative, but it made a NORMAL
+ * boot log `E: unsupported channel id '4'` every time, because provoking the
+ * error WAS the detection. An expected condition reported as an error is how a
+ * real error gets ignored, and this one sat in box3's boot log looking like the
+ * cause of a hang it had nothing to do with.
+ *
+ * The compatible already states the part, so read it there and only fall back to
+ * probing for a part not listed. Widening to the ADC 20 means adding its
+ * compatible here alongside the overlay change. */
+#if DT_NODE_HAS_COMPAT(ADC_NODE, microchip_mcp3204)
+#define ADC_DT_CHANNELS 4
+#elif DT_NODE_HAS_COMPAT(ADC_NODE, microchip_mcp3208)
+#define ADC_DT_CHANNELS 8
+#else
+#define ADC_DT_CHANNELS 0        /* unknown part -- probe, and accept the noise */
+#endif
+
 static uint8_t probe_channels(void)
 {
 	uint8_t n = 0;
+	uint8_t lim = ADC_DT_CHANNELS ? ADC_DT_CHANNELS : BOX_ADC_MAX_CH;
 
-	for (uint8_t ch = 0; ch < BOX_ADC_MAX_CH; ch++) {
+	for (uint8_t ch = 0; ch < lim; ch++) {
 		struct adc_channel_cfg cfg = {
 			.gain             = ADC_GAIN_1,
 			.reference        = ADC_REF_EXTERNAL0,

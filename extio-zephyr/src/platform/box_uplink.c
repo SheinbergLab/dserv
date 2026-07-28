@@ -354,7 +354,17 @@ static void eth_reg_watchdog(const box_config_t *cfg)
 	if (!box_net_eth_server_up()) {
 		fresh_ms = now;
 		if (!down_ms) { down_ms = now; return; }
-		if (now - down_ms < (ever_up ? REG_RETRY_MS : REG_FIRST_MS)) { return; }
+		/* Fast ONLY for the first few attempts, then back off even if we have
+		 * never registered. Gating purely on ever_up was a regression: a box
+		 * whose dserv is unreachable -- a bench box, a wrong target, a box
+		 * carried to another network -- never sets ever_up, so it retried
+		 * every 250 ms FOREVER, each attempt doing blocking socket work.
+		 * Observed on box3 as `re-registering (x276)` with the console
+		 * dropping characters. The fast path exists to cover the one
+		 * guaranteed-failed attempt at boot, not to poll a dead host. */
+		int64_t gap = (ever_up || rereg > 20) ? REG_RETRY_MS : REG_FIRST_MS;
+
+		if (now - down_ms < gap) { return; }
 		down_ms = now;
 		reg_request(cfg, 1);
 		if (++rereg <= 3 || (rereg % 12) == 0) {   /* first few, then ~1/min */
