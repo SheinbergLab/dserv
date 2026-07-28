@@ -331,7 +331,7 @@ proc extio_ota_push_usb {box file sha size} {
     set fp [open $file rb]; fconfigure $fp -translation binary
     set ::extio_ota_img($box)  [read $fp]; close $fp
     set ::extio_ota_size($box) $size
-    catch { dservAfterCancel $::extio_ota_timer($box) }
+    extio_ota_cancel ::extio_ota_timer $box
 
     catch { dservClear extio/$box/state/ota/ack }
     catch { dservClear extio/$box/state/ota/state }
@@ -385,12 +385,35 @@ proc extio_ota_usb_blast {box from} {                  ;# write every chunk from
     }
 }
 
+# Cancel a pending dservAfter recorded in an array element, and forget it.
+#
+# The element is routinely ABSENT -- on the first ack of a push, on any push
+# that never stalls (the resend timer is then never set at all), and on every
+# repeat call of extio_ota_usb_cleanup, which runs at least three times per push
+# (from dp_on_ack at cursor==size, then from on_state on `ok`, then on `armed`).
+# So a missing element is the NORMAL path here, not an error path.
+#
+# `catch { dservAfterCancel $arr($box) }` gets that wrong, and in THIS file it is
+# not merely inelegant: line 18 is `errormon enable`, which traces writes to
+# ::errorInfo (src/ErrorMonitor.cpp). Tcl writes errorInfo when an error is
+# RAISED -- catch stops it propagating, not from happening -- so every one of
+# these guarded-but-failing lines still gets reported, and an OTA produced a
+# stream of
+#   can't unset "::extio_ota_dead(box3)": no such element in array
+# for anyone watching the subprocess. `catch` is not silence here; use
+# `info exists` / `unset -nocomplain` for conditions that are expected.
+proc extio_ota_cancel {arr box} {
+    upvar #0 $arr a
+    if { [info exists a($box)] } { catch { dservAfterCancel $a($box) } }
+    unset -nocomplain a($box)
+}
+
 proc extio_ota_usb_on_ack {dp data} {                  ;# box published a new contiguous cursor
     if { ![regexp {^extio/([^/]+)/state/ota/ack$} $dp -> box] } return
     if { ![info exists ::extio_ota_size($box)] } return
     if { $data >= $::extio_ota_size($box) } { extio_ota_usb_cleanup $box; return }   ;# all delivered
     extio_ota_usb_deadline $box                                                      ;# progress -> re-arm
-    catch { dservAfterCancel $::extio_ota_timer($box) }                                  ;# debounce: resend only
+    extio_ota_cancel ::extio_ota_timer $box                              ;# debounce: resend only
     set ::extio_ota_timer($box) [dservAfter 400 [list extio_ota_usb_blast $box $data]]    ;# when stuck ~400ms
 }
 
@@ -432,7 +455,7 @@ proc extio_ota_push_dp {box file sha size} {
     set fp [open $file rb]; fconfigure $fp -translation binary
     set ::extio_ota_img($box)  [read $fp]; close $fp
     set ::extio_ota_size($box) $size
-    catch { dservAfterCancel $::extio_ota_timer($box) }
+    extio_ota_cancel ::extio_ota_timer $box
 
     catch { dservClear extio/$box/state/ota/ack }
     catch { dservClear extio/$box/state/ota/state }
@@ -467,12 +490,12 @@ proc extio_ota_dp_on_ack {dp data} {
     if { ![info exists ::extio_ota_size($box)] } return
     if { $data >= $::extio_ota_size($box) } { extio_ota_usb_cleanup $box; return }
     extio_ota_usb_deadline $box
-    catch { dservAfterCancel $::extio_ota_timer($box) }
+    extio_ota_cancel ::extio_ota_timer $box
     set ::extio_ota_timer($box) [dservAfter 400 [list extio_ota_dp_blast $box $data]]
 }
 
 proc extio_ota_usb_deadline {box} {
-    catch { dservAfterCancel $::extio_ota_dead($box) }
+    extio_ota_cancel ::extio_ota_dead $box
     set at -1
     catch { set at [dservGet extio/$box/state/ota/ack] }
     set ::extio_ota_dead($box) [dservAfter 10000 [list extio_ota_usb_deadcheck $box $at]]
@@ -497,13 +520,13 @@ proc extio_ota_usb_fail {box why} {
     puts "extio ota\[$box\]: push ABORTED -- $why"
 }
 
-proc extio_ota_usb_cleanup {box} {                     ;# stop resending (delivered, or state -> armed/fail)
-    catch { dservAfterCancel $::extio_ota_timer($box) }
-    catch { dservAfterCancel $::extio_ota_dead($box) }
-    catch { unset ::extio_ota_img($box) }
-    catch { unset ::extio_ota_size($box) }
-    catch { unset ::extio_ota_timer($box) }
-    catch { unset ::extio_ota_dead($box) }
+# Stop resending (delivered, or state -> armed/fail). IDEMPOTENT ON PURPOSE --
+# it runs three times per push, and only the first call finds anything to do.
+# See extio_ota_cancel above for why that must not be spelled `catch {unset}`.
+proc extio_ota_usb_cleanup {box} {
+    extio_ota_cancel ::extio_ota_timer $box
+    extio_ota_cancel ::extio_ota_dead  $box
+    unset -nocomplain ::extio_ota_img($box) ::extio_ota_size($box)
 }
 
 # Free a staged image by hand (auto-freed on ok|fail; this is for an aborted run).
@@ -734,7 +757,7 @@ proc extio_ota_push_docked {box file sha size port} {
 
 proc extio_ota_docked_done {dp value} {                ;# dservWhen callback: log the terminal result
     if { ![regexp {^extio/([^/]+)/state/ota/result$} $dp -> box] } return
-    catch { unset ::extio_ota_when($box) }
+    unset -nocomplain ::extio_ota_when($box)
     puts "extio ota\[$box\]: docked OTA result = $value"
 }
 
