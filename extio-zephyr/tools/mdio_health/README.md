@@ -26,8 +26,19 @@ KSZ8081 signature: PHYID1 (reg 2) = `0x0022`, PHYID2 (reg 3) = `0x1561`.
 | state | reads |
 |---|---|
 | **healthy (MEASURED, board 4, brand new)** | **`0x0022` 200/200 AND `0x1561` 200/200 at BOTH addr 0 and addr 2; zero `0xffff`, zero `0x0000`, zero other** |
-| marginal power (recoverable, PORTING.md) | mix of `0x0`, `0xffff`, `0x5`, occasional valid |
-| board 3 (faulty, RMA) | `0xffff` 200/200, no variation across 94+ passes |
+| marginal power (recoverable, PORTING.md) | mix of `0x0`, `0xffff`, `0x5`, occasional valid — and it goes to a STABLE 200/200 the instant power is fixed |
+| board 3 (faulty, RMA) | `0xffff` 200/200 at addr 2, no variation across 94+ passes |
+
+**Recoverable and dead look similar for one pass and diverge over several.** The
+discriminator is not the rate at any instant, it is which way it MOVES and
+whether PHYID1 ever reads at all:
+
+- box1/box2 (2026-07-28, both fine): valid reads present in the mix, and
+  reseating took them to a stable 200/200 **immediately, and it held**.
+- board 3, re-measured on a direct connection before RMA: **PHYID1 0/200 at BOTH
+  addresses, ever**; addr 2 uniformly `0xffff` (undriven); addr 0 uniformly
+  `0x0000` (bus HELD LOW) with `0x1561` decaying 110 → 2 → 0 across four passes.
+  Same "answers a little, then goes silent" as the original condemnation.
 
 The healthy case is **perfect, not merely good** — so this is a binary test with no
 judgement call in the middle. A board sitting at, say, 150/200 is marginal and
@@ -66,6 +77,19 @@ KSZ8081 PHY Control 1/2. A healthy linked board reads
 full duplex, while the extio firmware on the same board had just reported
 `autonegotiation timed out`. That ruled out both the board and the cable in one
 reading, and pointed at power -- correctly.
+
+## Do not decode a failed read (this tool got it wrong too)
+
+`0xffff` = nobody drove the bus, `0x0000` = bus held low. NEITHER is a register
+value. The first version of `status()` decoded them anyway and printed
+
+    BMCR ffff [POWER-DOWN ISOLATE aneg-en aneg-restart ] BMSR ffff [LINK aneg-done ...]
+
+— a confident-sounding diagnosis assembled entirely out of an absent device, and
+the exact mistake this tool exists to correct in the ksz8081 driver, whose
+"PHY is still in factory mode!" is that same all-ones read. Caught on the RMA
+candidate hours after the README warning above was written. `status()` now
+refuses to decode unless the read is live.
 
 ## Do not read the LEDs
 

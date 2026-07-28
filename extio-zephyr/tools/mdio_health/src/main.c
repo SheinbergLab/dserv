@@ -54,6 +54,9 @@ static void hammer(uint8_t addr)
  *
  * BMSR bit 2 is the honest answer to "is there a link": it is LATCHING-LOW, so
  * read it twice -- the first read can report a link that has since dropped. */
+/* A register read is only meaningful if the bus was actually driven. */
+static inline bool live(uint16_t v) { return v != 0xffff && v != 0x0000; }
+
 static void status(uint8_t addr)
 {
 	uint16_t bmcr = 0xffff, bmsr = 0xffff, bmsr2 = 0xffff;
@@ -64,6 +67,23 @@ static void status(uint8_t addr)
 	mdio_read(mdio, addr, 1, &bmsr2);
 	mdio_read(mdio, addr, 0x1e, &ctl1);   /* KSZ8081 PHY Control 1 */
 	mdio_read(mdio, addr, 0x1f, &ctl2);   /* KSZ8081 PHY Control 2 */
+
+	/* DECODE NOTHING FROM A FAILED READ.
+	 *
+	 * 0xffff means nobody drove the bus and 0x0000 means it was held low --
+	 * neither is a register value. Decoding them anyway produces
+	 * "BMCR ffff [POWER-DOWN ISOLATE ...]", which is a confident-sounding lie
+	 * assembled out of an absent device, and is EXACTLY the mistake this tool
+	 * exists to correct in the ksz8081 driver ("PHY is still in factory mode!"
+	 * is that same all-ones read). Caught on the RMA candidate 2026-07-28, in
+	 * this tool's own output, hours after writing the README warning about it. */
+	if (!live(bmcr) || !live(bmsr2)) {
+		printk("  BMCR %04x BMSR %04x/%04x CTL1 %04x CTL2 %04x "
+		       "-- NO VALID READ, nothing decodable (%s)\n",
+		       bmcr, bmsr, bmsr2, ctl1, ctl2,
+		       (bmcr == 0xffff) ? "bus not driven" : "bus held low");
+		return;
+	}
 
 	printk("  BMCR %04x [%s%s%s%s] BMSR %04x/%04x [%s%s%s] CTL1 %04x CTL2 %04x\n",
 	       bmcr,
