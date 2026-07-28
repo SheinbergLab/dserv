@@ -44,6 +44,9 @@
 #include "box_ota_flash.h"
 #include "box_ota.h"
 #endif
+#if defined(CONFIG_MCUBOOT_IMG_MANAGER)
+#include <zephyr/dfu/mcuboot.h>
+#endif
 
 static box_config_t   cfg;
 static dserv_framer_t rx_framer;
@@ -237,14 +240,28 @@ static int64_t  ota_dbg_until;
 #define BOX_OTA_CHUNK_HDR   8u      /* seq u32 LE + crc32 u32 LE */
 
 static int64_t   ota_res_until;   /* re-announce window for the TERMINAL result */
+static uint32_t  g_ota_base;      /* where the image starts inside slot1 */
 static box_ota_t g_ota;
 static uint8_t   g_ota_active;
 static uint32_t  g_ota_size;
 static uint32_t  g_ota_ack_at;
 
+/* box_ota works in IMAGE offsets (0 = first byte of the image); the flash layer
+ * works in SLOT offsets. g_ota_base is the difference, and applying it in one
+ * place keeps the portable sink unaware of the swap mode entirely. */
+static int ota_erase(uint32_t off)
+{
+	return box_ota_flash_erase(off + g_ota_base);
+}
+
+static int ota_program(uint32_t off, const uint8_t *page, uint32_t len)
+{
+	return box_ota_flash_program(off + g_ota_base, page, len);
+}
+
 static const box_ota_flash_t g_ota_flash_ops = {
-	.erase   = box_ota_flash_erase,
-	.program = box_ota_flash_program,
+	.erase   = ota_erase,
+	.program = ota_program,
 };
 #endif
 
@@ -854,7 +871,14 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 			box_console_printf("cmd/ota/begin -> slot open failed (%d)\n", rc);
 			return;
 		}
-		if (box_ota_begin(&g_ota, &g_ota_flash_ops, box_ota_flash_size(),
+		/* Start where MCUboot will LOOK, not at the slot's first byte --
+		 * swap-using-offset reserves the first sector. box_ota's offsets are
+		 * slot-relative, so shift the base and shrink the usable capacity to
+		 * match, or a full-size image would run off the end. */
+		g_ota_base = box_ota_flash_image_base();
+
+		if (box_ota_begin(&g_ota, &g_ota_flash_ops,
+				  box_ota_flash_size() - g_ota_base,
 				  box_ota_flash_sector(), sha, size) != 0) {
 			g_ota_active = 0;
 			ota_pub_done();
@@ -862,6 +886,20 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 					   box_ota_err_str(g_ota.err));
 			return;
 		}
+		/* Clear the trailer NOW rather than at arm time: it is an erase, and
+		 * begin is already the point where we are allowed to touch flash
+		 * (obs-gated above). Failing here is worth reporting but not fatal to
+		 * the transfer -- the image is still worth staging, and arm will say so. */
+		{
+			int trc = box_ota_flash_clear_trailer();
+
+			ota_pub_int("ota/trailer_rc", trc);
+			if (trc != 0) {
+				box_console_printf("cmd/ota/begin -> WARNING trailer clear failed (%d);"
+						   " arm will fail until it is erased\n", trc);
+			}
+		}
+
 		box_ota_flash_stats_reset();
 		g_ota_size    = size;
 		g_ota_ack_at  = BOX_OTA_ACK_EVERY;
@@ -977,7 +1015,7 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 		while (left) {
 			uint32_t n = (left > sizeof buf) ? (uint32_t) sizeof buf : left;
 
-			rc = box_ota_flash_read(off, buf, n);
+			rc = box_ota_flash_read(off + g_ota_base, buf, n);
 			if (rc != 0) {
 				break;
 			}
@@ -998,6 +1036,86 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 				   match ? "MATCHES" : "DIFFERS", off, ms, rc);
 		return;
 	}
+
+#if defined(CONFIG_MCUBOOT_IMG_MANAGER)
+	/* <prefix>/cmd/ota/arm -- boot the staged image ONCE, on trial.
+	 *
+	 * boot_request_upgrade(BOOT_UPGRADE_TEST) marks slot1 to be swapped in for a
+	 * SINGLE boot. If that boot never confirms, the next reset puts the old
+	 * image back with no action from anyone -- which is the whole point: every
+	 * failure path (bad image, wedge, power cut, failed self-test) converges on
+	 * "the old firmware boots".
+	 *
+	 * PERMANENT IS DELIBERATELY NOT OFFERED. A permanent upgrade is a one-way
+	 * door with no recovery if the new image cannot talk to dserv, and this box
+	 * may be physically inaccessible. Confirmation must be EARNED by the running
+	 * image, from cmd/ota/confirm below.
+	 *
+	 * Refuses unless the staged image was verified BY READ-BACK, not merely
+	 * received: MCUboot will happily try to boot a slot we only believe we
+	 * wrote, and a trial that bricks into a reboot loop is a rig visit. */
+	if (leaf && strcmp(leaf, "cmd/ota/arm") == 0) {
+		if (box_obs_active()) {
+			ota_pub_str("ota/arm", "refused_in_obs");
+			return;
+		}
+		if (g_ota.state != BOX_OTA_DONE_OK) {
+			ota_pub_str("ota/arm", "refused_no_verified_image");
+			box_console_printf("cmd/ota/arm -> refused: no verified image staged\n");
+			return;
+		}
+
+		int rc = boot_request_upgrade(BOOT_UPGRADE_TEST);
+
+		if (rc != 0) {
+			ota_pub_str("ota/arm", "failed");
+			ota_pub_int("ota/arm_rc", rc);
+			box_console_printf("cmd/ota/arm -> boot_request_upgrade failed (%d)\n", rc);
+			return;
+		}
+		/* Send this DIRECTLY, not via pub_enqueue. The queue is drained by the
+		 * service loop, and the k_msleep below blocks that very loop -- so a
+		 * queued "armed" is still sitting there when the reset lands and the
+		 * host never sees the acknowledgement for the one command that makes
+		 * the box disappear. Observed exactly that: dserv kept showing a stale
+		 * "refused_no_verified_image" from an earlier attempt while the box was
+		 * demonstrably armed and swapping. */
+		{
+			uint8_t fa2[DSERV_MSG_LEN];
+			char nma[80];
+
+			dserv_state_name(&cfg, nma, sizeof nma, "ota/arm");
+			dserv_msg_string(fa2, nma, 0, "armed");
+			box_uplink_send(fa2, DSERV_MSG_LEN);
+
+			dserv_state_name(&cfg, nma, sizeof nma, "ota/arm_rc");
+			dserv_msg_int(fa2, nma, 0, 0);
+			box_uplink_send(fa2, DSERV_MSG_LEN);
+		}
+		box_console_printf("cmd/ota/arm -> armed for ONE trial boot; rebooting\n");
+		k_msleep(600);                 /* let the wire settle before the reset */
+		sys_reboot(SYS_REBOOT_WARM);
+		return;
+	}
+
+	/* <prefix>/cmd/ota/confirm -- keep the image we are RUNNING.
+	 *
+	 * Only meaningful on a trial boot. Until this lands, the next reset reverts.
+	 * The host should send it only after the box has proven itself -- and the
+	 * proof that matters is state/cmds_rx advancing, because that is the one
+	 * thing a "publishing but deaf" image cannot fake: it means this very
+	 * command arrived over the very path the box needs to remain useful. */
+	if (leaf && strcmp(leaf, "cmd/ota/confirm") == 0) {
+		int rc = boot_write_img_confirmed();
+
+		ota_pub_str("ota/confirm", rc == 0 ? "confirmed" : "failed");
+		ota_pub_int("ota/confirm_rc", rc);
+		ota_res_until = k_uptime_get() + 6000;
+		box_console_printf("cmd/ota/confirm -> %s (%d)\n",
+				   rc == 0 ? "CONFIRMED, image is permanent" : "FAILED", rc);
+		return;
+	}
+#endif /* CONFIG_MCUBOOT_IMG_MANAGER */
 
 	/* <prefix>/cmd/ota/abort -- drop a transfer in progress. */
 	if (leaf && strcmp(leaf, "cmd/ota/abort") == 0) {
@@ -1303,6 +1421,15 @@ int main(void)
 	box_console_printf("console: %s (config/console cdc|uart; save+reboot)\n",
 	       dserv_console_str((uint8_t) dserv_cfg_console_mode(&cfg)));
 	box_console_printf("active uplink: %s\n", box_uplink_active_name());
+#if defined(CONFIG_MCUBOOT_IMG_MANAGER)
+	/* Loud on purpose: a trial boot that nobody confirms REVERTS on the next
+	 * reset, and finding that out from a mysterious version rollback later is
+	 * far worse than one line here. */
+	box_console_printf("image: %s\n",
+	       boot_is_img_confirmed()
+	       ? "confirmed"
+	       : "ON TRIAL -- send cmd/ota/confirm or the next reset REVERTS");
+#endif
 
 #if defined(CONFIG_BT)
 	/* ---- block #6 (ingress): multi-peripheral BLE central ----
@@ -1368,6 +1495,22 @@ int main(void)
 			 * a dserv RESTART leaves the box up with its anchor intact -- so
 			 * publishing "none" unconditionally would destroy a good value to
 			 * fix a stale one. Report what is actually true. */
+#if defined(CONFIG_MCUBOOT_IMG_MANAGER)
+			/* Is this a TRIAL boot? boot_is_img_confirmed() false means the
+			 * running image has not been kept yet and the next reset reverts.
+			 * Published on every connect because a host that reconnects
+			 * mid-trial has no other way to learn it is on the clock -- and
+			 * if nobody confirms, the box silently goes back. */
+			{
+				uint8_t f1[DSERV_MSG_LEN];
+				char nm1[80];
+
+				dserv_state_name(&cfg, nm1, sizeof nm1, "ota/trial");
+				dserv_msg_int(f1, nm1, 0, boot_is_img_confirmed() ? 0 : 1);
+				pub_enqueue(f1);
+			}
+#endif
+
 #if defined(CONFIG_PTP_CLOCK)
 			{
 				uint8_t f0[DSERV_MSG_LEN];

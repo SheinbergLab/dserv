@@ -29,10 +29,45 @@
 int  box_ota_flash_open(void);
 void box_ota_flash_close(void);
 
+/* Where an image must START within the slot, in bytes.
+ *
+ * ZERO for most swap modes, but ONE SECTOR for swap-using-offset -- which is
+ * what this board resolves to, having no scratch partition. Zephyr states the
+ * rule as SWAP_USING_OFFSET_SECTOR_UPDATE_BEGIN = 1: "Sector at which firmware
+ * update should be placed by application in swap using offset mode." The first
+ * sector is working space for the swap itself.
+ *
+ * Getting this wrong is INVISIBLE to a byte-level check: the image writes and
+ * reads back perfectly and MCUboot simply never finds it, because it is looking
+ * one sector further in. OTA step 3 verified the bytes and explicitly did NOT
+ * verify bootability, which is exactly the gap this closes. */
+uint32_t box_ota_flash_image_base(void);
+
 /* Geometry, valid after a successful open(). */
 uint32_t box_ota_flash_size(void);     /* slot capacity in bytes            */
 uint32_t box_ota_flash_sector(void);   /* erase granularity                 */
 uint32_t box_ota_flash_align(void);    /* required program alignment        */
+
+/* Erase the MCUboot image trailer at the END of the slot, so its magic reads
+ * UNSET.
+ *
+ * Required before arming. boot_set_next() switches on the trailer magic: UNSET
+ * means "write it and proceed", GOOD means "proceed", and ANYTHING ELSE falls
+ * through to an error -- which surfaces from Zephyr as a bare -EFAULT from
+ * boot_request_upgrade() with no hint at the cause.
+ *
+ * The trailer lives at the end of the slot and our OTA never touches it: erase
+ * happens as-you-go over the sectors the IMAGE occupies, which are all at the
+ * start. So a slot whose tail holds factory content reports magic=bad forever,
+ * and every arm fails while the image itself verifies perfectly. That is exactly
+ * what the very first MCUboot boot log on this board said, and it took an arm
+ * failure to notice:
+ *
+ *   I: Secondary image: magic=bad, swap_type=0x2, copy_done=0x2, image_ok=0x2
+ *
+ * Erases only from the trailer status offset onward, not the whole 3 MB slot --
+ * boot_erase_img_bank() would be ~46 s of blocking erase here. */
+int box_ota_flash_clear_trailer(void);
 
 /* Erase the sector containing `off`. Returns 0 or a negative errno. */
 int box_ota_flash_erase(uint32_t off);

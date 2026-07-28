@@ -8,6 +8,9 @@
 #include <zephyr/drivers/flash.h>
 #include <zephyr/storage/flash_map.h>
 #include <errno.h>
+#if defined(CONFIG_BOOTLOADER_MCUBOOT)
+#include <zephyr/dfu/mcuboot.h>   /* SWAP_USING_OFFSET_SECTOR_UPDATE_BEGIN */
+#endif
 
 #define OTA_SLOT_ID  FIXED_PARTITION_ID(slot1_partition)
 
@@ -61,9 +64,43 @@ void box_ota_flash_close(void)
 	}
 }
 
+uint32_t box_ota_flash_image_base(void)
+{
+#if defined(CONFIG_MCUBOOT_BOOTLOADER_MODE_SWAP_USING_OFFSET)
+	/* SWAP_USING_OFFSET_SECTOR_UPDATE_BEGIN sectors in; see the header. */
+	return SWAP_USING_OFFSET_SECTOR_UPDATE_BEGIN * sector_size;
+#else
+	return 0u;
+#endif
+}
+
 uint32_t box_ota_flash_size(void)   { return fa ? (uint32_t) fa->fa_size : 0u; }
 uint32_t box_ota_flash_sector(void) { return sector_size; }
 uint32_t box_ota_flash_align(void)  { return align_size; }
+
+int box_ota_flash_clear_trailer(void)
+{
+#if !defined(CONFIG_MCUBOOT_IMG_MANAGER)
+	return -ENOTSUP;
+#else
+	if (!fa || !sector_size) {
+		return -ENODEV;
+	}
+
+	ssize_t off = boot_get_area_trailer_status_offset(OTA_SLOT_ID);
+
+	if (off < 0) {
+		return (int) off;
+	}
+
+	/* Round DOWN to a sector boundary -- erase granularity is a sector, and
+	 * starting mid-sector would fail rather than clear what we need. */
+	uint32_t start = (uint32_t) off - ((uint32_t) off % sector_size);
+	uint32_t len   = (uint32_t) fa->fa_size - start;
+
+	return flash_area_erase(fa, start, len);
+#endif
+}
 
 int box_ota_flash_erase(uint32_t off)
 {
