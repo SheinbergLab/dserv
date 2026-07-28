@@ -1,6 +1,8 @@
 /*
  * extio-zephyr devicetree overlay for the FRDM-RW612.
  */
+#include <zephyr/dt-bindings/gpio/gpio.h>   /* GPIO_ACTIVE_LOW, for the mikroBUS CS */
+
 / {
 	aliases {
 		box-gpio-port     = &hsgpio0;   /* box pin n -> hsgpio0.n (12 = user LED) */
@@ -132,4 +134,39 @@
 &hsgpio0 {
 	pinctrl-0 = <&pinmux_hsgpio0 &pinmux_box_gpio>;
 	pinctrl-names = "default";
+};
+
+/* ---- analog input: MCP3204 on the mikroBUS socket ----
+ *
+ * The board brings the mikroBUS SPI out as flexcomm1 (`mikrobus_spi: &flexcomm1`
+ * in frdm_rw612_common.dtsi) but leaves it disabled with no pinctrl, so the app
+ * supplies both. CS is the socket's own CS pin via the mikrobus_header gpio-map,
+ * which keeps this correct for ANY Click board rather than hardcoding a pad.
+ *
+ * Declares the DEVICE only, no channel@N children. Channels are configured at
+ * runtime by box_adc.c because the sweep mask is a runtime property (a box may
+ * be told to sample 2 channels for a joystick or 4 for an eye feed), and because
+ * the same code then drives an 8-channel part with no devicetree edit.
+ *
+ * 1 MHz is the MCP3204's ceiling at 3.3 V for rated accuracy -- the datasheet
+ * derates below 2.7 V, and the RP2350 driver settled on the same number. A
+ * 4-channel sweep is then ~100 us, which is why sampling never runs on the
+ * service loop.
+ */
+&mikrobus_spi {
+	status = "okay";
+	pinctrl-0 = <&pinmux_flexcomm1_spi>;
+	pinctrl-names = "default";
+	#address-cells = <1>;
+	#size-cells = <0>;
+	cs-gpios = <&mikrobus_header 2 GPIO_ACTIVE_LOW>;
+
+	box_adc: adc@0 {
+		compatible = "microchip,mcp3204";
+		reg = <0>;
+		spi-max-frequency = <1000000>;
+		#io-channel-cells = <1>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+	};
 };

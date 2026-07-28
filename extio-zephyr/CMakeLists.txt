@@ -51,6 +51,14 @@ if(CONFIG_BOOTLOADER_MCUBOOT AND CONFIG_FLASH_MAP)
 	target_compile_definitions(app PRIVATE BOX_HAVE_OTA_SLOT=1)
 endif()
 
+# Analog input: compiled wherever Zephyr's ADC subsystem is enabled. The file
+# itself degrades to stubs when the board declares no `box_adc` node, so a board
+# with CONFIG_ADC on for some other reason still links.
+if(CONFIG_ADC)
+	target_sources(app PRIVATE src/platform/box_adc.c)
+	target_compile_definitions(app PRIVATE BOX_HAVE_ADC=1)
+endif()
+
 # Ethernet + PTP: frdm_rw612 and teensy41 (teensy40 has no PHY).
 if(CONFIG_NETWORKING)
 	target_sources(app PRIVATE
