@@ -145,10 +145,34 @@ proc ptp_measure_d {} {
 # Every live box publishes state/watchdog once a second, so it is the cheapest
 # roster. Retained keys mean a long-gone box can still appear; anchoring one is
 # harmless (the datapoint simply goes nowhere).
+# A box is one whose watchdog is FRESH -- not one whose watchdog datapoint
+# EXISTS. dserv retains datapoints forever, so a box that is unplugged leaves its
+# whole state/* tree standing and keeps being counted.
+#
+# Found by an 8-hour soak on 2026-07-28: box3 had been powered off all night and
+# still counted in BOTH ptp/boxes and ptp/anchored -- its retained
+# state/sync/source still read "ptp". That is the exact bug this subprocess was
+# written to close, reproduced inside it.
+#
+# It is not cosmetic. rig_check's anchoring test is `anchored >= boxes-under-
+# test`, so an inflated count MASKS a real failure: had box1 silently lost its
+# anchor, the count would have gone 3 -> 2, still passed for two boxes, and the
+# check designed to catch exactly that would have reported PASS. The inflation is
+# the same size as the fault it is meant to detect.
+#
+# Freshness, not the value: state/watchdog counts seconds since boot, so a dead
+# box's value is perfectly plausible -- only its TIMESTAMP gives it away.
+set ::ptp_live_us 10000000        ;# watchdog is 1 Hz; 10 s is generous and still
+                                  ;# two orders off an overnight-dead box
+
 proc ptp_boxes {} {
     set out {}
+    set now [now]
     foreach k [dservKeys extio/*/state/watchdog] {
-        if { [regexp {^extio/([^/]+)/state/watchdog$} $k -> b] } { lappend out $b }
+        if { ![regexp {^extio/([^/]+)/state/watchdog$} $k -> b] } continue
+        set age -1
+        catch { set age [expr {$now - [dservTimestamp $k]}] }
+        if { $age >= 0 && $age < $::ptp_live_us } { lappend out $b }
     }
     return [lsort -unique $out]
 }

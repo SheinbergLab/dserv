@@ -140,10 +140,18 @@ else
   [ -z "$PTP_ERR" ] && ok "ptpconf healthy (D=$PTP_D us, window=${PTP_WIN}ns)" \
                     || bad "ptpconf error: $PTP_ERR"
 
-  if [ -n "$PTP_ANCH" ] && [ "$PTP_ANCH" -ge "$NBOX" ] 2>/dev/null; then
-    ok "ptp/anchored=$PTP_ANCH covers the $NBOX box(es) under test"
-  else
+  # Report BOTH numbers. anchored counts boxes reporting sync/source=ptp; boxes
+  # counts LIVE boxes ptpconf pushed to. They differ exactly when a push is not
+  # landing -- and until the 2026-07-28 soak, `boxes` silently included a box
+  # that had been unplugged all night, which inflated `anchored` by the same
+  # amount and would have masked a real anchor loss here.
+  PTP_BOXES=$(get "ptp/boxes")
+  if [ -z "$PTP_ANCH" ] || [ "$PTP_ANCH" -lt "$NBOX" ] 2>/dev/null; then
     bad "ptp/anchored=${PTP_ANCH:-none} < $NBOX under test -- a push is not landing"
+  elif [ -n "$PTP_BOXES" ] && [ "$PTP_ANCH" -lt "$PTP_BOXES" ] 2>/dev/null; then
+    bad "ptp/anchored=$PTP_ANCH of $PTP_BOXES live box(es) -- one is NOT anchored"
+  else
+    ok "ptp/anchored=$PTP_ANCH of ${PTP_BOXES:-?} live, covers the $NBOX under test"
   fi
 
   # Only ever published when D jumped past the step threshold. Its presence means
