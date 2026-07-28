@@ -89,11 +89,40 @@ candidates() {
 
 enabled_of() { systemctl is-enabled "$1" 2>/dev/null | head -1; }
 
+# Every INSTANCE of our templates, loaded or merely enabled.
+#
+# NOT `systemctl list-unit-files`: that lists TEMPLATES (dserv-ptp4l@.service)
+# and never instances (dserv-ptp4l@enp86s0.service), so the first version of this
+# found only templates, skipped them, and reported "no role enabled" on a host
+# where both units were enabled AND active. A status command that cannot see the
+# thing it configures is worse than no status command.
+role_instances() {
+    { systemctl list-units --all --no-legend --no-pager \
+          "$GM_PTP*.service" "$GM_PHC*.service" "$CL_PTP*.service" "$CL_PHC*.service" 2>/dev/null \
+          | sed 's/^[^a-zA-Z]*//' | awk '{print $1}'
+      # enabled-but-never-started instances exist only as .wants symlinks
+      for _l in "$SYSD"/*.target.wants/dserv-ptp4l@*.service \
+                "$SYSD"/*.target.wants/dserv-phc2sys@*.service \
+                "$SYSD"/*.target.wants/dserv-ptp4l-client@*.service \
+                "$SYSD"/*.target.wants/dserv-phc2sys-client@*.service; do
+          [ -e "$_l" ] && basename "$_l"
+      done
+    } 2>/dev/null | sort -u
+}
+
+# PIDs systemd owns, so a healthy managed daemon is not reported as a conflict.
+managed_pid() {
+    for _u in $(role_instances); do
+        _m=$(systemctl show -p MainPID --value "$_u" 2>/dev/null)
+        [ "$_m" = "$1" ] && return 0
+    done
+    return 1
+}
+
 status() {
     echo "== units =="
     _any=0
-    for _u in $(systemctl list-unit-files --no-legend --no-pager 'dserv-ptp*' 2>/dev/null | awk '{print $1}'); do
-        case "$_u" in *@.service) continue ;; esac
+    for _u in $(role_instances); do
         printf "  %-34s %s / %s\n" "$_u" "$(enabled_of "$_u")" "$(systemctl is-active "$_u" 2>/dev/null)"
         _any=1
     done
@@ -101,21 +130,25 @@ status() {
 
     echo "== conflicts =="
     _c=0
-    # The distro's own linuxptp units, and anything hand-started. Two ptp4l on
-    # one PHC do not error -- they fight, and it reads as drift.
+    # The distro's own linuxptp units. Two ptp4l on one PHC do not error -- they
+    # fight, and it reads as drift.
     for _u in ptp4l@ phc2sys@ timemaster; do
         for _e in $(systemctl list-units --no-legend --no-pager "${_u}*" 2>/dev/null | sed 's/^[^a-zA-Z]*//' | awk '{print $1}'); do
             case "$_e" in dserv-*) continue ;; esac
             echo "  DISTRO UNIT RUNNING: $_e"; _c=1
         done
     done
-    if pgrep -af '[p]tp4l|[p]hc2sys' 2>/dev/null | grep -qv 'dserv-ptp-setup'; then
-        # Hand-started daemons are the state office-stim was found in: correct
-        # flags, but they do not survive a reboot and nothing reports that.
-        pgrep -af '[p]tp4l|[p]hc2sys' 2>/dev/null | sed 's/^/  RUNNING: /'
-        systemctl is-active "$GM_PTP"*.service "$CL_PTP"*.service >/dev/null 2>&1 || {
-            echo "  ^ not started by systemd -- will NOT survive a reboot"; _c=1; }
-    fi
+    # ...and daemons nobody supervises. pgrep -x matches the process NAME, so it
+    # cannot match the shell running this script (the -af form did, and listed
+    # the caller's own command line as a conflict).
+    for _n in ptp4l phc2sys; do
+        for _pid in $(pgrep -x "$_n" 2>/dev/null); do
+            managed_pid "$_pid" && continue
+            echo "  HAND-STARTED: $(tr '\0' ' ' < /proc/$_pid/cmdline 2>/dev/null)"
+            echo "    ^ pid $_pid is not supervised -- will NOT survive a reboot"
+            _c=1
+        done
+    done
     [ "$_c" = 0 ] && echo "  (none)"
 
     echo "== time source =="
