@@ -41,5 +41,34 @@ Board 3 showed two genuine `0x1561` reads early on, then went uniformly silent
 and never recovered across both cable configurations and a full ordered
 discharge — so "it answered once" is not sufficient evidence of a usable PHY.
 
-**No baseline has been taken on a KNOWN-GOOD board.** Do that before trusting
-"200/200 = healthy" as the threshold; it is currently an assumption.
+## The ID rate says NOTHING about the media side (2026-07-28)
+
+Learned the hard way on box2. MDIO is the MANAGEMENT interface; it is on the
+board and does not traverse the RJ45, and it works regardless of what the media
+side is doing. So `200/200` next to `autonegotiation timed out` is not a
+contradiction, and neither reading alone tells you where to look:
+
+| signature | where the fault is |
+|---|---|
+| garbage IDs (`0x0000`/`0xffff`/`0x0005` mixed) | **POWER PATH** -- USB-C seating, hubs. The Ethernet cable is IRRELEVANT: MDIO never touches it. |
+| IDs perfect + autoneg timeout | **the wire** -- cable, or the switch port |
+| IDs perfect + `BMSR [LINK aneg-done]` | PHY and wire are both FINE; look at the host software |
+
+So the meter now also dumps the media side (`status()`): BMCR (power-down /
+isolate / aneg-enable), BMSR read TWICE because link status is latching-low, and
+KSZ8081 PHY Control 1/2. A healthy linked board reads
+
+    BMCR 3100 [aneg-en ] BMSR 786d/786d [LINK aneg-done ] CTL1 0136 CTL2 8180
+
+`CTL1` bits [2:0] are the operation-mode indication: `6` = 100BASE-TX full duplex.
+
+**This is what settled box2**: it read 200/200 AND `LINK aneg-done` at 100 Mb
+full duplex, while the extio firmware on the same board had just reported
+`autonegotiation timed out`. That ruled out both the board and the cable in one
+reading, and pointed at power -- correctly.
+
+## Do not read the LEDs
+
+The green LED by the debug header is the PROBE's USB status, not the PHY. And
+"PHY lights solid, no blinking" was observed on a board whose PHY was, per its
+own BMSR, fully linked. The LEDs have now sent this hunt the wrong way twice.

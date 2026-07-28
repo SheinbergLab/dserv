@@ -42,6 +42,42 @@ static void hammer(uint8_t addr)
 	       addr, ok1, TRIES, ok2, TRIES, ones, zeros, other, last_other);
 }
 
+/* The MEDIA side, which a perfect ID-register rate says nothing about.
+ *
+ * MDIO is the management interface and works regardless of what the media side
+ * is doing -- so 200/200 on PHYID1/2 next to an autonegotiation timeout is not a
+ * contradiction, it is the signature of a PHY that is reachable and deliberately
+ * not linking. The two bits that do that are in BMCR: POWER-DOWN and ISOLATE,
+ * either of which can be latched from the strap pins at reset (PORTING.md: "the
+ * PHY latches its straps when reset deasserts"). Neither is visible in an ID
+ * read, and neither makes the driver say anything useful.
+ *
+ * BMSR bit 2 is the honest answer to "is there a link": it is LATCHING-LOW, so
+ * read it twice -- the first read can report a link that has since dropped. */
+static void status(uint8_t addr)
+{
+	uint16_t bmcr = 0xffff, bmsr = 0xffff, bmsr2 = 0xffff;
+	uint16_t ctl1 = 0xffff, ctl2 = 0xffff;
+
+	mdio_read(mdio, addr, 0, &bmcr);
+	mdio_read(mdio, addr, 1, &bmsr);
+	mdio_read(mdio, addr, 1, &bmsr2);
+	mdio_read(mdio, addr, 0x1e, &ctl1);   /* KSZ8081 PHY Control 1 */
+	mdio_read(mdio, addr, 0x1f, &ctl2);   /* KSZ8081 PHY Control 2 */
+
+	printk("  BMCR %04x [%s%s%s%s] BMSR %04x/%04x [%s%s%s] CTL1 %04x CTL2 %04x\n",
+	       bmcr,
+	       (bmcr & (1u << 11)) ? "POWER-DOWN "  : "",
+	       (bmcr & (1u << 10)) ? "ISOLATE "     : "",
+	       (bmcr & (1u << 12)) ? "aneg-en "     : "aneg-OFF ",
+	       (bmcr & (1u <<  9)) ? "aneg-restart " : "",
+	       bmsr, bmsr2,
+	       (bmsr2 & (1u << 2)) ? "LINK "        : "no-link ",
+	       (bmsr2 & (1u << 5)) ? "aneg-done "   : "aneg-incomplete ",
+	       (bmsr2 & (1u << 4)) ? "remote-fault " : "",
+	       ctl1, ctl2);
+}
+
 int main(void)
 {
 	printk("\n=== KSZ8081 MDIO health ===\n");
@@ -69,6 +105,7 @@ int main(void)
 	while (1) {
 		hammer(0);
 		hammer(2);
+		status(2);
 		printk("--- (reseat/repower and watch these climb; 200/200 = healthy) ---\n");
 		k_msleep(1000);
 	}

@@ -3358,3 +3358,62 @@ two delays in series, and only the larger one is visible.
 - **2.0 s `k_msleep`** buying nothing on an Ethernet box, where the console CDC
   is never enumerated. Making it conditional is easy and was left alone rather
   than risk the USB-console case for 2 s.
+
+## 2026-07-28 (later) — two boxes "with dead PHYs", neither of which had one
+
+Both box2 and box1 lost Ethernet within an hour of each other while boxes were
+being moved around for flashing. Both looked like the board we RMA'd. Neither
+was. Total cost: most of an evening, and I sent it down two wrong paths myself.
+
+**box2 = marginal power via a partly-seated USB-C.** The meter read a mix of
+`0x0000` / `0xffff` / `0x0005` — PORTING.md's documented marginal signature,
+almost byte for byte. Reseating BOTH USB-C connectors took it to **200/200 on
+both ID registers at both addresses, six passes running, zero errors**, which is
+exactly the baseline box3 set. Not silicon.
+
+**box1 = a USB HUB.** Same class of fault, new cause. **These boards go straight
+into the machine — never a hub.** An unpowered hub splits 500 mA across its
+ports and the RW612 wants real current once the PHY is running; the result does
+not look like a power problem, it looks like dead silicon. That is what makes it
+expensive: we came close to RMA-ing box2 on the strength of it, and the only
+reason we did not is that the meter reports a RATE rather than a verdict.
+
+**box1, second fault: the wrong switch port.** After the port was changed (for a
+shorter cable) box1 linked at **100 Mb full duplex and got no DHCP lease at all**
+— `net iface` showed `carrier=ON` with only an IPv6 link-local. Moving it back
+fixed it. Note the box stays dark FOREVER in that state: nothing re-runs DHCP
+once the initial attempt has failed, so it links, never gets an address, and
+spins on re-registration. Worth fixing — a box that is linked but addressless
+should say so (`state/net/ip` = none) instead of leaving a stale IP standing.
+
+### The diagnostic split, which is the reusable part
+
+MDIO is the management bus, on the board; it does NOT traverse the RJ45. So:
+
+- **garbage IDs → POWER.** The Ethernet cable cannot cause this. Do not touch it.
+- **IDs perfect + autoneg timeout → the wire** (cable or switch port).
+- **IDs perfect + `BMSR [LINK aneg-done]` → both are fine**; suspect software.
+
+The meter now dumps BMCR/BMSR/CTL1/CTL2 for exactly this reason (see its README).
+
+### My three wrong turns, recorded so they are not repeated
+
+1. **"Swap the cables."** Reasonable from box2's autoneg timeout, and wrong: the
+   meter then showed that same cable carrying a good 100 Mb full-duplex link.
+   Worse, the swap meant handling the boards — which is how box1 ended up on a
+   hub and in the wrong port. **Read the registers BEFORE moving hardware.**
+2. **"The PHY is in power-down or isolate."** A clean hypothesis that fit every
+   symptom — perfect MDIO, no link, static LEDs — and BMCR `0x3100` killed it
+   outright: neither bit set, autoneg enabled, link up.
+3. **Raising `CONFIG_PHY_AUTONEG_TIMEOUT_MS` to 20000 "fixed" box2.** It did not.
+   Autoneg completed in 2.3 s, well inside the stock 4 s, so that boot would have
+   worked either way — and the stock build then linked 3/3 boots. **The change is
+   NOT in the tree**; do not re-add it. The fix was the connector. This is the
+   same trap as the DHCP delay earlier today: a change made while a second,
+   larger fault was still present looks like the fix when the fault clears.
+
+Also: an IPv6 link-local ping meant as a segment test went out `wlan0`, because
+that is the Pi's default route while the boxes are on `eth0`. It proved nothing.
+Pin the interface (`%eth0`) when testing link-local reachability.
+
+**Ended 19/19 on box1 + box2**, both PTP-anchored, both firing.
