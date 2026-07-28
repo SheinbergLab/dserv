@@ -68,6 +68,18 @@ if { ![info exists ::ptp_window_max_ns] } { set ::ptp_window_max_ns 20000 }
 # the worst case measured and costs one exec per interval.
 if { ![info exists ::ptp_period_s] } { set ::ptp_period_s 300 }
 
+# A step in D is the ONE thing that invalidates every box's anchor at once, and
+# it is otherwise invisible. dserv's epoch constant is system_us() - steady_us()
+# captured once at startup, and its own comment notes those two clocks are slewed
+# together by NTP and diverge ONLY ACROSS A STEP. So the change in D between
+# sweeps IS a step detector, for free: normal drift between sweeps is a couple of
+# microseconds, while an NTP step shows up as milliseconds.
+#
+# Worth having because the failure is silent: CLOCK_MONOTONIC never steps, so
+# after an NTP step every box is anchored to a timeline that quietly moved, and
+# nothing else would say so until someone compared timestamps across it.
+if { ![info exists ::ptp_step_warn_us] } { set ::ptp_step_warn_us 1000 }
+
 set ::ptp_timer   ""
 set ::ptp_d_us    ""
 set ::ptp_lasterr ""
@@ -167,6 +179,17 @@ proc ptp_anchor_all {{why sweep}} {
         return
     }
     set ::ptp_lasterr ""
+
+    if { $::ptp_d_us ne "" } {
+        set delta [expr {$d - $::ptp_d_us}]
+        ptp_pub d_delta_us $delta
+        if { abs($delta) >= $::ptp_step_warn_us } {
+            puts "ptp: WARNING D jumped ${delta} us -- looks like a clock STEP,\
+                  not drift; every box was anchored to the old timeline"
+            ptp_pub step_us $delta
+        }
+    }
+
     set ::ptp_d_us $d
     ptp_pub error ""
     ptp_pub d_us  $d
