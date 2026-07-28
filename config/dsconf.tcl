@@ -42,6 +42,18 @@ subprocess juicer "source [file join $dspath config/juicerconf.tcl]"
 # frames <-> datapoints, forwards ess/in_obs/config/cmd to the box, hot-swaps USB)
 subprocess extio "source [file join $dspath config/extioconf.tcl]"
 
+# start the PTP anchor subprocess -- pushes the PHC->dserv constant to every
+# extio box so their timestamps share dserv's timeline (config/ptpconf.tcl).
+#
+# GATED on the host actually having a PHC, so this is a no-op on hardware that
+# cannot do PTP at all (a Pi 4 has no /dev/ptpN, and neither does any Realtek
+# NIC). Deliberately self-disabling rather than starting and erroring: the
+# lesson from the juicer incident is that a subprocess which loads
+# unconditionally will eventually run somewhere it should not.
+if { [llength [glob -nocomplain /sys/class/ptp/ptp*]] } {
+    subprocess ptp "source [file join $dspath config/ptpconf.tcl]"
+}
+
 # start a sound subprocess
 subprocess sound "source [file join $dspath config/soundconf.tcl]"
 
