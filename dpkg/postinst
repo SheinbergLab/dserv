@@ -34,10 +34,15 @@ fi
 # by later tooling, and starting a daemon as a side effect of `apt install` is a
 # different decision from shipping its unit file.
 if [ -d /usr/local/dserv/systemd ] && [ -d /etc/systemd/system ]; then
+# NOTE the `|| true` on every step. This script runs under `set -e`, so an
+# unguarded failure here aborts package configuration and leaves dserv
+# half-installed -- a steep price for an OPTIONAL convenience on a host that may
+# have no interest in PTP at all. Failing to place a unit template must never
+# cost you the dataserver.
     for u in /usr/local/dserv/systemd/dserv-ptp4l*@.service \
              /usr/local/dserv/systemd/dserv-phc2sys*@.service; do
         [ -f "$u" ] || continue
-        install -m 0644 "$u" /etc/systemd/system/
+        install -m 0644 "$u" /etc/systemd/system/ || true
     done
     if command -v systemctl >/dev/null 2>&1; then
         systemctl daemon-reload 2>/dev/null || true
@@ -45,9 +50,11 @@ if [ -d /usr/local/dserv/systemd ] && [ -d /etc/systemd/system ]; then
 fi
 
 # Put the PTP role helper on PATH; it is otherwise buried in the payload.
-if [ -f /usr/local/dserv/scripts/dserv-ptp-setup ] && [ -d /usr/local/bin ]; then
+if [ -f /usr/local/dserv/scripts/dserv-ptp-setup ]; then
     chmod 0755 /usr/local/dserv/scripts/dserv-ptp-setup 2>/dev/null || true
-    ln -sf /usr/local/dserv/scripts/dserv-ptp-setup /usr/local/bin/dserv-ptp-setup
+    mkdir -p /usr/local/bin 2>/dev/null || true
+    ln -sf /usr/local/dserv/scripts/dserv-ptp-setup \
+           /usr/local/bin/dserv-ptp-setup 2>/dev/null || true
 fi
 
 # Bootstrap dlsh if not already installed
