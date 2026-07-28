@@ -20,6 +20,36 @@ if [ -f /usr/local/dserv/udev/60-extio.rules ] && [ -d /etc/udev/rules.d ]; then
     fi
 fi
 
+# Install the PTP systemd unit TEMPLATES (/usr/local is not a path systemd
+# scans, same reason the udev rule above needs copying).
+#
+# Safe to do unconditionally because these are templates: a `foo@.service` with
+# no instance cannot start, so this copies inert files. Nothing PTP-related runs
+# until an operator picks an interface and a role with `dserv-ptp-setup`, which
+# is a site decision the installer cannot make -- the interface is unknowable
+# here, and "grandmaster" is a network-wide role, not a host preference.
+#
+# Deliberately does NOT glob dserv.service / dserv-agent.service: on Debian a
+# non-templated unit that lands in /etc/systemd/system can be enabled and started
+# by later tooling, and starting a daemon as a side effect of `apt install` is a
+# different decision from shipping its unit file.
+if [ -d /usr/local/dserv/systemd ] && [ -d /etc/systemd/system ]; then
+    for u in /usr/local/dserv/systemd/dserv-ptp4l*@.service \
+             /usr/local/dserv/systemd/dserv-phc2sys*@.service; do
+        [ -f "$u" ] || continue
+        install -m 0644 "$u" /etc/systemd/system/
+    done
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl daemon-reload 2>/dev/null || true
+    fi
+fi
+
+# Put the PTP role helper on PATH; it is otherwise buried in the payload.
+if [ -f /usr/local/dserv/scripts/dserv-ptp-setup ] && [ -d /usr/local/bin ]; then
+    chmod 0755 /usr/local/dserv/scripts/dserv-ptp-setup 2>/dev/null || true
+    ln -sf /usr/local/dserv/scripts/dserv-ptp-setup /usr/local/bin/dserv-ptp-setup
+fi
+
 # Bootstrap dlsh if not already installed
 if [ ! -f /usr/local/dlsh/dlsh.zip ]; then
     echo "dlsh not found, installing..."

@@ -100,3 +100,48 @@ Until that is automated, after enabling these units you still need:
 `extio-zephyr/host/start_ptp.sh` and `start_phc2sys.sh` remain for ad-hoc bench
 restarts, but they `setsid` into `/tmp` with no supervision and do not survive a
 reboot — these units are the durable path.
+
+## Choosing a role: `dserv-ptp-setup`
+
+The package copies these templates into `/etc/systemd/system` from its postinst
+and **enables nothing**. That copy is inert on purpose: a `foo@.service` with no
+instance cannot start, so shipping them costs nothing, while *instantiating* one
+is a site decision the installer cannot make.
+
+    dserv-ptp-setup candidates            # interfaces with a PHC
+    sudo dserv-ptp-setup grandmaster eth0 # this host defines the site's time
+    sudo dserv-ptp-setup client enp86s0   # this host follows the grandmaster
+    dserv-ptp-setup status                # role, conflicts, time source
+    sudo dserv-ptp-setup disable
+
+Exactly **one** host per site is the grandmaster. Clients need no address for it
+— PTP's BMCA elects the master from its Announce messages, which is the main
+advantage over NTP. The only value that must match is the domain number (0).
+
+### The two roles are mirror images, and the NTP rule inverts
+
+|            | grandmaster                        | client                              |
+|------------|------------------------------------|-------------------------------------|
+| `ptp4l`    | `--priority1 127`                  | `-s` (slaveOnly)                    |
+| `phc2sys`  | `-c IF -s CLOCK_REALTIME` (sys→PHC)| `-s IF -c CLOCK_REALTIME` (PHC→sys) |
+| NTP/chrony | **must keep running** — the source | **must be off** — PTP is the source |
+
+On a grandmaster, `phc2sys` pushes the NTP-disciplined system clock into the PHC;
+stop NTP and the site distributes free-running quartz. On a client the direction
+reverses, so an NTP daemon would steer `CLOCK_REALTIME` against `phc2sys`. Two
+disciplinarians on one clock do not error — they fight, and it reads as drift.
+The client unit declares `Conflicts=` on the usual NTP units so systemd stops
+them rather than relying on anyone remembering.
+
+`slaveOnly` on the client is a safety property, not a preference: without it the
+host joins the election and can *win* when the real grandmaster reboots, silently
+re-basing the site's timeline. That is the clock step `ptp/d_delta_us` detects.
+
+### What the helper refuses to do
+
+- enable a role on an interface with no PHC (`ptp4l` would run and report offsets
+  of exactly `0` forever)
+- run alongside the distro's `ptp4l@`/`phc2sys@`/`timemaster` units
+- run alongside a hand-started `ptp4l`/`phc2sys` — which is what office-stim was
+  found in on 2026-07-28: correct flags, but nothing would have restarted them
+  after a reboot, and no check reported that. `status` now says so out loud.

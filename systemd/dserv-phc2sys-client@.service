@@ -1,0 +1,45 @@
+[Unit]
+# Steer this host's SYSTEM CLOCK from the %i PHC. Pairs with
+# dserv-ptp4l-client@%i, and runs in the OPPOSITE direction to the grandmaster's
+# dserv-phc2sys@%i. Getting the direction wrong is silent, so:
+#
+#   grandmaster:  -c %i -s CLOCK_REALTIME   system clock  ->  PHC
+#   client:       -s %i -c CLOCK_REALTIME   PHC  ->  system clock
+#
+# On the grandmaster the PHC is the consumer and the (NTP-disciplined) system
+# clock is the source. Here it is reversed: ptp4l has already locked the PHC to
+# the grandmaster, and this pushes that time into CLOCK_REALTIME so dserv's own
+# timestamps -- which come from CLOCK_MONOTONIC plus a constant -- ride the same
+# timeline as every other host at the site.
+#
+# THEREFORE NTP MUST NOT RUN HERE, and that is the reverse of the grandmaster,
+# where killing NTP would leave the site distributing free-running quartz. Two
+# daemons steering CLOCK_REALTIME do not error; they fight, and it reads as
+# drift. Conflicts= below makes systemd stop them rather than relying on anyone
+# remembering -- the setup helper also refuses to proceed while one is enabled.
+Description=Steer the system clock from the %i PHC (phc2sys, client role)
+Documentation=file:/usr/local/dserv/extio-zephyr/PORTING.md
+Wants=network-online.target
+Wants=dserv-ptp4l-client@%i.service
+After=network-online.target dserv-ptp4l-client@%i.service
+
+# Wants=, not Requires=/BindsTo=: both propagate STOP, and a unit stopped by a
+# dependency is NOT restarted by Restart=, so every ptp4l restart would silently
+# strand this one. -w waits for ptp4l to synchronise; Restart=always covers the
+# rest.
+
+# The two things that must never run alongside this one.
+Conflicts=dserv-phc2sys@%i.service
+Conflicts=systemd-timesyncd.service chrony.service chronyd.service ntp.service ntpsec.service
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/phc2sys -s %i -c CLOCK_REALTIME -w -m -q
+Restart=always
+RestartSec=5
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
