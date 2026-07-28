@@ -1,0 +1,49 @@
+[Unit]
+# PTP grandmaster for the extio boxes. Templated on the interface, so one file
+# serves every site:  dserv-ptp4l@eth0  (rig Pi)  ·  dserv-ptp4l@enp86s0 (office).
+#
+# Deliberately NOT named ptp4l.service: Debian's linuxptp package ships units by
+# that name, and silently shadowing or being shadowed by a distro unit is a bad
+# failure for something whose whole job is to be trustworthy.
+#
+# --hwts_filter full is REQUIRED, and not just on one NIC. ptp4l asks for
+# HWTSTAMP_FILTER_PTP_V2_EVENT by default; a NIC that advertises only `none` and
+# `all` never honours it, so every event message arrives WITHOUT a timestamp and
+# mean_delay / offset_from_tt sit at 0 -- a confident-looking, meaningless
+# result. Both NICs measured so far are like this (Pi 5 macb, Intel I226-V igc).
+# Check `ethtool -T <iface>` on any new host before assuming the default works.
+#
+# --priority1 127 makes this host the grandmaster. The boxes are slaves and need
+# no configuration; they discipline their ENET 1588 counters to this PHC.
+#
+# NOTE on scheduling: no CPUSchedulingPolicy here, unlike dserv.service. Every
+# PTP figure in extio-zephyr/PORTING.md (±100 ns direct, ±352 ns through the
+# switch) was measured with ptp4l at DEFAULT priority. Adding RT scheduling would
+# invalidate that baseline and could contend with dserv's own fifo/60 threads.
+# Change it only alongside a re-measurement.
+Description=PTP grandmaster (ptp4l) on %i for extio time sync
+Documentation=file:/usr/local/dserv/extio-zephyr/PORTING.md
+Wants=network-online.target
+After=network-online.target sys-subsystem-net-devices-%i.device
+
+# Deliberately NOT BindsTo= the device. A dependency-stop is not a failure, so
+# Restart= does NOT recover from it -- a NIC flap or a driver reload would take
+# PTP down permanently and silently, which is the exact outcome these units
+# exist to prevent. `After=` orders startup; Restart=always rides out flaps
+# (ptp4l exits when the interface vanishes and is simply restarted until it
+# comes back).
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/ptp4l -i %i -H -m --priority1 127 --hwts_filter full
+Restart=always
+RestartSec=5
+
+# -m sends messages to stdout rather than syslog, so journald owns them.
+# This replaces host/start_ptp.sh, which setsid'd into /tmp/ptp4l.log with no
+# supervision and did not survive a host reboot.
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
