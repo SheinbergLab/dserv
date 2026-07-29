@@ -4347,3 +4347,81 @@ This is the same retained-datapoint property already recorded under "Open bugs"
 (reboot divergence) and the `extio_clear` discussion, arriving through a third
 door. Any harness that reads box state to make a decision should check freshness
 first.
+
+## 2026-07-29 (later) — chasing the revert-path drop: dserv leaks a thread per vanished box
+
+David's observation is what cracked it open: during the failure `cmd/ota/begin`
+ARRIVED and the chunks did not, while the box's CDC console stayed responsive.
+That asymmetry is diagnostic, because the two directions are DIFFERENT SOCKETS:
+
+* `dserv.live` reports `box_net_eth_connected()` — the box's OUTBOUND client
+  socket to dserv:4620, the one every publish goes down.
+* commands arrive on `srv_conn`, a connection **dserv** makes back to the box's
+  listener on :5010.
+
+So the box was not "off the network". It was **publish-dead and command-alive** —
+which also explains the frozen watchdog, and why `state/ota/*` froze at whatever
+it last managed to send.
+
+### What is PROVEN
+
+`ss -tn` on the dserv host, while the box was healthy:
+
+    40 ESTABLISHED on 192.168.88.46:4620
+    peers: 192.168.88.10 .11 .12 ... .34, .36, .43 x3, .49 .50 .51 .53 .54 .55 .56 .57
+
+That near-contiguous run **is this box's reboot history for the day** — a new
+DHCP lease every boot, and dserv still holding the socket from every previous
+incarnation. Spot-checked five of them (.12 .20 .30 .53 .54): **every one is a
+ghost, no ping reply.** dserv had **139 threads**.
+
+The mechanism is in `Dataserver.cpp:1477`:
+
+```c
+new_socket_fd = accept(socket_fd, &client_address, &client_address_len);
+...
+std::thread thr(tcp_client_process, this, new_socket_fd);
+thr.detach();          /* one detached thread per connection, no cap */
+```
+
+A box that disappears WITHOUT closing — reboot, reflash, power cut, crash —
+leaves that thread blocked in `read()` on a socket whose peer will never answer.
+There is no keepalive and no read timeout, so **nothing ever reaps it**. One
+leaked thread + one leaked socket per box disappearance, permanently, for the
+lifetime of the dserv process.
+
+This is a HOST bug, not a box bug, and it is not OTA-specific. It matters beyond
+this session: a rig box that reboots nightly adds a thread a day, and a
+development session like this one added forty in an evening. It also explains
+why the failure appeared LATE — it is cumulative, so nothing looks wrong until
+it does.
+
+### What is NOT yet established
+
+**Whether that leak is what killed this box's publish socket.** It is the
+obvious suspect and the timing fits, but the causal link is unproven, and this
+same evening produced two confident wrong mechanisms already (a post-reboot
+race, then the chunk blast — both measured and refuted). Stating it as the cause
+now would be the third.
+
+Two concrete leads for whoever picks this up:
+
+* **`ss` showed `192.168.88.46:51898 -> 192.168.88.56:5010` with Send-Q 1280.**
+  That is dserv's connect-back to a box that no longer exists, with data
+  BACKED UP in it. If a dead peer's send queue can stall the forward path, that
+  is a direct candidate for "begin got through, 3000 chunks did not".
+* The box side needs a live reproduction with its own view captured: whether
+  `sock` went to -1 and every reconnect failed, or a connect stayed permanently
+  in flight (`connecting` never completing), which `box_net_eth_connected()`
+  also reports as down.
+
+### Fix directions (host side)
+
+1. **TCP keepalive on accepted client sockets**, so a vanished peer is detected
+   in minutes rather than never. Smallest change, biggest return.
+2. A read timeout in `tcp_client_process` with the same effect.
+3. Reap on write failure — dserv already writes to these sockets when fanning
+   out datapoints; a failed write should retire the client rather than being
+   ignored.
+
+Worth doing before a rig runs unattended for weeks, independent of OTA.
