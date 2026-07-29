@@ -1082,8 +1082,7 @@ set www_path /usr/local/dserv/www</code>
           res->template upgrade<WSPerSocketData>({
               .rqueue = new SharedQueue<std::string>(),
               .client_name = "",
-              .subscriptions = std::vector<std::string>(),
-              .notification_queue = nullptr,
+              .channel = nullptr,
               .dataserver_client_id = ""
             }, req->getHeader("sec-websocket-key"),
             req->getHeader("sec-websocket-protocol"),
@@ -1102,43 +1101,54 @@ set www_path /usr/local/dserv/www</code>
           }
 
           try {
-            // Create notification queue for this client
-            userData->notification_queue = new SharedQueue<client_request_t>();
+            // Channel outlives this socket: the notification thread holds a
+            // shared_ptr to it, so uWS freeing userData cannot pull it away
+            userData->channel = std::make_shared<WSClientChannel>();
+            userData->channel->notification_queue =
+	      new SharedQueue<client_request_t>();
 
             // Create async response queue for this client
             userData->async_responses = new SharedQueue<std::string>();
-            
+
             // Register with Dataserver as a queue-based client
             userData->dataserver_client_id =
-	      this->ds->add_new_send_client(userData->notification_queue);
-            
+	      this->ds->add_new_send_client(userData->channel->notification_queue);
+
             if (userData->dataserver_client_id.empty()) {
               std::cerr <<
 		"Failed to register WebSocket client with Dataserver" <<
 		std::endl;
-              delete userData->notification_queue;
-              userData->notification_queue = nullptr;
+              delete userData->channel->notification_queue;
+              userData->channel->notification_queue = nullptr;
+              userData->channel.reset();
               ws->close();
               return;
             }
-            
+
             // Create a unique client name for this WebSocket
             char client_id[32];
             snprintf(client_id, sizeof(client_id), "ws_%p", (void*)ws);
             userData->client_name = std::string(client_id);
-            
+
             // Store this WebSocket connection
             {
               std::lock_guard<std::mutex> lock(this->ws_connections_mutex);
               this->ws_connections[userData->client_name] = (void*)ws;
             }
-            
-            // Start a thread to process notifications for this client
-            // Pass 'ws' by value (as void*) to the thread
-            std::thread([this, ws, userData]() {
-              this->process_websocket_client_notifications_template(ws, userData);
-            }).detach();
-            
+
+            // Start a thread to process notifications for this client.
+            // It captures the channel (shared_ptr, by value) and the name --
+            // deliberately NOT userData, which uWS frees at socket destruction
+            // while this thread is still running.
+            {
+              auto channel = userData->channel;
+              std::string client_name = userData->client_name;
+              std::thread([this, ws, channel, client_name]() {
+                this->process_websocket_client_notifications_template(ws, channel,
+								      client_name);
+              }).detach();
+            }
+
           } catch (const std::exception& e) {
             std::cerr << "Exception in WebSocket open handler: " << e.what() << std::endl;
             ws->close();
@@ -1322,9 +1332,15 @@ set www_path /usr/local/dserv/www</code>
                   every = json_integer_value(every_obj);
                 }
                 
-                // Store the subscription for this WebSocket client
-                userData->subscriptions.push_back(std::string(match));
-                
+                // Store the subscription for this WebSocket client.
+                // Under subs_mutex: the notification thread iterates this
+                // vector, and a reallocating push_back would invalidate it
+                // mid-iteration.
+                if (userData->channel) {
+                  std::lock_guard<std::mutex> lock(userData->channel->subs_mutex);
+                  userData->channel->subscriptions.push_back(std::string(match));
+                }
+
                 // Register the match with Dataserver so we get notifications
                 ds->client_add_match(userData->dataserver_client_id, (char*)match, every);
                 
@@ -1346,13 +1362,17 @@ set www_path /usr/local/dserv/www</code>
               if (match_obj && json_is_string(match_obj)) {
                 const char *match = json_string_value(match_obj);
                 
-                // Remove from local subscriptions
-                auto it = std::find(userData->subscriptions.begin(),
-				    userData->subscriptions.end(), match);
-                if (it != userData->subscriptions.end()) {
-                  userData->subscriptions.erase(it);
+                // Remove from local subscriptions (see subscribe: the
+                // notification thread reads this under the same mutex)
+                if (userData->channel) {
+                  std::lock_guard<std::mutex> lock(userData->channel->subs_mutex);
+                  auto &subs = userData->channel->subscriptions;
+                  auto it = std::find(subs.begin(), subs.end(), match);
+                  if (it != subs.end()) {
+                    subs.erase(it);
+                  }
                 }
-                
+
                 // Remove from Dataserver
                 this->ds->client_remove_match(userData->dataserver_client_id, (char*)match);
                 
@@ -1373,10 +1393,13 @@ set www_path /usr/local/dserv/www</code>
               json_t *response = json_object();
               json_t *subs_array = json_array();
               
-              for (const std::string& sub : userData->subscriptions) {
-                json_array_append_new(subs_array, json_string(sub.c_str()));
+              if (userData->channel) {
+                std::lock_guard<std::mutex> lock(userData->channel->subs_mutex);
+                for (const std::string& sub : userData->channel->subscriptions) {
+                  json_array_append_new(subs_array, json_string(sub.c_str()));
+                }
               }
-              
+
               json_object_set_new(response, "status", json_string("ok"));
               json_object_set_new(response, "subscriptions", subs_array);
               
@@ -1520,12 +1543,18 @@ set www_path /usr/local/dserv/www</code>
 
             // If no producer existed (registration failed or already
             // removed), unblock the notification thread ourselves
-            if (userData->notification_queue && !producer_active) {
+            if (userData->channel && userData->channel->notification_queue &&
+		!producer_active) {
               client_request_t eos_req;
               eos_req.type = REQ_QUEUE_EOS;
-              userData->notification_queue->push_back(eos_req);
+              userData->channel->notification_queue->push_back(eos_req);
             }
-            
+
+            // Drop this socket's reference to the channel. The notification
+            // thread holds the other one and frees the queue when it sees EOS,
+            // so the channel outlives userData by exactly as long as needed.
+            userData->channel.reset();
+
             // Clean up rqueue
             delete userData->rqueue;
             userData->rqueue = nullptr;
@@ -1574,23 +1603,26 @@ set www_path /usr/local/dserv/www</code>
 
 template<typename WebSocketType>
 void TclServer::process_websocket_client_notifications_template(
-    WebSocketType* ws, WSPerSocketData* userData) {
-    if (!userData) {
-        std::cerr << "ERROR: userData is null in notification thread" << std::endl;
+    WebSocketType* ws, std::shared_ptr<WSClientChannel> channel,
+    std::string client_name) {
+    if (!channel || !channel->notification_queue) {
+        std::cerr << "ERROR: channel is null in notification thread" << std::endl;
         return;
     }
-    
-    std::string client_name = userData->client_name;
+
+    /* Resolved ONCE. The old code re-read this pointer out of the socket's
+       userData on every iteration, and uWS frees userData the moment the socket
+       is destroyed -- so front() could succeed and the pop_front() on the very
+       next line run against a freed (zeroed) pointer. The channel we hold is
+       shared_ptr-owned and cannot be pulled out from under us. */
+    SharedQueue<client_request_t> *queue = channel->notification_queue;
+
     bool done = false;
-    
+
     while (!done) {
       try {
-        if (!userData || !userData->notification_queue) {
-          break;
-        }
-        
-        client_request_t req = userData->notification_queue->front();
-        userData->notification_queue->pop_front();
+        client_request_t req = queue->front();
+        queue->pop_front();
 
         // REQ_QUEUE_EOS is the producer's (SendClient's) final act;
         // after it, no further pushes can arrive, so the queue
@@ -1604,8 +1636,11 @@ void TclServer::process_websocket_client_notifications_template(
             // Check if this datapoint matches any subscriptions
             bool matches = false;
             std::string dpoint_name(req.dpoint->varname);
-            
-            for (const std::string& pattern : userData->subscriptions) {
+
+            {
+              /* the event loop mutates this vector on subscribe/unsubscribe */
+              std::lock_guard<std::mutex> lock(channel->subs_mutex);
+              for (const std::string& pattern : channel->subscriptions) {
                 if (pattern == "*") {
                     matches = true;
                 } else if (pattern.back() == '*') {
@@ -1614,8 +1649,9 @@ void TclServer::process_websocket_client_notifications_template(
                 } else {
                     matches = (strcmp(dpoint_name.c_str(), pattern.c_str()) == 0);
                 }
-                
+
                 if (matches) break;
+              }
             }
 
             if (matches) {
@@ -1630,13 +1666,22 @@ void TclServer::process_websocket_client_notifications_template(
                         
                         std::string message(enhanced_json);
                         
-                        // Send using ws_loop->defer for thread safety
+                        // Send using ws_loop->defer for thread safety.
+                        // The liveness check is not optional: this lambda runs
+                        // later, on the loop thread, and the socket may have
+                        // been closed and destroyed in between -- ws would then
+                        // dangle. Checking ws_connections IS sufficient because
+                        // .close erases from it on this same loop thread before
+                        // uWS frees the socket, so a hit here means alive.
+                        // (sendLargeMessage already did this; this path didn't.)
                         if (ws_loop) {
-                            ws_loop->defer([ws, message]() {
-                                ws->send(message, uWS::OpCode::TEXT);
+                            ws_loop->defer([ws, message, client_name, this]() {
+                                if (this->isWebSocketConnected(client_name, ws)) {
+                                    ws->send(message, uWS::OpCode::TEXT);
+                                }
                             });
                         }
-                        
+
                         free(enhanced_json);
                         json_decref(root);
                     }
@@ -1650,11 +1695,11 @@ void TclServer::process_websocket_client_notifications_template(
       }
     }
     
-    // Cleanup
-    if (userData && userData->notification_queue) {
-        delete userData->notification_queue;
-        userData->notification_queue = nullptr;
-    }
+    // Cleanup. Safe after EOS: that is the producer's final act, so nothing can
+    // still push. We own the queue here -- the socket's reference to the
+    // channel is already gone (dropped in .close).
+    delete queue;
+    channel->notification_queue = nullptr;
 }
 
 template<typename WebSocketType>
