@@ -35,6 +35,20 @@
  * silent connection exchanges one small packet per KEEPIDLE seconds. Probes
  * cannot truncate a busy connection, because they only run when it is idle.
  *
+ * KEEPALIVE ALONE IS NOT ENOUGH, and the gap is not obvious: **probes only run
+ * on an IDLE connection**. As soon as there is unacknowledged data in flight,
+ * TCP switches to retransmission and keepalive never fires -- the connection is
+ * then governed by tcp_retries2, roughly 15-30 minutes. Measured on the rig
+ * 2026-07-29: after a box vanished, its INBOUND (idle) socket was reaped at
+ * ~60 s exactly as designed, while the OUTBOUND connect-back sat at
+ * `timer:(on,4.520sec,13)` -- retransmit attempt 13 -- with 256 bytes queued,
+ * because dserv is always pushing to it and it is therefore never idle.
+ *
+ * TCP_USER_TIMEOUT closes that gap: it bounds how long transmitted data may go
+ * unacknowledged before the connection is torn down, which is precisely the
+ * "peer went away mid-conversation" case. Linux only; on platforms without it
+ * the retransmit default still applies to sockets with data pending.
+ *
  * This does NOT replace closing sockets properly; it is the backstop for peers
  * that were never in a position to close theirs.
  */
@@ -68,6 +82,16 @@ static inline void dserv_set_keepalive(int fd)
 	(void) setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &cnt, sizeof cnt);
 #else
 	(void) cnt;
+#endif
+
+#if defined(TCP_USER_TIMEOUT)
+	/* Data unacknowledged this long -> tear the connection down, so
+	 * send_dpoint()'s write can finally fail and the client be reaped. 20 s is
+	 * far beyond any hiccup on a wired rig LAN and far below the ~15-30 min the
+	 * retransmit default would take. */
+	unsigned int utmo = 20000;      /* ms */
+
+	(void) setsockopt(fd, IPPROTO_TCP, TCP_USER_TIMEOUT, &utmo, sizeof utmo);
 #endif
 }
 

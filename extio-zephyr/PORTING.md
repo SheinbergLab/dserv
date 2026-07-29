@@ -4500,3 +4500,45 @@ mechanism that could never fire. Both defects are of that shape — an option se
 without its parameters, and an error path unreachable because the call blocks
 before it can fail. Grepping for "does it handle X" finds the handler and stops;
 it does not ask whether the handler is reachable.
+
+### KEEPALIVE ONLY RUNS ON AN IDLE CONNECTION — the outbound socket needed more
+
+Deployed the outbound fix and re-ran the vanish test. Both directions now arm
+keepalive, confirmed in `ss -tno`. But the result was only half right:
+
+| | before | t+25 s | t+75 s |
+|---|---|---|---|
+| ESTAB | 2 (in + out) | 4 (2 ghosts + 2 new) | **3** |
+
+Three, where two is correct. Identifying the survivor is what taught the lesson:
+
+    ESTAB 0 256 192.168.88.46:49276 -> 192.168.88.58:5010  timer:(on,4.520sec,13)
+    ESTAB 0 0   192.168.88.46:37414 -> 192.168.88.59:5010  timer:(keepalive,11sec,0)
+    ESTAB 0 0   192.168.88.46:4620  -> 192.168.88.59:47993 timer:(keepalive,7.640sec,0)
+
+The **inbound** ghost reaped at ~60 s exactly as designed. The **outbound**
+connect-back to the dead box did not — and its timer says why: `timer:(on,...,13)`
+is the RETRANSMIT timer at attempt 13, not keepalive.
+
+**Keepalive probes only run when a connection is IDLE.** The moment there is
+unacknowledged data in flight, TCP switches to retransmission and keepalive never
+fires; the connection is then governed by `tcp_retries2`, roughly 15-30 minutes.
+And the outbound connect-back is *never* idle by construction — dserv is always
+pushing datapoints to it, so it always has data queued (Send-Q 256 here).
+
+`SO_SNDTIMEO` does not cover it either: 256 bytes never fills the send buffer,
+so the write still succeeds and never blocks.
+
+**`TCP_USER_TIMEOUT` is the option for exactly this** — it bounds how long
+transmitted data may go unacknowledged before the connection is torn down, which
+is the "peer went away mid-conversation" case rather than the "peer went away
+while we were both quiet" case. Set to 20 s: far beyond any hiccup on a wired rig
+LAN, far below the retransmit default. Verified applied on the Pi
+(`TCP_USER_TIMEOUT = 20000`); Linux-only, compiles out cleanly on macOS.
+
+**The generalisable bit:** "TCP keepalive detects dead peers" is only true for
+connections that are idle. For a connection carrying data the mechanism is a
+different timer entirely, and the two are easy to conflate because both present
+as "the socket eventually goes away". The `ss -tno` timer column distinguishes
+them at a glance — `keepalive` vs `on` — and that single column is what turned a
+guess into a diagnosis here.
