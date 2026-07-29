@@ -28,6 +28,11 @@
  * Returns 0 on success, negative on a missing/!ready device. Call once at boot. */
 int box_gpio_init(void);
 
+/* Bitmask of box pins this board refuses (unmapped, or listed in box-reserved).
+ * Handed to the CLI so a reserved pin is rejected at the point of entry rather
+ * than silently ignored when the config is applied. */
+uint32_t box_gpio_reserved_mask(void);
+
 /* (Re)configure every pin from cfg: output / input / input+pullup, plus the DI
  * edge interrupts, the obs-mirror output, and the hardware obs-sync input.
  * Idempotent -- call at boot and after any pin/<n>/mode change. Pins the host

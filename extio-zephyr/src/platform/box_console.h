@@ -34,6 +34,11 @@ void box_console_service(box_config_t *cfg);
  * one includer (see the note in that header). */
 void box_console_set_ain_channels(int n);
 
+/* Tell the CLI which pins this board refuses, so `pin N mode ...` is rejected
+ * instead of stored and ignored. Routed through the console for the same reason
+ * as the channel count -- box_cli.h keeps one includer. */
+void box_console_set_reserved_pins(uint32_t mask);
+
 void box_console_write(const char *s);
 
 /* printf-style convenience over box_console_write (non-blocking). */

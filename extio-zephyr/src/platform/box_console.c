@@ -204,6 +204,11 @@ void box_console_set_ain_channels(int n)
 	box_cli_set_ain_channels(n);
 }
 
+void box_console_set_reserved_pins(uint32_t mask)
+{
+	box_cli_set_reserved_pins(mask);
+}
+
 /* ---- line assembly + dispatch to box_cli ---- */
 static char line_buf[128];
 static int  line_len;

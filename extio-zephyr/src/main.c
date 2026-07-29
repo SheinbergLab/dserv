@@ -1424,6 +1424,10 @@ int main(void)
 	box_console_set_ain_channels((int) box_adc_channels());
 #endif
 
+	/* Pins this board refuses -- unmapped indices plus anything in
+	 * `box-reserved` (the PHY's MDIO pin, and any pad handed to the ADC). */
+	box_console_set_reserved_pins(box_gpio_reserved_mask());
+
 
 #if defined(CONFIG_PTP_CLOCK)
 	for (int i = 0; i < BOX_NPINS; i++) {

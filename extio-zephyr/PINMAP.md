@@ -36,13 +36,19 @@ obs mirror and the sync input. Everything here is 3.3 V; **the MCXN947 is not
 | 11 | D11 | P0_24 | free | **B16** | CT0_MAT0 | FC1_P0 (SPI MOSI) |
 | 12 | D12 | P0_26 | free | **B18** | CT0_MAT2 | FC1_P2 (SPI MISO) |
 | 13 | D13 | P0_25 | free | **B17** | CT0_MAT1 | FC1_P1 (SPI SCK) |
-| 14 | A2 | P0_14 | free | **B14** | — | FC0/FC1, FLEXIO |
-| 15 | A3 | P0_22 | free | **A14** | — | FC0/FC1, CMP1 |
-| 16 | A4 | P0_15 | free | **B15** | — | FC0, FLEXIO |
+| **14** | **A2** | **P0_14** | **RESERVED — ain ch3** | B14 | — | muxed to the ADC |
+| **15** | **A3** | **P0_22** | **RESERVED — ain ch4** | A14 | — | muxed to the ADC |
+| **16** | **A4** | **P0_15** | **RESERVED — ain ch5** | B15 | — | muxed to the ADC |
 | 17 | A5 | P0_23 | free — **also SW2** | **A15** | — | FC1_P3, CMP2 |
 
-**17 usable digital pins.** Under the old one-port scheme there were 11, and
-D0/D1/D3/D6 were unreachable at all.
+**14 usable digital pins** (17 mapped, minus D5 to the PHY and A2/A3/A4 to the
+ADC). Under the old one-port scheme there were 11, and D0/D1/D3/D6 were
+unreachable at all.
+
+**Reserved pins are refused by the CLI**, not silently ignored: `pin 14 mode out`
+answers `ERR pin 14 is reserved on this board`. Before that gate existed the
+mode was stored and echoed back by `show` while the pad stayed wired to the
+converter — a config that reported a mode the hardware did not have.
 
 Three things that are easy to trip over:
 
@@ -83,14 +89,27 @@ flag. Until then the LED is full-brightness on/off.
 Configured in the overlay as `channel@N` children of `lpadc0`; the box announces
 the fitted count in `state/ain/dbg/chans` and the CLI validates against it.
 
-| ain channel | ADC0 input | SoC pad | header |
-|---|---|---|---|
-| 0 | A1 | P4_15 | J8-20 |
-| 1 | B1 | P4_19 | J8-24 |
-| 2 | A2 | P4_23 | J8-28 |
+| ain channel | ADC0 input | SoC pad | header | costs a digital pin? |
+|---|---|---|---|---|
+| 0 | A1 | P4_15 | J8-20 | no |
+| 1 | B1 | P4_19 | J8-24 | no |
+| 2 | A2 | P4_23 | J8-28 | no |
+| 3 | B14 | P0_14 | **Arduino A2** | yes — box pin 14 |
+| 4 | A14 | P0_22 | **Arduino A3** | yes — box pin 15 |
+| 5 | B15 | P0_15 | **Arduino A4** | yes — box pin 16 |
 
-**These cost no digital pins** — they are on port 4, and the box maps no digital
-pins there except D0/D1. Full scale is **3300 mV** (`voltage-ref = <0>`,
+Channels 0-2 are free — port 4, where the box maps no digital pins except
+D0/D1. Channels 3-5 were bought deliberately with three Arduino pins. **A5 was
+left alone on purpose: it is also SW2, the user button.** The remaining port-4
+pads (P4_12/13/16/17) would have cost nothing, but their header positions are
+not verified in the schematic, and a silkscreened pin you can actually reach
+beats a pad that might not be brought out.
+
+Adding a channel needs BOTH a `channel@N` and the pad in a pinctrl group — the
+board's own `pinmux_lpadc0` covers only the three J8 pads, so a channel declared
+without extending pinctrl leaves the pad muxed as GPIO and the converter reads a
+disconnected input. Silent wrong answer, same shape as the RW612's un-muxed
+digital pads. Full scale is **3300 mV** (`voltage-ref = <0>`,
 channels on `ADC_REF_EXTERNAL0`), measured, not assumed — see PORTING.md.
 
 Up to **8** channels are supported end to end (`AIN_MAX_CH`, `BOX_ADC_MAX_CH`,
@@ -100,12 +119,29 @@ remaining port-4 pads (P4_12/P4_13/P4_16/P4_17, header positions unverified —
 check the schematic) or any Arduino pin from the table above, accepting the loss
 of that digital pin.
 
-Throughput note: `AIN_BLOCK_MAX` is 24 int16, so batch caps at `24 / nchan` —
-8 scans at 3 channels, 4 at six. At a 1 kHz base that is 125 and 250 blocks/s
-respectively, against an `AIN_MAX_BLOCKS_PER_S` limiter of 200. Mixed rates are
-what the **groups** are for: eyes fast in one group, pupil / heart rate
-decimated in another. The base rate applies to ALL channels; groups decimate on
-the publish side only.
+### THROUGHPUT: six channels at 1 kHz in ONE group LOSES HALF THE DATA
+
+`AIN_BLOCK_MAX` is 24 int16, so batch caps at `24 / nchan` — 4 scans at six
+channels. At a 1 kHz base that produces 250 blocks/s against the
+`AIN_MAX_BLOCKS_PER_S` limiter of 200, and **a throttled block is DISCARDED, not
+deferred** (`st_throttled++; continue;`). Measured on the board: +2500 blocks and
+**+2500 throttled** over 20 s. Exactly half the samples gone, while every counter
+that a casual check looks at — `sweeps`, `dropped`, `late` — stays healthy.
+
+**The fix is what the groups are for**, and it is verified on the board:
+
+| group | channels | rate | blocks/s |
+|---|---|---|---|
+| `eye` | 0,1 | 1 kHz, batch 12 | 83.3 |
+| `aux` | 2,3,4,5 | decimate 10 → 100 Hz, batch 4 | 25 |
+| | | **total** | **108.3, `throttled` = 0** |
+
+    ain group 0 channels 0,1     / label eye / batch 12
+    ain group 1 channels 2,3,4,5 / label aux / mode continuous / decimate 10 / batch 4
+
+**The base rate applies to ALL channels** — every one of the six is still
+converted at 1 kHz; groups decimate on the *publish* side only. So the slow
+signals cost sampling time regardless, they just do not cost frames.
 
 ## Owned by the firmware — not box pins
 
@@ -116,7 +152,7 @@ the publish side only.
 | console UART (MCU-Link VCOM) | P1_8, P1_9 (flexcomm4) |
 | USB HS (box CDCs) | usb1 + usbphy1, no header pads |
 | QSPI flash (NVS storage) | flexspi |
-| LPADC inputs | P4_15, P4_19, P4_23 (J8) |
+| LPADC inputs | P4_15, P4_19, P4_23 (J8) + P0_14, P0_22, P0_15 (A2/A3/A4) |
 | DAC0_OUT | P4_2 (= D1) |
 
 ## Other boards in this tree

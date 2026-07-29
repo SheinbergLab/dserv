@@ -165,6 +165,18 @@ static void pulse_fall_expired(struct k_timer *t)
 	gpio_pin_set_dt(&specs[pin], 0);
 }
 
+uint32_t box_gpio_reserved_mask(void)
+{
+	uint32_t m = 0;
+
+	for (int i = 0; i < BOX_NPINS && i < 32; i++) {
+		if (box_gpio_reserved(i)) {
+			m |= (1u << i);
+		}
+	}
+	return m;
+}
+
 int box_gpio_init(void)
 {
 	/* Every DISTINCT controller the map names has to be up. A map spanning

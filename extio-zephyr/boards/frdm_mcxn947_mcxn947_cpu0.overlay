@@ -82,7 +82,7 @@
 		/* Bytestring, NOT <5>: a one-element <> infers a SCALAR int and
 		 * `uint8_t rsv[] = DT_PROP(...)` then fails to compile. [] is always a
 		 * uint8-array however many entries it has. */
-		box-reserved = [05];                       /* D5 = ENET0_MDIO, the PHY's */
+		box-reserved = [05 0e 0f 10];              /* D5 = ENET0_MDIO; A2/A3/A4 = analog */
 	};
 };
 
@@ -136,6 +136,22 @@
  * 0,1`) resolve to a specific pad -- and keeps that resolution a BOARD property,
  * exactly like the pin-map proposal in PORTING.md.
  */
+/* The Arduino analog pads used by ain channels 3-5. The board's own
+ * `pinmux_lpadc0` covers ONLY the three J8 pads, so without this the pad stays
+ * muxed as GPIO and the converter reads a disconnected input -- a silent wrong
+ * answer, the same shape as the RW612's un-muxed digital pads. */
+&pinctrl {
+	pinmux_box_ain: pinmux_box_ain {
+		group0 {
+			pinmux = <ADC0_B14_PIO0_14>,   /* A2 */
+				 <ADC0_A14_PIO0_22>,   /* A3 */
+				 <ADC0_B15_PIO0_15>;   /* A4 */
+			slew-rate = "fast";
+			drive-strength = "low";
+		};
+	};
+};
+
 &vref {
 	/* Only actually used in EXTERNAL1 mode, which we do NOT use (see below).
 	 * Left configured so that switching a channel back to the precision 1.8 V
@@ -146,6 +162,12 @@
 box_adc: &lpadc0 {
 	#address-cells = <1>;
 	#size-cells = <0>;
+
+	/* BOTH groups: the board's three J8 pads plus our three Arduino ones.
+	 * Overriding pinctrl-0 replaces the board's value, so `pinmux_lpadc0` has
+	 * to be repeated here or channels 0-2 quietly stop working. */
+	pinctrl-0 = <&pinmux_lpadc0 &pinmux_box_ain>;
+	pinctrl-names = "default";
 
 	/*
 	 * ---- 3300 mV FULL SCALE, MEASURED, NOT ASSUMED ----
@@ -215,5 +237,44 @@ box_adc: &lpadc0 {
 		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
 		zephyr,resolution = <12>;
 		zephyr,input-positive = <MCUX_LPADC_CH2A>;   /* P4_23, J8-28 */
+	};
+
+	/* ---- channels 3-5: the Arduino analog strip ----
+	 * These COST DIGITAL PINS -- box 14/15/16 (A2/A3/A4) are listed in
+	 * `box-reserved` above so the digital side refuses them outright rather
+	 * than letting `pin 14 mode out` fight the converter for the pad. A5 is
+	 * deliberately left alone: it is also SW2, the user button.
+	 * Chosen over the remaining port-4 pads (P4_12/13/16/17), which would have
+	 * cost no digital pins, because their header positions are NOT verified in
+	 * the schematic and a silkscreened pin you can actually reach beats a pad
+	 * that might not be brought out. */
+	channel@3 {
+		reg = <3>;
+		zephyr,gain = "ADC_GAIN_1";
+		zephyr,reference = "ADC_REF_EXTERNAL0";
+		zephyr,vref-mv = <3300>;
+		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
+		zephyr,resolution = <12>;
+		zephyr,input-positive = <MCUX_LPADC_CH14B>;  /* P0_14, Arduino A2 */
+	};
+
+	channel@4 {
+		reg = <4>;
+		zephyr,gain = "ADC_GAIN_1";
+		zephyr,reference = "ADC_REF_EXTERNAL0";
+		zephyr,vref-mv = <3300>;
+		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
+		zephyr,resolution = <12>;
+		zephyr,input-positive = <MCUX_LPADC_CH14A>;  /* P0_22, Arduino A3 */
+	};
+
+	channel@5 {
+		reg = <5>;
+		zephyr,gain = "ADC_GAIN_1";
+		zephyr,reference = "ADC_REF_EXTERNAL0";
+		zephyr,vref-mv = <3300>;
+		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
+		zephyr,resolution = <12>;
+		zephyr,input-positive = <MCUX_LPADC_CH15B>;  /* P0_15, Arduino A4 */
 	};
 };

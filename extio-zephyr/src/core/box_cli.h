@@ -77,6 +77,24 @@ static inline uint32_t box_cli_ain_chmask(void)
 	return (1u << box_cli_ain_nch) - 1u;
 }
 
+/* ---- pins the platform refuses ----
+ *
+ * Set from box_gpio_reserved() at boot, for the same reason as the channel
+ * ceiling above: without it the CLI cheerfully accepts `pin 14 mode out` on a
+ * pad that is wired to the ADC (or to the PHY), stores the mode, and prints it
+ * back in `show` -- while box_gpio_apply_config() skips the pin and NOTHING
+ * happens electrically. A config that reports a mode the hardware does not have
+ * is the failure this project keeps having to re-learn; refuse it where the
+ * user is looking. Default 0 = nothing reserved, so an unset platform behaves
+ * exactly as before. */
+static uint32_t box_cli_pin_rsv;
+
+static inline void box_cli_set_reserved_pins(uint32_t mask) { box_cli_pin_rsv = mask; }
+static inline int  box_cli_pin_reserved(int n)
+{
+	return (n >= 0 && n < 32) ? (int) ((box_cli_pin_rsv >> n) & 1u) : 0;
+}
+
 /* CLI_GROUP = labels/groups/desc changed: caller refreshes the group runtime
  * and re-announces the manifest (no GPIO re-apply needed). */
 typedef enum { CLI_OK, CLI_ERR, CLI_PIN, CLI_GROUP, CLI_AIN, CLI_GPIO, CLI_SAVE, CLI_FACTORY, CLI_REBOOT, CLI_BOOTSEL } cli_action_t;
@@ -264,6 +282,9 @@ static inline cli_action_t box_cli_exec(box_config_t *c, const char *line,
     if (sscanf(line, "pin %d mode %23s", &n, w) == 2) {
         int m = dserv_mode_val(w);
         if (n < 0 || n >= BOX_NPINS || m < 0) { snprintf(out, outsz, "ERR bad pin/mode\r\n"); return CLI_ERR; }
+        if (box_cli_pin_reserved(n)) {
+            snprintf(out, outsz, "ERR pin %d is reserved on this board\r\n", n); return CLI_ERR;
+        }
         c->pin_mode[n] = (uint8_t) m; c->applied_count++;
         snprintf(out, outsz, "OK pin%d=%s\r\n", n, dserv_mode_str((uint8_t)m)); return CLI_PIN;
     }
