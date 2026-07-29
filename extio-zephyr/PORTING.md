@@ -4425,3 +4425,40 @@ Two concrete leads for whoever picks this up:
    ignored.
 
 Worth doing before a rig runs unattended for weeks, independent of OTA.
+
+### FIXED AND VERIFIED ON THE RIG, 2026-07-29
+
+`src/socket_keepalive.h` + the three accept sites; David built and installed it
+on raspberrypi.local and tagged a release.
+
+**Keepalive is armed on accepted sockets** — `ss -tno` on a live box connection:
+
+    ESTAB 0 0 192.168.88.46:4620 192.168.88.57:40397 timer:(keepalive,4.296sec,0)
+
+**A vanished peer is now reaped.** Reset the box over SWD (it disappears with no
+FIN and comes back on a new DHCP lease — the exact case that used to leak), and
+watched the socket table:
+
+| | ESTAB | FIN-WAIT-1 |
+|---|---|---|
+| before reset | 1 (the live box) | 39 |
+| t+20 s | **2** — the ghost plus the box's new lease | 39 |
+| t+40 s | 2 | **0** |
+| **t+60 s** | **1 — ghost reaped** | 0 |
+| t+80 s | 1, stable | 0 |
+
+Reaped between t+40 and t+60, which is 30 s idle + 3 x 10 s probes. **Before the
+fix that socket stayed ESTABLISHED for about two hours.**
+
+**Threads 139 -> 97**, and 139 - 97 is almost exactly the 40 ghosts, so the
+detached threads came back with the sockets. The 39 FIN-WAIT-1 were residue from
+the OLD process (killed on restart, no peer left to ACK the FIN) and the kernel
+cleared them on its own. Box healthy throughout.
+
+Steady state is now 1 ESTAB + 1 LISTEN with one box connected, which is what it
+should always have been.
+
+**Still open:** the outbound direction — dserv's connect-back to a dead box was
+seen with Send-Q 1280 backed up, and the fan-out path ignores write failures
+rather than retiring the client. Different socket, different fix, and still the
+most likely explanation for "begin got through, 3000 chunks did not".
