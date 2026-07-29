@@ -4189,6 +4189,76 @@ change in traffic is not contention. It looks periodic — a 1 Hz publish, PTP, 
 DHCP renewal — and it, not the network, is what sets the jitter a rig would see.
 **That is the thing worth chasing.**
 
+### Chasing the p99: localised to the box's own long send, not dserv or the wire
+
+Ruled OUT, each by measurement:
+
+* **dserv's dispatch.** `host/dispatch_test.sh`: min 16, med 21, **p99 136 µs**.
+  Two orders below the RTT tail.
+* **The measuring host.** The harness stamps `cmd/do` when *dserv* processes it
+  and takes arrival inside dserv's callback, so the span is dserv → box → dserv.
+  Driving it from a Mac over the house LAN does not enter the measurement.
+* **Network contention** — p99 invariant across 0 / 50 / 125 frames/s (above).
+
+The box's own instrumentation, read live at 1 kHz streaming:
+
+| stage | µs |
+|---|---|
+| `wake_us` RX thread saw readability → loop reached recv | 34 |
+| `recv_us` the recv that returned the frame | 126 |
+| `disp_us` framer + dispatch + GPIO + `state/do` publish | 113 |
+| **box-internal inbound** | **~273** |
+
+Against L1's 730 µs median that leaves **~457 µs off-box** in dserv's send path
+plus transit — and PORTING.md recorded "~430 µs unaccounted" for teensy41, so
+**this is the same structure, not something MCXN-specific.**
+
+For the tail itself: `loop_us` 182 typical against `loop_max_us` **733**, and
+`send_us` 141 against `send_max_us` **560**. That ~550 µs of occasional extra
+loop time is the right magnitude for the ~495 µs p99 excess, and the send is
+most of it. **Working conclusion: the tail is the box's own occasional long
+send.** What makes a send 4x longer, and whether it is periodic, needs a TIME
+SERIES — running maxima cannot show periodicity. That is where to pick this up.
+
+### How many analog channels can this board actually do? (asked: 6)
+
+Answer: **yes, and the blocker is neither pins nor conversion time — it is one
+hardcoded constant in the shared CLI.**
+
+* **Pins: not a constraint.** ADC0 reaches nine distinct pads on **port 4 alone**
+  — P4_2, P4_3, P4_12, P4_13, P4_15, P4_16, P4_17, P4_19, P4_23 — all at **zero
+  box-GPIO cost**, since box pins live on gpio0. (Of those, P4_15/19/23 are J8
+  and P4_2/P4_3 are Arduino D1/D0; the header positions of P4_12/13/16/17 need
+  the schematic.) The Arduino analog strip adds four more at the cost of box
+  pins 14/22/15/23.
+* **Software ceiling is 8, not 4**: `AIN_MAX_CH` 8, `BOX_ADC_MAX_CH` 8,
+  `ain_group_chans[]` is a `uint8_t`, `CONFIG_LPADC_CHANNEL_COUNT` 15,
+  `BOX_NAGROUPS` 4.
+* **THE BLOCKER: `box_cli.h:292` masks with `~0x0Fu`** — four channels, an
+  MCP3204 fossil baked into the grammar SHARED with the deployed RP2350 boxes.
+  `ain group 0 channels 0,1,2,3,4,5` is refused with "ch 0-3" on a board whose
+  converter has six declared and announces `ain/dbg/chans = 6`.
+  **Do not just widen it to `~0xFFu`.** On a Pico with a real MCP3204 that would
+  let someone configure channels the part does not have, and the group would
+  then silently publish nothing — the exact failure shape this project keeps
+  writing memos about. The honest fix is to validate against the FITTED channel
+  count (`box_adc_channels()`), which means carrying it in `box_config_t` where
+  the platform-agnostic CLI can see it. A design call, not a one-liner.
+* **Conversion time is NOT the constraint.** Measured at 1 kHz base:
+  `sweep_max_us` was **894 µs at 3 channels** and **573 µs at 4** — it went
+  *down* with more channels, so the maximum is scheduling jitter (the ADC thread
+  preempted by the service loop / net RX), not per-channel cost. `late` ran 17
+  in ~26 000 sweeps (0.06 %), `throttled` 0.
+* **The real throughput limit is block rate.** `AIN_BLOCK_MAX` is 24 int16, so
+  batch caps at `24/nchan` — 8 scans at 3 channels, **4 at six**. At a 1 kHz base
+  that is 250 blocks/s, over the `AIN_MAX_BLOCKS_PER_S` limiter of 200.
+* **And the architecture already answers the actual use case.** Eyes at 1 kHz,
+  pupil/heart-rate far slower: put them in SEPARATE GROUPS and decimate the slow
+  one. Four groups exist. **Note the base rate applies to ALL channels** —
+  groups decimate on the *publish* side only — so a 6-channel 1 kHz base pays
+  the full 6-channel sweep every millisecond regardless of how slowly a group
+  publishes. Given the numbers above, that is affordable.
+
 ### Known and unexplained: the DAC floors at ~517 mV
 
 Codes 0 and 511 give an identical reading, reproducibly across runs and across
