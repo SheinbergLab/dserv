@@ -410,6 +410,31 @@ oo::class create System {
                 }
             }
 
+            # String-valued send over the SAME persistent socket.
+            #
+            # dserv_send takes a dl and derives its type from it, so it cannot
+            # express a plain string datapoint -- and the interactive stimuli
+            # report their outcome as exactly that (planko/complete = left |
+            # right | ...). DSERV_STRING is type 1.
+            #
+            # This exists so those stimuli stop using qpcs::dsSet, which opens a
+            # FRESH connection per call and then waits for a reply. Both are
+            # unbounded: a dserv host that has vanished (rather than refusing)
+            # makes the connect block for 75 s -- measured -- and the reply
+            # `gets` has no timeout at all. Those calls sit in object update
+            # callbacks, i.e. on the display loop, so the cost of a missing
+            # dserv was a frozen stimulus mid-trial.
+            #
+            # Fire-and-forget, like the other two: if the socket is dead the
+            # write goes nowhere and ESS sees planko/complete stay "waiting",
+            # which surfaces as a trial that does not advance rather than as a
+            # wrong outcome. A stimulus must never block on the network.
+            proc dserv_send_str { varname val } {
+                if { [info exists ::dserv_return_sock] } {
+                    qpcs::dsSocketSendBytes $::dserv_return_sock $varname $val 1
+                }
+            }
+
             # Event-bearing send: prepend a sync header {SwapCount StimTicksF},
             # read live, ahead of an optional float value list, as one
             # DSERV_BYTE blob (ESS reconstructs the event time from these; see
