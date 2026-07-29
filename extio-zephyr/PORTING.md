@@ -4542,3 +4542,61 @@ different timer entirely, and the two are easy to conflate because both present
 as "the socket eventually goes away". The `ss -tno` timer column distinguishes
 them at a glance — `keepalive` vs `on` — and that single column is what turned a
 guess into a diagnosis here.
+
+### VERIFIED ON THE RIG — both directions reap, and the revert drop is gone
+
+With `TCP_USER_TIMEOUT` installed, the vanish test that half-worked before now
+completes:
+
+| | sockets |
+|---|---|
+| before reset | 2 ESTAB to .60 (in + out), keepalive armed |
+| t+25 s | 4 — the two .60 ghosts (outbound at `timer:(on,492ms,6)`) + two new .61 |
+| **t+50 s** | **2 — both ghosts reaped** |
+
+The outbound cleared between t+25 and t+50, matching the 20 s user timeout;
+previously it sat at retransmit attempt 13 with 15-30 minutes to run.
+
+**The post-revert session drop does not reproduce.** Full cycle — push v0.3.0+1,
+arm, trial boot, reboot WITHOUT confirming:
+
+    t+030s  fw 0.2.0+7  boot revert  wd  18  age_s 0
+    t+060s  fw 0.2.0+7  boot revert  wd  48  age_s 0
+    t+150s  fw 0.2.0+7  boot revert  wd 138  age_s 0
+
+Watchdog advancing at exactly 1 Hz for 150 s, `age_s 0` throughout. Before, the
+box published its announce after a revert and went dark within a minute, staying
+dark until an SWD reset.
+
+Structurally: after roughly a dozen box reboots this session (.58 through .65)
+the table holds exactly **2 ESTAB — one inbound, one outbound — and 96 threads**,
+where the same pattern previously accumulated 40 sockets and 139 threads.
+
+**Causality, stated honestly:** the failure no longer reproduces and the
+cumulative condition that preceded it is gone, but that is not the same as
+proving the leak caused it. The original defect appeared only after many
+reboots, so a single clean run is weak evidence on its own; what carries more
+weight is that the accumulation itself is now structurally impossible. If it
+ever returns, the first thing to check is `ss -tno` for ghost sockets — and the
+timer column, `keepalive` vs `on`, to tell which mechanism is meant to be
+reaping them.
+
+### OTA edge case found on the way: re-pushing the just-swapped image is REJECTED
+
+Pushing the image MCUboot had *just swapped out* (slot1 already held it) staged
+and verified fine — `ota ok, progress 100` — but the arm produced
+`boot rejected`, `rejects 1`, and the box stayed on the running version.
+
+`rejected` is a distinct state from `revert`, and the distinction is what made
+this diagnosable: `box_boot.c` classifies **armed + ran + back on confirmed** as
+a revert, and **armed + NEVER ran** as rejected. So MCUboot declined the image
+rather than trialling and rolling it back.
+
+Not downgrade prevention — `CONFIG_MCUBOOT_DOWNGRADE_PREVENTION` is not set.
+The likely cause is inconsistent trailer/swap state in slot1 from re-writing the
+image that was already there. Pushing a genuinely new version (v0.3.0+1) armed
+and trialled immediately.
+
+**Operationally:** do not test OTA by pushing the image the box just came from.
+Bump the version. And `state/ota/rejects` is the counter that tells you MCUboot
+refused, as against `reverts` which says it tried and rolled back.
