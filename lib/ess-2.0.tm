@@ -6291,9 +6291,20 @@ namespace eval ess {
 
 	set _loading_from_config 1
 
+        # EVERYTHING from here to the matching `finally` runs with the
+        # re-entrancy flag held. It MUST be released on every exit path: this
+        # used to be a bare `catch` around load_system only, so anything that
+        # threw earlier (validate_config, the dict gets, script_source
+        # switching) left the flag stuck at 1 and every LATER load_config died
+        # on the guard above with "Config load already in progress" until dserv
+        # was restarted -- one bad config poisoned the whole session. The error
+        # itself still propagates to the caller exactly as before; `finally`
+        # only guarantees the state is released on the way out.
+        try {
+
         # Validate the config
         validate_config $config_dict
-        
+
         # Extract fields with defaults
         set script_source ""
         set system        [dict get $config_dict system]
@@ -6337,23 +6348,22 @@ namespace eval ess {
         # will be called at the right moments during load_system
         ess_info "Loading system: $system $protocol $variant" "config"
         
-        if {[catch {load_system $system $protocol $variant} err]} {
-            # Clean up on error
+        load_system $system $protocol $variant
+
+        ess_info "load_config complete" "config"
+
+        # Return what was actually loaded
+        return [capture_config]
+
+        } finally {
+            # Released on EVERY exit: success, error, or return. The pending
+            # args must be cleared too -- otherwise a failed config load leaves
+            # them staged and the next PLAIN load_system (not from a config)
+            # would silently inherit the dead config's variant_args.
             set _pending_config_args {}
             set _pending_config_params {}
             set _loading_from_config 0
-            error $err
         }
-        
-        # Clear pending state
-        set _pending_config_args {}
-        set _pending_config_params {}
-        set _loading_from_config 0
-        
-        ess_info "load_config complete" "config"
-        
-        # Return what was actually loaded
-        return [capture_config]
     }
     
     #=========================================================================
