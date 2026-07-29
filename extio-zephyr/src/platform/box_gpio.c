@@ -10,23 +10,68 @@
 #include <zephyr/device.h>
 #include <zephyr/drivers/gpio.h>
 
-/* ---- devices (devicetree aliases, resolved per board) ----
- * box pin n -> <box-gpio-port>.n, so the flat wire index is preserved on every
- * board. Each board's overlay supplies one alias:
- *   box-gpio-port      GPIO controller carrying the box's DO/DI pins
- * (RW612: hsgpio0.  Teensy 4.x: gpio2.) */
-#if !DT_NODE_EXISTS(DT_ALIAS(box_gpio_port))
-#error "board overlay must define the 'box-gpio-port' alias"
+/* ---- the pin map: box pin n -> ANY gpio, chosen per board ----
+ *
+ * Two schemes, in priority order.
+ *
+ * 1. PIN MAP (preferred). The board declares an ordered list of gpio specs in
+ *    `zephyr,user/box-gpios`, so box pin n resolves to whatever the board says.
+ *    This buys three things the old scheme could not:
+ *      * pins on ANY port, not just one (the FRDM-MCXN947's Arduino header is
+ *        spread across gpio0/gpio1/gpio4, and six of fourteen digital pins were
+ *        simply unreachable before);
+ *      * per-pin FLAGS from devicetree -- notably GPIO_ACTIVE_LOW, which is how
+ *        the board's LEDs stop being inverted without inventing a config field;
+ *      * box pin numbering CHOSEN PER BOARD, so it can match the silkscreen.
+ *    `zephyr,user` is used rather than a custom compatible so no binding file is
+ *    needed; `box-reserved` lists indices that must never be claimed.
+ *
+ * 2. LEGACY single-port alias `box-gpio-port`, giving box pin n -> port.n. Kept
+ *    so teensy40/teensy41/frdm_rw612 build and behave EXACTLY as before -- they
+ *    are not on the bench for this change, and silently renumbering their pins
+ *    would be the worst possible way to find that out.
+ *
+ * The frozen wire contract is untouched either way: `config/pin/<n>` and
+ * `cmd/do/<n>` stay a flat index, it just resolves somewhere sane.
+ */
+#define BOX_USER_NODE DT_PATH(zephyr_user)
+
+#if DT_NODE_HAS_PROP(BOX_USER_NODE, box_gpios)
+#define BOX_PINMAP_ENTRY(i, _) \
+	GPIO_DT_SPEC_GET_BY_IDX_OR(BOX_USER_NODE, box_gpios, i, {0})
+#elif DT_NODE_EXISTS(DT_ALIAS(box_gpio_port))
+#define BOX_PINMAP_ENTRY(i, _) \
+	{ .port = DEVICE_DT_GET(DT_ALIAS(box_gpio_port)), \
+	  .pin = (gpio_pin_t) (i), .dt_flags = 0 }
+#else
+#error "board overlay must supply zephyr,user/box-gpios or the box-gpio-port alias"
 #endif
 
-static const struct device *port;          /* box-gpio-port     */
+static const struct gpio_dt_spec specs[BOX_NPINS] = {
+	LISTIFY(BOX_NPINS, BOX_PINMAP_ENTRY, (,))
+};
 
-static inline gpio_pin_t off_of(int n) { return (gpio_pin_t) n; }
+/* A pin is refused if the board does not map it at all, or lists it reserved.
+ * On the MCXN947 that is Arduino D5 = P1_21 = ENET0_MDIO: it exists on the
+ * header, it is the PHY's, and claiming it would take the box off the network
+ * to no purpose. Declaring it in the map and refusing it here is deliberate --
+ * the map then documents the whole header rather than quietly omitting a pin. */
+static inline int box_gpio_reserved(int n)
+{
+	if (n < 0 || n >= BOX_NPINS || specs[n].port == NULL) {
+		return 1;
+	}
+#if DT_NODE_HAS_PROP(BOX_USER_NODE, box_reserved)
+	static const uint8_t rsv[] = DT_PROP(BOX_USER_NODE, box_reserved);
 
-/* No board pins are hard-reserved on the RW612 the way GPIO15-22 were the W6300
- * QSPI block on the EVB-Pico2. Peripheral claims (SPI ADC, etc.) will register
- * here as those blocks land; for now nothing is refused. */
-static inline int box_gpio_reserved(int n) { (void) n; return 0; }
+	for (size_t k = 0; k < ARRAY_SIZE(rsv); k++) {
+		if (rsv[k] == (uint8_t) n) {
+			return 1;
+		}
+	}
+#endif
+	return 0;
+}
 
 /* ---- high-resolution timestamp (box clock) ---- */
 static inline uint64_t now_us(void)
@@ -44,16 +89,26 @@ static uint8_t           di_pub_level[BOX_NPINS];      /* poller-only           
 static volatile int      sync_pin = -1;
 static volatile uint64_t sync_edge[2];                 /* [0]=fall(end) [1]=rise(begin) */
 
-static struct gpio_callback di_cb;
-static bool                 cb_added;
+/* gpio_callback is PER CONTROLLER, so a map spanning several ports needs one
+ * registration each. Four covers any board here (the MCXN947 uses three:
+ * gpio0/gpio1/gpio4); overflow is refused in add_input() rather than silently
+ * dropping a pin's interrupts. */
+#define BOX_MAX_PORTS 4
+static const struct device *cb_dev[BOX_MAX_PORTS];
+static struct gpio_callback cb_obj[BOX_MAX_PORTS];
+static gpio_port_pins_t     cb_mask[BOX_MAX_PORTS];
+static uint8_t              cb_n;
 static volatile uint32_t    di_isr_n;      /* TEMP diagnostic: ISR entries */
 
-/* single ISR for every configured input + the sync pin. 64-bit fields are
- * written here and read under irq_lock in the poller (single-core CM33). */
+/* single ISR for every configured input + the sync pin, on every port. `pins`
+ * is a mask in the CONTROLLER's pin space, so a box pin matches only when both
+ * its controller and its pin agree -- with one port that reduces to the old
+ * BIT(i) test, and with several it is what keeps gpio1.2 from being mistaken
+ * for gpio0.2. 64-bit fields are written here and read under irq_lock in the
+ * poller (single-core CM33). */
 static void di_isr(const struct device *dev, struct gpio_callback *cb,
 		   gpio_port_pins_t pins)
 {
-	ARG_UNUSED(dev);
 	ARG_UNUSED(cb);
 	uint64_t t = now_us();
 	bool woke = false;
@@ -61,11 +116,11 @@ static void di_isr(const struct device *dev, struct gpio_callback *cb,
 	di_isr_n++;                          /* TEMP diagnostic */
 
 	for (int i = 0; i < BOX_NPINS; i++) {
-		if (!(pins & BIT(i))) {
+		if (specs[i].port != dev || !(pins & BIT(specs[i].pin))) {
 			continue;
 		}
 		if (i == sync_pin) {                         /* latch, do not report */
-			int lvl = gpio_pin_get(port, off_of(i));
+			int lvl = gpio_pin_get_dt(&specs[i]);
 			sync_edge[lvl ? 1 : 0] = t;
 			continue;
 		}
@@ -107,14 +162,18 @@ static struct k_timer pulse_fall[BOX_NPINS];
 static void pulse_fall_expired(struct k_timer *t)
 {
 	int pin = (int)(t - pulse_fall);
-	gpio_pin_set(port, off_of(pin), 0);
+	gpio_pin_set_dt(&specs[pin], 0);
 }
 
 int box_gpio_init(void)
 {
-	port = DEVICE_DT_GET(DT_ALIAS(box_gpio_port));
-	if (!device_is_ready(port)) {
-		return -1;
+	/* Every DISTINCT controller the map names has to be up. A map spanning
+	 * three ports fails usefully here rather than at the first write to the one
+	 * port that was not ready. */
+	for (int i = 0; i < BOX_NPINS; i++) {
+		if (specs[i].port && !device_is_ready(specs[i].port)) {
+			return -1;
+		}
 	}
 	for (int i = 0; i < BOX_NPINS; i++) {
 		k_timer_init(&pulse_fall[i], pulse_fall_expired, NULL);
@@ -122,13 +181,32 @@ int box_gpio_init(void)
 	return 0;
 }
 
+/* Accumulate box pin `i` into its controller's interrupt mask, creating the
+ * slot on first use. Returns 0 if the port table is full -- refused loudly at
+ * the caller rather than leaving a configured input with no ISR behind it. */
+static int add_input(int i)
+{
+	for (int k = 0; k < cb_n; k++) {
+		if (cb_dev[k] == specs[i].port) {
+			cb_mask[k] |= BIT(specs[i].pin);
+			return 1;
+		}
+	}
+	if (cb_n >= BOX_MAX_PORTS) {
+		return 0;
+	}
+	cb_dev[cb_n]  = specs[i].port;
+	cb_mask[cb_n] = BIT(specs[i].pin);
+	cb_n++;
+	return 1;
+}
+
 void box_gpio_apply_config(const box_config_t *c)
 {
-	if (cb_added) {                                  /* rebuild the input set */
-		gpio_remove_callback(port, &di_cb);
-		cb_added = false;
+	for (int k = 0; k < cb_n; k++) {             /* rebuild the input set */
+		gpio_remove_callback(cb_dev[k], &cb_obj[k]);
 	}
-	gpio_port_pins_t input_mask = 0;
+	cb_n = 0;
 
 	for (int i = 0; i < BOX_NPINS; i++) {
 		if (box_gpio_reserved(i)) {
@@ -136,16 +214,16 @@ void box_gpio_apply_config(const box_config_t *c)
 		}
 		switch (c->pin_mode[i]) {
 		case 1:                                  /* output */
-			gpio_pin_configure(port, off_of(i), GPIO_OUTPUT_INACTIVE);
+			gpio_pin_configure_dt(&specs[i], GPIO_OUTPUT_INACTIVE);
 			break;
 		case 2:                                  /* input */
 		case 3:                                  /* input + pull-up */
-			gpio_pin_configure(port, off_of(i),
+			gpio_pin_configure_dt(&specs[i],
 				GPIO_INPUT | (c->pin_mode[i] == 3 ? GPIO_PULL_UP : 0));
-			gpio_pin_interrupt_configure(port, off_of(i), GPIO_INT_EDGE_BOTH);
+			gpio_pin_interrupt_configure_dt(&specs[i], GPIO_INT_EDGE_BOTH);
 			di_unsettled[i] = 0;
-			di_pub_level[i] = (uint8_t) gpio_pin_get(port, off_of(i));
-			input_mask |= BIT(i);
+			di_pub_level[i] = (uint8_t) gpio_pin_get_dt(&specs[i]);
+			(void) add_input(i);
 			break;
 		default:                                 /* 0 = leave untouched */
 			break;
@@ -156,7 +234,7 @@ void box_gpio_apply_config(const box_config_t *c)
 	if (obs_mirror_enabled(c)) {
 		int p = obs_mirror_pin(c);
 		if (p >= 0 && p < BOX_NPINS && !box_gpio_reserved(p)) {
-			gpio_pin_configure(port, off_of(p), GPIO_OUTPUT_INACTIVE);
+			gpio_pin_configure_dt(&specs[p], GPIO_OUTPUT_INACTIVE);
 		}
 	}
 
@@ -166,17 +244,16 @@ void box_gpio_apply_config(const box_config_t *c)
 	if (sync_input_enabled(c)) {
 		int p = sync_input_pin(c);
 		if (p >= 0 && p < BOX_NPINS && !box_gpio_reserved(p)) {
-			gpio_pin_configure(port, off_of(p), GPIO_INPUT);
-			gpio_pin_interrupt_configure(port, off_of(p), GPIO_INT_EDGE_BOTH);
-			input_mask |= BIT(p);
+			gpio_pin_configure_dt(&specs[p], GPIO_INPUT);
+			gpio_pin_interrupt_configure_dt(&specs[p], GPIO_INT_EDGE_BOTH);
+			(void) add_input(p);
 			sync_pin = p;
 		}
 	}
 
-	if (input_mask) {
-		gpio_init_callback(&di_cb, di_isr, input_mask);
-		gpio_add_callback(port, &di_cb);
-		cb_added = true;
+	for (int k = 0; k < cb_n; k++) {
+		gpio_init_callback(&cb_obj[k], di_isr, cb_mask[k]);
+		gpio_add_callback(cb_dev[k], &cb_obj[k]);
 	}
 }
 
@@ -193,7 +270,7 @@ void box_gpio_exec(const box_config_t *c, const gpio_cmd_t *cmd)
 	 * NOT already configured as outputs: reconfiguring drives the pin low
 	 * first, a real glitch on the wire (e.g. SET 1 while already high). */
 	if (c->pin_mode[cmd->pin] != 1) {
-		gpio_pin_configure(port, off_of(cmd->pin), GPIO_OUTPUT_INACTIVE);
+		gpio_pin_configure_dt(&specs[cmd->pin], GPIO_OUTPUT_INACTIVE);
 	}
 
 	/* any new DO op on a pin cancels its pending pulse falling edge, so a
@@ -201,16 +278,16 @@ void box_gpio_exec(const box_config_t *c, const gpio_cmd_t *cmd)
 	k_timer_stop(&pulse_fall[cmd->pin]);
 
 	if (cmd->op == GPIO_OP_SET) {
-		gpio_pin_set(port, off_of(cmd->pin), cmd->value ? 1 : 0);
+		gpio_pin_set_dt(&specs[cmd->pin], cmd->value ? 1 : 0);
 		return;
 	}
 	if (cmd->op != GPIO_OP_PULSE || cmd->value == 0) {
-		gpio_pin_set(port, off_of(cmd->pin), 0);     /* zero-width no-op */
+		gpio_pin_set_dt(&specs[cmd->pin], 0);     /* zero-width no-op */
 		return;
 	}
 
 	/* PULSE: raise now, drop when the per-pin timer expires (never blocks) */
-	gpio_pin_set(port, off_of(cmd->pin), 1);
+	gpio_pin_set_dt(&specs[cmd->pin], 1);
 	k_timer_start(&pulse_fall[cmd->pin], K_USEC(cmd->value), K_NO_WAIT);
 }
 
@@ -224,14 +301,14 @@ int box_gpio_poll_di(const box_config_t *c, box_di_event_t *out)
 		uint64_t first = di_first_edge_us[i];
 		irq_unlock(k);
 
-		if (!uns) {
+		if (!uns || box_gpio_reserved(i)) {
 			continue;
 		}
 		uint64_t win = (uint64_t) c->debounce_ms[i] * 1000u;
 		if (now - last < win) {
 			continue;                        /* still bouncing */
 		}
-		uint8_t lvl = (uint8_t) gpio_pin_get(port, off_of(i));
+		uint8_t lvl = (uint8_t) gpio_pin_get_dt(&specs[i]);
 		k = irq_lock();
 		di_unsettled[i] = 0;
 		irq_unlock(k);
@@ -280,9 +357,21 @@ void box_gpio_read_di_levels(const box_config_t *c, uint8_t levels[BOX_NPINS])
 {
 	for (int i = 0; i < BOX_NPINS; i++) {
 		levels[i] = 0;
-		/* DI modes only (in / in_pullup); outputs and off read 0. */
+		/* DI modes only (in / in_pullup); outputs and off read 0.
+		 *
+		 * THE RESERVED CHECK IS LOAD-BEARING, not defensive tidiness. With a
+		 * sparse pin map an unmapped index has specs[i].port == NULL, and
+		 * gpio_pin_get_dt() on it dereferences NULL->api and jumps to garbage.
+		 * A persisted config naming a pin this board does not map is the
+		 * ordinary case after a renumbering, so this WILL be hit: it hard
+		 * faulted on the bench the first time, "Bus fault on vector table
+		 * read", from a stale pin_mode[26]=in_pullup. The old dense map made
+		 * every index valid and hid the whole class. */
+		if (box_gpio_reserved(i)) {
+			continue;
+		}
 		if (c->pin_mode[i] == 2 || c->pin_mode[i] == 3) {
-			int raw = gpio_pin_get(port, off_of(i));
+			int raw = gpio_pin_get_dt(&specs[i]);
 
 			if (raw >= 0) {
 				levels[i] = (uint8_t) di_logical(c, i, raw);
@@ -298,6 +387,6 @@ void box_gpio_obs_mirror(const box_config_t *c, int obs)
 	}
 	int p = obs_mirror_pin(c);
 	if (p >= 0 && p < BOX_NPINS && !box_gpio_reserved(p)) {
-		gpio_pin_set(port, off_of(p), obs ? 1 : 0);
+		gpio_pin_set_dt(&specs[p], obs ? 1 : 0);
 	}
 }

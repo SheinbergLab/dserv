@@ -1,3 +1,4 @@
+#include <zephyr/dt-bindings/gpio/gpio.h>      /* GPIO_ACTIVE_LOW for the LEDs */
 #include <zephyr/dt-bindings/adc/adc.h>
 #include <zephyr/dt-bindings/adc/mcux-lpadc.h>
 #include <zephyr/dt-bindings/regulator/nxp_vref.h>
@@ -25,38 +26,63 @@
  */
 
 / {
-	aliases {
-		/*
-		 * box pin n -> gpio0.n.
-		 *
-		 * gpio0 is the right port on this board for two reasons:
-		 *   1. it carries 11 of the Arduino header pins inside the box's
-		 *      0..29 index range (BOX_NPINS = 30, a frozen core constant):
-		 *
-		 *        box 10 = D9  (P0_10, also the RED LED)
-		 *        box 14 = A2  (P0_14)
-		 *        box 15 = A4  (P0_15)
-		 *        box 22 = A3  (P0_22)
-		 *        box 23 = A5  (P0_23, also SW2 -- the user button)
-		 *        box 24 = D11 (P0_24, Arduino MOSI)
-		 *        box 25 = D13 (P0_25, Arduino SCK)
-		 *        box 26 = D12 (P0_26, Arduino MISO)
-		 *        box 27 = D10 (P0_27, Arduino CS, also the GREEN LED)
-		 *        box 28 = D8  (P0_28)
-		 *        box 29 = D2  (P0_29)
-		 *
-		 *      (D4 = P0_30 and D7 = P0_31 exist but fall outside BOX_NPINS.)
-		 *   2. ENET_QOS uses NONE of port 0 -- its RMII/MDIO pads are all on
-		 *      port 1 (P1_4..7, P1_13..15, P1_20/21). Picking gpio1 would put
-		 *      box pins straight on top of the PHY.
-		 *
-		 * NO pinmux group is needed for these, unlike the RW612. Zephyr's
-		 * gpio_mcux driver writes PORT_PCR_MUX(PORT_MUX_GPIO) itself in
-		 * pin_configure(), so claiming a box pin muxes the pad to GPIO as a
-		 * side effect. The RW612's "a pad not muxed to GPIO accepts every
-		 * command and does nothing electrically" trap does not exist here.
-		 */
-		box-gpio-port = &gpio0;
+	/*
+	 * ---- THE PIN MAP: box pin n IS Arduino Dn ----
+	 *
+	 * The old scheme was one alias, `box pin n -> gpio0.n`, which had two
+	 * costs. Six of the fourteen Arduino digital pins live on gpio1/gpio4 and
+	 * were simply UNREACHABLE; and the numbering was scrambled against the
+	 * silkscreen (box 24 was D11, box 26 was D12), which cost bench time every
+	 * single session and needed a doc lookup to answer "which pins do I jumper".
+	 *
+	 * Now box pin n resolves to whatever this list says, so the box pin number
+	 * IS the number printed on the board. `cmd/do/11` drives the pin labelled
+	 * D11. Nothing on the wire changed -- the contract was always a flat index,
+	 * it just resolves somewhere a human can find.
+	 *
+	 * D5 IS DECLARED AND RESERVED. P1_21 is ENET0_MDIO: the pin exists on the
+	 * header, it belongs to the PHY, and claiming it would take the box off the
+	 * network. Listing it and refusing it beats omitting it -- the map then
+	 * describes the whole header, and the reason lives next to the pin.
+	 *
+	 * THE TWO LEDs CARRY GPIO_ACTIVE_LOW, which is the whole reason the flags
+	 * matter. The board wires both LEDs active-low, so before this an
+	 * obs-mirror on the green LED lit BETWEEN observation periods and went dark
+	 * DURING them -- backwards, and confirmed backwards on the bench. With the
+	 * flag, `obs pin 10` lights the LED for the duration of the obs period,
+	 * because gpio_pin_set_dt() applies the polarity the board declared. Note
+	 * this makes `do 10 1` light the LED too: on this board that pad IS the LED.
+	 *
+	 * NO pinmux group is needed for any of these. Zephyr's gpio_mcux driver
+	 * writes PORT_PCR_MUX(PORT_MUX_GPIO) in pin_configure(), so claiming a box
+	 * pin muxes the pad as a side effect -- the RW612's "a pad not muxed to
+	 * GPIO accepts every command and does nothing electrically" trap does not
+	 * exist here.
+	 */
+	zephyr,user {
+		box-gpios = <&gpio4  3 0>,                 /*  0 = D0   (P4_3)  */
+			    <&gpio4  2 0>,                 /*  1 = D1   (P4_2, also DAC0_OUT) */
+			    <&gpio0 29 0>,                 /*  2 = D2   (P0_29) */
+			    <&gpio1 23 0>,                 /*  3 = D3   (P1_23) */
+			    <&gpio0 30 0>,                 /*  4 = D4   (P0_30) */
+			    <&gpio1 21 0>,                 /*  5 = D5   RESERVED: ENET0_MDIO */
+			    <&gpio1  2 0>,                 /*  6 = D6   (P1_2, also BLUE LED) */
+			    <&gpio0 31 0>,                 /*  7 = D7   (P0_31) */
+			    <&gpio0 28 0>,                 /*  8 = D8   (P0_28) */
+			    <&gpio0 10 GPIO_ACTIVE_LOW>,   /*  9 = D9   (P0_10, RED LED)   */
+			    <&gpio0 27 GPIO_ACTIVE_LOW>,   /* 10 = D10  (P0_27, GREEN LED) */
+			    <&gpio0 24 0>,                 /* 11 = D11  (P0_24, MOSI) */
+			    <&gpio0 26 0>,                 /* 12 = D12  (P0_26, MISO) */
+			    <&gpio0 25 0>,                 /* 13 = D13  (P0_25, SCK)  */
+			    <&gpio0 14 0>,                 /* 14 = A2   (P0_14) */
+			    <&gpio0 22 0>,                 /* 15 = A3   (P0_22) */
+			    <&gpio0 15 0>,                 /* 16 = A4   (P0_15) */
+			    <&gpio0 23 0>;                 /* 17 = A5   (P0_23, also SW2) */
+
+		/* Bytestring, NOT <5>: a one-element <> infers a SCALAR int and
+		 * `uint8_t rsv[] = DT_PROP(...)` then fails to compile. [] is always a
+		 * uint8-array however many entries it has. */
+		box-reserved = [05];                       /* D5 = ENET0_MDIO, the PHY's */
 	};
 };
 
