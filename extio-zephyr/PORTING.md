@@ -4267,3 +4267,83 @@ that field — and `low-power-mode` is not set in the board dts. The bottom ~700
 DAC codes are simply unusable. This is a property of the test SOURCE, not of the
 ADC, and it did not affect either result above; it matters only if something
 wants to synthesise a near-zero voltage on-board.
+
+---
+
+## 2026-07-29 — OTA end to end on the MCXN947, and one real defect
+
+MCUboot + the full try-before-you-buy lifecycle, exercised on silicon. The board
+had been running a non-MCUboot image linked at flash base; moving to the A/B
+layout is a ONE-TIME SWD flash of both images (`west flash -d <sysbuild-dir>`
+flashes MCUboot and the signed app), exactly parallel to the Pico needing one
+BOOTSEL flash before OTA can take over.
+
+Config needed adding to the board conf -- `CONFIG_STREAM_FLASH`,
+`CONFIG_IMG_MANAGER`, `CONFIG_MCUBOOT_IMG_MANAGER`. Per the RW612's note,
+MCUBOOT_IMG_MANAGER alone is **silently ignored** (it sits under the IMG_MANAGER
+menuconfig, which needs STREAM_FLASH), so the build succeeds with every
+arm/confirm path compiled out. Checked in `.config`, not assumed.
+
+**First chainload was clean** — no analogue of the RW612's
+MCUboot-powers-down-the-TDDR-PLL defect appeared:
+
+    I: Bootloader chainload address offset: 0x14000
+    I: Jumping to the first image slot
+    image: v0.0.0+0, confirmed
+
+### The lifecycle, both halves
+
+Proven with two images distinguishable on sight: the running v0.0.0+0 and a
+second build stamped `CONFIG_MCUBOOT_IMGTOOL_SIGN_VERSION="0.2.0+7"`.
+
+| step | result |
+|---|---|
+| stage 240076 B into slot1 (datapoint chunks) | `ok`, progress 100, sha verified |
+| box-side cost | `erase_max 1286 us, prog_max 2329 us` |
+| arm -> MCUboot swap -> trial | `fw_ver 0.2.0+7, trial 1, boot trial` |
+| **reset WITHOUT confirm** | **reverts to 0.0.0+0, `reverts 1`, `boot revert`** |
+| confirm | `trial 0`, **`updates 1`** |
+| **reset AFTER confirm** | **stays 0.2.0+7, `boot software`** |
+
+The box states the rollback in words, which is what OTA step 5 was for:
+
+    image: ROLLED BACK from v0.2.0+7 -- the trial image was never confirmed
+           (1 revert(s) lifetime)
+
+**Config survived every swap** — 6 analog channels, 2 groups, pin map, dserv
+target all intact, because `storage_partition` is outside both slots. That is a
+property of the layout, and it held.
+
+### THE DEFECT: after a REVERT boot, the dserv session went down and stayed down
+
+The revert boot came up, published its announce (`fw_ver`, `boot=revert`,
+`ota/reverts=1` all arrived), and then the session died. `show` on the box
+console read `dserv.live=down uplink=eth cmds_rx=12` while the box itself was
+perfectly healthy. **It did not self-heal in ~6 minutes**; an SWD reset restored
+it immediately.
+
+Every OTA attempted in that window failed with `result=host_io`, `progress=0` --
+which is the honest symptom, since `cmd/ota/chunk` had nowhere to land.
+
+Ruled OUT afterwards, on a freshly reset box: **the blast itself does not kill
+the session.** A 240 KB push with the watchdog polled throughout ran to
+`ok/progress 100` with `age_s 0` the whole way. So the trigger is something about
+the revert path specifically, not chunk volume. Unresolved.
+
+### A MEASUREMENT MISTAKE WORTH NOT REPEATING
+
+While the box was off the air I read `state/ota/*` and reported `fail` /
+`host_io` as if they were live. **They were RETAINED datapoints.** dserv never
+deletes, so a dead box serves its last values forever and every query looks
+healthy. Two hypotheses were built and reported on those stale reads before the
+box's own console (`dserv.live=down`) and a frozen watchdog gave it away.
+
+**Poll liveness, not the value.** `[now] - [dservTimestamp <dp>]` is one
+expression and it would have caught this immediately:
+
+    wd=41 age_ms=348271117    <- 348 SECONDS old, value unchanged
+
+This is the same retained-datapoint property already recorded under "Open bugs"
+(reboot divergence) and the `extio_clear` discussion, arriving through a third
+door. Any harness that reads box state to make a decision should check freshness
+first.
