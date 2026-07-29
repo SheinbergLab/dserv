@@ -3,6 +3,7 @@
 #include "ObjectRegistry.h"
 #include "dserv.h"
 #include "dservConfig.h"
+#include "socket_keepalive.h"
 #include <vector>
 #include <algorithm>
 #include <filesystem>
@@ -288,6 +289,7 @@ void TclServer::start_tcp_server(void)
     register_connection(new_socket_fd, client_ip);
     
     setsockopt(new_socket_fd, IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on));
+    dserv_set_keepalive(new_socket_fd);   /* reap peers that vanish */
     
     std::thread thr(tcp_client_process, this, new_socket_fd, &queue);
     thr.detach();
@@ -358,6 +360,7 @@ void TclServer::start_message_server(void)
     }
     
     setsockopt(new_socket_fd, IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on));
+    dserv_set_keepalive(new_socket_fd);   /* reap peers that vanish */
     
     register_connection(new_socket_fd, client_ip);
     

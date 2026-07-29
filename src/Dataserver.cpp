@@ -1,6 +1,7 @@
 #include "sharedqueue.h"
 #include "Dataserver.h"
 #include "dpoint_process.h"
+#include "socket_keepalive.h"
 
 static int process_requests(Dataserver *dserv);
 
@@ -1483,6 +1484,12 @@ void Dataserver::start_tcp_server(void)
     }
       
     setsockopt(new_socket_fd, IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on));
+
+    /* The thread below blocks in read() with no timeout, so a peer that
+       vanishes without closing would leak both the socket and the thread
+       forever. Keepalive is what turns that read() into an eventual
+       ETIMEDOUT -> close_up. See socket_keepalive.h. */
+    dserv_set_keepalive(new_socket_fd);
 
     // Create a thread and transfer the new stream to it.
     std::thread thr(tcp_client_process, this, new_socket_fd);
