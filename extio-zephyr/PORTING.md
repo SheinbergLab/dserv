@@ -4600,3 +4600,147 @@ and trialled immediately.
 **Operationally:** do not test OTA by pushing the image the box just came from.
 Bump the version. And `state/ota/rejects` is the counter that tells you MCUboot
 refused, as against `reverts` which says it tried and rolled back.
+
+---
+
+## 2026-07-29 — one cable: power, console and flash (and a pack that eats boards)
+
+Goal for the day: get the MCXN947 to a state where a person can bring one up at a
+new site with a single USB-C cable. Reached, but the route there cost two
+self-inflicted board bricks, both worth recording.
+
+### J17 POWERS THE BOARD — check this first, always
+
+Presented as "with both cables in I get a console; with only the CDC cable it
+does not work". That is not a fault. The Zephyr board doc says it outright:
+
+> Connect a USB Type-C cable to the host computer and **J17** … **This powers
+> the board**, connects the debug probe…
+
+The MCXN947's own USB-C is a **device port only**. With just that cable the board
+is unpowered, so nothing enumerates and the target UART is silent. Every "the
+board won't come up" symptom starts here.
+
+### J19 is for an EXTERNAL probe only, and it lies about it
+
+`J19` shorted disables the on-board MCU-Link's SWD so an external J-Link on J23
+can drive the bus. Leave it fitted with no external probe and:
+
+* `pyocd list` reports **no debug probes**, while
+* the MCU-Link's **VCOM still works** — so the board looks half-alive rather than
+  misconfigured, and
+
+* **the VCOM RENAMES as the jumper changes** (`…SNNGIV1` <-> `…SNNGIV3`), because
+  the probe's interface numbering changes with it. A terminal (or a capture
+  script) pointed at the old node reads **silence**, which is indistinguishable
+  from a dead board. That cost a full misdiagnosis here: a capture returned
+  "nothing", and the board had been fine the whole time.
+
+### THE PACK VERSION IS A BOARD-EATER
+
+`west flash -r pyocd` needs a CMSIS pack. The obvious command installs the newest:
+
+    pyocd pack install mcxn947      # -> NXP.MCXN947_DFP.26.06.00
+
+and **that version fails with `flash init timed out` PART WAY THROUGH ERASING**.
+Not "refuses to start" — it prints `Erasing…`, runs the progress bar, and dies.
+The bootloader region is then half gone and the board does not boot:
+
+    I: Bootloader chainload address offset: 0x14000
+    I: Image version: v0.2.0
+    E: ***** HARD FAULT *****  BFAR Address: 0xfffffffe
+    E: Faulting instruction address (r15/pc): 0x00000000
+
+**19.0.0 programs cleanly** — the last of the old numbering before the
+date-based releases (25.03.00, 25.09.00, 26.06.00). Pinned in `pyocd.yaml`.
+
+The index only serves the newest, so `pack install …@19.0.0` cannot reach it. Get
+it by hand from NXP's public pack repo — no login, same host pyocd already uses:
+
+    curl -fsSLO https://mcuxpresso.nxp.com/cmsis_pack/repo/NXP.MCXN947_DFP.19.0.0.pack
+
+**Ruled out, do not re-try:** the part-specific target. `mcxn947vdf` fails
+IDENTICALLY to the generic `mcxn947` — the memory maps are the same and the
+failure is the same. This is purely the pack version, and with 19.0.0 the generic
+target `board.cmake` already passes works, so no runner override is needed.
+
+**Bonus:** the on-board MCU-Link programs at **~34 kB/s** against **~11 kB/s**
+for the same image through an external J-Link EDU Mini. The single-cable path is
+not a convenience trade — it is also 3x faster.
+
+### TWO MISTAKES OF MINE, both avoidable
+
+**1. The build directory encodes the flash layout.** I ran
+`west flash -d build-mcxn947` at a board running MCUboot. That build has
+`FLASH_LOAD_OFFSET=0`, so it erases from `0x10000000` — **where MCUboot lives** —
+while the board's actual app sits at `0x10014000` under it. On a board moved to
+the A/B layout, `build-mcxn947` is BUILD-ONLY; `build-mcxn-ota` is the only valid
+flash target.
+
+**2. A failed flash is not a no-op.** I read `flash init timed out` as "the tool
+did not work" when it meant "the tool got part way". The erase had already run.
+A flash that errors needs *verification*, not an assumption — and a new flash
+tool should be proved on something recoverable before it is pointed at a
+bootloader.
+
+Both recoveries were quick (refit J19, reattach the Segger,
+`west flash -r jlink -d build-mcxn-ota`), and **the persisted config survived
+both** — NVS lives in the external QSPI, outside every region that was erased.
+That layout property has now been tested against destruction, not just an OTA
+swap.
+
+### Per-board console default
+
+A fresh config had `console_mode = 0` = CDC purely because `box_config_t` is
+BSS-zeroed. Wrong for this board: its console UART **is** the MCU-Link VCOM on
+J17, the cable that already powers it — so one cable brings the box up AND shows
+its config console. `-DBOX_DEFAULT_CONSOLE_MODE=CONSOLE_MODE_UART` from
+CMakeLists, applied BEFORE the persisted blob so an explicit `console …` + `save`
+always wins.
+
+**Deliberately not global:** on the Teensy the same setting means lpuart6 on pins
+0/1 and a soldered-on USB-serial adapter, where a uart default would make a
+healthy box look dead.
+
+The reply to `console uart` used to claim "needs a USB-serial adapter" — true on
+the Teensy, **false here**, and misleading to exactly the person the default is
+meant to help. Fixed.
+
+### The console stopped repeating itself
+
+`box_uplink` printed on every registration pass, and the routine case carries no
+information. With the console on the board UART that was the *only* thing on
+screen:
+
+    reg: matches refreshed as extio/box
+    reg: matches refreshed as extio/box
+    reg: matches refreshed as extio/box
+
+**Noise that never varies is worse than silence** — it trains you to stop reading
+the one channel where `(INCOMPLETE, watchdog will retry)` appears. Now prints
+only for a full (re)registration or a failure. `verbose 1` restores the rest,
+runtime-only and not persisted, since a box that boots chatty because of a
+setting saved months ago is its own trap. The result reads as a narrative:
+
+    reg: config link down -> re-registering (x1)
+    reg: first registration at 5584 ms
+    reg: config link restored
+    reg: registered as extio/box
+
+### Wall power — expected to work, NOT yet verified
+
+With `console=uart` and `mode=eth` nothing on the box depends on USB: the CLI
+goes to the MCU-Link over PCB traces (enumeration irrelevant), the data pipe is
+suppressed, and uplink/PTP/dserv are all Ethernet. So J17 into a charger should
+run a configured box.
+
+Two caveats before relying on it. **USB-C CC negotiation** — the board must
+present sink pull-downs for a charger to deliver power; test with the ACTUAL
+charger. And **all local observability is gone** — no host on the VCOM, no CDC,
+so dserv over Ethernet is the only way to see the box, and a network
+misconfiguration then needs a physical visit.
+
+Check it with FRESHNESS, not the value — a dead box serves its last reading
+forever:
+
+    dservctl -c 'expr {([now]-[dservTimestamp extio/box/state/watchdog])/1000000}'
