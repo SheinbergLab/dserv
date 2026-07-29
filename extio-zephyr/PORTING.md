@@ -4131,6 +4131,64 @@ property of that board's OS timer and does NOT apply here**; the tick source has
 use is 1500). So finer ticks are worth actually testing on this board before
 assuming the RW612's ±37 µs skew floor transfers.
 
+### ENET_QOS: what the "QoS" actually is, and why it is NOT our lever
+
+David asked whether, with a proper partner, we could prioritise time-critical
+traffic. Checked in the HAL and the driver rather than assumed:
+
+* **The silicon has it, modestly.** `ENET_MTL_QUEUE_COUNT = 2` for the MCXN
+  family (MCXA has 1) — two MTL queues and two DMA channels, with fixed or
+  weighted-strict-priority arbitration, per-queue weights, and 802.1Q PCP →
+  queue mapping (`rxqueuePrio` / `txqueuePrio`, and a `pcp:3` field in the VLAN
+  API). **No Qbv time-aware shaper, no EST, no frame preemption** anywhere in
+  `mcux-sdk-ng/drivers/mcx_enet/fsl_enet.h`. So this is **DCB-class priority
+  queuing, not TSN** — prioritise a class, do not schedule a window.
+* **Zephyr uses none of it.** `eth_nxp_enet_qos_mac.c` hardcodes `MTL_QUEUE[0]`
+  and `DMA_CH[0]` throughout. Both queues exist; the driver drives one.
+  Enabling this is driver work, not a Kconfig line.
+
+**And the measurement says we would be building it for nothing.** Loopback under
+three offered loads, same box, same wire:
+
+| condition | frames/s | min | med | p99 |
+|---|---|---|---|---|
+| analog off (x3 runs) | 0 | 962-975 | 974-987 | 1462-1473 |
+| analog 50 Hz, batch 1 (x2) | 50 | 957-969 | 975-984 | 1466-1475 |
+| **analog 1 kHz, batch 8** | **125** | **982** | **1001** | **1485** |
+
+1 kHz continuous streaming with maximum batching — the realistic shape, since we
+would never send a sample per frame — costs **~15-25 µs of median and leaves p99
+alone**. Verified as genuinely 1 kHz: +19,999 sweeps and +2,500 blocks over 20 s,
+`throttled` 0, drops frozen. (Batch caps at 8 here: `AIN_BLOCK_MAX` is 24 int16
+samples, 3 channels → 24/3. That gives 125 blocks/s, under the 200/s limiter.)
+
+**The arithmetic that should have preceded the experiment:** a 128-byte dserv
+frame is ~206 bytes on the wire with headers and IFG, so 125 frames/s is
+**~0.2 Mbit/s — about 0.2 % of a 100 Mb link.** *The frame format caps the
+problem.* One box streaming as hard as it practically can cannot congest its
+own uplink; it would take several hundred boxes. There is no queuing contention
+for a priority scheme to arbitrate.
+
+**So QoS is not the lever on the box uplink.** It would only earn its keep when
+(a) many boxes share a switch path to dserv, or (b) foreign traffic — video, file
+transfer, imaging — shares that path. Both are switch-level problems, and both
+are addressable by **marking** (VLAN PCP / IP DSCP via Zephyr traffic classes and
+`net_pkt_set_priority`) with the existing single-queue driver, because the mark
+rides in the frame and the MikroTik does the sorting. That is far cheaper than
+driver surgery and is the thing to do first if the need ever appears.
+
+**Ordering trap if it ever does:** two hardware TX queues behind ONE serialising
+service loop buy nothing. Every publish is currently a blocking send on that
+loop, so the box emits in submission order regardless of how many queues the MAC
+has. "Move sends off the service loop (own TX queue + thread)", already listed as
+pending above, is the prerequisite. Software first.
+
+**What this strengthens instead:** p99 is now measured at 1462-1485 µs across
+**three** offered loads spanning 0 to 125 frames/s. A tail that ignores a 2.5x
+change in traffic is not contention. It looks periodic — a 1 Hz publish, PTP, a
+DHCP renewal — and it, not the network, is what sets the jitter a rig would see.
+**That is the thing worth chasing.**
+
 ### Known and unexplained: the DAC floors at ~517 mV
 
 Codes 0 and 511 give an identical reading, reproducibly across runs and across
