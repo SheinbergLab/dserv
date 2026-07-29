@@ -4085,6 +4085,52 @@ condition. A stable ~1.5 ms stall hitting ~1 % of samples smells like a periodic
 event (a 1 Hz publish, PTP, DHCP renewal), not like contention. Worth chasing —
 it, not the analog subsystem, is what sets the jitter a rig would see.
 
+### Context for every number above: this is a MODEST core, and it does not matter (yet)
+
+David's point, and it is the right frame to read the loopback in. Verified from
+the builds rather than from spec sheets where possible:
+
+| board | core | clock | notes |
+|---|---|---|---|
+| **frdm_mcxn947** | Cortex-**M33**F | **150 MHz** | `ICACHE=y`, FPU, MPU; internal flash |
+| teensy41 | Cortex-**M7** | **600 MHz** | superscalar, L1 caches — but XIPs external QSPI |
+| RP2350 / Pico 2 | Cortex-M33 | 150 MHz | **the Pico firmware uses BOTH cores** |
+| frdm_rw612 | Cortex-M33 | 260 MHz (spec) | |
+
+**The MCXN947 is dual-core silicon and we use one core** —
+`frdm_mcxn947_mcxn947_cpu0.dtsi:18` does `/delete-node/ cpu@1`. So against the
+Pico 2 it is the *same core at the same clock*, and the difference is entirely
+that the RP2350 build splits work across two cores (core 1 RT, core 0
+console/I2C/flash) while this one does not. The second core is available if a
+reason ever appears.
+
+Against the Teensy it is ~4x less clock on a weaker microarchitecture —
+realistically 5-8x less throughput.
+
+**And yet the loopback matches the Teensy: ~975 µs against ~954 µs.** That is
+the useful conclusion: **the round trip is not CPU-bound.** It is dominated by
+the network path, which is exactly what the split says (L1 = 75 % of the loop).
+A 4x clock deficit buying no measurable penalty is strong evidence the CPU is
+not the constraint here. Note also that the Teensy's advantage is partly eaten
+by its own memory system — it XIPs from external QSPI, which is why its net
+stack had to be relocated to ITCM at all, while this part runs internal flash
+behind an I-cache.
+
+Where the modest core WILL matter, and should be watched: the ADC sweep costs
+114 µs for 3 channels, so a 1 kHz 4-channel eye feed is a real fraction of the
+budget, not a rounding error. And anything compute-heavy has ~1/6 the headroom
+the Teensy would give.
+
+**One difference that matters for the two-box scope work:**
+`CONFIG_SYS_CLOCK_HW_CYCLES_PER_SEC` is **150 MHz here against 1 MHz on the
+RW612**. The RW612's hard 1 µs floor on scheduler resolution — the thing that
+capped `at_abs` simultaneity and starved its main loop when pushed — **is a
+property of that board's OS timer and does NOT apply here**; the tick source has
+6.67 ns resolution. The practical limit becomes tick-interrupt overhead instead
+(a 1 µs tick is 150 cycles between interrupts, obviously unusable; the 10 µs in
+use is 1500). So finer ticks are worth actually testing on this board before
+assuming the RW612's ±37 µs skew floor transfers.
+
 ### Known and unexplained: the DAC floors at ~517 mV
 
 Codes 0 and 511 give an identical reading, reproducibly across runs and across
