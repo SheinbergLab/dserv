@@ -1729,9 +1729,29 @@ int Dataserver::open_send_sock(char *host, int port)
     on = 1;
     setsockopt(sendsock, IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on));
   }
-  /* keepalive: detect a dead/rebooted peer even when the client is idle */
-  on = 1;
-  setsockopt(sendsock, SOL_SOCKET, SO_KEEPALIVE, &on, sizeof(on));
+  /* Keepalive: detect a dead/rebooted peer even when the client is idle.
+     This was already SO_KEEPALIVE-only, which inherits the kernel default of
+     roughly TWO HOURS -- long enough that a rebooted box's send queue was seen
+     holding 1280 bytes indefinitely (2026-07-29). dserv_set_keepalive() uses the
+     same 30/10/3 as the accept side, so detection is ~60 s and the existing
+     reaping does the rest: the write fails, send_dpoint() clears `active`, and
+     forward_dpoint() drops the client. */
+  dserv_set_keepalive(sendsock);
+
+  /* Bound a BLOCKING write. This socket is deliberately restored to blocking
+     mode above, so a peer that stops reading -- wedged rather than dead, so
+     keepalive stays satisfied -- would park this client's thread in write()
+     forever while forward_dpoint() keeps pushing onto its dpoint_queue. That is
+     an unbounded memory growth path with no error anywhere.
+
+     A timeout turns it into exactly the failure the code already handles: a
+     short write, `active` cleared, client reaped. 5 s is far beyond any healthy
+     consumer's stall on this rig, and a subscriber that has not drained in 5 s
+     is not going to be useful to a realtime box anyway. */
+  {
+    struct timeval tv = { .tv_sec = 5, .tv_usec = 0 };
+    setsockopt(sendsock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+  }
   return sendsock;
 }
 

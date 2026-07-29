@@ -4462,3 +4462,41 @@ should always have been.
 seen with Send-Q 1280 backed up, and the fan-out path ignores write failures
 rather than retiring the client. Different socket, different fix, and still the
 most likely explanation for "begin got through, 3000 chunks did not".
+
+### The outbound half — and a CORRECTION to what I said it was
+
+I wrote twice that "the fan-out path ignores write failures rather than retiring
+the client". **That is wrong.** `SendClient::send_dpoint()` sets `active = 0` on
+a short or failed write in BOTH the binary and string paths, and
+`SendTable::forward_dpoint()` reaps inactive clients under the same lock that
+guards removal. The retirement machinery was already there and already correct.
+
+Reading the code turned up two DIFFERENT defects, and the real one was better
+hidden:
+
+**1. `SO_KEEPALIVE` was already set on the outbound socket — bare.** There is even
+a comment saying "detect a dead/rebooted peer even when the client is idle". But
+a bare `SO_KEEPALIVE` inherits the kernel default of roughly **two hours**, which
+is why a rebooted box's connect-back sat with Send-Q 1280 looking permanent. The
+intent was right; the timing was never set. Now it calls the same
+`dserv_set_keepalive()` as the accept side (30/10/3, ~60 s), after which the
+EXISTING path does everything: write fails -> `active = 0` -> reaped.
+
+**2. The socket is deliberately restored to BLOCKING mode after connect, with no
+send timeout.** That is the more interesting hazard, because keepalive does not
+cover it: a peer that is *wedged rather than dead* keeps answering keepalive
+probes while never reading, so the send buffer fills and `write()` blocks that
+client's thread **forever** — while `forward_dpoint()` keeps pushing onto its
+`dpoint_queue`. Unbounded memory growth, no error raised anywhere, and the
+client never retires because a blocked write never returns to report failure.
+
+`SO_SNDTIMEO` of 5 s converts that into precisely the failure the code already
+handles: a short write, `active` cleared, client reaped. Five seconds is far
+outside any healthy consumer's stall on this rig, and a subscriber that has not
+drained in five seconds is no longer useful to a realtime box.
+
+**Lesson worth keeping:** the bug was not a missing mechanism, it was a
+mechanism that could never fire. Both defects are of that shape — an option set
+without its parameters, and an error path unreachable because the call blocks
+before it can fail. Grepping for "does it handle X" finds the handler and stops;
+it does not ask whether the handler is reachable.
