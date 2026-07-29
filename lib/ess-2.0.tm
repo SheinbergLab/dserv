@@ -86,6 +86,27 @@ namespace eval ess {
     }
 
     #
+    # Strict stim mode accessors. The variable itself, and the ESS_STIM_REQUIRED
+    # default behind it, are documented at its declaration further down.
+    #
+    proc stim_required {} {
+        variable stim_required
+        return $stim_required
+    }
+
+    proc set_stim_required {enabled} {
+        variable stim_required
+        set stim_required [expr {$enabled ? 1 : 0}]
+        dservSet ess/stim_required $stim_required
+        if {$stim_required} {
+            ess_info "Stim required: a missing display is now an error" "stim"
+        } else {
+            ess_info "Stim required disabled: running without a display is allowed" "stim"
+        }
+        return $stim_required
+    }
+
+    #
     # stimdg validation
     #
     #   stimdg is the contract the whole control loop runs on. A malformed
@@ -302,18 +323,26 @@ oo::class create System {
             variable screen_h 600
             variable refresh_rate 60.0
             variable frame_duration 16.6667
-            dservSet ess/rmt_connected [rmtConnected]
             foreach v "halfx halfy w h" {
                 dservSet ess/screen_${v} [set screen_${v}]
             }
             dservSet ess/screen_refresh_rate $refresh_rate
             dservSet ess/screen_frame_duration $frame_duration
-            ::ess::ess_warning "Could not connect to stimulus host $host, using defaults" "stim"
+
+            # ess/rmt_connected is published by the rmt module itself, on every
+            # transition -- do NOT set it here, or it goes stale the moment
+            # stim2 dies between system loads.
+            if { [::ess::stim_required] } {
+                ::ess::ess_error \
+                    "STIM REQUIRED but not connected: no display at $host" "stim"
+            } else {
+                ::ess::ess_warning \
+                    "Could not connect to stimulus host $host, using defaults" "stim"
+            }
             return 0
         }
 
-        dservSet ess/rmt_connected [rmtConnected]
-        
+
         variable screen_halfx [rmtSend "screen_set HalfScreenDegreeX"]
         variable screen_halfy [rmtSend "screen_set HalfScreenDegreeY"]
         set scale_x [rmtSend "screen_set ScaleX"]
@@ -1539,6 +1568,22 @@ namespace eval ess {
     proc start {} {
         variable current
         if {$current(system) == ""} {print "no system set"; return 0}
+
+        # Strict mode: refuse to run blind. The check lives here rather than
+        # only in configure_stim because stim2 can die at any point after the
+        # system loaded, and the failure we are guarding against -- a deployed
+        # rig collecting a session against a dark screen -- happens at start,
+        # not at load. rmtConnected probes the link, so this sees a display
+        # that went away since.
+        if { [stim_required] } {
+            set connected 0
+            catch { set connected [rmtConnected] }
+            if { !$connected } {
+                ess_error "Refusing to start: stim required but not connected" "stim"
+                return 0
+            }
+        }
+
         set current(state_system) [find_system $current(system)]
         if {$current(state_system) != ""} {
             ::ess::evt_put USER START [now]
@@ -5189,6 +5234,28 @@ namespace eval ess {
         variable rmt_host localhost
     }
 
+    #
+    # STRICT STIM MODE (ESS_STIM_REQUIRED)
+    #
+    # Everything here runs perfectly well with no stim2 attached: rmtSend on a
+    # dead socket is an empty string and a shrug. That is deliberate and useful
+    # at a desk, where you don't always want a screen. It is the wrong default
+    # for a deployed rig, where nobody is watching the display and a silently
+    # blank one looks exactly like a working session -- until the data comes
+    # back and the subject saw nothing.
+    #
+    # Setting ESS_STIM_REQUIRED=1 (or `::ess::set_stim_required 1` at runtime,
+    # e.g. from local/post-pins.tcl) makes a missing display an error rather
+    # than a warning, and refuses to start an observation period without one.
+    # Default off: the dev loop is unchanged.
+    #
+    variable stim_required 0
+    if {[info exists ::env(ESS_STIM_REQUIRED)]} {
+        variable stim_required \
+            [expr {[string is true -strict $::env(ESS_STIM_REQUIRED)] ||
+                   $::env(ESS_STIM_REQUIRED) eq "1"}]
+    }
+
     # publish so other processes can access
     dservSet ess/system_path $system_path    
 
@@ -5217,7 +5284,7 @@ namespace eval ess {
     set project "ess"
     set_project $project
 
-    foreach v "system_path rmt_host data_dir project" {
+    foreach v "system_path rmt_host data_dir project stim_required" {
         dservSet ess/$v [set $v]
     }
     dservSet ess/overlay_path $overlay_path
