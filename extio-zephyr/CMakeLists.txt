@@ -51,6 +51,23 @@ if(CONFIG_BOOTLOADER_MCUBOOT AND CONFIG_FLASH_MAP)
 	target_compile_definitions(app PRIVATE BOX_HAVE_OTA_SLOT=1)
 endif()
 
+# ---- per-board console default ----
+# A fresh config (or one after `factory`) binds the box CLI to whichever console
+# that BOARD can actually reach with the cable that powers it.
+#
+# On the FRDM-MCXN947 the console UART is the MCU-Link VCOM, and J17 supplies
+# BOTH power and that VCOM -- so one cable brings the board up AND shows its
+# config console, which is what bringing a box up at a new site needs. The USB
+# CDC console needs a second cable to a port that does not power the board, and
+# in `mode eth` the data pipe is suppressed anyway, so the CDC has no other job.
+#
+# Deliberately NOT global: on the Teensy the same setting means lpuart6 on pins
+# 0/1 and a soldered-on USB-serial adapter, where defaulting to uart would make
+# a healthy box look dead. Every other board keeps CDC.
+if(CONFIG_BOARD_FRDM_MCXN947)
+	target_compile_definitions(app PRIVATE BOX_DEFAULT_CONSOLE_MODE=CONSOLE_MODE_UART)
+endif()
+
 # Analog input: compiled wherever Zephyr's ADC subsystem is enabled. The file
 # itself degrades to stubs when the board declares no `box_adc` node, so a board
 # with CONFIG_ADC on for some other reason still links.

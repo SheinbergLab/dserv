@@ -1381,6 +1381,11 @@ int main(void)
 	 * A flash fault here has no box-console to report on, but Zephyr's own
 	 * printk/LOG is on the board UART (chosen zephyr,console) and still works --
 	 * the boot-log channel PORTING.md documents. */
+	/* Board default FIRST, so the persisted blob below always overrides it and
+	 * an explicit `console cdc|uart` + save is never second-guessed. This is
+	 * what a fresh box -- or one after `factory` -- comes up on. */
+	cfg.console_mode = BOX_DEFAULT_CONSOLE_MODE;
+
 #if defined(BOX_HAVE_PERSIST)
 	int frc = box_flash_init();
 	if (frc != 0) {

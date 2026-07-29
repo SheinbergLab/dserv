@@ -47,4 +47,10 @@ int box_uplink_send(const uint8_t *buf, int len);
 /* Name of the active uplink ("eth"/"usb"), or "none". */
 const char *box_uplink_active_name(void);
 
+
+/* Routine registration chatter (`reg: matches refreshed ...`). Off by default;
+ * a full registration or any failure always prints. Runtime only, not saved. */
+void box_uplink_set_verbose(int on);
+int  box_uplink_verbose(void);
+
 #endif /* BOX_UPLINK_H */

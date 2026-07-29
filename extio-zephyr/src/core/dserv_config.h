@@ -401,6 +401,22 @@ static inline const char *dserv_xmode_str(uint8_t m)
  * UART (better timing). See box_config_t.console_mode. */
 #define CONSOLE_MODE_CDC   0
 #define CONSOLE_MODE_UART  1
+
+/* Which console a FRESH config binds to (no saved blob, or after `factory`).
+ *
+ * PER BOARD, because the ergonomics are not comparable. On the FRDM-MCXN947 the
+ * console UART is the MCU-Link VCOM -- the same single cable that POWERS the
+ * board -- so a box straight out of the box shows its config console with
+ * nothing else attached, which is exactly what someone bringing one up at a new
+ * location needs. On the Teensy the same setting means lpuart6 on pins 0/1 and
+ * a SOLDERED-ON USB-serial adapter, so defaulting to uart there would make a
+ * perfectly healthy box look dead.
+ *
+ * Boards opt in via -DBOX_DEFAULT_CONSOLE_MODE (see CMakeLists.txt); everything
+ * else keeps the CDC default it has always had. */
+#ifndef BOX_DEFAULT_CONSOLE_MODE
+#define BOX_DEFAULT_CONSOLE_MODE CONSOLE_MODE_CDC
+#endif
 static inline int         dserv_cfg_console_mode(const box_config_t *c)
 { return c->console_mode == CONSOLE_MODE_UART ? CONSOLE_MODE_UART : CONSOLE_MODE_CDC; }
 static inline const char *dserv_console_str(uint8_t m)

@@ -525,9 +525,15 @@ static inline cli_action_t box_cli_exec(box_config_t *c, const char *line,
         int v = dserv_console_val(w);
         if (v < 0) { snprintf(out, outsz, "ERR console cdc|uart\r\n"); return CLI_ERR; }
         c->console_mode = (uint8_t) v; c->applied_count++;
+        /* Deliberately does NOT claim a USB-serial adapter is needed: that is
+           true of the Teensy (lpuart6 on pins 0/1) and FALSE of a board whose
+           console UART is its on-board debug VCOM, where it is the same cable
+           that already powers the box. This grammar is shared across both, so
+           it states WHERE the console goes and lets the board speak for
+           itself. */
         snprintf(out, outsz, "OK console=%s (save+reboot to apply%s)\r\n",
                  dserv_console_str(c->console_mode),
-                 v == CONSOLE_MODE_UART ? "; needs a USB-serial adapter on the console UART" : "");
+                 v == CONSOLE_MODE_UART ? "; moves to the board console UART" : "");
         return CLI_OK;
     }
     if (!strcmp(line, "show"))    { box_cli_show(c, out, outsz); return CLI_OK; }

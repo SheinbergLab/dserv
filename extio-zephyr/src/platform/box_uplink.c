@@ -124,6 +124,15 @@ static struct {
 } reg_req;
 
 /* Snapshot what the thread needs; never let it read the live config. */
+/* Routine (successful, non-full) registration chatter. Off by default -- see
+ * the printk below. Runtime only, deliberately NOT persisted: it is a debugging
+ * aid for the session you are in, and a box that boots chatty because of a
+ * setting saved months ago is its own small trap. */
+static int reg_verbose;
+
+void box_uplink_set_verbose(int on) { reg_verbose = (on != 0); }
+int  box_uplink_verbose(void)       { return reg_verbose; }
+
 static void reg_request(const box_config_t *c, int full)
 {
 	uint8_t ip[4];
@@ -243,8 +252,23 @@ static void reg_thread_fn(void *a, void *b, void *cc)
 			k_msleep(150);
 		}
 
-		printk("reg: %s as %s%s\n", full ? "registered" : "matches refreshed",
-		       pfx, fails ? " (INCOMPLETE, watchdog will retry)" : "");
+		/* Say something only when there IS something to say.
+		 *
+		 * This fired on EVERY pass, and the routine case -- a match refresh
+		 * that succeeded -- carries no information at all. On a board whose
+		 * console is the board UART (see BOX_DEFAULT_CONSOLE_MODE) that is the
+		 * only thing on screen, so the one channel a human reads while bringing
+		 * a box up is filled with a line that never varies. Noise that never
+		 * varies is worse than silence: it trains you to stop reading, and the
+		 * INCOMPLETE case below is exactly the line you must not miss.
+		 *
+		 * Kept: a full (re)registration -- the box genuinely (re)joined -- and
+		 * any failure. Dropped: routine refreshes that worked. `verbose 1`
+		 * brings them back for someone debugging registration itself. */
+		if (full || fails || reg_verbose) {
+			printk("reg: %s as %s%s\n", full ? "registered" : "matches refreshed",
+			       pfx, fails ? " (INCOMPLETE, watchdog will retry)" : "");
+		}
 	}
 }
 

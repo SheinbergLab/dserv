@@ -222,6 +222,18 @@ static void run_line(box_config_t *cfg, const char *line)
 	gpio_cmd_t cmd = { .op = GPIO_OP_NONE };
 	cli_action_t a;
 
+	/* `verbose 0|1` -- routine registration chatter. Platform-local for the
+	 * same reason as adccal: it names a behaviour of this port's uplink, not a
+	 * concept the shared grammar (and the RP2350 boxes that fork it) has. */
+	if (strncmp(line, "verbose", 7) == 0) {
+		if (line[7] == ' ') {
+			box_uplink_set_verbose(atoi(line + 8));
+		}
+		box_console_printf("OK verbose=%d (routine reg messages; full/failed always print)\n",
+				   box_uplink_verbose());
+		return;
+	}
+
 #if defined(BOX_HAVE_ADC) && defined(CONFIG_DAC)
 	/* Handled BEFORE the core CLI, which would answer `ERR unknown` first. */
 	if (strncmp(line, "adccal", 6) == 0) {
