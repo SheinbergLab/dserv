@@ -128,6 +128,52 @@ for B in $BOXES; do
     || bad "$B sync/source=${S:-none} -- run ptp_anchor.sh (at_abs will REFUSE to fire)"
 done
 
+# 6b THE CLOCK IS ACTUALLY RIGHT -- added 2026-07-29 because THIS SCRIPT SCORED
+# 11/11 ON A BOX WHOSE 1588 COUNTER WAS 56 YEARS OFF, free-running from boot.
+#
+# Every other PTP check here is a PROXY for the thing we care about:
+#   sync/source=ptp  is set when a paired READ succeeds, not when the clock is right
+#   ptp/anchored=1   means ptpconf successfully PUSHED D, not that D landed on a
+#                    correct counter
+#   ptp/window_ns    is HOST-side PHC read quality, nothing to do with the box
+#   step 9 "fired"   checked THAT it fired, never WHEN
+#
+# state/ptp/ns is a raw ptp_clock_get() of the box's hardware counter, so it is the
+# one field no amount of anchoring can fake. An unsynced counter reads
+# seconds-since-boot; a synced one reads epoch. Comparing to [now] catches both the
+# gross failure and a mis-scaled counter, and the tolerance is deliberately loose
+# (2 s) because we are excluding "wrong by decades", not measuring sync quality --
+# TAI-UTC alone puts a correct box 37 s ahead of dserv's UTC-based clock.
+echo "== 6b PTP clock is ACTUALLY SET (not just anchored) =="
+for B in $BOXES; do
+  PN=$(get "$B/state/ptp/ns")
+  if [ -z "$PN" ]; then
+    echo "  SKIP  $B has no state/ptp/ns (no 1588 clock on this board?)"
+    continue
+  fi
+  # seconds since boot vs seconds since the epoch -- 1e9 s ~= 2001, so anything
+  # below it cannot be a real wall clock.
+  PS=$((PN / 1000000000))
+  HS=$(dservctl -c "expr {[now]/1000000}" 2>/dev/null | tr -d '[:space:]')
+  if [ "$PS" -lt 1000000000 ] 2>/dev/null; then
+    bad "$B ptp/ns=${PS}s is UPTIME, not epoch -- 1588 counter is FREE-RUNNING.
+        Every box-stamped event timestamp is garbage and at_abs fires at an
+        arbitrary time. Check the PTP TRANSPORT matches on both ends: this board
+        needs CONFIG_PTP_IEEE_802_3_PROTOCOL + ptp4l -2 (RX timestamps are never
+        valid over UDP/IPv4 on ENET_QOS). Enable CONFIG_PTP_LOG_LEVEL_INF and look
+        for 'drops Sync without valid RX timestamp'."
+  else
+    D=$((PS - HS)); [ "$D" -lt 0 ] && D=$((-D))
+    # 37 s of TAI-UTC is expected and correct; 2 s of slop on top of it.
+    if [ "$D" -le 39 ] 2>/dev/null; then
+      ok "$B ptp/ns is epoch, ${D}s from dserv time (TAI-UTC is 37s => correct)"
+    else
+      bad "$B ptp/ns is epoch but ${D}s from dserv time -- expected ~37 (TAI-UTC).
+        Counter is set but to the WRONG time, or its rate is mis-scaled."
+    fi
+  fi
+done
+
 echo "== 7 anchoring service (ptpconf) =="
 PTP_D=$(get "ptp/d_us")
 if [ -z "$PTP_D" ]; then

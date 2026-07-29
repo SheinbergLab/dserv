@@ -35,7 +35,25 @@ After=network-online.target sys-subsystem-net-devices-%i.device
 
 [Service]
 Type=simple
-ExecStart=/usr/sbin/ptp4l -i %i -H -m -q --priority1 127 --hwts_filter full
+# -2 = IEEE 802.3 / L2 transport (EtherType 0x88F7) instead of UDP/IPv4, and it is
+# REQUIRED for MCXN947 boxes: on ENET_QOS the RX hardware timestamp is never valid
+# over UDP/IPv4, so the box logs "drops Sync without valid RX timestamp" once per
+# Sync and its 1588 counter free-runs from boot while every status field reports
+# healthy. Over L2 it syncs immediately. Reproduced 2026-07-29 with STOCK
+# samples/net/ptp on a direct cable, so it is upstream, not ours; there is no
+# upstream fix. See extio-zephyr/PORTING.md.
+#
+# THE TRANSPORT MUST MATCH ON BOTH ENDS, and a mismatch is QUIET: box-on-L2 with
+# host-on-UDP produces total silence, not dropped Syncs -- easier to misread than
+# the original bug. The box side is CONFIG_PTP_IEEE_802_3_PROTOCOL=y.
+#
+# CONSEQUENCE, deliberately accepted: Zephyr defaults to UDP/IPv4, and
+# boards/frdm_rw612.conf does NOT override it, so RW612 boxes speak UDP and will
+# NOT sync against this unit until they are reflashed for L2. That is fine while
+# the work is MCXN947-focused; if a site needs both transports at once, split this
+# into a per-host EnvironmentFile rather than running two ptp4l on one interface
+# (two grandmasters on one wire, which cost real time on 2026-07-29).
+ExecStart=/usr/sbin/ptp4l -2 -i %i -H -m -q --priority1 127 --hwts_filter full
 Restart=always
 RestartSec=5
 

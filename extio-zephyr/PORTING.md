@@ -4744,3 +4744,192 @@ Check it with FRESHNESS, not the value — a dead box serves its last reading
 forever:
 
     dservctl -c 'expr {([now]-[dservTimestamp extio/box/state/watchdog])/1000000}'
+
+
+## 2026-07-29 (evening) — a stable MAC, PTP that actually syncs, and four confounds I walked into
+
+Two real bugs fixed and one capability finally verified. Also the most
+methodologically sloppy stretch of this port, so the mistakes are recorded next to
+the results — they were more instructive than the fixes.
+
+### Bug 1: the board had no stable identity
+
+`zephyr/boards/nxp/frdm_mcxn947/frdm_mcxn947.dtsi:361` sets
+`zephyr,random-mac-address`, so this board synthesises a locally-administered MAC
+(`ae:9a:22:` prefix) with **three random low bytes at every boot**. Nothing on the
+MCXN947 is fused; the RW612 gets its MAC from wireless OTP, which is precisely why
+this never came up there.
+
+Two consequences, neither of which looks like a MAC problem when you hit it:
+
+* **DHCP hands out a new lease every reboot** (.45 → .46 → .47 → .48 in one
+  session). A static lease CANNOT fix this — static leases are keyed on the MAC,
+  which is the unstable thing.
+* **PTP `clockIdentity` is derived from the MAC**, so the box's PTP identity
+  changes every boot too. Two identities observed an hour apart
+  (`ae9a22.fffe.062efb`, `ae9a22.fffe.fa28e2`) were THE SAME BOX — and I spent
+  real time hypothesising a second PTP clock on the LAN because of it.
+
+The fix is in `boards/frdm_mcxn947_mcxn947_cpu0.overlay`: `local-mac-address` set
+to the address NXP prints on the board (`00:04:9F:...`, a real assigned OUI, better
+than the locally-administered one we were inventing), **plus a
+`/delete-property/ zephyr,random-mac-address`**. That deletion is the load-bearing
+half: the driver checks the random flag and calls `gen_random_mac()` when set, so
+`local-mac-address` alone builds clean, reads correctly in the overlay, and changes
+nothing. Same silent-no-op shape as the un-qualified board overlay on day one.
+Verified by ARP, and by the lease surviving a reflash (`.51` before and after).
+
+**Per-board, not global** — a second MCXN947 needs its own printed MAC or they
+collide.
+
+### Bug 2: PTP never worked, and every check said it did
+
+`state/ptp/ns` read ~uptime while the grandmaster's PHC read epoch: the 1588
+counter was FREE-RUNNING, 56 years off. Consequences: box-stamped event timestamps
+were raw uptime (later, negative), and `at_abs` — the entire point of PTP here —
+fired at arbitrary times.
+
+**`rig_check.sh` scored 11/11 on that box.** Every PTP check in it is a proxy:
+
+| check | what it actually means |
+|---|---|
+| `sync/source=ptp` | a paired READ succeeded, not that the clock is right |
+| `ptp/anchored=1` | ptpconf PUSHED D, not that D landed on a correct counter |
+| `ptp/window_ns` 42 | HOST-side PHC read quality; nothing to do with the box |
+| `sync/ptp_window_us` 2 | how tight the box's paired read was |
+| step 9 "armed and fired" | THAT it fired, never WHEN |
+
+Nothing compared the box's clock to the host's. Fixed by adding **step 6b**, which
+compares `state/ptp/ns` against host epoch — a raw `ptp_clock_get()` is the one
+field no amount of anchoring can fake. An unsynced counter reads seconds-since-boot;
+a synced one reads epoch. Tolerance is deliberately loose (2 s around the 37 s of
+TAI−UTC) because it excludes "wrong by decades", not sync quality.
+
+The rule this rig already had was *presence is not enough, it must ADVANCE*. It
+needed one more rung: **it must be RIGHT.**
+
+### What made it visible
+
+`CONFIG_PTP_LOG_LEVEL` defaults to 0 — the stack says nothing — and
+**`CONFIG_NET_LOG` is the gate**. Every per-module level under `subsys/net` lives in
+`Kconfig.template.log_config.net` behind `depends on NET_LOG`, so without it the
+choice has no selection and the assignment is DROPPED, leaving
+`CONFIG_PTP_LOG_LEVEL=0` while the `.conf` plainly says `..._INF=y`. The only tell
+is a build warning that scrolls past unless you grep for it. **Proof it matters:**
+`CONFIG_NET_L2_ETHERNET_LOG_LEVEL_WRN=y` in this file *and* in `frdm_rw612.conf`
+has NEVER been in effect for exactly this reason.
+
+With it on, the box says the thing in one line:
+
+    W: Port 1 drops Sync without valid RX timestamp
+
+and on a healthy boot says the opposite, which is just as valuable:
+
+    W: Clock offset exceeds 1 second (t1=1785368658.357736505 t2=7.142554780 delay=4612ns ...)
+    W: Set clock time: 1785368658.371375357
+
+`t2` is the box's RX hardware timestamp. Those two lines are POSITIVE PROOF that
+the receive path produced a real stamp and the servo stepped the counter.
+
+### The finding: transport
+
+Over **UDP/IPv4** the RX hardware timestamp was never valid — Sync dropped every
+second, forever, while TX timestamping worked fine and a tcpdump looked perfect
+(Sync / Follow_Up / Delay_Req / Delay_Resp all complete). Over **L2**
+(`CONFIG_PTP_IEEE_802_3_PROTOCOL`, EtherType 0x88F7) it syncs.
+**`ptp4l` needs `-2` to match**, now in `systemd/dserv-ptp4l@.service`.
+
+A mismatch is QUIET: box-on-L2 with host-on-UDP is total silence, not dropped
+Syncs — easier to misread than the original bug.
+
+Not our config. `MAC_TIMESTAMP_CONTROL` sets TSENA|TSENALL|TSVER2ENA|TSIPENA|
+TSEVNTENA|SNAPTYPSEL, store-and-forward is on both ways, the PTP clock node is
+already `okay`, and both drivers are unmodified upstream. Reproduced with **stock
+`samples/net/ptp`** (no MCUboot, none of our code). Upstream has no fix and no
+matching issue; the one post-clone driver commit (`680606c`) is TX-only. PR
+**#107225** added ENET_QOS PTP "verified with ptp sample" with no documented
+linuxptp interop and no measured offset — and reviewers flagged, unaddressed at
+merge, that fragment counting may not account for the buffer2 DMA feature.
+
+### Verified capability
+
+Through the office hEX, on the switched path:
+
+| | |
+|---|---|
+| offset stability | ±240 µs, no drift |
+| `at_abs` accuracy | **median 23 µs** (17–28, n=10) |
+
+**HOW that was measured matters, because the obvious way returns a fake.**
+`main.c:1706` stamps a scheduled DO echo with `abs_target_us[p]` — the REQUESTED
+TARGET — so `do_ts − T` is identically **0.0 µs** by construction. I generated 12
+such zeros and nearly reported them as the actuation error. Measure at the **DI
+IRQ** through the pin 11→12 jumper instead: an independent stamp of the physical
+edge. The 23 µs includes the DI input path, so actuation error is smaller. Compare
+WIZnet ~34 µs. This rig resolves ~10 µs and larger.
+
+### Four confounds, all mine
+
+1. **Transport vs path.** The successful test changed BOTH (UDP-through-switch →
+   L2-on-direct-cable) and I credited transport. A later tcpdump showed L2 working
+   fine through the switch while the clock still free-ran.
+2. **"L2 fails through the switch."** Measured while the box was in a stale state
+   after minutes without a master; it stayed slaved-but-not-correcting — sending
+   Delay_Req, protocol healthy, clock free-running — until rebooted. **Operational
+   lesson: after the grandmaster disappears and returns, reboot the box before
+   believing anything.**
+3. **Logging vs not.** Converged 2/2 with logging, 0/2 without. That is four coin
+   flips, and there is no good mechanism (at WRN nothing prints). See BASE RATE
+   below.
+4. **The MikroTik bridge settings** (`protocol-mode=none`,
+   `forward-reserved-addresses=yes`, `igmp-snooping=no`) were changed mid-session.
+   Our frames go to `01:1b:19:00:00:00`, which is NOT in the reserved range, and
+   IGMP snooping only touches IP multicast which was already arriving — so neither
+   has an obvious mechanism. Recorded as *changed at the same time, contribution
+   unknown* rather than dismissed.
+
+Ruled out along the way, each with evidence rather than argument: the MikroTik
+(tcpdump shows bidirectional 0x88F7), routed-vs-bridged (ARP resolves the box's own
+MAC, so same L2 domain), IGMP/multicast, BMCA, priority1, the PTP clock node,
+MCUboot, our firmware, and — via a fresh boot with `sweeps 0 → 0` — the **analog
+sampler**, which David proposed and which was a better hypothesis than my logging
+theory.
+
+Still open: a boot-time link/descriptor race remains the best surviving mechanism
+(David's suggestion). `port_enable()` in `subsys/net/lib/ptp/port.c` contains a
+`while (!net_if_is_up(...)) { return -1; }` — a loop that can never loop, an `if`
+in disguise — though that is not our failure, since the tcpdump proves the port was
+enabled and exchanging Delay_Req. `CONFIG_NET_CONNECTION_MANAGER` would NOT help:
+the PTP stack never references conn_mgr, it does its own `net_mgmt` link tracking.
+
+### BASE RATE
+
+Every conclusion above rested on n=1 or n=2. Measured across repeated cold boots on
+the shipping image (L2 + logging):
+
+    8/8 boots synced, every one at 8-10 s uptime.
+
+Tight and repeatable, so on this image convergence is NOT intermittent and the
+boot-race worry does not bite in practice. The `at_abs` and offset figures above
+therefore stand.
+
+**v1 of this loop was invalid and the failure is worth recording**: it polled
+`state/ptp/ns` after each reboot, but that is a RETAINED datapoint, so dserv still
+held the PREVIOUS boot's epoch value and all 8 boots scored "synced" at 1-5 s
+uptime -- a perfect score measuring nothing. THIRD instance of this trap in one
+evening (the others: reading `sync/rate_ppb` as current when it was 22 h stale, and
+computing an offset from a published `ptp/ns` against a live `[now]`, which
+manufactured a fake -6000 ppm drift). The fix is to `dservClear` the datapoint after
+the box is confirmed up, so it can only reappear via a fresh publish. The watchdog
+gate needed no such fix -- the retained value is high and only a fresh publish reads
+below the threshold.
+
+**Still unresolved:** the same image with logging OFF failed to converge on 2 of 2
+boots, against 8/8 with it on. A common rate is implausible at those counts, yet
+there is no good mechanism (at WRN nothing prints). Either something correlated with
+that build matters, or we were unlucky twice. Worth 8 boots of the no-logging image
+to settle; until then logging stays on, which is independently justified above.
+
+**Free sync check, no tooling:** the box's own boot banner prints
+`PTP hw clock: ready=1 now=<ns>`. Synced reads epoch (1.78e18 ns); free-running
+reads single-digit seconds.

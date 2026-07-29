@@ -121,6 +121,45 @@
 	};
 };
 
+/*
+ * ---- a STABLE MAC, and why this is not cosmetic ----
+ *
+ * frdm_mcxn947.dtsi:361 sets `zephyr,random-mac-address`, so this board
+ * synthesises a locally-administered MAC with a fixed ae:9a:22 prefix and THREE
+ * RANDOM LOW BYTES AT EVERY BOOT. Unlike the RW612 -- whose MAC comes out of the
+ * wireless OTP and is therefore stable -- nothing here is fused, so the board has
+ * no persistent identity unless we give it one.
+ *
+ * Two consequences, both observed on 2026-07-29 and neither of which looks like a
+ * MAC problem when you hit it:
+ *
+ *   1. DHCP hands out a NEW LEASE EVERY REBOOT (.45 -> .46 -> .47 -> .48 across
+ *      four reboots in one session), because the server correctly sees a new
+ *      client each time. A static lease CANNOT fix this -- static leases are
+ *      keyed on the MAC, which is the unstable thing.
+ *   2. PTP `clockIdentity` IS DERIVED FROM THE MAC, so the box's PTP identity
+ *      changes every boot too. A grandmaster sees a brand-new clock after each
+ *      reset, and two identities observed an hour apart (ae9a22.fffe.062efb and
+ *      ae9a22.fffe.fa28e2) were the SAME BOX.
+ *
+ * 00:04:9F is Freescale/NXP's OUI and this address is printed on the board by the
+ * PHY, i.e. it is genuinely assigned and globally unique -- strictly better than
+ * the locally-administered address we were inventing.
+ *
+ * DELETING THE RANDOM PROPERTY IS THE LOAD-BEARING HALF. The driver checks the
+ * random flag and calls gen_random_mac() when it is set, so `local-mac-address`
+ * ALONE is silently ignored: the overlay reads correctly, builds clean, and the
+ * MAC still changes every boot. Same failure shape as the un-qualified board
+ * overlay on day one -- present, plausible, and doing nothing.
+ *
+ * PER-BOARD, NOT GLOBAL: this address belongs to THIS physical board. A second
+ * MCXN947 needs its own printed MAC here, or the two will collide.
+ */
+&enet_mac {
+	/delete-property/ zephyr,random-mac-address;
+	local-mac-address = [00 04 9f 09 d9 c4];
+};
+
 /* ---- analog input: the ON-CHIP LPADC ----
  *
  * `box_adc:` relabels the SoC's lpadc0 as the box's converter, which is all
