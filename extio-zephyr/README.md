@@ -130,7 +130,30 @@ west flash                               # teensy runner; press the board's
                                          # program button when it waits
 
 west build -b frdm_mcxn947/mcxn947/cpu0 . --pristine   # the analog board
+
+# ...and flash it over the board's OWN MCU-Link -- one USB-C cable to J17 does
+# power, console AND flash. No jumper, no external probe.
+west build -b frdm_mcxn947/mcxn947/cpu0 . --sysbuild -d build-mcxn-ota
+west flash -r pyocd -d build-mcxn-ota
 ```
+
+**J17 POWERS THE BOARD.** The MCXN947's own USB-C is a device port only, so with
+just that cable connected the board is dead and nothing enumerates. This is the
+first thing to check when a board "won't come up".
+
+**The pyocd pack version MUST be pinned -- see `pyocd.yaml`.** The default
+`pyocd pack install mcxn947` fetches the newest from the index (26.06.00 at time
+of writing) and that version fails with `flash init timed out` PARTWAY THROUGH
+ERASING -- which is worse than not working, because it leaves the bootloader
+region half-erased and the board dead until reflashed. 19.0.0 programs cleanly,
+and at ~34 kB/s over the onboard MCU-Link is three times faster than the same
+image through an external J-Link.
+
+**J19 must be OFF** for the onboard MCU-Link to drive SWD; it is only for
+attaching an external J-Link to J23. With it fitted, `pyocd list` reports no
+probes -- and, confusingly, the MCU-Link's VCOM still works, so the board looks
+half-alive. The VCOM also renames (`...V1` <-> `...V3`) as the jumper changes,
+which will strand a terminal pointed at the old node.
 
 **The MCXN947 board target carries QUALIFIERS**, unlike every other board here,
 and so must its config files: `boards/frdm_mcxn947_mcxn947_cpu0.{conf,overlay}`.

@@ -1,0 +1,15 @@
+# pyOCD config for this app -- makes `west flash -r pyocd` work over the
+# FRDM-MCXN947's ONBOARD MCU-Link, so one cable to J17 does power, console and
+# flash (no J19 jumper, no external probe).
+#
+# PIN THE PACK VERSION. `pyocd pack install mcxn947` fetches the newest from the
+# index -- 26.06.00 at time of writing -- and that version's reset sequence fails
+# with "flash init timed out" partway through ERASING, which is worse than not
+# working: it leaves the bootloader region half-erased. 19.0.0 is the last of the
+# old numbering before the date-based releases and programs cleanly.
+#
+# The index only offers the newest, so 19.0.0 has to be fetched by hand from
+# NXP's public pack repo (no login):
+#   curl -fsSLO https://mcuxpresso.nxp.com/cmsis_pack/repo/NXP.MCXN947_DFP.19.0.0.pack
+pack:
+  - /Users/sheinb/.pyocd/packs/NXP.MCXN947_DFP.19.0.0.pack
