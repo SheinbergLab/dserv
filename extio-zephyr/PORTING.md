@@ -4019,6 +4019,72 @@ while the box rebooted and the uplink was not yet draining. Sampling counters
 have to be read as RATES; a single snapshot of a monotonic counter says nothing
 about the steady state.
 
+### FIRST TIMING NUMBERS on this silicon — DO->DI loopback
+
+Wire: box pin **24 (Arduino D11) -> 26 (D12)**, adjacent on the digital header.
+`pin 24 mode out`, `pin 26 mode in_pullup`, **`pin 26 debounce 0`** (a 25 ms
+debounce would dominate every sample). The jumper doubles as an independent
+check of the gpio0 pin map: `di/26` follows `do/24` exactly.
+
+**Both harnesses were run as a pair, per the measurement audit above** —
+`wiznet-io/host/loopback_rtt.sh` and `host/lb_split.sh` compute the same span by
+different routes, and their disagreement is the only check on the apparatus.
+They agreed to within 3 µs (957/975 vs 956/972), so these numbers are usable.
+Driven from a Mac with `DSERV_HOST=raspberrypi.local` against the rig dserv;
+~0.25 s per dservctl call, so ~90 s per 100-iteration run.
+
+    median RTT ~975-987 us,  floor ~960-975 us,  p99 ~1470 us
+
+Split into legs (analog on):
+
+| leg | min | med | p90 |
+|---|---|---|---|
+| L1 `cmd -> do_echo` (dserv -> box -> GPIO -> echo) | 714 | **730** | 970 |
+| L2 `do_echo -> di` (box sense -> publish) | 9 | **242** | 246 |
+| total | 956 | **972** | 1210 |
+
+**L1 is ~75 % of the loop** — the inbound leg dominates, as it did on the
+Teensy. L2 at ~240 µs is notably larger than the 3-96 µs recorded for teensy41,
+and its distribution is suspiciously tight (227-254 with analog off), which
+looks like a fixed processing cost rather than a poll wait. Unexplained; a lead.
+
+Against the audit table above (teensy41 eth 954/964, office W6300 676/654), the
+MCXN947 sits with the Teensy at ~975 and both are ~1.4x the W6300 Pico. **Treat
+that as indicative, not controlled** — those rows were measured against a
+different dserv host and network.
+
+### What the analog subsystem costs the RT path — and a claim I withdrew
+
+Asked whether to disable the ADC for the loopback. Measured both instead. Five
+runs, n=100 each:
+
+| | min | med | p90 | p99 |
+|---|---|---|---|---|
+| analog ON  | 957, 969 | 975, 984 | **1210, 1042** | 1475, 1466 |
+| analog OFF | 962, 975, 973 | 974, 987, 987 | **989, 1007, 1007** | 1462, 1471, 1473 |
+
+**Median, floor and p99: no difference at all** — OFF is marginally *higher* at
+the median in two of three runs. The 50 Hz sampler costs nothing where it counts.
+
+**p90 is the one place it shows**, and only weakly: OFF clusters tightly
+(989/1007/1007) while ON is both higher and scattered (1042/1210). So the honest
+statement is *the analog sampler makes the tail higher and less repeatable by
+roughly 50-200 µs*, consistent with 50 extra publishes/s contending for the same
+service loop.
+
+**A claim was withdrawn on the way to that.** The first ON/OFF pair showed p90
+1210 vs 989, and it was reported as a ~220 µs analog cost. The repeat ON run
+came back 1042 — the between-run spread was as large as the effect, on a
+single run per condition. It took three OFF runs and two ON runs before the
+comparison meant anything. **One run per condition is not a measurement**, which
+is the same lesson as `dropped=354` earlier the same evening: read the
+distribution, not the sample.
+
+**Left unexplained: p99 is ~1466-1475 in ALL FIVE runs**, regardless of
+condition. A stable ~1.5 ms stall hitting ~1 % of samples smells like a periodic
+event (a 1 Hz publish, PTP, DHCP renewal), not like contention. Worth chasing —
+it, not the analog subsystem, is what sets the jitter a rig would see.
+
 ### Known and unexplained: the DAC floors at ~517 mV
 
 Codes 0 and 511 give an identical reading, reproducibly across runs and across
