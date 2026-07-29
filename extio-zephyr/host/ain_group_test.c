@@ -1,7 +1,7 @@
 /*
  * ain_group_test.c -- exercise box_ain_group.h on the host: on-change deadband
  * (joystick), continuous decimate (drop) + batch packing, boxcar averaging, the
- * block wire header, and the mcp_en default synthesizer.
+ * block wire header, and the ain_en default synthesizer.
  *   cc -O2 -Wall -I../src/core -o ain_group_test ain_group_test.c && ./ain_group_test
  */
 #include "dserv_config.h"
@@ -27,14 +27,14 @@ int main(void)
 
     /* ---- default synthesizer ---- */
     memset(&cfg, 0, sizeof cfg);
-    cfg.mcp_en = 1;
+    cfg.ain_en = 1;
     dserv_cfg_ain_default(&cfg);
     CHECK(cfg.ain_group_chans[0] == 0x03, "default: group0 = ch{0,1}");
     CHECK(cfg.ain_group_mode[0] == 0 && cfg.ain_group_deadband[0] == 8, "default: on-change, db=8");
     CHECK(strcmp(cfg.ain_group_label[0], "joystick") == 0, "default: labeled 'joystick'");
     { char leaf[32]; dserv_ain_group_leaf(&cfg, 0, leaf, sizeof leaf);
       CHECK(strcmp(leaf, "ain/joystick") == 0, "leaf = ain/joystick"); }
-    memset(&cfg, 0, sizeof cfg);   /* mcp_en=0 -> no synth */
+    memset(&cfg, 0, sizeof cfg);   /* ain_en=0 -> no synth */
     dserv_cfg_ain_default(&cfg);
     CHECK(dserv_ain_active_count(&cfg) == 0, "no synth when mcp disabled");
 

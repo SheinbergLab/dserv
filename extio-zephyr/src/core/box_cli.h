@@ -105,7 +105,7 @@ static inline void box_cli_show(const box_config_t *c, char *out, int outsz)
     k += snprintf(out + k, outsz - k, "mode=%s ", dserv_xmode_str(c->transport_mode));
 #endif
     k += snprintf(out + k, outsz - k,
-        "name=%s net.mode=%s net.ip=%u.%u.%u.%u net.gw=%u.%u.%u.%u net.mask=%u.%u.%u.%u dserv=%u.%u.%u.%u:%u obs.pin=%s sync.pin=%s wifi.ssid=%s wifi.pass=%s wifi.pm=%u mcp.en=%u oled.en=%u ble.en=%u pipe.en=%u applied=%u\r\n",
+        "name=%s net.mode=%s net.ip=%u.%u.%u.%u net.gw=%u.%u.%u.%u net.mask=%u.%u.%u.%u dserv=%u.%u.%u.%u:%u obs.pin=%s sync.pin=%s wifi.ssid=%s wifi.pass=%s wifi.pm=%u ain.en=%u oled.en=%u ble.en=%u pipe.en=%u applied=%u\r\n",
         dserv_cfg_name(c), dserv_netmode_str(c->net_mode),
         c->net_ip[0], c->net_ip[1], c->net_ip[2], c->net_ip[3],
         c->net_gw[0], c->net_gw[1], c->net_gw[2], c->net_gw[3],
@@ -113,7 +113,7 @@ static inline void box_cli_show(const box_config_t *c, char *out, int outsz)
         c->dserv_ip[0], c->dserv_ip[1], c->dserv_ip[2], c->dserv_ip[3],
         dserv_cfg_port(c), obs, syn,   /* effective port (default when unset), not raw 0 */
         c->wifi_ssid[0] ? c->wifi_ssid : "(build)", c->wifi_pass[0] ? "set" : "(build)",
-        c->wifi_pm, c->mcp_en, c->oled_en, c->ble_en, c->pipe_en, c->applied_count);
+        c->wifi_pm, c->ain_en, c->oled_en, c->ble_en, c->pipe_en, c->applied_count);
     if (k < outsz - 24)
         k += snprintf(out + k, outsz - k, "  console=%s\r\n",
                       dserv_console_str((uint8_t) dserv_cfg_console_mode(c)));
@@ -181,8 +181,8 @@ static inline void box_cli_dump(const box_config_t *c)
     if (c->wifi_ssid[0])                  printf("wifi ssid %s\r\n", c->wifi_ssid);
     if (c->wifi_pass[0])                  printf("# wifi pass <re-enter manually; not dumped>\r\n");
     if (c->wifi_pm)                       printf("wifi pm 1\r\n");
-    if (c->mcp_en)                        printf("mcp enable 1\r\n");
-    if (c->mcp_rate)                      printf("mcp rate %u\r\n", c->mcp_rate);
+    if (c->ain_en)                        printf("ain enable 1\r\n");
+    if (c->ain_rate)                      printf("ain rate %u\r\n", c->ain_rate);
     for (int ag = 0; ag < BOX_NAGROUPS; ag++)
         if (c->ain_group_chans[ag]) {
             char cs[16]; dserv_pins_str(c->ain_group_chans[ag], cs, sizeof cs);
@@ -327,10 +327,10 @@ static inline cli_action_t box_cli_exec(box_config_t *c, const char *line,
         snprintf(out, outsz, "OK group%d off\r\n", n); return CLI_GROUP;
     }
     /* ---- analog (MCP3204) groups: base scan rate + per-group channel-set policy ---- */
-    if (sscanf(line, "mcp rate %d", &v) == 1) {
-        if (v < 1 || v > 65535) { snprintf(out, outsz, "ERR mcp rate 1-65535 Hz\r\n"); return CLI_ERR; }
-        c->mcp_rate = (uint16_t) v; c->applied_count++;
-        snprintf(out, outsz, "OK mcp rate=%dHz (base scan; save+reboot)\r\n", v); return CLI_AIN;
+    if (sscanf(line, "ain rate %d", &v) == 1) {
+        if (v < 1 || v > 65535) { snprintf(out, outsz, "ERR ain rate 1-65535 Hz\r\n"); return CLI_ERR; }
+        c->ain_rate = (uint16_t) v; c->applied_count++;
+        snprintf(out, outsz, "OK ain rate=%dHz (base scan; save+reboot)\r\n", v); return CLI_AIN;
     }
     if (sscanf(line, "ain group %d channels %23s", &n, w) == 2) {
         uint32_t mask;
@@ -450,9 +450,9 @@ static inline cli_action_t box_cli_exec(box_config_t *c, const char *line,
         snprintf(out, outsz, "OK wifi pm=%d (%s; save+reboot to apply)\r\n",
                  c->wifi_pm, c->wifi_pm ? "power-save/battery" : "off/low-latency"); return CLI_OK;
     }
-    if (sscanf(line, "mcp enable %d", &v) == 1) { /* activate the MCP3204 SPI ADC (save+reboot to apply) */
-        c->mcp_en = v ? 1 : 0; c->applied_count++;
-        snprintf(out, outsz, "OK mcp enable=%d (claims SPI0 pins 2-5; save+reboot to apply)\r\n", c->mcp_en); return CLI_OK;
+    if (sscanf(line, "ain enable %d", &v) == 1) { /* master switch for analog input, whatever converter is fitted */
+        c->ain_en = v ? 1 : 0; c->applied_count++;
+        snprintf(out, outsz, "OK ain enable=%d (save+reboot to apply)\r\n", c->ain_en); return CLI_OK;
     }
     if (sscanf(line, "oled enable %d", &v) == 1) { /* SSD1306 SPI status display (see PINMAP.md) */
         c->oled_en = v ? 1 : 0; c->applied_count++;
@@ -525,7 +525,7 @@ static inline cli_action_t box_cli_exec(box_config_t *c, const char *line,
             "      sync pin N | sync off |\r\n"
             "      group G pins 2,3,4,5 | group G label NAME | group G settle MS |\r\n"
             "      group G quiet 0|1 | group G off |\r\n"
-            "      mcp enable 0|1 | mcp rate HZ | oled enable 0|1 |\r\n"
+            "      ain enable 0|1 | ain rate HZ | oled enable 0|1 |\r\n"
             "      ain group G channels 0,1 | ain group G label NAME | ain group G mode onchange|continuous |\r\n"
             "      ain group G deadband N | ain group G decimate N | ain group G batch N | ain group G average 0|1 | ain group G off |\r\n"
             "      ble enable 0|1 | " BOX_CLI_HELP_BLE "\r\n"

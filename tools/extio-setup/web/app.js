@@ -37,8 +37,8 @@ const api = async (path, body) => {
 };
 
 /* Board map: W6300-EVB-Pico2 (dual image) from wiznet-io/PINMAP.md.
- * "claimed" pins depend on live config (mcp/oled), reflected from the box's
- * announced state/{mcp_en,oled_en} (dserv) or `show` output (serial). MCP3204
+ * "claimed" pins depend on live config (ain/oled), reflected from the box's
+ * announced state/{ain_en,oled_en} (dserv) or `show` output (serial). MCP3204
  * and OLED share SPI0 SCK/MOSI (GP2/3), so when both are on the OLED note wins
  * for those two -- pinRole checks oled first. */
 const NPINS = 29;
@@ -46,6 +46,12 @@ const FIXED = { 0:"UART0 TX", 1:"UART0 RX", 15:"W6300", 16:"W6300", 17:"W6300",
   18:"W6300", 19:"W6300", 20:"W6300", 21:"W6300", 22:"W6300",
   23:"SMPS", 24:"VBUS", 28:"mode strap" };
 const OLED_PINS = { 2:"OLED CLK", 3:"OLED DATA", 6:"OLED CS", 7:"OLED DC", 8:"OLED RST" };
+/* PICO-SPECIFIC. These are the pins an MCP3204 claims on an RP2350 box. A box
+ * whose converter is ON-CHIP (the MCXN947's LPADC) claims NO digital pins at
+ * all, so showing GP2-5 as claimed there is wrong. Harmless today because the
+ * indices do not collide with anything that board maps, but the honest fix is
+ * for the box to ANNOUNCE its claimed pins rather than the UI guessing from a
+ * converter it assumes. Left as-is deliberately, not overlooked. */
 const MCP_PINS = { 2:"MCP SCK", 3:"MCP DIN", 4:"MCP DOUT", 5:"MCP CS" };
 
 let cfg = emptyCfg();
@@ -60,7 +66,7 @@ let obsLive = false; // box is currently in an observation (state/in_obs = 1)
 
 function emptyCfg() {
   return { name: "", desc: "", mode: "", obs: null, sync: null,
-    mcp: false, oled: false, pins: {}, dgroups: {}, again: {}, raw: [],
+    ain: false, oled: false, pins: {}, dgroups: {}, again: {}, raw: [],
     // firmware identity: fw=running version, build=shelf image line
     // (BOX_BUILD_TARGET), board=compat key (BOX_BOARD_ID), channel=update track.
     // build/board/channel arrive over dserv (state/*) or serial (`show` trailer);
@@ -162,7 +168,7 @@ const SerialDriver = {
 
   async testPulse(n, us) { await execChecked(`do ${n} pulse ${us}`); },
   async setBoxField(field, v) { await execChecked(`${field} ${v}`); }, // name|desc
-  async setFeature(name, on) { await execChecked(`${name} enable ${on ? 1 : 0}`); }, // mcp/oled
+  async setFeature(name, on) { await execChecked(`${name} enable ${on ? 1 : 0}`); }, // ain/oled
   async applyGroup(slot, g) {
     if (!g.pins) { await execChecked(`group ${slot} off`); return; }
     await execChecked(`group ${slot} pins ${g.pins}`);
@@ -216,7 +222,7 @@ const DservDriver = {
       .then(() => conLog(`> %set ${leaf} = ${value}`));
   },
 
-  async setFeature(name, on) { await this.set(`config/${name}/enable`, on ? 1 : 0); }, // mcp/oled
+  async setFeature(name, on) { await this.set(`config/${name}/enable`, on ? 1 : 0); }, // ain/oled
   async applyGroup(slot, g) {
     if (!g.pins) { await this.set(`config/group/${slot}/pins`, "off"); return; }
     await this.set(`config/group/${slot}/pins`, g.pins);
@@ -297,10 +303,10 @@ function parseDump(lines) {
     else if ((m = s.match(/^ain group (\d+) decimate (\d+)$/))) (c.again[+m[1]] ??= {}).decimate = +m[2];
     else if ((m = s.match(/^ain group (\d+) batch (\d+)$/))) (c.again[+m[1]] ??= {}).batch = +m[2];
     else if ((m = s.match(/^ain group (\d+) average 1$/))) (c.again[+m[1]] ??= {}).average = true;
-    else if ((m = s.match(/^mcp rate (\d+)$/))) c.mcprate = +m[1];
+    else if ((m = s.match(/^ain rate (\d+)$/))) c.ainrate = +m[1];
     else if ((m = s.match(/^obs pin (\d+)$/))) c.obs = +m[1];
     else if ((m = s.match(/^sync pin (\d+)$/))) c.sync = +m[1];
-    else if (s === "mcp enable 1") c.mcp = true;
+    else if (s === "ain enable 1") c.ain = true;
     else if (s === "oled enable 1") c.oled = true;
   }
   return c;
@@ -338,7 +344,7 @@ function cfgFromState(box, st) {
       else if (m[2] === "idx") g.idx = +v;
     }
   }
-  c.mcprate = +st["ain/rate"] || 0;
+  c.ainrate = +st["ain/rate"] || 0;
   const rekey = (byName, dst, pfx) => {
     for (const g of Object.values(byName)) {
       const auto = g.name.match(new RegExp("^" + pfx + "(\\d+)$"));  // g2 / a1 = unlabeled
@@ -351,10 +357,10 @@ function cfgFromState(box, st) {
   rekey(ainByName, c.again, "a");
   if (typeof st["obs_pin"] === "number" && st["obs_pin"] >= 0) c.obs = st["obs_pin"];
   if (typeof st["sync_pin"] === "number" && st["sync_pin"] >= 0) c.sync = st["sync_pin"];
-  // analog/display feature flags (state/mcp_en, state/oled_en) -> claimed pins.
+  // analog/display feature flags (state/ain_en, state/oled_en) -> claimed pins.
   // Absent on boxes predating the manifest change -> stays false (pin map just
   // won't shade them, same as before).
-  c.mcp = +st["mcp_en"] === 1;
+  c.ain = +st["ain_en"] === 1;
   c.oled = +st["oled_en"] === 1;
   c.fw = st["fw"] || "";
   // build/board announced today (state/build, state/board); channel added with
@@ -372,7 +378,7 @@ function cfgFromState(box, st) {
 function pinRole(n) {
   if (n in FIXED) return { cls: "fixed", note: FIXED[n], locked: true };
   if (cfg.oled && n in OLED_PINS) return { cls: "claimed", note: OLED_PINS[n], locked: true };
-  if (cfg.mcp && n in MCP_PINS) return { cls: "claimed", note: MCP_PINS[n], locked: true };
+  if (cfg.ain && n in MCP_PINS) return { cls: "claimed", note: MCP_PINS[n], locked: true };
   const lbl = cfg.pins[n]?.label;
   if (n === cfg.obs) return { cls: "special", note: lbl ? lbl + " · obs" : "obs mirror", strong: !!lbl, locked: false };
   if (n === cfg.sync) return { cls: "special", note: lbl ? lbl + " · sync" : "sync input", strong: !!lbl, locked: false };
@@ -427,40 +433,41 @@ function renderBox() {
   for (const [g, v] of Object.entries(cfg.again))
     gs.push(`${v.label || "a" + g}{${v.channels || ""}}`);
   $("groups").textContent = gs.length ? gs.join("  ") : "—";
-  renderMcp();
+  renderAin();
   renderGroups();
 }
 
-/* ---- Analog / MCP3204 panel: enable/disable the SPI ADC (claims GP2-5). Works
- * in both drivers via drv.setFeature (serial: `mcp enable N`; dserv:
- * config/mcp/enable). MCP is compiled into every image, so show when connected.
+/* ---- Analog panel: enable/disable analog input (MCP3204 on a Pico, on-chip
+ * LPADC on the MCXN947). Works
+ * in both drivers via drv.setFeature (serial: `ain enable N`; dserv:
+ * config/ain/enable). Analog is compiled into every image, so show when connected.
  * Optimistic: shade the pins immediately; the "save + reboot" note sets the
  * expectation that the claim only takes effect on the next boot. ---- */
-function renderMcp() {
-  $("mcppanel").hidden = !connected;
+function renderAin() {
+  $("ainpanel").hidden = !connected;
   if (!connected) return;
-  $("mcpStatus").textContent = cfg.mcp ? "enabled — GP2-5 claimed" : "disabled";
-  $("mcpEnable").disabled = cfg.mcp;
-  $("mcpDisable").disabled = !cfg.mcp;
+  $("ainStatus").textContent = cfg.ain ? "enabled — GP2-5 claimed" : "disabled";
+  $("ainEnable").disabled = cfg.ain;
+  $("ainDisable").disabled = !cfg.ain;
 }
 
-async function mcpSet(on) {
+async function ainSet(on) {
   try {
-    await drv.setFeature("mcp", on);
-    cfg.mcp = on;                       // optimistic: reflect in panel + pin map now
-    $("mcpMsg").textContent = `${on ? "enabled" : "disabled"} — Save to flash + reboot to apply`;
-    renderMcp(); renderPins();
+    await drv.setFeature("ain", on);
+    cfg.ain = on;                       // optimistic: reflect in panel + pin map now
+    $("ainMsg").textContent = `${on ? "enabled" : "disabled"} — Save to flash + reboot to apply`;
+    renderAin(); renderPins();
   } catch (e) {
-    $("mcpMsg").textContent = "err: " + e.message;
+    $("ainMsg").textContent = "err: " + e.message;
   }
 }
-$("mcpEnable").onclick = () => mcpSet(true);
-$("mcpDisable").onclick = () => mcpSet(false);
+$("ainEnable").onclick = () => ainSet(true);
+$("ainDisable").onclick = () => ainSet(false);
 
 /* ---- Groups panel: DI chord groups + analog (MCP3204) channel groups. Both are
  * named member-sets published as ONE atomic datapoint; edited by SLOT (0..N-1),
  * which we map from the manifest's announced idx (labeled groups lose the slot in
- * their name). Shows when connected; the analog section is gated on mcp. A shared
+ * their name). Shows when connected; the analog section is gated on ain. A shared
  * editor opens for a chosen (type, slot); .gdi/.gain fields toggle by type. ---- */
 const NDGROUPS = 4, NAGROUPS_UI = 4;
 let gedit = null;               // { type: 'di'|'ain', slot } or null
@@ -485,7 +492,7 @@ function renderGroups() {
     const v = cfg.dgroups[s];
     dl.append(groupRow("di", s, v, v && (v.label || "g" + s), v && groupSummaryDI(v)));
   }
-  const showAin = cfg.mcp;
+  const showAin = cfg.ain;
   $("ainGroupHead").hidden = !showAin;
   $("ainGroupList").hidden = !showAin;
   if (showAin) {
@@ -1292,7 +1299,7 @@ function setConnected(on, label) {
   $("conhint").textContent = !on ? "connect a box to interact"
     : drv.hasConsole ? "" : "live events only (the CLI console needs the USB serial driver)";
   if (!on) {
-    $("editor").hidden = true; $("blepanel").hidden = true; $("mcppanel").hidden = true;
+    $("editor").hidden = true; $("blepanel").hidden = true; $("ainpanel").hidden = true;
     $("grouppanel").hidden = true; $("geditor").hidden = true; gedit = null;
     selPin = null; cfg = emptyCfg();
     liveDI.clear(); beats = 0; $("beat").textContent = "";

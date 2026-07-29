@@ -125,7 +125,7 @@ void box_announce_manifest(const box_config_t *c)
 	/* Feature flags, so a UI can shade pins claimed by a peripheral without
 	 * hardcoding the pin budget. Neither is implemented on this port yet -- they
 	 * are announced honestly as configured, not as running. */
-	pub_int(c, "mcp_en",  c->mcp_en  ? 1 : 0);
+	pub_int(c, "ain_en",  c->ain_en  ? 1 : 0);
 	pub_int(c, "oled_en", c->oled_en ? 1 : 0);
 
 	/* Per-pin labels. A pin publishes its label if it HAS one or is configured.

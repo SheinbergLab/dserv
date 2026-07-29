@@ -3,7 +3,7 @@
  *
  * Sits between box_adc.h (one sweep) and box_ain_group.h (the packing state
  * machine), and owns the one thing neither of them can: a clock. Scans the union
- * of every active group's channels at the box-wide base rate (config mcp_rate),
+ * of every active group's channels at the box-wide base rate (config ain_rate),
  * feeds each group, and queues whatever blocks come out.
  *
  * WHY A THREAD AND NOT THE SERVICE LOOP. adc_read() parks its caller for the
@@ -33,7 +33,7 @@
 
 /* Start the sampler. `cfg` must outlive it (main.c's static config). Returns 0,
  * -ENODEV when no ADC is fitted (the normal case for most boxes), or a negative
- * errno. Safe to call when mcp_en is clear: the thread starts and idles. */
+ * errno. Safe to call when ain_en is clear: the thread starts and idles. */
 int box_ain_init(const box_config_t *cfg);
 
 /* Re-read rate/channels/policy after a config change, and reset every group's

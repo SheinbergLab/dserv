@@ -91,7 +91,7 @@ typedef struct {
     char     wifi_pass[64];
     uint8_t  wifi_pm;                   /* pico2w: 1 = WiFi power-save (battery), 0 = off (low latency) */
     /* v10 was the ADS1115 I2C analog-in (ain_rate/ain_gain/ain_en). REMOVED
-     * 2026-07-19 in favor of the MCP3204 SPI ADC (mcp_en); these 3 bytes are
+     * 2026-07-19 in favor of the MCP3204 SPI ADC (ain_en); these 3 bytes are
      * RETAINED AS RESERVED so the persist layout is byte-identical -- removing
      * them would shift every later field and corrupt already-saved configs. */
     uint8_t  _rsvd_ain_rate;
@@ -145,10 +145,11 @@ typedef struct {
      * periodic sync burst. See wiznet-io/BLE.md "Power" + box_ble_central.h. */
     uint8_t  ble_latency;
 
-    /* v18: MCP3204 SPI analog-in (box_mcp3204.h) -- a 4-channel scan (2-axis
+    /* v18: analog input -- originally the MCP3204 SPI ADC, now any converter
+     * behind box_adc.h (on-chip LPADC on the MCXN947). A channel scan (2-axis
      * joystick on CH0/CH1) published as one packed state/ain/scan snapshot. Off
      * by default, leaves the SPI0 pins free. Applied at boot (SPI init). */
-    uint8_t  mcp_en;
+    uint8_t  ain_en;
 
     /* v19: firmware update channel this box TRACKS (extio-setup / OTA compare
      * against <channel>/latest for this build line). A deployment policy, not a
@@ -163,14 +164,14 @@ typedef struct {
      * together with one sampling policy. The analog twin of DI chord groups
      * (box_group.h / box_ain_group.h): the box knows channels/labels/policy,
      * never device semantics (that stays host-side). A group is ACTIVE iff
-     * ain_group_chans[g] != 0. mcp_en stays the master switch (claims the SPI0
-     * pins + inits the ADC); with mcp_en and NO group defined, dserv_cfg_ain_
+     * ain_group_chans[g] != 0. ain_en stays the master switch (claims the SPI0
+     * pins + inits the ADC); with ain_en and NO group defined, dserv_cfg_ain_
      * default() synthesizes group 0 = {0,1} on-change "joystick" so the stick
-     * just works. mcp_rate is the box-wide base SCAN rate; a group publishes at
+     * just works. ain_rate is the box-wide base SCAN rate; a group publishes at
      * base/decimate (0/1 = every scan), optionally boxcar-averaged (flags bit0).
      * All fields additive at the struct tail => older saved configs stay valid
      * (they load these zeroed => no groups => the default kicks in). */
-    uint16_t mcp_rate;                                 /* base scan rate Hz (0 -> 50) */
+    uint16_t ain_rate;                                 /* base scan rate Hz (0 -> 50) */
     uint8_t  ain_group_chans[BOX_NAGROUPS];           /* channel mask, bit c = MCP ch c (0..3); 0 = unused */
     char     ain_group_label[BOX_NAGROUPS][BOX_LABEL_MAX]; /* names state/ain/<label>; "" -> "a<idx>" */
     uint8_t  ain_group_mode[BOX_NAGROUPS];            /* 0 = on-change (deadband), 1 = continuous */
@@ -229,7 +230,7 @@ typedef enum {
     CFG_WIFI_SSID,
     CFG_WIFI_PASS,
     CFG_WIFI_PM,
-    CFG_MCP_EN,
+    CFG_AIN_EN,
     CFG_OLED_EN,
     CFG_BLE_EN,
     CFG_PIPE_EN,
@@ -270,8 +271,8 @@ static inline int dserv_cfg_prefix(const box_config_t *c, char *buf, int sz)
 
 /* ---- analog (MCP3204) groups ---- */
 /* base scan rate: 0 => 50 Hz default. */
-static inline int dserv_cfg_mcp_rate(const box_config_t *c)
-{ return c->mcp_rate ? c->mcp_rate : 50; }
+static inline int dserv_cfg_ain_rate(const box_config_t *c)
+{ return c->ain_rate ? c->ain_rate : 50; }
 
 /* number of active analog groups (chans mask non-zero). */
 static inline int dserv_ain_active_count(const box_config_t *c)
@@ -288,7 +289,7 @@ static inline void dserv_ain_group_leaf(const box_config_t *c, int g, char *buf,
  * has ANY group defined is left untouched. Call once after config load. */
 static inline void dserv_cfg_ain_default(box_config_t *c)
 {
-    if (!c->mcp_en || dserv_ain_active_count(c)) return;
+    if (!c->ain_en || dserv_ain_active_count(c)) return;
     c->ain_group_chans[0]    = 0x03;   /* ch0 = X, ch1 = Y */
     c->ain_group_mode[0]     = 0;      /* on-change */
     c->ain_group_deadband[0] = 8;
@@ -539,12 +540,12 @@ static inline cfg_result_t dserv_cfg__config(box_config_t *c, const char *k,
     if (strcmp(k, "wifi/pm") == 0) {
         c->wifi_pm = dserv_msg_as_long(m) ? 1 : 0; c->applied_count++; return CFG_WIFI_PM;
     }
-    if (strcmp(k, "mcp/enable") == 0) {    /* MCP3204 SPI analog-in (applied at boot) */
-        c->mcp_en = dserv_msg_as_long(m) ? 1 : 0; c->applied_count++; return CFG_MCP_EN;
+    if (strcmp(k, "ain/enable") == 0) {    /* analog input master switch (applied at boot) */
+        c->ain_en = dserv_msg_as_long(m) ? 1 : 0; c->applied_count++; return CFG_AIN_EN;
     }
-    if (strcmp(k, "mcp/rate") == 0) {      /* box-wide base SCAN rate Hz (groups decimate from it) */
+    if (strcmp(k, "ain/rate") == 0) {      /* box-wide base SCAN rate Hz (groups decimate from it) */
         long v = dserv_msg_as_long(m); if (v < 1) v = 1; if (v > 65535) v = 65535;
-        c->mcp_rate = (uint16_t) v; c->applied_count++; return CFG_AIN;
+        c->ain_rate = (uint16_t) v; c->applied_count++; return CFG_AIN;
     }
     /* Analog groups: ain/group/<g>/{channels,label,mode,deadband,decimate,batch,average,off} */
     { int ng = -1; int npos = -1;
@@ -725,7 +726,7 @@ static inline const char *dserv_cfg_result_str(cfg_result_t r)
     case CFG_WIFI_SSID:  return "wifi_ssid";
     case CFG_WIFI_PASS:  return "wifi_pass";
     case CFG_WIFI_PM:    return "wifi_pm";
-    case CFG_MCP_EN:     return "mcp_en";
+    case CFG_AIN_EN:     return "ain_en";
     case CFG_OLED_EN:    return "oled_en";
     case CFG_BLE_EN:     return "ble_en";
     case CFG_PIPE_EN:    return "pipe_en";

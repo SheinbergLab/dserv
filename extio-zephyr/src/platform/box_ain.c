@@ -80,15 +80,15 @@ static void recompute(void)
 		union_mask &= (uint8_t) ((1u << have) - 1u);
 	}
 
-	/* mcp_en is the documented master switch ("mcp_en stays the master switch"
-	 * -- dserv_config.h). Honour it: without this, `mcp enable 0` left the
+	/* ain_en is the documented master switch ("ain_en stays the master switch"
+	 * -- dserv_config.h). Honour it: without this, `ain enable 0` left the
 	 * sampler running, so there was no way to stop it short of clearing every
 	 * group. */
-	if (!cfg->mcp_en) {
+	if (!cfg->ain_en) {
 		union_mask = 0;
 	}
 
-	int rate = dserv_cfg_mcp_rate(cfg);
+	int rate = dserv_cfg_ain_rate(cfg);
 	period_us = (uint32_t) (1000000 / (rate > 0 ? rate : 50));
 }
 

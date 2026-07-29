@@ -25,9 +25,9 @@
 #define BOX_PERSIST_MAGIC    0x57494F31u   /* "WIO1" */
 #define BOX_PERSIST_VERSION  22  /* v22: console_mode (cdc|uart -- a timing choice).
                                    * v21: static net gateway + subnet mask (net_gw/net_sn).
-                                   * v20: MCP3204 analog groups (mcp_rate + ain_group_*).
+                                   * v20: MCP3204 analog groups (ain_rate + ain_group_*).
                                    * v19: channel (firmware update track, default dev).
-                                   * v18: mcp_en (MCP3204 SPI analog-in).
+                                   * v18: ain_en (MCP3204 SPI analog-in).
                                    * v17: ble_latency (idle peripheral-latency target).
                                    * v16: pipe_en (receiver relay auto-arm). v15: ble_en (BLE central
                                    * on radio builds). v14: sync_pin/sync_en (TTL obs-sync input).

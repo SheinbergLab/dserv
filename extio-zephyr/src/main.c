@@ -1269,7 +1269,7 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 				   event_stamp(box_gpio_now_us()));
 		}
 #if defined(BOX_HAVE_ADC)
-	} else if (r == CFG_AIN || r == CFG_MCP_EN) {
+	} else if (r == CFG_AIN || r == CFG_AIN_EN) {
 		/* Tell the sampler its policy changed. Without this the running
 		 * thread keeps its old channel mask forever: on 2026-07-28 a rescue
 		 * that set `channels off` was accepted, persisted, and had NO effect
@@ -1408,7 +1408,7 @@ int main(void)
 	/* Same synthesizer the RP2350 runs: with the ADC enabled and no group
 	 * defined, give ch0/ch1 an on-change "joystick" group so a freshly fitted
 	 * Click does something visible instead of nothing. No-op once any group
-	 * exists, and no-op while mcp_en is clear. */
+	 * exists, and no-op while ain_en is clear. */
 	dserv_cfg_ain_default(&cfg);
 
 	/* After the persisted config (rate/groups come from it) and before the
@@ -1529,7 +1529,7 @@ int main(void)
 	if (box_adc_ready()) {
 		box_console_printf("analog: %s, %u ch, %u-bit, %u mV fs; %d group(s) at %d Hz base\n",
 		       box_adc_name(), box_adc_channels(), box_adc_bits(), box_adc_vref_mv(),
-		       dserv_ain_active_count(&cfg), dserv_cfg_mcp_rate(&cfg));
+		       dserv_ain_active_count(&cfg), dserv_cfg_ain_rate(&cfg));
 	} else {
 		box_console_printf("analog: no ADC fitted\n");
 	}

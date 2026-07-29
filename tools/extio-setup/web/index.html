@@ -85,16 +85,16 @@
       </div>
     </div>
 
-    <div class="panel" id="mcppanel" hidden>
+    <div class="panel" id="ainpanel" hidden>
       <div class="panel-title">Analog &middot; MCP3204</div>
       <div class="grid2">
-        <label>status</label><span id="mcpStatus" class="mono muted">&mdash;</span>
+        <label>status</label><span id="ainStatus" class="mono muted">&mdash;</span>
       </div>
       <div class="row gap">
-        <button id="mcpEnable" title="mcp enable 1">Enable</button>
-        <button id="mcpDisable" title="mcp enable 0">Disable</button>
+        <button id="ainEnable" title="ain enable 1">Enable</button>
+        <button id="ainDisable" title="ain enable 0">Disable</button>
       </div>
-      <div id="mcpMsg" class="mono muted"></div>
+      <div id="ainMsg" class="mono muted"></div>
       <div class="hint">MCP3204 SPI ADC on <b>GP2&ndash;5</b> (CH0=X, CH1=Y). Claims those pins &mdash;
         <b>Save to flash</b> + reboot to apply. Publishes analog groups as <code>state/ain/&lt;label&gt;</code>.</div>
     </div>
