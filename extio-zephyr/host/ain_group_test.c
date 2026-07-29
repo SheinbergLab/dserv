@@ -44,14 +44,14 @@ int main(void)
     cfg.ain_group_chans[0] = 0x03; cfg.ain_group_mode[0] = 0; cfg.ain_group_deadband[0] = 8;
     ain_group_rt_t rt; ain_group_reset(&rt);
     scan_set(s, 2048, 2048, 111, 222);
-    CHECK(ain_group_feed(&rt, &cfg, 0, s, 1000, 20000, &out) == 1, "first sample publishes");
+    CHECK(ain_group_feed(&rt, &cfg, 0, 0xff, s, 1000, 20000, &out) == 1, "first sample publishes");
     CHECK(out.count == 1 && out.nchan == 2 && out.mask == 0x03, "count=1, nchan=2, mask=0x03");
     CHECK(out.v[0] == 2048 && out.v[1] == 2048, "columns ascending (ch0,ch1)");
     CHECK(out.interval_us == 0 && out.t0_us == 1000, "single: interval 0, t0 = sample time");
     scan_set(s, 2052, 2048, 0, 0);   /* moved +4 <= db 8 */
-    CHECK(ain_group_feed(&rt, &cfg, 0, s, 1100, 20000, &out) == 0, "sub-deadband move: no publish");
+    CHECK(ain_group_feed(&rt, &cfg, 0, 0xff, s, 1100, 20000, &out) == 0, "sub-deadband move: no publish");
     scan_set(s, 2060, 2048, 0, 0);   /* moved +12 > db 8 */
-    CHECK(ain_group_feed(&rt, &cfg, 0, s, 1200, 20000, &out) == 1, "past-deadband move: publish");
+    CHECK(ain_group_feed(&rt, &cfg, 0, 0xff, s, 1200, 20000, &out) == 1, "past-deadband move: publish");
     CHECK(out.v[0] == 2060 && out.t0_us == 1200, "publishes moved value at its time");
 
     /* ---- continuous decimate (drop) + batch ---- */
@@ -63,7 +63,7 @@ int main(void)
     int blocks = 0;
     for (int k = 0; k < 12; k++) {           /* 12 base scans @ 1kHz (period 1000us) */
         scan_set(s, 100 + k, 200 + k, 0, 0);
-        if (ain_group_feed(&rt, &cfg, 1, s, 1000ull + (uint64_t)k * 1000, 1000, &out)) blocks++;
+        if (ain_group_feed(&rt, &cfg, 1, 0xff, s, 1000ull + (uint64_t)k * 1000, 1000, &out)) blocks++;
     }
     /* 12 scans / decimate 2 = 6 takes / batch 3 = 2 blocks */
     CHECK(blocks == 2, "12 scans, dec2, batch3 -> 2 blocks");
@@ -83,7 +83,7 @@ int main(void)
     ain_group_reset(&rt);
     int got = 0;
     for (int k = 0; k < 4; k++) { scan_set(s, 10 + k * 10, 0, 0, 0);   /* 10,20,30,40 -> mean 25 */
-        if (ain_group_feed(&rt, &cfg, 0, s, 5000ull + k, 1000, &out)) got = 1; }
+        if (ain_group_feed(&rt, &cfg, 0, 0xff, s, 5000ull + k, 1000, &out)) got = 1; }
     CHECK(got && out.count == 1 && out.nchan == 1, "avg: one take after 4 scans");
     CHECK(out.v[0] == 25, "boxcar mean (10+20+30+40)/4 = 25");
     CHECK((out.flags & AIN_GROUP_FLAG_AVG) != 0, "avg: flagged averaged");

@@ -80,6 +80,13 @@ static void recompute(void)
 		union_mask &= (uint8_t) ((1u << have) - 1u);
 	}
 
+	/* ...and only channels that are ANALOG RIGHT NOW. A channel sharing a box
+	 * pin is samplable only while that pin is in `ain` mode; sweeping it while
+	 * the pad is muxed to GPIO would convert a disconnected input and publish
+	 * the result as if it meant something. The block header carries mask and
+	 * nchan, so a consumer sees exactly which channels it got. */
+	union_mask &= box_adc_active_mask(cfg);
+
 	/* ain_en is the documented master switch ("ain_en stays the master switch"
 	 * -- dserv_config.h). Honour it: without this, `ain enable 0` left the
 	 * sampler running, so there was no way to stop it short of clearing every
@@ -153,7 +160,7 @@ static void ain_thread_fn(void *a, void *b, void *c)
 		for (int g = 0; g < BOX_NAGROUPS; g++) {
 			ain_block_t blk;
 
-			if (ain_group_feed(&rt[g], cfg, g, scan, t_us,
+			if (ain_group_feed(&rt[g], cfg, g, union_mask, scan, t_us,
 					   running_period, &blk)) {
 				int64_t now_ms = k_uptime_get();
 

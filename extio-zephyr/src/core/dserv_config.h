@@ -354,16 +354,28 @@ static inline void dserv_group_name(const box_config_t *c, int g, char *buf, int
 }
 
 /* pin mode word -> value; -1 if not a recognized word (caller falls back to int) */
+#define PIN_MODE_AIN 4     /* pin is an ADC input, not digital I/O */
+
 static inline int dserv_mode_val(const char *w)
 {
     if (!strcmp(w, "out"))       return 1;
     if (!strcmp(w, "in"))        return 2;
     if (!strcmp(w, "in_pullup")) return 3;
+    if (!strcmp(w, "ain"))       return PIN_MODE_AIN;
     if (!strcmp(w, "off") || !strcmp(w, "unset")) return 0;
     return -1;
 }
 static inline const char *dserv_mode_str(uint8_t m)
-{ return m == 1 ? "out" : m == 2 ? "in" : m == 3 ? "in_pullup" : "off"; }
+{ return m == 1 ? "out" : m == 2 ? "in" : m == 3 ? "in_pullup"
+       : m == PIN_MODE_AIN ? "ain" : "off"; }
+
+/* A pin handed to the ADC. The pad is muxed away from GPIO (on MCX that is
+ * PCR[MUX]=0, kPORT_PinDisabledOrAnalog, which Zephyr reaches via
+ * GPIO_DISCONNECTED), and the ain channel bound to it becomes samplable.
+ * Which pins CAN do this is a board property -- see zephyr,user/box-ain-pins --
+ * but WHETHER they do is runtime config like every other setting on the box. */
+static inline int pin_is_ain(const box_config_t *c, int n)
+{ return (n >= 0 && n < BOX_NPINS && c->pin_mode[n] == PIN_MODE_AIN); }
 
 static inline const char *dserv_netmode_str(uint8_t mode)
 { return mode == NET_MODE_STATIC ? "static" : "dhcp"; }

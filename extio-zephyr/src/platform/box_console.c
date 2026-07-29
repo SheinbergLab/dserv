@@ -13,6 +13,9 @@
 #if defined(CONFIG_NETWORKING)
 #include "box_net_eth.h"
 #endif
+#if defined(BOX_HAVE_ADC)
+#include "box_ain.h"
+#endif
 #if defined(BOX_HAVE_ADC) && defined(CONFIG_DAC)
 #include "box_adc.h"
 #include <zephyr/drivers/dac.h>
@@ -306,6 +309,16 @@ static void run_line(box_config_t *cfg, const char *line)
 	case CLI_GROUP:
 	case CLI_AIN:
 		box_gpio_apply_config(cfg);   /* pin/group/analog change -> re-apply */
+#if defined(BOX_HAVE_ADC)
+		/* ...and tell the SAMPLER too. The datapoint path (main.c, CFG_AIN)
+		 * has always done this; the console path never did, so every `ain
+		 * group ...` typed at the console needed a reboot to take effect --
+		 * and with runtime `pin N mode ain` it would be worse, re-muxing the
+		 * pad while the sweep mask stayed stale. Same rule as main.c states
+		 * it: config that applies only after a reboot is a config field that
+		 * lies. */
+		box_ain_apply();
+#endif
 		break;
 	case CLI_SAVE:
 #if defined(BOX_HAVE_PERSIST)

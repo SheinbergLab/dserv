@@ -82,7 +82,23 @@
 		/* Bytestring, NOT <5>: a one-element <> infers a SCALAR int and
 		 * `uint8_t rsv[] = DT_PROP(...)` then fails to compile. [] is always a
 		 * uint8-array however many entries it has. */
-		box-reserved = [05 0e 0f 10];              /* D5 = ENET0_MDIO; A2/A3/A4 = analog */
+		box-reserved = [05];                       /* D5 = ENET0_MDIO, the PHY's */
+
+		/* Which box pin each ain channel shares, indexed by ain channel;
+		 * 0xff = a DEDICATED pad that is not a box pin at all, so that
+		 * channel is always analog. A channel bound to a box pin is
+		 * samplable only while that pin is in `ain` mode.
+		 *
+		 * ch0-2 = J8 pads (dedicated).  ch3/4/5 = box pins 14/15/16
+		 * (Arduino A2/A3/A4), which stay ordinary digital pins until
+		 * someone says `pin 14 mode ain`.
+		 *
+		 * The BOARD declares what is possible; the CONFIG decides what is
+		 * used. That split is why analog allocation no longer needs a
+		 * firmware rebuild -- which matters because every other setting on
+		 * this box is runtime and persisted, and one exception means an
+		 * image per rig. */
+		box-ain-pins = [ff ff ff 0e 0f 10];
 	};
 };
 

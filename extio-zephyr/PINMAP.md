@@ -16,8 +16,8 @@ different and wrong answer for several pads.
 
 ## Digital I/O — the Arduino header
 
-`Free` pins take `pin N mode out|in|in_pullup|off`, `cmd/do/N`, DI groups, the
-obs mirror and the sync input. Everything here is 3.3 V; **the MCXN947 is not
+`Free` pins take `pin N mode out|in|in_pullup|ain|off`, `cmd/do/N`, DI groups,
+the obs mirror and the sync input. Everything here is 3.3 V; **the MCXN947 is not
 5 V tolerant.**
 
 | box pin | Arduino | SoC pad | status | ADC0 | PWM | other alternates |
@@ -36,14 +36,17 @@ obs mirror and the sync input. Everything here is 3.3 V; **the MCXN947 is not
 | 11 | D11 | P0_24 | free | **B16** | CT0_MAT0 | FC1_P0 (SPI MOSI) |
 | 12 | D12 | P0_26 | free | **B18** | CT0_MAT2 | FC1_P2 (SPI MISO) |
 | 13 | D13 | P0_25 | free | **B17** | CT0_MAT1 | FC1_P1 (SPI SCK) |
-| **14** | **A2** | **P0_14** | **RESERVED — ain ch3** | B14 | — | muxed to the ADC |
-| **15** | **A3** | **P0_22** | **RESERVED — ain ch4** | A14 | — | muxed to the ADC |
-| **16** | **A4** | **P0_15** | **RESERVED — ain ch5** | B15 | — | muxed to the ADC |
+| 14 | A2 | P0_14 | free — or **ain ch3** | **B14** | — | switchable at runtime |
+| 15 | A3 | P0_22 | free — or **ain ch4** | **A14** | — | switchable at runtime |
+| 16 | A4 | P0_15 | free — or **ain ch5** | **B15** | — | switchable at runtime |
 | 17 | A5 | P0_23 | free — **also SW2** | **A15** | — | FC1_P3, CMP2 |
 
-**14 usable digital pins** (17 mapped, minus D5 to the PHY and A2/A3/A4 to the
-ADC). Under the old one-port scheme there were 11, and D0/D1/D3/D6 were
-unreachable at all.
+**16 usable digital pins** (17 mapped, minus D5 to the PHY) — of which **three
+are dual-purpose**: A2/A3/A4 are digital until you say `pin 14 mode ain`, and
+digital again when you say `pin 14 mode out`. No rebuild either way.
+
+Under the old one-port scheme there were 11, and D0/D1/D3/D6 were unreachable
+at all.
 
 **Reserved pins are refused by the CLI**, not silently ignored: `pin 14 mode out`
 answers `ERR pin 14 is reserved on this board`. Before that gate existed the
@@ -98,8 +101,21 @@ the fitted count in `state/ain/dbg/chans` and the CLI validates against it.
 | 4 | A14 | P0_22 | **Arduino A3** | yes — box pin 15 |
 | 5 | B15 | P0_15 | **Arduino A4** | yes — box pin 16 |
 
-Channels 0-2 are free — port 4, where the box maps no digital pins except
-D0/D1. Channels 3-5 were bought deliberately with three Arduino pins. **A5 was
+Channels 0-2 are on dedicated port-4 pads that are not box pins at all, so they
+are **always analog**. Channels 3-5 share box pins 14/15/16 and are analog only
+while that pin is in `ain` mode — **`pin 14 mode ain` / `pin 14 mode out`, live,
+no rebuild and no reboot.**
+
+The split is deliberate: **the BOARD declares what is possible**
+(`zephyr,user/box-ain-pins`, indexed by ain channel, `0xff` = dedicated pad),
+**the CONFIG decides what is used.** Channel indices never move, which matters
+because the block header's channel mask is 8 bits of frozen wire format — an
+index that shifted between reboots would be worse than a rebuild.
+
+A group naming a channel whose pin is currently digital does not carry a stale
+value for it: the group mask is intersected with what was actually sampled, so
+the block **honestly reports fewer channels**. Verified live — with pin 15
+digital the `aux` block goes `mask 60, nchan 4` → `mask 44, nchan 3` and back. **A5 was
 left alone on purpose: it is also SW2, the user button.** The remaining port-4
 pads (P4_12/13/16/17) would have cost nothing, but their header positions are
 not verified in the schematic, and a silkscreened pin you can actually reach

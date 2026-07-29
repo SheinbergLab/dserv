@@ -15,7 +15,7 @@
  *   wifi pass PASS
  *   dserv ip A.B.C.D
  *   dserv port N
- *   pin N mode out|in|in_pullup|off
+ *   pin N mode out|in|in_pullup|ain|off   (ain = hand the pad to the ADC)
  *   pin N pulse US
  *   desc TEXT...         (free-form box description; `desc off` clears)
  *   label N TEXT|off     (per-pin role label -> announced manifest)
@@ -541,7 +541,7 @@ static inline cli_action_t box_cli_exec(box_config_t *c, const char *line,
             "cmds: show | dump | name NAME | desc TEXT | channel NAME | console cdc|uart | " BOX_CLI_HELP_XTRA
             "net mode dhcp|static | net ip A.B.C.D | net gateway A.B.C.D | net mask A.B.C.D |\r\n"
             "      wifi ssid SSID | wifi pass PASS | wifi pm 0|1 | dserv ip A.B.C.D | dserv port N |\r\n"
-            "      pin N mode out|in|in_pullup|off | pin N pulse US | pin N debounce MS |\r\n"
+            "      pin N mode out|in|in_pullup|ain|off | pin N pulse US | pin N debounce MS |\r\n"
             "      pin N active_low 0|1 | label N TEXT|off | obs pin N | obs off |\r\n"
             "      sync pin N | sync off |\r\n"
             "      group G pins 2,3,4,5 | group G label NAME | group G settle MS |\r\n"

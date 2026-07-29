@@ -36,6 +36,7 @@
 #define BOX_ADC_H
 
 #include <stdint.h>
+#include "dserv_config.h"   /* box_config_t -- box_adc_active_mask() reads pin modes */
 
 #define BOX_ADC_MAX_CH 8          /* the widest part we intend to fit */
 
@@ -53,6 +54,17 @@ const char *box_adc_name(void);      /* devicetree node name, e.g. "adc@0" */
 uint8_t     box_adc_channels(void);  /* 4 (MCP3204) / 8 (ADC 20) / 0 if absent */
 uint8_t     box_adc_bits(void);      /* resolution, 12 for both parts above */
 uint16_t    box_adc_vref_mv(void);   /* full-scale in mV, for counts -> volts */
+
+/* Box pin this ain channel lives on, or -1 for a channel on a DEDICATED pad
+ * (one that is not a box pin at all, so it is always analog). Declared per
+ * board in zephyr,user/box-ain-pins, indexed by ain channel. */
+int         box_adc_pin_of(uint8_t ch);
+
+/* Channels that are physically analog right now: dedicated pads always, plus
+ * any channel whose box pin is in `ain` mode. A channel whose pin is currently
+ * digital must NOT be swept -- the pad is muxed to GPIO and the converter would
+ * read a disconnected input and report it as a number. */
+uint8_t     box_adc_active_mask(const box_config_t *c);
 
 /* ONE SWEEP.
  *

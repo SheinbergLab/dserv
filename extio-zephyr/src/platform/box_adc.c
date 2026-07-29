@@ -13,7 +13,16 @@
 /* The node the overlay declares on the mikroBUS socket. Chosen by LABEL rather
  * than by compatible, so fitting an ADC 20 Click means editing the overlay
  * (compatible + spi-max-frequency) and nothing here. */
-#define ADC_NODE DT_NODELABEL(box_adc)
+#define ADC_NODE      DT_NODELABEL(box_adc)
+#define BOX_USER_NODE DT_PATH(zephyr_user)
+
+/* Per-board: which box pin each ain channel shares, 0xff for a dedicated pad.
+ * Absent on a board that never switches pins to analog -- every channel is then
+ * a dedicated pad and always active, which is the old behaviour exactly. */
+#if DT_NODE_HAS_PROP(BOX_USER_NODE, box_ain_pins)
+#define BOX_HAVE_AIN_PINMAP 1
+static const uint8_t ain_pin_of[] = DT_PROP(BOX_USER_NODE, box_ain_pins);
+#endif
 
 #if DT_NODE_HAS_STATUS(ADC_NODE, okay)
 
@@ -145,6 +154,32 @@ int box_adc_init(void)
 	return 0;
 }
 
+int box_adc_pin_of(uint8_t ch)
+{
+#ifdef BOX_HAVE_AIN_PINMAP
+	if (ch < ARRAY_SIZE(ain_pin_of) && ain_pin_of[ch] != 0xff) {
+		return (int) ain_pin_of[ch];
+	}
+#else
+	ARG_UNUSED(ch);
+#endif
+	return -1;
+}
+
+uint8_t box_adc_active_mask(const box_config_t *c)
+{
+	uint8_t m = 0;
+
+	for (uint8_t ch = 0; ch < nch && ch < BOX_ADC_MAX_CH; ch++) {
+		int pin = box_adc_pin_of(ch);
+
+		if (pin < 0 || (c && pin_is_ain(c, pin))) {
+			m |= BIT(ch);
+		}
+	}
+	return m;
+}
+
 int         box_adc_ready(void)    { return ready; }
 const char *box_adc_name(void)     { return DT_NODE_FULL_NAME(ADC_NODE); }
 uint8_t     box_adc_channels(void) { return nch; }
@@ -228,6 +263,8 @@ void box_adc_stats_reset(void) { sweep_max_us = sweep_n = 0; }
 
 int         box_adc_init(void)     { return -ENODEV; }
 int         box_adc_ready(void)    { return 0; }
+int         box_adc_pin_of(uint8_t ch) { ARG_UNUSED(ch); return -1; }
+uint8_t     box_adc_active_mask(const box_config_t *c) { ARG_UNUSED(c); return 0; }
 const char *box_adc_name(void)     { return "none"; }
 uint8_t     box_adc_channels(void) { return 0; }
 uint8_t     box_adc_bits(void)     { return 0; }

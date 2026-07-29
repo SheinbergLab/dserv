@@ -107,11 +107,19 @@ static inline int ain_group_batch_eff(const box_config_t *c, int g, int nchan)
 /* Feed one full base scan (scan[AIN_MAX_CH] sampled at t_us; base_period_us =
  * 1e6 / base_rate) to analog group g. Returns 1 and fills *out when a block is
  * ready to publish, else 0. Inactive groups (mask 0) return 0. */
+/* `avail` = channels that were actually SAMPLED this scan. The group's own
+ * config mask is intersected with it, so a group naming a channel that is not
+ * currently analog (its box pin is in digital mode) publishes a block that
+ * HONESTLY reports fewer channels rather than carrying a stale scan slot
+ * labelled as a reading. The 12-byte header is self-describing -- mask and
+ * nchan travel with the samples -- so a consumer reshapes correctly with no
+ * out-of-band knowledge. Pass 0xff for "everything the part has". */
 static inline int ain_group_feed(ain_group_rt_t *rt, const box_config_t *c, int g,
+                                 uint8_t avail,
                                  const int16_t scan[AIN_MAX_CH], uint64_t t_us,
                                  uint32_t base_period_us, ain_block_t *out)
 {
-    uint8_t mask = c->ain_group_chans[g];
+    uint8_t mask = c->ain_group_chans[g] & avail;
     if (!mask) return 0;
     int16_t col[AIN_MAX_CH];
     int nchan = ain_extract(mask, scan, col);

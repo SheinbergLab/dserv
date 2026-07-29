@@ -237,6 +237,14 @@ void box_gpio_apply_config(const box_config_t *c)
 			di_pub_level[i] = (uint8_t) gpio_pin_get_dt(&specs[i]);
 			(void) add_input(i);
 			break;
+		case PIN_MODE_AIN:                       /* handed to the ADC */
+			/* GPIO_DISCONNECTED sets PCR[MUX]=0 on this SoC, which IS
+			 * kPORT_PinDisabledOrAnalog -- so the analog mux is reached
+			 * through Zephyr's own API rather than by poking the port.
+			 * It also clears IBE, so the digital input buffer stops
+			 * loading the pad. */
+			gpio_pin_configure_dt(&specs[i], GPIO_DISCONNECTED);
+			break;
 		default:                                 /* 0 = leave untouched */
 			break;
 		}
