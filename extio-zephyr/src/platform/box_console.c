@@ -199,6 +199,11 @@ static void adc_cal(uint8_t ch)
 }
 #endif /* BOX_HAVE_ADC && CONFIG_DAC */
 
+void box_console_set_ain_channels(int n)
+{
+	box_cli_set_ain_channels(n);
+}
+
 /* ---- line assembly + dispatch to box_cli ---- */
 static char line_buf[128];
 static int  line_len;

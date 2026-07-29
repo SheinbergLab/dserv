@@ -27,6 +27,13 @@ int box_console_init(const box_config_t *cfg);
 void box_console_service(box_config_t *cfg);
 
 /* Queue text for output (non-blocking; silently drops if the TX ring is full). */
+/* Tell the CLI how many analog channels the platform actually fitted, so
+ * `ain group G channels ...` validates against reality instead of against the
+ * MCP3204's four. Call AFTER box_ain_init(). Routed through the console rather
+ * than calling box_cli_set_ain_channels() directly, so box_cli.h keeps exactly
+ * one includer (see the note in that header). */
+void box_console_set_ain_channels(int n);
+
 void box_console_write(const char *s);
 
 /* printf-style convenience over box_console_write (non-blocking). */

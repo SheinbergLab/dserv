@@ -32,6 +32,51 @@
 #include <stdio.h>
 #include <string.h>
 
+/* ---- fitted analog channel count ----
+ *
+ * This used to be a hardcoded `mask & ~0x0Fu` -- four channels, the MCP3204's
+ * width baked into the grammar. On a board with a different converter that is
+ * simply a lie: the MCXN947's on-chip LPADC can declare six or eight, announces
+ * the true number in `state/ain/dbg/chans`, and the CLI still answered "ch 0-3".
+ *
+ * The limit is now WHAT THE PLATFORM ACTUALLY FITTED, reported after
+ * box_adc_init(). Two properties worth keeping:
+ *   * it defaults to 4, so a build that never calls the setter behaves exactly
+ *     as before (this file is a fork of the RP2350's pico_cli.h, not a shared
+ *     compilation unit, but keeping the default identical keeps the GRAMMAR
+ *     compatible, which is the part that is actually shared);
+ *   * it is a CEILING FROM REALITY, not a widened constant. Simply allowing
+ *     0-7 everywhere would let someone configure channels a fitted MCP3204 does
+ *     not have, and the group would then publish nothing at all -- box_adc_sweep
+ *     rejects the sweep, silently, every time. Refusing at the CLI is the only
+ *     place the user finds out.
+ *
+ * NOTE this is a static in a header, which is safe only because box_cli.h is
+ * included by exactly ONE translation unit per binary (box_console.c on the
+ * device, tools/box_sim.c on the host). If that ever stops being true each TU
+ * gets its own copy and only the one whose setter ran would be right -- move it
+ * into a .c file at that point. The platform sets it via box_console.h rather
+ * than including this header twice.
+ */
+#ifndef BOX_CLI_AIN_NCH_DEFAULT
+#define BOX_CLI_AIN_NCH_DEFAULT 4      /* MCP3204 */
+#endif
+#define BOX_CLI_AIN_NCH_MAX     8      /* must not exceed AIN_MAX_CH */
+
+static uint8_t box_cli_ain_nch = BOX_CLI_AIN_NCH_DEFAULT;
+
+static inline void box_cli_set_ain_channels(int n)
+{
+	if (n < 1)                       n = BOX_CLI_AIN_NCH_DEFAULT;
+	if (n > BOX_CLI_AIN_NCH_MAX)     n = BOX_CLI_AIN_NCH_MAX;
+	box_cli_ain_nch = (uint8_t) n;
+}
+
+static inline uint32_t box_cli_ain_chmask(void)
+{
+	return (1u << box_cli_ain_nch) - 1u;
+}
+
 /* CLI_GROUP = labels/groups/desc changed: caller refreshes the group runtime
  * and re-announces the manifest (no GPIO re-apply needed). */
 typedef enum { CLI_OK, CLI_ERR, CLI_PIN, CLI_GROUP, CLI_AIN, CLI_GPIO, CLI_SAVE, CLI_FACTORY, CLI_REBOOT, CLI_BOOTSEL } cli_action_t;
@@ -289,9 +334,10 @@ static inline cli_action_t box_cli_exec(box_config_t *c, const char *line,
     }
     if (sscanf(line, "ain group %d channels %23s", &n, w) == 2) {
         uint32_t mask;
-        if (n < 0 || n >= BOX_NAGROUPS || dserv_parse_pins(w, &mask) < 0 || (mask & ~0x0Fu)) {
-            snprintf(out, outsz, "ERR ain channels: 'ain group G channels 0,1' (G 0-%d, ch 0-3)\r\n",
-                     BOX_NAGROUPS - 1);
+        if (n < 0 || n >= BOX_NAGROUPS || dserv_parse_pins(w, &mask) < 0 ||
+            (mask & ~box_cli_ain_chmask())) {
+            snprintf(out, outsz, "ERR ain channels: 'ain group G channels 0,1' (G 0-%d, ch 0-%d)\r\n",
+                     BOX_NAGROUPS - 1, box_cli_ain_nch - 1);
             return CLI_ERR;
         }
         c->ain_group_chans[n] = (uint8_t) mask; c->applied_count++;

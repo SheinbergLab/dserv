@@ -1416,6 +1416,12 @@ int main(void)
 	 * comes up. Returns -ENODEV on a box with no Click fitted, which is the
 	 * ordinary case and not worth reporting as a failure. */
 	(void) box_ain_init(&cfg);
+
+	/* Teach the CLI what the converter actually has, so `ain group G channels`
+	 * validates against the fitted count instead of the MCP3204's four. Must
+	 * follow box_ain_init(), which is what runs box_adc_init(). A board with no
+	 * ADC reports 0 and the setter keeps the safe default. */
+	box_console_set_ain_channels((int) box_adc_channels());
 #endif
 
 
