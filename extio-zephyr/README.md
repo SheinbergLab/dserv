@@ -128,7 +128,16 @@ west build -b teensy41 . --pristine      # wired test system (add a magjack)
 west build -b teensy40 . --pristine      # USB-only test system
 west flash                               # teensy runner; press the board's
                                          # program button when it waits
+
+west build -b frdm_mcxn947/mcxn947/cpu0 . --pristine   # the analog board
 ```
+
+**The MCXN947 board target carries QUALIFIERS**, unlike every other board here,
+and so must its config files: `boards/frdm_mcxn947_mcxn947_cpu0.{conf,overlay}`.
+A bare `frdm_mcxn947.overlay` is SILENTLY IGNORED — Zephyr's search names are
+built from BOARD + BOARD_QUALIFIERS and never include the bare board name. The
+tell is a missing `-- Found devicetree overlay:` line in the CMake output; see
+PORTING.md, "FRDM-MCXN947: first build".
 
 Teensy flashing needs `teensy_loader_cli` (`brew install teensy_loader_cli`);
 the build emits `build/zephyr/zephyr.hex`, which is what the loader wants.

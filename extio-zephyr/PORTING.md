@@ -613,6 +613,13 @@ Tests/tools that hardcode pin numbers and will need updating:
       callers; no platform driver. Block #7. On RW612 this also decides on-chip
       GAU GPADC vs the external MCP3204 (BENCH_NXP D10 — watch RF coupling into
       on-chip analog on a tri-radio part).
+      **Status 2026-07-28:** everything ABOVE the converter is proven on
+      hardware; the MCP3204 itself never answered and is PARKED (see the
+      2026-07-28 sections at the end). The live path is now the MCXN947's
+      on-chip `lpadc0`, whose open item is a **channel -> `input_positive` map**
+      — `box_adc.c` assumes channel *n* IS input *n*, which is true of the
+      MCP3204 and false of the LPADC. That map is board wiring, so decide it
+      together with the devicetree pin map proposed below, not separately.
 - [ ] **OLED status display** (`pico_oled.h`, SSD1306 SPI) — no counterpart.
 - [ ] **WS2812 status LED** (`pico_status_led.h`) — no counterpart.
 
@@ -3458,3 +3465,206 @@ morning and I repeated it anyway.
 group layer never learned which converter is fitted. Moving to the MCXN947's
 on-chip `lpadc0` is a devicetree + Kconfig change with `box_ain_group.h` and
 `box_ain.c` untouched -- and it deletes the chip-select problem entirely.
+(Half right. It does delete the chip select; it replaces it with a
+channel-to-input mapping problem. See the next section.)
+
+---
+
+## 2026-07-28 (end) — FRDM-MCXN947: first build, and what did NOT break
+
+**Why this board at all.** The RW612 was chosen as the universal hub, and then
+two things became true: we never turned the radios on, and we wanted a real
+analog front end. The MCXN947 is the trade — no radio, but `lpadc0` + `dac0` +
+`opamp0` on the die, and it keeps everything the port actually leans on:
+Ethernet with an IEEE-1588 clock, USB HS, MCUboot A/B partitions, a storage
+partition. Zephyr supports `frdm_mcxn947` in tree.
+
+**Result: it builds.** Two new files — `boards/frdm_mcxn947_mcxn947_cpu0.conf`
+and `.overlay`. FLASH 314 KB, RAM 130 KB of 320 KB, no errors and no unsatisfied
+Kconfig. Done in three stages (USB+GPIO, then Ethernet+PTP+NVS, then an analog
+probe) so that each failure had one candidate cause.
+
+### The only thing that actually bit: the file NAME
+
+This is the first board in the tree with hardware-model-v2 **qualifiers** —
+`frdm_mcxn947/mcxn947/cpu0`, against the bare `teensy41` / `frdm_rw612`. Zephyr
+builds its board-overlay search names from BOARD + BOARD_QUALIFIERS via
+`zephyr_build_string(... MERGE)`, and MERGE appends only the *board+qualifiers*
+variant — **not the bare board name**. Confirmed in
+`cmake/modules/extensions.cmake` (`zephyr_build_string`, the `BUILD_STR_MERGE`
+branch) and `configuration_files.cmake:72`.
+
+So `boards/frdm_mcxn947.overlay` is never looked at. It sits in `boards/`
+being silently ignored while the build fails on the very alias it defines —
+another entry in the FIELDS/FILES THAT REPORT MEMORY NOT REALITY family. The
+tell is the absent `-- Found devicetree overlay:` line in the CMake output;
+check for it before debugging anything else on a new board.
+
+**Rule: the name must carry the qualifiers, `/` replaced by `_`.** Same for the
+`.conf`. Note this also means the file does NOT apply to the `_ns` or `_qspi`
+variants — a `frdm_mcxn947_mcxn947.overlay` would cover every cpu variant, but
+not the qspi one either, since MERGE adds exactly one parent level.
+
+Everything the naive first build complained about was the predictable trio:
+no `box-gpio-port` alias, no `cdc_acm_data`, no `cdc_acm_console`. Kconfig and
+CMake configured cleanly on the first attempt.
+
+### What came for free — read from `.config`, not assumed
+
+The board devicetree already enables `enet` / `enet_mac` / `enet_mdio` / `phy` /
+`enet_ptp_clock` / `usb1` / `lpadc0`, and every NXP driver behind them is
+`default y` on its DT node. Verified present after building:
+
+    CONFIG_ETH_NXP_ENET_QOS=y      CONFIG_MDIO_NXP_ENET_QOS=y
+    CONFIG_ETH_NXP_ENET_QOS_MAC=y  CONFIG_PTP_CLOCK_NXP_ENET_QOS=y
+    CONFIG_PHY_GENERIC_MII=y       CONFIG_UDC_NXP_EHCI=y
+    CONFIG_NVS=y                   CONFIG_FLASH_MCUX_FLEXSPI_NOR=y
+
+**MCUboot works out of the box too.** `west build --sysbuild` completes,
+relinks the app to `0x10014000` (= `slot0_partition`, flash base `0x10000000` +
+`0x14000`), and emits `zephyr.signed.bin` at 322 KB against a 984 KB slot. None
+of the RW612's MCUboot pain (see "the PLL the bootloader takes with it") has an
+analogue yet — but that was a silicon-init defect found on hardware, so absence
+from a build proves nothing about it.
+
+### Three RW612 traps are STRUCTURALLY absent here
+
+Worth stating explicitly so nobody spends an evening looking for them:
+
+1. **The missing-`pinctrl-0` PTP failure cannot happen.**
+   `ptp_clock_nxp_enet_qos_init()` never calls `pinctrl_apply_state()`. That was
+   the entire failure path on `ptp_clock_nxp_enet.c`, and it is not in this
+   driver. No dummy pinctrl state is needed, and no pad gets consumed for one.
+2. **The silent wrong-rate clock bug cannot happen.** Two independent reasons.
+   `MCUX_ENET_QOS_PTP_CLK` (`MCUX_LPC_CLK_ID(0x27, 0x00)`) **has** a case in
+   `clock_control_mcux_syscon.c:795`, unlike the RW612's `MCUX_ENET_PLL` which
+   fell out of the switch and returned success without writing `*rate`. And the
+   QoS driver checks the return (`ret = clock_control_get_rate(...); if (ret)
+   return ret;`) instead of casting it to `(void)`. The 0.14996x counter has no
+   route in.
+3. **A box pin cannot be "configured but electrically dead."** Zephyr's
+   `gpio_mcux.c` writes `PORT_PCR_MUX(PORT_MUX_GPIO)` inside `pin_configure()`
+   (line ~205), so claiming a box pin muxes the pad to GPIO as a side effect.
+   The RW612 needed an explicit `pinmux_box_gpio` group and would otherwise
+   accept `pin <n> mode out`, report itself in `state/pins/out`, and do nothing
+   on the wire. No such group exists — or is needed — here.
+
+### Pin map: gpio0, and why
+
+`box-gpio-port = &gpio0`. Two reasons, both checked against the board dts:
+
+* It carries **11 Arduino header pins inside the `BOX_NPINS = 30` window**
+  (a frozen core constant in `dserv_config.h`, not to be raised casually):
+
+  | box pin | Arduino | note |
+  |---|---|---|
+  | 10 | D9  | also the RED LED |
+  | 14 | A2  | |
+  | 15 | A4  | |
+  | 22 | A3  | |
+  | 23 | A5  | also SW2, the user button |
+  | 24 | D11 | Arduino MOSI |
+  | 25 | D13 | Arduino SCK |
+  | 26 | D12 | Arduino MISO |
+  | 27 | D10 | Arduino CS, also the GREEN LED |
+  | 28 | D8  | |
+  | 29 | D2  | |
+
+  (D4 = P0_30 and D7 = P0_31 exist but fall outside `BOX_NPINS`.) Compare the
+  RW612, which had **one** free box pin before the overlay went hunting for
+  pads — no loopback pair, no way to prove DI at all.
+* **ENET_QOS uses none of port 0.** Its RMII/MDIO pads are all port 1 (P1_4..7,
+  P1_13..15, P1_20/21). Choosing `gpio1` would have put box pins straight on
+  top of the PHY.
+
+The numbering is still scrambled relative to the silkscreen, which is exactly
+what the "devicetree pin map" proposal above is for. This board makes the case
+stronger, not weaker.
+
+### Flash topology: better than either previous board, by construction
+
+The app XIPs **internal** flash (`slot0_partition` on the `fmu` controller)
+while `storage_partition` is the whole 8 MB of the **external** W25Q64 on
+FlexSPI. So NVS writes a device the CPU is not fetching instructions from.
+Neither the Teensy's XIP-write hazard nor the RW612's "NVS refuses to erase a
+region it does not recognise" (`nvs_mount -> -45`) applies here as a matter of
+layout rather than of configuration. `box_flash.c` already handles this board's
+`compatible = "zephyr,mapped-partition"` style, from the RW612 work.
+
+Still verify on silicon. "Cannot happen by construction" has been wrong before.
+
+### Analog: it COMPILES against `lpadc0`, and that is the dangerous part
+
+Probed with a throwaway overlay labelling the on-chip converter as the box's:
+
+```dts
+box_adc: &lpadc0 { #address-cells = <1>; #size-cells = <0>; };
+```
+
+plus `CONFIG_ADC=y`. It builds and links (322 KB). **It is NOT wired up in the
+committed overlay, on purpose**, because it would be wrong on silicon and wrong
+silently — the failure shape this project keeps writing memos about.
+
+**The mismatch.** `box_adc.c` is MCP3204-shaped: channel *n* **is** input *n*,
+one 3-byte transaction per channel. `adc_mcux_lpadc.c` does not work that way:
+
+* `channel_cfg->input_positive` selects the physical input (low 4 bits = channel
+  number, bit 5 = A/B side — `mcux_lpadc_channel_setup`, lines 214-217);
+* `channel_cfg->channel_id` merely indexes a CMD-register slot
+  (`data->cmd_config[channel_id]`), bounded by `CONFIG_LPADC_CHANNEL_COUNT`,
+  which is **15** on this board.
+
+`box_adc.c` never sets `input_positive`. So every "channel" would sample the
+same physical pad (input 0, side A). Worse, `probe_channels()` — which detects
+width by walking channels upward until `adc_channel_setup()` refuses one —
+would happily report `BOX_ADC_MAX_CH` = 8, because the driver accepts any slot
+index regardless of what is wired. A confident, self-consistent, entirely
+fictional 8-channel sweep.
+
+(`ADC_REF_EXTERNAL0`, which `box_adc.c` passes, *is* accepted — it means "use
+the board's `voltage-ref` setting". That part needs no change.)
+
+**What the board actually brings out:** `pinmux_lpadc0` muxes exactly three
+pads — `ADC0_A2/PIO4_23`, `ADC0_A1/PIO4_15`, `ADC0_B1/PIO4_19`.
+
+**So the real work is a channel -> input map, and that map is board wiring,
+which means devicetree.** It is a design decision, not a mechanical port, and it
+overlaps the pin-map proposal above — both are "the flat wire index must resolve
+to something the board chooses." Do them with one idea, not two.
+
+### Everything timing-related is UNMEASURED
+
+The MAC here is **ENET_QOS** (Synopsys DWMAC-derived), a different IP from the
+RW612's ENET, with a different PTP clock driver and a different USB controller.
+Per the measurement audit above, numbers do not transfer by inheritance. Carried
+into `frdm_mcxn947_mcxn947_cpu0.conf` as *starting points with comments saying
+so*, not as facts:
+
+* `CONFIG_SYS_CLOCK_TICKS_PER_SEC=100000` (10 µs). The RW612 could not go below
+  this — at 1 µs its main loop was STARVED (watchdog stopped after two ticks
+  while ICMP kept answering). That was a consequence of its 1 MHz OS timer; this
+  board's kernel timer is a different peripheral, so the floor must be found
+  again, and by watching `state/watchdog` advance for a full minute rather than
+  by a bring-up check that a starved box passes.
+* The unexplained **~30 µs skew floor** below the tick on the RW612. Re-measure
+  before assuming it is shared.
+* `CONFIG_NET_MAX_CONTEXTS/MAX_CONN=16`. Carried as a PROTOCOL-level lesson, not
+  a silicon one: at the default 6 the box ends up PUBLISHING BUT DEAF.
+* `CONFIG_MAIN_STACK_SIZE=16384`. Deliberately generous. The 4096 default is
+  what overflowed on the RW612 and, silently as an MPU fault with no console, on
+  the Teensy SD path. RAM is 320 KB with ~40 KB in use; this buys one fewer
+  first-boot mystery for nothing.
+* The `NET_PKT_*_STATS` instrumentation, A/B'd as free on the Teensy. Re-verify
+  here — different MAC driver.
+
+### Next, in order
+
+1. Get the board on the bench: boot log on `flexcomm4_lpuart4` (the MCU-Link
+   VCOM, already `zephyr,console`), confirm the PHY announces autonegotiation,
+   confirm USB enumerates both CDCs in the right order (console first).
+2. Confirm `ptp/ns` advances **and check its RATE**, not just that it moves —
+   the RW612 lesson, even though the mechanism that caused it is absent here.
+3. `cmd/save` -> reboot -> confirm config survives, i.e. NVS on the external
+   QSPI behaves as the layout predicts.
+4. Only then the LPADC channel map, designed together with the devicetree pin
+   map rather than bolted on beside it.
