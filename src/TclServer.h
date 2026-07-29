@@ -10,6 +10,7 @@
 #include <condition_variable>
 #include <chrono>
 #include <queue>
+#include <memory>
 
 #include <stdlib.h>
 
@@ -48,18 +49,54 @@
 // Add uWebSockets support
 #include <App.h>
 
+/*
+ * Everything the per-client notification thread touches, with a lifetime
+ * INDEPENDENT of the uWS socket.
+ *
+ * WHY THIS EXISTS. WSPerSocketData lives *inside* the uWS WebSocket object, so
+ * uWS frees it the instant the socket is destroyed -- while the detached
+ * notification thread started in .open is still running. Anything that thread
+ * reaches for through userData is therefore a read of freed memory, and the
+ * loop did it twice per iteration:
+ *
+ *     client_request_t req = userData->notification_queue->front();
+ *     userData->notification_queue->pop_front();
+ *
+ * Freed memory reads back zeroed, so pop_front() ran with this == nullptr and
+ * locked SharedQueue::mutex_ at its offset of 0x30 -- which is exactly the
+ * "KERN_INVALID_ADDRESS at 0x0000000000000030" in the crash reports. The window
+ * is only the gap between those two statements and only opens on disconnect,
+ * which is why it fires during development (many rapid reconnects) and almost
+ * never on a rig where a browser stays connected for hours.
+ *
+ * The queue itself was never the problem -- it is a separate heap allocation.
+ * Only the struct holding the pointer to it died early. So the thread now holds
+ * a shared_ptr to this channel and never dereferences userData at all.
+ *
+ * subscriptions moved in here for a second, independent reason: it is a
+ * std::vector mutated by the event-loop thread (subscribe/unsubscribe) while
+ * the notification thread iterates it, with no synchronization. A push_back
+ * that reallocates during that iteration invalidates it mid-flight. Hence
+ * subs_mutex, which both sides now take.
+ */
+struct WSClientChannel {
+  SharedQueue<client_request_t> *notification_queue = nullptr;
+  std::mutex subs_mutex;
+  std::vector<std::string> subscriptions;
+};
+
 // Add WebSocket per-socket data structure
 struct WSPerSocketData {
   SharedQueue<std::string> *rqueue;
   std::string client_name;
-  std::vector<std::string> subscriptions;
-  
-  // Add datapoint notification queue
-  SharedQueue<client_request_t> *notification_queue;
+
+  /* shared with the notification thread; see WSClientChannel */
+  std::shared_ptr<WSClientChannel> channel;
+
   std::string dataserver_client_id;  // ID for Dataserver registration
 
   // Queue for async eval responses (fed by process thread, drained by event loop)
-  SharedQueue<std::string> *async_responses = nullptr;  
+  SharedQueue<std::string> *async_responses = nullptr;
 };
 
 // To help manage large WebSocket messages (stimdg -> ess/stiminfo)
@@ -426,7 +463,9 @@ public:
   }
     
   template<typename WebSocketType>
-  void process_websocket_client_notifications_template(WebSocketType* ws, WSPerSocketData* userData);
+  void process_websocket_client_notifications_template(WebSocketType* ws,
+						       std::shared_ptr<WSClientChannel> channel,
+						       std::string client_name);
   
   int sourceFile(const char *filename);
   uint64_t now(void) { return ds->now(); }

@@ -9,7 +9,6 @@
     <link rel="stylesheet" href="css/ess_control.css">
     <link rel="stylesheet" href="css/ess_performance.css">
     <link rel="stylesheet" href="css/eyetouch_visualizer.css">
-    <link rel="stylesheet" href="css/mesh_dropdown.css">
     <link rel="stylesheet" href="css/TclTerminal.css">
     <link rel="stylesheet" href="css/page_nav.css">
     <link rel="stylesheet" href="css/project_selector.css">
@@ -22,9 +21,9 @@
                 <h1>ESS Control</h1>
                 <div class="ess-status-indicator" id="status-indicator"></div>
                 <span class="ess-status-text" id="status-text">Connecting...</span>
-                <div id="mesh-dropdown-container"></div>
                 <div id="project-selector-container"></div>
                 <div class="ess-oe-status" id="openephys-status"></div>
+                <div class="ess-stim-status" id="stim-status" hidden title=""></div>
             </div>
             <div class="ess-status-bar-center">
                 <div class="ess-juice-status" id="juice-status" hidden title="">
@@ -44,7 +43,7 @@
                 </div>
             </div>
             <div class="ess-status-bar-right">
-                <button id="sync-btn" title="Sync scripts (ess::sync_base)" onclick="syncScripts()">⟳ Sync</button>
+                <button id="sync-btn" title="Sync scripts (ess::sync_base)" onclick="syncScripts()">⟳<span class="ess-btn-label"> Sync</span></button>
                 <span class="ess-system-state" id="system-state">--</span>
                 <div id="page-nav-container"></div>
             </div>
@@ -283,7 +282,6 @@
     <script src="js/GraphicsRenderer.js"></script>
     <script src="js/ESSControl.js"></script>
     <script src="js/EyeTouchVisualizer.js"></script>
-    <script src="js/mesh_dropdown.js"></script>
     <script src="js/TclTerminal.js"></script>
     <script src="js/PageNav.js"></script>
     

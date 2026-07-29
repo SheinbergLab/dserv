@@ -45,7 +45,14 @@ body.ess-app {
 /* Status Bar */
 .ess-status-bar {
     display: grid;
-    grid-template-columns: 1fr auto 1fr;
+    /* minmax(0, ...) on every track. A bare `1fr` is minmax(AUTO, 1fr), and that
+       auto floor is what stopped the side columns shrinking below their content,
+       so the centre got squeezed and the hostname ellipsised first -- the machine
+       name being the one thing here you cannot infer from anything else on
+       screen. The centre needs the same treatment for the opposite reason: a
+       bare `auto` cannot shrink either, so at narrow widths it overflowed its
+       track and drew on top of the Sync button. */
+    grid-template-columns: minmax(0, 1fr) minmax(0, auto) minmax(0, 1fr);
     align-items: center;
     gap: 12px;
     padding: 8px 16px;
@@ -61,6 +68,11 @@ body.ess-app {
     align-items: center;
     gap: 12px;
     min-width: 0;
+    /* NOT overflow:hidden. Both columns host absolutely-positioned dropdown
+       menus (project selector, page nav) that must escape the 29px-tall bar,
+       and clipping here silently swallows them. Over-wide content is instead
+       prevented at source: the items below either shrink, ellipsise, or drop
+       their labels on a narrow bar. */
 }
 
 .ess-status-bar-right {
@@ -73,6 +85,8 @@ body.ess-app {
     align-items: center;
     gap: 8px;
     min-width: 0;
+    max-width: 100%;
+    overflow: hidden;   /* truncate inside the track rather than spill out of it */
 }
 
 .ess-hostname-display {
@@ -81,7 +95,7 @@ body.ess-app {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    max-width: min(40vw, 320px);
+    max-width: min(50vw, 420px);
     text-align: center;
 }
 
@@ -181,6 +195,8 @@ body.ess-app {
     font-size: 18px;
     font-weight: 600;
     color: var(--ess-accent);
+    /* never let it wrap onto a second line and grow the whole bar */
+    white-space: nowrap;
 }
 
 .ess-status-indicator {
@@ -189,6 +205,9 @@ body.ess-app {
     border-radius: 50%;
     background: var(--ess-error);
     transition: background 0.3s;
+    /* an empty div's min-content width is 0, so without this the connection
+       dot silently shrank to nothing on a crowded bar */
+    flex-shrink: 0;
 }
 
 .ess-status-indicator.connected {
@@ -208,6 +227,11 @@ body.ess-app {
 .ess-status-text {
     font-size: 13px;
     color: var(--ess-text-secondary);
+    /* give up width before the hostname does */
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
 }
 
 .ess-system-state {
@@ -267,6 +291,62 @@ body.ess-app {
 .ess-oe-status.acquiring .ess-oe-dot { background: var(--ess-warning); }
 .ess-oe-status.recording .ess-oe-dot {
     background: var(--ess-success);
+    animation: pulse 1s infinite;
+}
+
+/* Stim (stim2 display) connection indicator.
+   Mirrors ess/rmt_connected, which the rmt module republishes on every
+   transition. Disconnected is the LOUD state here, not the quiet one: the
+   whole point is that a rig running against a dark screen currently looks
+   identical to a working one. */
+.ess-stim-status {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    color: var(--ess-text-muted);
+    padding: 3px 8px;
+    border-radius: 4px;
+    background: var(--ess-bg-panel);
+    white-space: nowrap;
+    /* whatever else the bar gives up, it is not this one */
+    flex-shrink: 0;
+}
+
+/* The project selector is the widest thing on the left and the most
+   recoverable -- it is also shown inside the Experiment Control panel -- so it
+   is what yields when the bar runs out of room. min-width only: no overflow
+   clipping, or its own dropdown gets swallowed. */
+#project-selector-container {
+    min-width: 0;
+}
+
+.ess-stim-status[hidden] {
+    display: none;
+}
+
+.ess-stim-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--ess-text-muted);
+    flex-shrink: 0;
+}
+
+.ess-stim-status.connected .ess-stim-dot { background: var(--ess-success); }
+
+.ess-stim-status.disconnected {
+    color: var(--ess-error);
+    background: rgba(248, 113, 113, 0.12);
+    border: 1px solid rgba(248, 113, 113, 0.35);
+    padding: 2px 7px;
+}
+
+.ess-stim-status.disconnected .ess-stim-dot { background: var(--ess-error); }
+
+/* strict mode (ess/stim_required): not merely informational -- nothing will
+   start in this state, so it gets the pulse */
+.ess-stim-status.required.disconnected .ess-stim-dot {
     animation: pulse 1s infinite;
 }
 
@@ -1843,9 +1923,63 @@ select.ess-param-select {
     .ess-grid {
         grid-template-columns: 280px 295px 1fr;
     }
-    
+
     .ess-column-extra {
         display: none;
+    }
+
+    /*
+     * Status bar declutter.
+     *
+     * This tier rather than a narrower one because the bar runs out of room
+     * long before the grid does: at 1280 the h1 was wrapping onto a second line
+     * and the connection word was ellipsising to "Connec...". Everything below
+     * removes content outright, because the alternative -- letting flex items
+     * shrink past their own text -- just clips mid-word (the Sync button read
+     * "ync"). Each item either keeps an icon that still says what it is, or is
+     * recoverable from somewhere else on screen.
+     */
+
+    /* "ESS Control" is in the browser tab title and on the page nav; the
+       connection word is already said by the coloured dot beside it, and the
+       hostname reads "[name] - disconnected" when that matters. The hostname
+       itself is the one thing here you cannot get anywhere else, so it stays. */
+    .ess-status-bar h1,
+    .ess-status-text {
+        display: none;
+    }
+
+    /* keep the STIM state, drop the host name it points at */
+    .ess-stim-host {
+        display: none;
+    }
+
+    .ess-btn-label,
+    .ess-status-bar-right .page-nav-label {
+        display: none;
+    }
+
+    .ess-status-bar-right > * {
+        flex-shrink: 0;
+    }
+
+    /* The project selector absorbs the remaining pressure: drop its "Project:"
+       label and release the 160px floor on the button so the name inside can
+       ellipsise (it already has overflow/text-overflow of its own). This is
+       what keeps the left column inside its track now that the column itself
+       no longer clips.
+
+       Scoped through .ess-status-bar-left for two reasons: it only changes the
+       header instance, not the selector wherever else it is used; and it has to
+       out-specify project_selector.css, which sets min-width:160px and is
+       linked AFTER this file -- a media query adds no specificity, so the bare
+       class selector would lose the cascade. */
+    .ess-status-bar-left .project-selector-label {
+        display: none;
+    }
+
+    .ess-status-bar-left .project-selector-button {
+        min-width: 0;
     }
 }
 

@@ -92,13 +92,13 @@ async function init() {
         initEyeTouchVisualizer();
         initStimRenderer();
         initPerformanceDisplay();
-        initMeshManager();
         initEyeSettings();
         initButtonControls();
         initJoystickControls();
         initSliderControls();
 	initProjectSelector();
         initOpenEphysStatus();
+        initStimStatus();
         initHostnameDisplay();
         initJuiceIndicator();
         initBatteryIndicator();
@@ -152,6 +152,7 @@ function requestInitialData() {
           ess/session_stats
           em/settings mesh/peers
           openephys/status
+          ess/rmt_connected ess/rmt_host ess/stim_required
           system/hostname system/os
           powermon/pct powermon/charging powermon/hrs_remaining powermon/v powermon/a powermon/w
           juicer/juice_level juicer/reward_mls juicer/reward_number
@@ -328,6 +329,85 @@ function initOpenEphysStatus() {
     });
 
     log('Open Ephys status initialized', 'info');
+}
+
+/**
+ * Stim (stim2 display) connection indicator state
+ */
+let stimConnected = null;      // null = not yet reported
+let stimHost = '';
+let stimRequired = false;
+
+/**
+ * Update the stim connection chip in the status bar
+ *
+ * Deliberately stays visible when disconnected rather than hiding like the
+ * OpenEphys chip: an absent display is exactly the condition this exists to
+ * make impossible to miss on a deployed rig. It only hides before the first
+ * report, when we genuinely don't know.
+ */
+function updateStimStatus() {
+    const container = document.getElementById('stim-status');
+    if (!container) return;
+
+    if (stimConnected === null) {
+        container.hidden = true;
+        return;
+    }
+
+    const where = stimHost ? ` ${stimHost}` : '';
+    container.hidden = false;
+    // host lives in its own span so CSS can drop it on a narrow bar while
+    // keeping the part that matters
+    container.innerHTML = '<div class="ess-stim-dot"></div>' +
+                          '<span class="ess-stim-label"></span>' +
+                          '<span class="ess-stim-host"></span>';
+    const label = container.querySelector('.ess-stim-label');
+    const hostEl = container.querySelector('.ess-stim-host');
+
+    if (stimConnected) {
+        container.className = 'ess-stim-status connected';
+        label.textContent = 'STIM';
+        hostEl.textContent = stimHost || '';
+        container.title = `Stimulus display connected${where ? ` (${stimHost})` : ''}`;
+    } else {
+        container.className = stimRequired
+            ? 'ess-stim-status disconnected required'
+            : 'ess-stim-status disconnected';
+        label.textContent = 'STIM: not connected';
+        container.title = stimRequired
+            ? `No stimulus display at ${stimHost || 'configured host'} — stim is REQUIRED, so the system will refuse to start`
+            : `No stimulus display at ${stimHost || 'configured host'} — stimulus commands are being silently discarded`;
+    }
+}
+
+/**
+ * Initialize stim connection indicator from ess/rmt_connected
+ *
+ * ess/rmt_connected is published by the rmt module itself on every transition
+ * (open, close, failed I/O, peer EOF), so this chip tracks the live link and
+ * not just what was true when the system loaded.
+ */
+function initStimStatus() {
+    if (!document.getElementById('stim-status')) return;
+
+    dpManager.subscribe('ess/rmt_connected', (data) => {
+        const raw = data.value ?? data.data ?? '';
+        stimConnected = parseInt(raw, 10) > 0;
+        updateStimStatus();
+    });
+
+    dpManager.subscribe('ess/rmt_host', (data) => {
+        stimHost = String(data.value ?? data.data ?? '');
+        updateStimStatus();
+    });
+
+    dpManager.subscribe('ess/stim_required', (data) => {
+        stimRequired = parseInt(data.value ?? data.data ?? '', 10) > 0;
+        updateStimStatus();
+    });
+
+    log('Stim status indicator initialized', 'info');
 }
 
 /**
@@ -824,25 +904,21 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
-let meshDropdown = null;
 let tclTerminal = null;
 let activeBottomTab = 'console';
 
 // Initialize when DOM is ready
 document.addEventListener('DOMContentLoaded', init);
 
-// Initialize mesh dropdown after connection is established
-function initMeshManager() {
-    if (connection && !meshDropdown) {
-        const container = document.getElementById('mesh-dropdown-container');
-        if (container) {
-            meshDropdown = new MeshDropdown(container, connection, {
-                guiPath: '/ess_control.html',
-                dpManager: dpManager
-            });
-        }
-    }
-}
+/*
+ * The mesh peer dropdown (a picker that opened another host's ess_control)
+ * lived here. Removed from this page: peers are advertised with addresses that
+ * are frequently unroutable from wherever the browser happens to be -- another
+ * subnet, a private rig network, a different site -- so most entries led to a
+ * page that could not load. A menu whose items are expected to fail is worse
+ * than no menu. mesh/peers itself is still used, by ESSControl's remote-config
+ * server list, and js/mesh_dropdown.js is still in the tree for other pages.
+ */
 
 // Initialize Tcl terminal
 function initTerminal() {
