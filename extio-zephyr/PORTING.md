@@ -3920,3 +3920,110 @@ Everything timing. No RTT, no loopback, no scope skew, no tick-floor probe on
 this silicon. The conf's carried-over values (10 µs tick especially) remain
 untested guesses. ENET_QOS is a different MAC and this is a different USB
 controller; nothing above changes that.
+
+---
+
+## 2026-07-28 (end, later still) — LPADC up, and a jumper that answered two questions
+
+Block #7 on the board it was always meant for. **The MCP3204's entire problem
+class — SPI, chip select, a Click board seated or not — does not exist here.**
+The converter is on the die.
+
+### The pin decision: spend nothing
+
+Box ain channels 0/1/2 = **ADC0_A1 / B1 / A2 = P4_15 / P4_19 / P4_23**, which are
+J8 pins 20/24/28. **No pinmux change at all** — `pinmux_lpadc0` in the board's
+own pinctrl already brings out exactly these three, and they cost **zero box
+GPIO** because box pins live on gpio0 and these are port 4.
+
+The Arduino analog strip was the obvious alternative and is the wrong trade
+*today*: A2/A3/A4/A5 are P0_14/P0_22/P0_15/P0_23 = box pins 14/22/15/23, one of
+them SW2. Four of our eleven digital pins, spent on channels nothing needs yet.
+Recorded in the overlay as the extension path, not as a rejection.
+
+### box_adc.c learned that an index is not an input
+
+It assumed **channel n IS input n** — true of an MCP3204, false of the LPADC,
+where `channel_id` indexes a CMD-register slot and `zephyr,input-positive` picks
+the pad. Left alone, `probe_channels()` would have "succeeded" for all 15 driver
+slots and reported a channel count describing nothing physical.
+
+Now: if the node declares `channel@N` children, **they are the map** and probing
+is not used. The MCP3204 path is untouched. The box's flat wire index is still
+`channel_id`, so the contract does not move — it just resolves to a pad the
+BOARD chose, which is the same principle as the devicetree pin-map proposal.
+
+### `adccal`: one jumper, two unanswerable questions
+
+`DAC0_OUT` is **P4_2 (J1-4)** and the board already pinmuxes it, so a single
+jumper to an analog input turns both of these into measurements:
+
+* **which pad is channel N** — a wrong devicetree map reports just as
+  confidently as a right one;
+* **what the ADC's real full scale is** — `CFG[REFSEL]`, where the FSL headers
+  only offer Alt1/Alt2/Alt3.
+
+Added in `box_console.c`, deliberately **not** in `box_cli.h`: that grammar is
+shared verbatim with the deployed RP2350 boxes, which have no DAC, and "CLI
+overstates the box" is already an open complaint above.
+
+### Result 1 — the map is PROVEN, with a negative control
+
+Sweeping the DAC, **ch0 goes 1178 → 4095 monotonically while ch1 wanders
+386–595 with no correlation.** The negative control is what makes this
+specificity rather than mere responsiveness — without it, a short or a coupling
+path would look identical to a correct map.
+
+### Result 2 — REFSEL settled by measurement, and the Eyelink problem dissolves
+
+The board's default `voltage-ref = <1>` is the on-chip VREF regulator, which
+**caps at 2.1 V** (`regulator-max-microvolt`) — so a 0–3.3 V eye feed genuinely
+does not fit, and it is not a tuning knob. Sweeping the setting:
+
+| `voltage-ref` | behaviour | full scale |
+|---|---|---|
+| 1 (board default) | saturates at DAC code ~2256 | 1.8 V |
+| **0** | **no saturation, `adc_code == dac_code`** | **the DAC's** |
+| 2 | identical to 0 | " |
+| 3 | identical to 0 | " |
+
+**A 12-bit DAC and a 12-bit ADC reading code-for-code** (1023→1026, 2047→2052,
+3071→3076, 4095→4094) is the signature of the two sharing a reference. Chained
+with the 1.8 V run — where a known ADC reference implied a 3.3 V DAC to ~1% —
+that lands the full scale at ~3.3 V. Confirmed after the change:
+
+    dac 1023 -> 829 mV   (824 expected)
+    dac 2047 -> 1655 mV  (1650)
+    dac 3071 -> 2480 mV  (2475)
+    dac 4095 -> 3299 mV  (3300)
+
+So **no divider, no OPAMP, no external parts** — one devicetree line. Channels
+must be `ADC_REF_EXTERNAL0`; EXTERNAL1 makes the driver program the vref
+regulator and use that instead.
+
+**The trade is real and is recorded in the overlay:** 0.81 mV/LSB at 3.3 V
+against 0.44 at 1.8 V, and VDDA is noisier than a bandgap. A low-range precision
+channel should go back to EXTERNAL1.
+
+**And a joystick needs none of this.** It is a potentiometer, so its span is
+whatever supply drives it; power the pot from the reference and the measurement
+is ratiometric, with reference drift cancelling. Worth knowing before anyone
+builds a divider for one.
+
+### Sampling, and one number that looked worse than it was
+
+50 Hz, **1000 sweeps → 1000 blocks over 20 s, zero ongoing loss**,
+`sweep_max_us` 114, `late` 0. A first reading showed `dropped=354` against 512
+sweeps, which looks like a 69 % loss rate; it is **frozen** — a startup burst
+while the box rebooted and the uplink was not yet draining. Sampling counters
+have to be read as RATES; a single snapshot of a monotonic counter says nothing
+about the steady state.
+
+### Known and unexplained: the DAC floors at ~517 mV
+
+Codes 0 and 511 give an identical reading, reproducibly across runs and across
+reference settings. **Not** the `buffered` flag — `dac_mcux_lpdac.c` never reads
+that field — and `low-power-mode` is not set in the board dts. The bottom ~700
+DAC codes are simply unusable. This is a property of the test SOURCE, not of the
+ADC, and it did not affect either result above; it matters only if something
+wants to synthesise a near-zero voltage on-board.

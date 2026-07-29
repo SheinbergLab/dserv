@@ -111,9 +111,9 @@
  * exactly like the pin-map proposal in PORTING.md.
  */
 &vref {
-	/* The LPADC's reference comes from this regulator in EXTERNAL1 mode.
-	 * High-power mode is what the in-tree ADC sample uses; the buffer has to
-	 * drive the converter's sampling capacitor. */
+	/* Only actually used in EXTERNAL1 mode, which we do NOT use (see below).
+	 * Left configured so that switching a channel back to the precision 1.8 V
+	 * reference is a one-line change and not a re-derivation. */
 	regulator-initial-mode = <NXP_VREF_MODE_HIGH_POWER>;
 };
 
@@ -122,33 +122,50 @@ box_adc: &lpadc0 {
 	#size-cells = <0>;
 
 	/*
-	 * 1800 mV FULL SCALE, AND THAT IS A REAL CONSTRAINT, NOT A DEFAULT.
+	 * ---- 3300 mV FULL SCALE, MEASURED, NOT ASSUMED ----
 	 *
-	 * This vref is the on-chip regulator, and the SoC devicetree caps it at
-	 * `regulator-max-microvolt = 2100000` -- 2.1 V. **An Eyelink-style 0-3.3 V
-	 * feed does not fit**, which is the same 0-3.3 V gotcha recorded against
-	 * the MCP3204 work, arriving from the opposite direction: there the
-	 * converter wanted 3.3 V and got it, here the converter cannot reach it.
+	 * The board's own dts sets `voltage-ref = <1>`, which is the on-chip VREF
+	 * regulator. That caps at 2.1 V (`regulator-max-microvolt`) and the in-tree
+	 * sample runs it at 1.8 V -- and **an Eyelink-style 0-3.3 V feed does not
+	 * fit in 1.8 V**. It is not a tuning knob; the regulator cannot go there.
 	 *
-	 * Three ways out, UNDECIDED and deliberately not guessed at here:
-	 *   1. a CFG[REFSEL] setting that selects VDDA (3.3 V) instead of this
-	 *      regulator -- the board sets `voltage-ref = <1>` and the FSL header
-	 *      only calls the options Alt1/Alt2/Alt3, so which is which needs the
-	 *      reference manual or an experiment;
-	 *   2. a 2:1 divider on the input, costing a bit of resolution;
-	 *   3. the on-chip OPAMP (opamp0 is enabled and pinmuxed on this board),
-	 *      which would also buffer a high-impedance source.
+	 * CFG[REFSEL] is the way out, but the FSL headers only call the options
+	 * Alt1/Alt2/Alt3, so which one is VDDA is a reference-manual question. It
+	 * was settled instead by MEASUREMENT, using the `adccal` DAC->ADC sweep
+	 * (box_console.c) with a jumper from DAC0_OUT (P4_2 / J1-4) to J8-20:
 	 *
-	 * 1800 mV is used now because it is the configuration the in-tree sample
-	 * proves. Anything reading above ~1.8 V will SATURATE, and a saturated
-	 * eye trace looks like a badly calibrated eye, not like a range error --
-	 * so settle this before trusting any eye data.
+	 *   voltage-ref = 1   ADC saturates at DAC code ~2256      -> full scale 1.8 V
+	 *   voltage-ref = 0   NO saturation, adc_code == dac_code   -> full scale = the DAC's
+	 *   voltage-ref = 2   identical to 0
+	 *   voltage-ref = 3   identical to 0
+	 *
+	 * A 12-bit DAC and a 12-bit ADC reading code-for-code (1023->1026,
+	 * 2047->2052, 3071->3076, 4095->4094) is the signature of the two SHARING a
+	 * reference. Chained with the earlier run -- where a known-1.8 V ADC
+	 * reference implied a 3.3 V DAC to within ~1% -- that puts this at ~3.3 V.
+	 *
+	 * So no divider and no OPAMP are needed for a 0-3.3 V source; it is a
+	 * devicetree line. `zephyr,reference` must be EXTERNAL0 for this: EXTERNAL1
+	 * makes the driver program the vref regulator and use it instead.
+	 *
+	 * THE TRADE, stated because it is a real one: full scale 3.3 V gives
+	 * 0.81 mV/LSB against 0.44 mV/LSB at 1.8 V -- half the resolution -- and
+	 * VDDA is a noisier reference than a dedicated bandgap. For a 0-3.3 V eye
+	 * feed the range is not optional. For a low-range precision signal, put
+	 * that channel back on EXTERNAL1 + `voltage-ref = <1>` and 1800 mV.
+	 *
+	 * A JOYSTICK NEEDS NEITHER, and this is worth knowing before anyone builds
+	 * a divider for one: a joystick is a potentiometer, so its output span is
+	 * whatever supply drives it. Power the pot from the reference and it is
+	 * ratiometric -- reference drift cancels out of the measurement entirely.
 	 */
+	voltage-ref = <0>;
+
 	channel@0 {
 		reg = <0>;
 		zephyr,gain = "ADC_GAIN_1";
-		zephyr,reference = "ADC_REF_EXTERNAL1";
-		zephyr,vref-mv = <1800>;
+		zephyr,reference = "ADC_REF_EXTERNAL0";
+		zephyr,vref-mv = <3300>;
 		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
 		zephyr,resolution = <12>;
 		zephyr,input-positive = <MCUX_LPADC_CH1A>;   /* P4_15, J8-20 */
@@ -157,8 +174,8 @@ box_adc: &lpadc0 {
 	channel@1 {
 		reg = <1>;
 		zephyr,gain = "ADC_GAIN_1";
-		zephyr,reference = "ADC_REF_EXTERNAL1";
-		zephyr,vref-mv = <1800>;
+		zephyr,reference = "ADC_REF_EXTERNAL0";
+		zephyr,vref-mv = <3300>;
 		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
 		zephyr,resolution = <12>;
 		zephyr,input-positive = <MCUX_LPADC_CH1B>;   /* P4_19, J8-24 */
@@ -167,8 +184,8 @@ box_adc: &lpadc0 {
 	channel@2 {
 		reg = <2>;
 		zephyr,gain = "ADC_GAIN_1";
-		zephyr,reference = "ADC_REF_EXTERNAL1";
-		zephyr,vref-mv = <1800>;
+		zephyr,reference = "ADC_REF_EXTERNAL0";
+		zephyr,vref-mv = <3300>;
 		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
 		zephyr,resolution = <12>;
 		zephyr,input-positive = <MCUX_LPADC_CH2A>;   /* P4_23, J8-28 */
