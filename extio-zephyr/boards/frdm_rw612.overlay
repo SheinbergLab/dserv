@@ -125,7 +125,14 @@
 		group0 {
 			pinmux = <IO_MUX_GPIO15
 				  IO_MUX_GPIO20
-				  IO_MUX_GPIO27>;
+				  IO_MUX_GPIO27
+				  /* mikroBUS CS. Freeing IO10 from the flexcomm SS1
+				   * function is not enough -- the pad still has to be
+				   * muxed TO GPIO for a cs-gpios write to reach it.
+				   * Without this the select floated: MISO was undriven
+				   * and every sample came back rail-to-rail (0 / 4095)
+				   * instead of a resting stick's mid-scale. */
+				  IO_MUX_GPIO10>;
 			slew-rate = "normal";
 		};
 	};
@@ -153,12 +160,41 @@
  * 4-channel sweep is then ~100 us, which is why sampling never runs on the
  * service loop.
  */
+/* Mux ONLY the three data signals, so IO10 stays a plain GPIO for the chip
+ * select. The board's pinmux_flexcomm1_spi cannot be used here: its names are
+ * misleading -- IO_MUX_FC1_SPI_SS0 is not "the SS0 pin" but a composite muxing
+ * IO6/7/8/9, and SS1 muxes IO7/8/9/10 -- so including it hands IO10 to the
+ * flexcomm peripheral as a hardware select, and a cs-gpios write to that pad
+ * goes nowhere. That is why every sample read exactly 0: clock and data were
+ * fine, nothing ever asserted CS, and the MCP3204 never drove MISO.
+ *
+ * The per-pin macros are what make this expressible. mikroBUS wiring on this
+ * board: SCK=IO7, MISO=IO8, MOSI=IO9, CS=IO10. */
+&pinctrl {
+	pinmux_box_mikrobus_spi: pinmux_box_mikrobus_spi {
+		group0 {
+			pinmux = <IO_MUX_FC1_SPI_SS0_IO7      /* SCK  */
+				  IO_MUX_FC1_SPI_SS0_IO8      /* MISO */
+				  IO_MUX_FC1_SPI_SS0_IO9>;    /* MOSI */
+			slew-rate = "ultra";
+		};
+	};
+};
+
 &mikrobus_spi {
 	status = "okay";
-	pinctrl-0 = <&pinmux_flexcomm1_spi>;
+	pinctrl-0 = <&pinmux_box_mikrobus_spi>;
 	pinctrl-names = "default";
 	#address-cells = <1>;
 	#size-cells = <0>;
+
+	/* GPIO chip select, and reg = <0>.
+	 *
+	 * This SoC's flexcomm SPI has exactly ONE hardware select: the driver
+	 * computes max_slave from FSL_FEATURE_SPI_SSEL_COUNT and rejected reg = <1>
+	 * outright with `Slave 1 is greater than max 0`, timing out every transfer.
+	 * So the socket's CS on IO10 has to be driven as a GPIO, and `reg` indexes
+	 * the cs-gpios list rather than a hardware select. */
 	cs-gpios = <&mikrobus_header 2 GPIO_ACTIVE_LOW>;
 
 	box_adc: adc@0 {
