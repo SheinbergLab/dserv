@@ -3417,3 +3417,44 @@ that is the Pi's default route while the boxes are on `eth0`. It proved nothing.
 Pin the interface (`%eth0`) when testing link-local reachability.
 
 **Ended 19/19 on box1 + box2**, both PTP-anchored, both firing.
+
+## 2026-07-28 (end) — the MCP3204 path is PARKED, and why
+
+box3 sits at rig_check 11/11 with the analog switched off (`mcp/enable 0`,
+persisted). Everything above the converter is proven; the converter itself never
+answered. Parked rather than abandoned — the work below is all reusable.
+
+**PROVEN, on hardware:** sweeps at exactly 1000/s with `late` and `sweep_max_us`
+frozen after boot; group packing; decimate + batch; the 12-byte block header
+decoding byte-for-byte (`ver=1 mask=3 nchan=2 count=12 interval_us=1000`);
+publishing to dserv as `state/ain/<label>`; **live reconfiguration with no
+reboot**; and the `ain/dbg/*` counters. `box_ain_group.h` also passes all 24 host
+tests with `AIN_MAX_CH=8`.
+
+**NOT PROVEN:** a single real sample. Every read came back `0` or `4095` --
+all-zeros or all-ones, the "bus nobody is driving" signature from the MDIO work
+the same morning.
+
+**Two findings worth keeping, both from the console rather than from reasoning:**
+
+- `E: Slave 1 is greater than max 0` -- this SoC's flexcomm SPI has exactly ONE
+  hardware chip select. `reg = <1>` is rejected outright and every transfer times
+  out at ~70 ms. A mikroBUS CS on IO10 must be a GPIO.
+- **`pinmux_flexcomm1_spi` cannot be used with a GPIO chip select.** The macro
+  names mislead: `IO_MUX_FC1_SPI_SS0` is not "the SS0 pin", it is a composite
+  muxing IO6/7/8/9, and SS1 muxes IO7/8/9/10 -- so it hands IO10 to the
+  peripheral and a `cs-gpios` write to that pad goes nowhere.
+
+**Where it stopped:** per-pin muxing of SCK/MISO/MOSI (IO7/8/9) plus IO10 as
+GPIO got transfers completing (`sweeps` 0 -> 28832) but the data stayed
+rail-to-rail. Remaining candidates are all on the wire -- whether IO7/8/9 under
+the SS0 function encoding really are SCK/MISO/MOSI, whether CS toggles on IO10,
+whether the Click is seated and powered -- and **none can be settled by reading
+source. Put a scope on the mikroBUS SCK/CS/MISO pins.** Three guess-and-flash
+cycles produced nothing; that is the anti-pattern the MDIO hunt cured the same
+morning and I repeated it anyway.
+
+**Why parking is cheap:** `box_adc.h` is a sweep over Zephyr's ADC API, so the
+group layer never learned which converter is fitted. Moving to the MCXN947's
+on-chip `lpadc0` is a devicetree + Kconfig change with `box_ain_group.h` and
+`box_ain.c` untouched -- and it deletes the chip-select problem entirely.
