@@ -3668,3 +3668,156 @@ so*, not as facts:
    QSPI behaves as the layout predicts.
 4. Only then the LPADC channel map, designed together with the devicetree pin
    map rather than bolted on beside it.
+
+**Steps 1-3 are DONE — see the next section.** Step 4 is the open work.
+
+---
+
+## 2026-07-28 (end, later) — MCXN947 first boot: it all worked, and the shell lied
+
+Board on the bench the same evening. **Every bring-up step passed on the first
+image**, which has not happened before on this project — the RW612 took two
+evenings to reach the equivalent point. The one real defect found was in a
+setting *we* copied across, not in the board.
+
+### Flashing: external J-Link, not the onboard probe
+
+`pyocd` has no built-in `mcxn947` target and would need an
+`NXP.MCXN947_DFP` pack download; `linkserver` is not installed. A Segger J-Link
+EDU Mini on the board's **10-pin SWD header J23, with jumper J19 shorted**, works
+with the in-tree runner and no downloads:
+
+```sh
+west flash -r jlink -d build-mcxn947
+```
+
+J-Link Commander V9.54 knows `MCXN947_M33_0`. Connecting halted the core cleanly
+(CM33 with security extensions), and — worth knowing — **attaching the probe to a
+running box does not disturb it**: the box kept answering its console across
+several J-Link sessions, including the 120 s register-sampling run below.
+
+**J19 shorted disables the onboard MCU-Link's SWD, but its VCOM survives** and
+stays the Zephyr console. Both USB cables want to be in: J17 for VCOM + probe
+power, and the board's own HS USB-C for the box's two CDCs.
+
+### Results
+
+| check | result |
+|---|---|
+| Zephyr boots | `*** Booting Zephyr OS build v4.4.0-9159 ***` |
+| MDIO + PHY | `I: PHY (0) ID 7C121` (Microchip LAN874x family) |
+| link | **100 Mb, full duplex** |
+| both CDCs, console FIRST | `usbmodem1301` console, `usbmodem1303` data |
+| DHCP | `192.168.88.36`, `link=1` |
+| PTP hardware clock | `PTP hw clock: ready=1  now=5115039040 ns` |
+| NVS persistence | `persist store -> config LOADED from flash` |
+| dserv uplink | `dserv.live=connected uplink=eth cmds_rx=1` |
+
+`ready=1` on the first image is the whole point of the driver reading in the
+previous section: no dummy pinctrl state, no clock-ID patch, no evening lost.
+
+### THE ONE REAL DEFECT: `CONFIG_SHELL` corrupts the boot log
+
+Copied from `frdm_rw612.conf`, where it earns its place. Here it did two bad
+things at once:
+
+1. **The shell never accepted input at all.** No echo, no prompt on demand;
+   only the boot-time prompt ever appeared. So it was useless as a diagnostic
+   before it did any damage. (Cause not chased — it was removed instead.)
+2. **Shell output and `LOG_MODE_MINIMAL` output interleave on the same UART
+   with no mutual exclusion and shred each other.**
+
+The evidence, same board, same line, shell on vs off:
+
+    with shell:   Y0) Lnk speed 10 Mb,ulldpe
+    without:      I: PHY (0) Link speed 100 Mb, full duplex
+
+**Read literally, the corrupted line says the rig negotiated a 10 Mb link.** It
+is 100. A wrong fact, arriving through the one channel we use to establish
+facts, in a form that looks like a reading rather than like damage — and it
+would have quietly poisoned every timing measurement taken afterwards. I nearly
+recorded it. What saved it was noticing that characters were missing *scattered
+mid-line*, which is not what UART overrun looks like; overrun truncates.
+
+**A boot log that lies is worse than no shell.** `CONFIG_SHELL` and friends are
+now commented out in the board conf with this reasoning attached. Build drops
+314 KB -> 218 KB as a side benefit. If the shell is ever wanted here, route logs
+*through* it (`CONFIG_SHELL_LOG_BACKEND`) instead of letting both own the UART —
+and fix the input path first, or it buys nothing.
+
+Note this combination is also live in `frdm_rw612.conf`. It was never observed
+to corrupt anything there, but it was never specifically looked for either.
+**Worth a deliberate look before trusting an RW612 boot log.**
+
+### PTP: not just running — LOCKED to the rig grandmaster, unconfigured
+
+The rate check the section above insists on, done with the box left running and
+the ENET_QOS system-time registers sampled directly over SWD:
+
+    ENET_QOS base 0x40100000
+      +0xB08  MAC_SYSTEM_TIME_SECONDS
+      +0xB0C  MAC_SYSTEM_TIME_NANOSECONDS   (mask 0x7FFFFFFF)
+
+Two reads in ONE J-Link session separated by its own `sleep 120000`, so the
+interval is a single host-timed span rather than two process launches:
+
+    PTP delta 120.001886 s over 120 s  ->  +15.7 ppm
+
+**Do not over-read that number.** Command latency at each read bounds this
+method at roughly +/-25 ppm, so +15.7 is inside its own noise. What it
+establishes is the ABSENCE of gross mis-scaling — the RW612's 0.14996x was
+-850,000 ppm and would have been unmissable.
+
+**The seconds register was the real find.** It reads wall-clock epoch time, not
+a counter that started near zero at boot (the banner shows it at ~5 s). Against
+the host:
+
+    PTP - host UTC = +36.977 s
+
+**37 s is exactly the TAI-UTC offset**, and TAI is the timescale PTP runs on. So
+`CONFIG_PTP` found the rig's existing ptp4l grandmaster and disciplined the
+clock **on first boot with no configuration at all**. The ~-23 ms residual is
+the measurement method (the register read precedes the host stamp), not sync
+error — real sync quality needs the +/-100 ns-class harness used on the RW612.
+
+This also reframes the rate figure: with the servo steering, +15.7 ppm is not
+the crystal's error, it is the measurement floor.
+
+### Talking to dserv: mDNS resolved to the WRONG INTERFACE
+
+`raspberrypi.local` -> **192.168.0.26**, the Pi's house-LAN side. The rig-side
+address is **192.168.88.46**, on the box's own subnet. A box configured from the
+mDNS answer would have pointed at an address it cannot route to.
+
+Second trap in the same step: **`mode=auto` picks USB whenever USB is plugged
+in**, and a USB uplink carries frames to the machine holding the cable — this
+Mac — not to the Pi. Reaching dserv over the rig network needs `mode eth`
+explicitly.
+
+    dserv ip 192.168.88.46
+    mode eth
+    save
+
+`dserv.live` went to `connected` **without a reboot** (config applies live), and
+`cmds_rx` reached 1 shortly after — so registration, dserv's connect-back, and
+the downlink all work. The box is a live extio box on the rig.
+
+### Bench gotchas worth not rediscovering
+
+* **A J-Link reset re-enumerates the board's USB**, so a capture held across the
+  reset dies with `OSError: [Errno 6] Device not configured`. Reopen the CDC
+  after the reset rather than holding a handle through it. The boot banner is
+  still catchable — poll for the device node and open the instant it returns.
+* **The box console needs DTR asserted.** `cat /dev/cu.*` deliberately does not
+  raise it, so it silently reads nothing. Use pyserial with `s.dtr = True`.
+  Likewise `stty -f` settings revert when `cat` reopens the port — set the baud
+  on the open handle instead. Both cost a cycle here.
+* The box CLI command is **`dump`**, not `state`. On a fresh box `dump` prints
+  nothing, which is correct and looks like a hang.
+
+### Still unmeasured
+
+Everything timing. No RTT, no loopback, no scope skew, no tick-floor probe on
+this silicon. The conf's carried-over values (10 µs tick especially) remain
+untested guesses. ENET_QOS is a different MAC and this is a different USB
+controller; nothing above changes that.
