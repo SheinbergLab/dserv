@@ -607,6 +607,105 @@ Tests/tools that hardcode pin numbers and will need updating:
 **Deployed Pico boxes are unaffected** — this is per-board devicetree; their
 `box pin n = GP n` semantics are unchanged.
 
+## PROPOSAL: zero-touch dserv discovery — who advertises to whom, 2026-07-28
+
+**Status: proposed, not implemented.** Prompted by the MCXN947 bring-up, where
+pointing a box at dserv by hand went wrong in a way a name lookup cannot fix.
+
+### The motivating failure, concretely
+
+`raspberrypi.local` resolves to **192.168.0.26** — the Pi's house-LAN side. The
+address dserv is actually reachable on from the rig is **192.168.88.46**. A box
+configured from the mDNS answer points somewhere it cannot route, and says
+`dserv.live=n/a` while looking otherwise healthy.
+
+**This is structural, not a misconfiguration.** A multi-homed host has no way to
+know which of its addresses the asker meant, so a NAME can always resolve to the
+wrong interface. **An advert sent out of the interface dserv is listening on
+carries the right address by construction.** That is the real argument for
+discovery here — not convenience.
+
+### Half of it already exists, pointing the OTHER way
+
+Verified in the source, not remembered:
+
+* `wiznet-io/pico/wizchip_dserv_config.c:361` — every **Ethernet** RP2350 box
+  already broadcasts a UDP beacon on **port 5011** every 1500 ms:
+
+  ```json
+  {"t":"extio","v":1,"name":"box","ip":"...","fw":"...","board":"...",
+   "build":"...","target":"0.0.0.0:4620"}
+  ```
+
+  It is a no-op on USB (`local_ip` 0.0.0.0 → early return), and it deliberately
+  **fires BEFORE the dserv-target gate** so a brand-new box announces itself.
+* **`target: 0.0.0.0` is already the "unconfigured" marker on the wire.** The
+  one field a discovery scheme needs most is in the protocol today.
+* `tools/extio-setup/discover.go` already listens (12 s TTL, keyed by box IP)
+  and exposes `/api/discover`; its own comment says assigning the target is "a
+  follow-up".
+* Boxes additionally run a **config server on TCP :5010**.
+
+So the model today is *box advertises, human adopts via extio-setup*. The
+proposal is to close the loop automatically.
+
+### Two shapes
+
+**A — host-side adoption. No new protocol, no firmware.** Something on the
+dserv host listens for beacons carrying `target 0.0.0.0` and pushes its own
+address to the box over the config server the box already runs on :5010.
+
+**B — dserv advertises, box adopts.** dserv broadcasts
+`{"t":"dserv","v":1,"ip":...,"port":...,"host":...,"site":...}`; an unconfigured
+box adopts it. Symmetric with the box beacon, and the only option if a box
+cannot run a config server.
+
+**Recommendation: do A first.** It is a TOOL change rather than a CONTRACT
+change — nothing on the wire moves, deployed Pico boxes need no reflash, and it
+can be withdrawn without leaving a protocol behind. B stays open and is the
+better long-term shape; nothing in A blocks it.
+
+### Adoption must be BOUNDED — this is the part to get right
+
+There is more than one dserv on more than one subnet here (rig, office, dev
+laptops). **A box that attaches to the first dserv it hears is the juicer wedge
+again** — grab the first thing that answers, get the wrong device, fail
+silently. Constraints:
+
+* **Opt-in per dserv** (`extio_adopt on`), OFF by default. A dserv that has not
+  been told to adopt must never claim anything.
+* **Match on a `site` string**, so a box only adopts an advert it was told to
+  expect. Name-based allowlists work too but do not scale to a fresh box, which
+  is exactly the case discovery is for.
+* **Learn it, do NOT persist it.** An adopted target should live in RAM until
+  someone explicitly `save`s. A reboot then returns an ambiguous box to
+  unconfigured instead of welding a wrong assignment in — and it keeps this
+  clear of the reboot-divergence bug in "Open bugs" above.
+* **Never adopt over an existing target.** Adoption applies only to
+  `dserv 0.0.0.0`.
+
+### What this costs on the Zephyr boxes
+
+**Neither piece exists here.** Tier 3 lists both "LAN discovery beacon (UDP
+:5011)" and the config server as *no counterpart*, which is precisely why the
+MCXN947 had to be told an IP over a serial console during bring-up. So the
+Zephyr port needs the beacon and the :5010 config server ported before it can
+participate in EITHER shape. That is a port of something already written and
+proven, not a design — but it is real work, and it is a prerequisite, not a
+consequence.
+
+### Open decisions
+
+1. Broadcast or multicast for B, and whether the beacon port is shared with
+   5011 or separate (a shared port with a `"t"` discriminator is tempting and
+   makes one listener serve both directions).
+2. Whether adoption is announced — a box that adopted should say so
+   (`state/dserv/adopted` = the source of the target), or the whole thing is
+   invisible when it goes wrong. Same principle as the manifest announce.
+3. Whether extio-setup's existing `/api/discover` becomes the adoption UI (a
+   button per unconfigured box) before anything automatic exists at all. That
+   may be enough on its own, and it is the smallest possible step.
+
 ## Tier 2 — peripherals
 
 - [ ] **Analog: MCP3204 + analog groups** — `src/core/box_ain_group.h`, zero
