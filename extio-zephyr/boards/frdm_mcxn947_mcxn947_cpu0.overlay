@@ -1,3 +1,7 @@
+#include <zephyr/dt-bindings/adc/adc.h>
+#include <zephyr/dt-bindings/adc/mcux-lpadc.h>
+#include <zephyr/dt-bindings/regulator/nxp_vref.h>
+
 /*
  * extio-zephyr devicetree overlay for the FRDM-MCXN947.
  *
@@ -72,5 +76,101 @@
 	};
 	cdc_acm_data: cdc_acm_uart1 {
 		compatible = "zephyr,cdc-acm-uart";
+	};
+};
+
+/* ---- analog input: the ON-CHIP LPADC ----
+ *
+ * `box_adc:` relabels the SoC's lpadc0 as the box's converter, which is all
+ * box_adc.c binds to. No SPI, no chip select -- the whole class of problem that
+ * parked the MCP3204 on the RW612 does not exist here.
+ *
+ * PIN CHOICE: the three pads the board ALREADY muxes, and NO pinmux change.
+ * `pinmux_lpadc0` in frdm_mcxn947-pinctrl.dtsi brings out exactly:
+ *
+ *   ADC0_A1 = P4_15   -> box ain channel 0
+ *   ADC0_B1 = P4_19   -> box ain channel 1
+ *   ADC0_A2 = P4_23   -> box ain channel 2
+ *
+ * These are J8 pins 20 / 24 / 28 (samples/drivers/adc/adc_dt names them). Three
+ * single-ended channels covers an eye feed's X / Y / pupil.
+ *
+ * WHY NOT THE ARDUINO ANALOG STRIP. A2/A3/A4/A5 are P0_14 / P0_22 / P0_15 /
+ * P0_23 = ADC0 B14 / A14 / B15 / A15, so they work -- but port 0 is
+ * `box-gpio-port`, so every analog pin taken there DELETES a digital box pin. Those
+ * four are box pins 14, 22, 15, 23 (and 23 is SW2). We have 11 digital pins;
+ * spending 4 of them on channels we do not yet need is the wrong trade. The
+ * port-4 pads cost nothing because the box has no digital claim on port 4.
+ * Documented as the extension path when a 4th+ channel is actually wanted.
+ *
+ * THE CHANNEL MAP IS THE POINT. box_adc.c used to assume channel n IS input n,
+ * which is true of an MCP3204 and false here: `channel_id` indexes a CMD-register
+ * slot and `zephyr,input-positive` picks the physical input. Declaring the map
+ * in devicetree is what makes the box's flat wire index (`ain group G channels
+ * 0,1`) resolve to a specific pad -- and keeps that resolution a BOARD property,
+ * exactly like the pin-map proposal in PORTING.md.
+ */
+&vref {
+	/* The LPADC's reference comes from this regulator in EXTERNAL1 mode.
+	 * High-power mode is what the in-tree ADC sample uses; the buffer has to
+	 * drive the converter's sampling capacitor. */
+	regulator-initial-mode = <NXP_VREF_MODE_HIGH_POWER>;
+};
+
+box_adc: &lpadc0 {
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	/*
+	 * 1800 mV FULL SCALE, AND THAT IS A REAL CONSTRAINT, NOT A DEFAULT.
+	 *
+	 * This vref is the on-chip regulator, and the SoC devicetree caps it at
+	 * `regulator-max-microvolt = 2100000` -- 2.1 V. **An Eyelink-style 0-3.3 V
+	 * feed does not fit**, which is the same 0-3.3 V gotcha recorded against
+	 * the MCP3204 work, arriving from the opposite direction: there the
+	 * converter wanted 3.3 V and got it, here the converter cannot reach it.
+	 *
+	 * Three ways out, UNDECIDED and deliberately not guessed at here:
+	 *   1. a CFG[REFSEL] setting that selects VDDA (3.3 V) instead of this
+	 *      regulator -- the board sets `voltage-ref = <1>` and the FSL header
+	 *      only calls the options Alt1/Alt2/Alt3, so which is which needs the
+	 *      reference manual or an experiment;
+	 *   2. a 2:1 divider on the input, costing a bit of resolution;
+	 *   3. the on-chip OPAMP (opamp0 is enabled and pinmuxed on this board),
+	 *      which would also buffer a high-impedance source.
+	 *
+	 * 1800 mV is used now because it is the configuration the in-tree sample
+	 * proves. Anything reading above ~1.8 V will SATURATE, and a saturated
+	 * eye trace looks like a badly calibrated eye, not like a range error --
+	 * so settle this before trusting any eye data.
+	 */
+	channel@0 {
+		reg = <0>;
+		zephyr,gain = "ADC_GAIN_1";
+		zephyr,reference = "ADC_REF_EXTERNAL1";
+		zephyr,vref-mv = <1800>;
+		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
+		zephyr,resolution = <12>;
+		zephyr,input-positive = <MCUX_LPADC_CH1A>;   /* P4_15, J8-20 */
+	};
+
+	channel@1 {
+		reg = <1>;
+		zephyr,gain = "ADC_GAIN_1";
+		zephyr,reference = "ADC_REF_EXTERNAL1";
+		zephyr,vref-mv = <1800>;
+		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
+		zephyr,resolution = <12>;
+		zephyr,input-positive = <MCUX_LPADC_CH1B>;   /* P4_19, J8-24 */
+	};
+
+	channel@2 {
+		reg = <2>;
+		zephyr,gain = "ADC_GAIN_1";
+		zephyr,reference = "ADC_REF_EXTERNAL1";
+		zephyr,vref-mv = <1800>;
+		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
+		zephyr,resolution = <12>;
+		zephyr,input-positive = <MCUX_LPADC_CH2A>;   /* P4_23, J8-28 */
 	};
 };

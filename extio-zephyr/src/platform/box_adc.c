@@ -43,6 +43,48 @@ static uint32_t sweep_max_us, sweep_n;
 #define ADC_DT_CHANNELS 0        /* unknown part -- probe, and accept the noise */
 #endif
 
+/* ---- the CHANNEL MAP, for converters where index != input ----
+ *
+ * Probing works on an MCP3204 because channel n IS input n: one 3-byte
+ * transaction, the channel number goes on the wire. That is a property of THAT
+ * PART, and it does not generalise. On the MCXN947's on-chip LPADC,
+ * `channel_id` only indexes a CMD-register slot and the physical input comes
+ * from `input_positive` -- so probing there would "succeed" for every slot the
+ * driver has (15 of them) and report a channel count that reflects nothing on
+ * the board. A confident, self-consistent, entirely fictional sweep.
+ *
+ * So: if the devicetree node declares channel@N children, they ARE the map and
+ * probing is not used. The box's flat wire index (`ain group G channels 0,1`)
+ * stays `channel_id`, which is `reg` -- the contract is untouched; it just
+ * resolves to a pad the BOARD chose rather than to an assumption this file made.
+ *
+ * A part that declares no children keeps the old behaviour exactly.
+ */
+#if DT_CHILD_NUM_STATUS_OKAY(ADC_NODE) > 0
+#define BOX_ADC_DT_MAP 1
+#define CH_CFG(node)  ADC_CHANNEL_CFG_DT(node),
+#define CH_RES(node)  DT_PROP_OR(node, zephyr_resolution, 12),
+#define CH_VREF(node) DT_PROP_OR(node, zephyr_vref_mv, 3300),
+static const struct adc_channel_cfg dt_ch[]  = { DT_FOREACH_CHILD_STATUS_OKAY(ADC_NODE, CH_CFG) };
+static const uint8_t                dt_res[] = { DT_FOREACH_CHILD_STATUS_OKAY(ADC_NODE, CH_RES) };
+static const uint16_t               dt_vrf[] = { DT_FOREACH_CHILD_STATUS_OKAY(ADC_NODE, CH_VREF) };
+
+/* Configure every declared channel. A channel the board DECLARED but the driver
+ * refuses is a devicetree error, not a "the part is narrower than we thought" --
+ * fail the whole init rather than silently running a shorter sweep, because the
+ * short sweep would still publish and still look plausible. */
+static uint8_t setup_from_dt(void)
+{
+	for (size_t i = 0; i < ARRAY_SIZE(dt_ch); i++) {
+		if (adc_channel_setup(adc, &dt_ch[i]) != 0) {
+			return 0;
+		}
+	}
+	return (uint8_t) ARRAY_SIZE(dt_ch);
+}
+#endif
+
+#ifndef BOX_ADC_DT_MAP
 static uint8_t probe_channels(void)
 {
 	uint8_t n = 0;
@@ -64,6 +106,7 @@ static uint8_t probe_channels(void)
 	}
 	return n;
 }
+#endif /* !BOX_ADC_DT_MAP */
 
 int box_adc_init(void)
 {
@@ -74,6 +117,19 @@ int box_adc_init(void)
 		return -ENODEV;
 	}
 
+#ifdef BOX_ADC_DT_MAP
+	nch = setup_from_dt();
+	if (nch == 0) {
+		return -EIO;
+	}
+	/* ONE resolution and ONE vref for the whole sweep -- the block header the
+	 * box publishes carries a single scale for all channels, so a board that
+	 * mixed them per channel could not be represented on the wire. Taken from
+	 * channel 0; declaring channels with differing scales is a board bug this
+	 * cannot express, not a case to support. */
+	res     = dt_res[0];
+	vref_mv = dt_vrf[0];
+#else
 	nch = probe_channels();
 	if (nch == 0) {
 		return -EIO;
@@ -84,6 +140,7 @@ int box_adc_init(void)
 	 * wider part appears. */
 	res     = 12;
 	vref_mv = DT_PROP_OR(ADC_NODE, zephyr_vref_mv, 3300);
+#endif
 	ready   = 1;
 	return 0;
 }

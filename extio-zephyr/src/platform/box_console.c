@@ -13,6 +13,10 @@
 #if defined(CONFIG_NETWORKING)
 #include "box_net_eth.h"
 #endif
+#if defined(BOX_HAVE_ADC) && defined(CONFIG_DAC)
+#include "box_adc.h"
+#include <zephyr/drivers/dac.h>
+#endif
 
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
@@ -108,6 +112,93 @@ int box_console_init(const box_config_t *cfg)
 	return 0;
 }
 
+#if defined(BOX_HAVE_ADC) && defined(CONFIG_DAC)
+/* ---- `adccal`: an on-board DAC -> ADC calibration sweep ----
+ *
+ * WHY THIS EXISTS. Two questions about an on-chip analog front end cannot be
+ * answered by reading source:
+ *   1. Which physical pad is box ain channel N? The devicetree says, but a
+ *      devicetree that is WRONG says so just as confidently -- and a mis-mapped
+ *      channel produces perfectly plausible numbers from the wrong pin.
+ *   2. What is the ADC's actual full scale? The reference comes from CFG[REFSEL],
+ *      and the FSL headers only name the options Alt1/Alt2/Alt3. Whether the
+ *      board's `voltage-ref = <1>` means 1.8 V, VDDA, or something else is a
+ *      reference-manual question -- or one measurement.
+ *
+ * DAC0_OUT is on P4_2 (J1-4) and the board already pinmuxes it, so ONE jumper
+ * from there to an analog input turns both questions into an experiment that
+ * needs no bench supply and no external parts. Drive a known code, read it back.
+ *
+ * Deliberately NOT added to box_cli.h: that grammar is shared verbatim with the
+ * deployed RP2350 boxes, which have no DAC, and PORTING.md already records "CLI
+ * overstates the box" as a live complaint. Same reasoning as the `show` and
+ * `ble enable` additions below -- platform truth belongs in the platform layer.
+ *
+ * Note this BLOCKS the service loop for roughly (steps x settle) ms. That is
+ * accepted for a command a human types on purpose; it is not something to call
+ * from anywhere else.
+ */
+#define ADCCAL_STEPS   8
+#define ADCCAL_SETTLE  5   /* ms; a DAC settles far faster, this is slack */
+
+static void adc_cal(uint8_t ch)
+{
+	const struct device *dac = DEVICE_DT_GET(DT_NODELABEL(dac0));
+	struct dac_channel_cfg dcfg = {
+		.channel_id = 0,
+		.resolution = 12,
+		.buffered   = true,
+	};
+	uint16_t v[BOX_ADC_MAX_CH];
+	char ln[112];
+	uint16_t vref = box_adc_vref_mv();
+	uint32_t full = (1u << box_adc_bits()) - 1u;
+
+	if (!box_adc_ready()) {
+		box_console_write("ERR adc not ready\r\n");
+		return;
+	}
+	if (ch >= box_adc_channels()) {
+		box_console_write("ERR no such ain channel\r\n");
+		return;
+	}
+	if (!device_is_ready(dac) || dac_channel_setup(dac, &dcfg) != 0) {
+		box_console_write("ERR dac0 not ready\r\n");
+		return;
+	}
+
+	snprintf(ln, sizeof ln,
+		 "dac0 (P4_2 / J1-4) -> ain ch%u; adc %u-bit, vref %u mV\r\n",
+		 ch, box_adc_bits(), vref);
+	box_console_write(ln);
+	box_console_write("  dac_code   adc_code   adc_mV\r\n");
+
+	for (int i = 0; i <= ADCCAL_STEPS; i++) {
+		uint16_t code = (uint16_t) ((4095 * i) / ADCCAL_STEPS);
+		int rc;
+
+		if (dac_write_value(dac, 0, code) != 0) {
+			box_console_write("ERR dac write\r\n");
+			break;
+		}
+		k_msleep(ADCCAL_SETTLE);
+
+		rc = box_adc_sweep(BIT(ch), v, (uint8_t) ARRAY_SIZE(v), NULL);
+		if (rc < 1) {
+			snprintf(ln, sizeof ln, "  %8u   sweep err %d\r\n", code, rc);
+		} else {
+			uint32_t mv = ((uint32_t) v[0] * vref) / full;
+			snprintf(ln, sizeof ln, "  %8u   %8u   %6u\r\n", code, v[0], mv);
+		}
+		box_console_write(ln);
+	}
+
+	/* Leave the pin low rather than parked at full scale -- a DAC left driving
+	 * is a surprise for whatever gets jumpered next. */
+	(void) dac_write_value(dac, 0, 0);
+}
+#endif /* BOX_HAVE_ADC && CONFIG_DAC */
+
 /* ---- line assembly + dispatch to box_cli ---- */
 static char line_buf[128];
 static int  line_len;
@@ -116,7 +207,21 @@ static void run_line(box_config_t *cfg, const char *line)
 {
 	char resp[1024];   /* `help`/`show` output is large */
 	gpio_cmd_t cmd = { .op = GPIO_OP_NONE };
-	cli_action_t a = box_cli_exec(cfg, line, resp, sizeof resp, &cmd);
+	cli_action_t a;
+
+#if defined(BOX_HAVE_ADC) && defined(CONFIG_DAC)
+	/* Handled BEFORE the core CLI, which would answer `ERR unknown` first. */
+	if (strncmp(line, "adccal", 6) == 0) {
+		unsigned ch = 0;
+		if (line[6] == ' ') {
+			ch = (unsigned) atoi(line + 7);
+		}
+		adc_cal((uint8_t) ch);
+		return;
+	}
+#endif
+
+	a = box_cli_exec(cfg, line, resp, sizeof resp, &cmd);
 
 	box_console_write(resp);   /* the OK/ERR line box_cli produced */
 
