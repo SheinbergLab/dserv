@@ -429,7 +429,7 @@ oo::class create System {
             # write goes nowhere and ESS sees planko/complete stay "waiting",
             # which surfaces as a trial that does not advance rather than as a
             # wrong outcome. A stimulus must never block on the network.
-            proc dserv_send_str { varname val } {
+            proc dserv_send_string { varname val } {
                 if { [info exists ::dserv_return_sock] } {
                     qpcs::dsSocketSendBytes $::dserv_return_sock $varname $val 1
                 }
