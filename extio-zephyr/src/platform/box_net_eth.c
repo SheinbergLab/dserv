@@ -395,20 +395,98 @@ void box_net_eth_send_stats(uint32_t *last_us, uint32_t *max_us)
 	if (max_us)  *max_us  = send_max_us;
 }
 
+/* UPLINK FAILURE DETECTION. Without this the box publishes into a dead socket
+ * forever and looks dead from dserv while running perfectly.
+ *
+ * The socket is non-blocking, so a failed send DROPS the frame and returns -1 --
+ * and every caller ignored that (box_uplink_send passes it up, nothing checks).
+ * box_net_eth_connected() then reported "established" purely because the fd still
+ * existed; it never tested whether the peer was there. So once dserv dropped its
+ * end for ANY reason, the box kept an fd that would never work again, never
+ * reconnected, and silently discarded every publish. From dserv it presented as a
+ * watchdog frozen at the last value it managed to send -- indistinguishable from a
+ * crashed box, but it needed a POWER CYCLE to recover because nothing in the
+ * firmware could rebuild the socket. Observed repeatedly on 2026-07-30: box2
+ * frozen at up=45 for 6+ minutes while healthy.
+ *
+ * Two failure classes, and conflating them is what to avoid:
+ *
+ *   EAGAIN/EWOULDBLOCK -- the send buffer is full and the peer has not drained it.
+ *     TRANSIENT and expected: a 1 Hz status burst is ~30 frames, and the peer may
+ *     legitimately be busy (dserv relaying an OTA blast, say). Tolerate a long run
+ *     of these before concluding anything.
+ *   anything else (ECONNRESET, EPIPE, ENOTCONN, ...) -- the connection is gone.
+ *     Give up at once; retrying cannot help and every attempt is a dropped publish.
+ *
+ * On giving up, CLOSE the socket. That is what makes connected() tell the truth,
+ * which lets the existing re-registration path (box_uplink) rebuild the uplink on
+ * its own. The recovery machinery already existed -- it was simply never reached,
+ * because nothing ever admitted the connection had failed. */
+#define UPLINK_EAGAIN_LIMIT 200   /* ~consecutive full-buffer sends before giving up */
+
+static unsigned uplink_eagain;
+static unsigned uplink_drops;      /* lifetime, for state/dbg */
+
+static void uplink_failed(const char *why)
+{
+	printk("uplink: %s -- closing socket so it can be re-established\n", why);
+	if (sock >= 0) {
+		zsock_close(sock);
+	}
+	sock = -1;
+	connecting = 0;
+	uplink_eagain = 0;
+}
+
+unsigned box_net_eth_uplink_drops(void) { return uplink_drops; }
+
 int box_net_eth_send(const uint8_t *buf, int len)
 {
 	if (sock < 0) {
 		return -1;
 	}
+	/* DO NOT SEND ON A CONNECT STILL IN FLIGHT. box_net_eth_connect() is
+	 * deliberately non-blocking, so for a while after it returns the fd exists but
+	 * the handshake has not completed. A send then fails with ENOTCONN -- which
+	 * looks exactly like a hard error, and treating it as one produced a tight
+	 * close/reconnect/send-too-early THRASH LOOP, printing "send error" several
+	 * times a second and never recovering. That was the first version of this fix;
+	 * the box went from silently dead to noisily dead. Drop the frame and let
+	 * box_net_eth_connected() finish the handshake first. */
+	if (connecting) {
+		uplink_drops++;
+		return -1;
+	}
 	uint32_t t0 = k_cycle_get_32();
 	int n = zsock_send(sock, buf, (size_t) len, 0);
+	int err = errno;
 	uint32_t dt = k_cyc_to_us_floor32(k_cycle_get_32() - t0);
 
 	send_last_us = dt;
 	if (dt > send_max_us) {
 		send_max_us = dt;
 	}
-	return (n == len) ? 0 : -1;
+
+	if (n == len) {
+		uplink_eagain = 0;
+		return 0;
+	}
+
+	uplink_drops++;
+	if (n < 0 && (err == EAGAIN || err == EWOULDBLOCK ||
+		      err == ENOTCONN || err == EINPROGRESS || err == EALREADY)) {
+		/* ENOTCONN/EINPROGRESS/EALREADY belong here, not with the hard errors:
+		 * they mean "not ready yet", the same as a full buffer. Classifying them
+		 * as fatal is what created the reconnect thrash loop described above. */
+		if (++uplink_eagain >= UPLINK_EAGAIN_LIMIT) {
+			uplink_failed("peer not draining");
+		}
+		return -1;
+	}
+	/* Hard error, or a short write we cannot resume from mid-frame (the wire
+	 * format is fixed-length records, so a partial one is unusable anyway). */
+	uplink_failed(n < 0 ? "send error" : "short write");
+	return -1;
 }
 
 /* ---- in-stack residence time ----

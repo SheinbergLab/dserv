@@ -69,6 +69,10 @@ void box_net_eth_server_service(void);
  * caller that sees this stay 0 while the client socket is up must re-register. */
 int box_net_eth_server_up(void);
 
+/* Lifetime count of publishes dropped because the uplink send failed. Non-zero
+ * means frames were lost; a jump means the uplink was rebuilt (see the .c). */
+unsigned box_net_eth_uplink_drops(void);
+
 /* Cost of the last zsock_send() and the running max, in us. Instrumentation for
  * the publish-latency investigation; see box_net_eth.c. */
 void box_net_eth_send_stats(uint32_t *last_us, uint32_t *max_us);
