@@ -1841,8 +1841,39 @@ int main(void)
 			}
 
 			uint8_t f[DSERV_MSG_LEN];
-			dserv_state_name(&cfg, name, sizeof name, "watchdog");
-			dserv_msg_int(f, name, 0, watchdog++);
+
+			/* WATCHDOG GETS ITS OWN BUFFER, AND IS ENQUEUED EXACTLY ONCE.
+			 *
+			 * It used to be built into the shared scratch `f` and rely on a
+			 * trailing pub_enqueue(f) far below to actually send it -- with each
+			 * intervening sub-block "borrowing" f and then RESTORING the watchdog
+			 * frame into it on the way out. That idiom published state/watchdog
+			 * TWICE PER TICK, with the same value, ~20-40 ms apart (observed on a
+			 * clean subscriber 2026-07-30, David spotted it): once at the enqueue
+			 * that used to sit here, and again at the trailing one. One of the two
+			 * restores was also dead code -- cmds_rx overwrote f before any
+			 * enqueue could see it.
+			 *
+			 * Worse, the trailing pub_enqueue(f) sat AFTER an #endif, so on a board
+			 * where that block compiles out it published whatever happened to be
+			 * in f -- a duplicate of some unrelated datapoint. That is the whole
+			 * problem with a shared scratch buffer: correctness depends on the
+			 * distance between a build and its enqueue, across #ifdefs, and
+			 * nothing checks it.
+			 *
+			 * A dedicated buffer makes the watchdog immune to whatever the rest of
+			 * the block does with f. An audit of all 33 enqueues in this block
+			 * found watchdog was the ONLY datapoint affected -- every other one is
+			 * build-then-enqueue in order -- so this is the minimum change that
+			 * removes the class, not just the instance. */
+			{
+				uint8_t wf[DSERV_MSG_LEN];
+				char wn[80];
+
+				dserv_state_name(&cfg, wn, sizeof wn, "watchdog");
+				dserv_msg_int(wf, wn, 0, watchdog++);
+				pub_enqueue(wf);
+			}
 			{
 				/* USB caller cost + TX-ring drops. Published on EVERY
 				 * board: the comparison against the Ethernet numbers is
@@ -1850,7 +1881,6 @@ int main(void)
 				 * budget rather than a guess. */
 				uint32_t ul = 0, um = 0, ud = 0;
 				box_net_usb_send_stats(&ul, &um, &ud);
-				pub_enqueue(f);
 				dserv_state_name(&cfg, name, sizeof name, "dbg/usb_send_us");
 				dserv_msg_int(f, name, 0, (int32_t) ul);
 				pub_enqueue(f);
@@ -1887,8 +1917,6 @@ int main(void)
 					}
 				}
 #endif
-				dserv_state_name(&cfg, name, sizeof name, "watchdog");
-				dserv_msg_int(f, name, 0, watchdog - 1);
 			}
 
 			/* Deliberately alongside watchdog: watchdog proves the UPLINK
@@ -2065,11 +2093,8 @@ int main(void)
 					pub_enqueue(f);
 				}
 #endif
-				dserv_state_name(&cfg, name, sizeof name, "watchdog");
-				dserv_msg_int(f, name, 0, watchdog - 1);
 			}
 #endif
-			pub_enqueue(f);
 
 			/* box status as datapoints -- observable any time over the active
 			 * uplink, not just at boot: active transport, and (where present)
