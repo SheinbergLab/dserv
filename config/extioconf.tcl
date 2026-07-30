@@ -64,10 +64,29 @@ proc extio_find_data_port {} {
             }
             if { $best ne "" } { return $best }
         }
-        # fallback: the old heuristic (pre-identity firmware, or ioreg hiccup).
-        # Beware: identity-blind -- a handheld/other CDC device can win the sort.
-        set ports [lsort -dictionary [glob -nocomplain /dev/cu.usbmodem*]]
-        if {[llength $ports]} { return [lindex $ports end] }
+        # NO FALLBACK, deliberately -- removed 2026-07-29 to match Linux below.
+        #
+        # This used to end with `lindex [lsort -dictionary [glob /dev/cu.usbmodem*]]
+        # end` for "pre-identity firmware, or an ioreg hiccup", carrying its own
+        # warning that it was identity-blind. That is the SAME heuristic whose Linux
+        # twin opened a JUICER PUMP and corrupted a dispense (2026-07-09) -- the
+        # comment below has never allowed it there, and macOS simply never got
+        # updated.
+        #
+        # It became materially more dangerous with the MCXN947. That board's console
+        # defaults to `console=uart` and its console UART IS the MCU-Link VCOM, which
+        # enumerates as /dev/cu.usbmodem* -- so with no real box plugged in, the
+        # highest-sorting candidate is THE BOX'S OWN CONSOLE. Opening it gives two
+        # readers on one port: the CLI sees stolen replies and a human debugging the
+        # box gets "device reports readiness to read but returned no data (multiple
+        # access on port?)" with nothing to blame. On the RP2350 boxes the console was
+        # a CDC on the box itself, so the same bug needed a second device to exist.
+        #
+        # Returning "" is the correct answer to "I cannot identify a box": the caller
+        # already handles no-port (it is the normal state on a rig with no USB box),
+        # whereas a wrong port is indistinguishable from a broken one. If a box's
+        # identity is genuinely absent, pin its port by redefining this proc in
+        # local/extio.tcl -- same escape hatch Linux has always had.
         return ""
     }
     # Linux: ONLY a device positively identified as an extio box (data CDC =
