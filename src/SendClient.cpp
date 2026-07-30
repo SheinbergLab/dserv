@@ -41,6 +41,7 @@
 #include <fcntl.h>
 
 #include "SendClient.h"
+#include <errno.h>
 
 SendClient::SendClient(int socket, char *hoststr, int port, uint8_t flags):
     port(port), fd(socket)
@@ -85,16 +86,51 @@ int SendClient::send_dpoint(ds_datapoint_t *dpoint)
     buf[0] = DPOINT_BINARY_MSG_CHAR;
     if (dpoint_to_binary(dpoint, &buf[1], &bufsize)) {
 #ifndef _MSC_VER
-      nwritten = write(fd, buf, DPOINT_BINARY_FIXED_LENGTH);
+      /* A SEND TIMEOUT IS NOT A DEAD PEER, and conflating them broke OTA.
+       *
+       * This used to be an unconditional `active = 0` on any short write, with an
+       * EMPTY `if (nwritten == -1) {}` block where the errno test belonged. That
+       * was harmless while the socket had no SO_SNDTIMEO: write() blocked as long
+       * as the consumer needed and eventually succeeded. Adding a 5 s send timeout
+       * (Dataserver.cpp, to reap vanished boxes) turned every SLOW consumer into a
+       * reaped one -- and an OTA target is slow BY DEFINITION, because it writes
+       * flash between chunks. Symptom: the box's session dies seconds into
+       * staging, the next host write fails, and the OTA reports host_io with
+       * progress=0 while the box itself is perfectly healthy. It then cannot
+       * re-register (dserv's connect-back is one-shot) so it looks dead until
+       * power-cycled. Diagnosed 2026-07-30 after it killed two boxes in a row.
+       *
+       * EAGAIN/EWOULDBLOCK after SO_SNDTIMEO means "the buffer is full and the
+       * peer has not drained it yet" -- transient. Retry, bounded, so a genuinely
+       * wedged peer cannot park this thread forever. Detecting a truly dead peer
+       * is TCP_USER_TIMEOUT's job (socket_keepalive.h): it fires on data that goes
+       * unacknowledged, which is the actual signal for "gone", and it is what the
+       * leak fix should have relied on for this case all along.
+       *
+       * Only a HARD error (EPIPE, ECONNRESET, ...) or a persistent stall reaps the
+       * client now. Each SendClient has its own thread, so the retry delays only
+       * this consumer and never dserv as a whole.
+       */
+      int tries = 0;
+      for (;;) {
+	nwritten = write(fd, buf, DPOINT_BINARY_FIXED_LENGTH);
+	if (nwritten == DPOINT_BINARY_FIXED_LENGTH) {
+	  break;
+	}
+	if (nwritten == -1 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
+	  if (++tries < 6) {         /* ~30 s at the 5 s SO_SNDTIMEO */
+	    continue;
+	  }
+	}
+	active = 0;                  /* hard error, short write, or a real stall */
+	break;
+      }
 #else
       nwritten = send(fd, (const char *) buf, DPOINT_BINARY_FIXED_LENGTH, 0);
-#endif
       if (nwritten != DPOINT_BINARY_FIXED_LENGTH) {
-	if (nwritten == -1)
-	  {
-	  }
 	active = 0;
       }
+#endif
     }
   }
   else {
@@ -146,18 +182,32 @@ int SendClient::send_dpoint(ds_datapoint_t *dpoint)
       }
     }
     
-    nwritten = writev(fd, (const struct iovec *) iov, 2);
-    
+    /* Same slow-consumer-is-not-a-dead-consumer fix as the binary path above --
+     * see that comment for why. This path had the identical unconditional
+     * `active = 0` with the identical empty errno block, and it feeds the string
+     * and JSON clients (essgui, plain socket subscribers), which have exactly the
+     * same right not to be reaped for being briefly slow. Fixed together on
+     * purpose: an hour earlier the same day, fixing one of two identical build
+     * matchers and leaving its twin alone cost a debugging round. */
+    {
+      int tries = 0;
+      for (;;) {
+	nwritten = writev(fd, (const struct iovec *) iov, 2);
+	if (nwritten == dstring_size + 1) {
+	  break;
+	}
+	if (nwritten == -1 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
+	  if (++tries < 6) {
+	    continue;
+	  }
+	}
+	active = 0;
+	break;
+      }
+    }
+
     /* if we allocated the buffer, free here */
     if (dstring_alloc) free(dstring_buf);
-    
-    /* if write failed, dactivate this thread */
-    if (nwritten != dstring_size+1) {
-      if (nwritten == -1) {
-      }
-      
-      active = 0;
-    }
   }
   return active;
 }

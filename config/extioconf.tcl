@@ -740,6 +740,15 @@ proc extio_shelf_fetch_bin {box channel version} {
     }
     set bbuild [dservGet extio/$box/state/build]
     set bboard [expr {[dservExists extio/$box/state/board] ? [dservGet extio/$box/state/board] : ""}]
+
+    # Same / -> _ flattening as extio_ota_push_shelf; see the long comment there.
+    # This is a SECOND matcher on the same contract, which is exactly why it was
+    # missed when the first was fixed: extio_ota_push_shelf worked, this silently
+    # did not, and the paths that use it (extio_ota_push_shelf_docked,
+    # extio_ota_pull_run) stayed broken for every Zephyr board. Found by running
+    # the fetch in isolation, which failed with the slashed name still in the
+    # error text -- if these two ever diverge again, that error message is the tell.
+    set bbuild [string map {/ _} $bbuild]
     set url "$base/api/firmware/extio/$channel"
     if { [catch { https_get $url -timeout 15000 } json] } { error "shelf fetch failed ($url): $json" }
     set d [::yajl::json2dict $json]
