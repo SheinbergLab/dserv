@@ -594,23 +594,55 @@ proc extio_ota_push_shelf {box {channel dev} {version ""}} {
         error "extio_ota_push_shelf: shelf fetch failed ($url): $json"
     }
     set d [::yajl::json2dict $json]
-    if { $version eq "" } {
-        if { [dict exists $d latest] } { set version [dict get $d latest] }
-    }
-    if { $version eq "" } { error "extio_ota_push_shelf: channel '$channel' has no version to pull" }
 
-    # 3. find the OTA image for this box's build in the latest version.
-    set img ""
+    # 3. find the newest version carrying an OTA image for THIS box's build.
+    #
+    # NOT simply `latest`, and that distinction became load-bearing the moment the
+    # shelf held two families. `latest` is a single per-channel pointer moved by
+    # whoever published most recently, but a version only contains the images that
+    # publish built -- so pushing an MCXN947 image makes `dev/latest` a version with
+    # no RP2350 image in it, and every Pico box asking for latest gets "no OTA
+    # (.bin) image for build 'dual'". Observed 2026-07-30, immediately, on the first
+    # MCXN947 publish: one family's release silently broke the other family's
+    # default update path.
+    #
+    # So walk the versions newest-first and take the first that HAS an image for
+    # this build. That is what "latest" means from a given box's point of view.
+    #
+    # AN EXPLICIT version ARGUMENT IS NEVER OVERRIDDEN -- if the caller pinned a
+    # version and it lacks the image, that is an error worth reporting, not
+    # something to silently substitute. Pinning exists to say "this exact one".
+    #
+    # Relies on the shelf listing `versions` newest-first, which is the order the
+    # agent writes and the API returns.
+    set img ""; set pinned [expr {$version ne ""}]
+    set tried {}
     foreach v [dict get $d versions] {
-        if { ![dict exists $v version] || [dict get $v version] ne $version } continue
+        if { ![dict exists $v version] } continue
+        set vv [dict get $v version]
+        if { $pinned && $vv ne $version } continue
         foreach im [dict get $v images] {
             if { ![dict exists $im build] || [dict get $im build] ne $bbuild } continue
             if { ![dict exists $im bin] || [dict get $im bin] eq "" } continue
-            set img $im; break
+            set img $im; set version $vv; break
         }
+        if { $img ne "" } break
+        lappend tried $vv
+        if { $pinned } break
     }
     if { $img eq "" } {
-        error "extio_ota_push_shelf: no OTA (.bin) image for build '$bbuild' in $channel/$version"
+        if { $pinned } {
+            error "extio_ota_push_shelf: no OTA (.bin) image for build '$bbuild' in\
+                   $channel/$version (version was pinned explicitly)"
+        }
+        error "extio_ota_push_shelf: no OTA (.bin) image for build '$bbuild' anywhere in\
+               channel '$channel' -- searched [llength $tried] version(s): [join $tried {, }].\
+               Has an image for this build ever been published? Check\
+               $base/api/firmware/extio/$channel"
+    }
+    if { !$pinned && [dict exists $d latest] && [dict get $d latest] ne $version } {
+        puts "extio_ota_push_shelf: channel latest is [dict get $d latest] (no '$bbuild'\
+              image); using $version, the newest that has one"
     }
     if { $bboard ne "" && [dict exists $img board] && [dict get $img board] ne "" \
          && [dict get $img board] ne $bboard } {
