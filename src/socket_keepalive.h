@@ -86,10 +86,30 @@ static inline void dserv_set_keepalive(int fd)
 
 #if defined(TCP_USER_TIMEOUT)
 	/* Data unacknowledged this long -> tear the connection down, so
-	 * send_dpoint()'s write can finally fail and the client be reaped. 20 s is
-	 * far beyond any hiccup on a wired rig LAN and far below the ~15-30 min the
-	 * retransmit default would take. */
-	unsigned int utmo = 20000;      /* ms */
+	 * send_dpoint()'s write can finally fail and the client be reaped.
+	 *
+	 * MUST EXCEED THE LONGEST LEGITIMATE STALL OF A HEALTHY CONSUMER, and 20 s
+	 * (the original value) did not. An extio box erasing its 984 kB MCUboot slot
+	 * for an OTA blocks its single service loop for ~15-16 s -- the firmware's own
+	 * estimate is "512 kB into slot1 = ~8 s" -- so a legitimate erase sat right on
+	 * top of the timeout. The cascade, every step of which is correct except this
+	 * number: ETIMEDOUT -> hard write error -> client reaped -> dserv closes its
+	 * connect-back -> the box correctly observes server_up == 0 -> the box
+	 * correctly re-registers -> %reg correctly tears the client down for a clean
+	 * slate -> the in-flight OTA dies with host_io and progress=0, on a box that is
+	 * perfectly healthy and comes back by itself once the erase finishes. Cost two
+	 * boxes' worth of confusion and several wrong diagnoses on 2026-07-30.
+	 *
+	 * 60 s now, which also makes this AGREE with the keepalive budget above
+	 * (30 + 10*3 = 60 s). Those two paths detect the same thing -- a peer that has
+	 * stopped -- and having them disagree by 3x was the actual defect: whichever
+	 * fired first set the policy, and it was the aggressive one nobody had reasoned
+	 * about against a flash erase.
+	 *
+	 * Still far below the ~15-30 min the retransmit default would take, so the
+	 * socket-leak fix this was added for is unaffected: a vanished box is reaped in
+	 * ~60 s, which was the stated goal all along. */
+	unsigned int utmo = 60000;      /* ms */
 
 	(void) setsockopt(fd, IPPROTO_TCP, TCP_USER_TIMEOUT, &utmo, sizeof utmo);
 #endif
