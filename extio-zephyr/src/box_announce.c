@@ -23,6 +23,41 @@
 #define BOX_BUILD_TARGET CONFIG_BOARD_TARGET   /* e.g. "teensy40/mimxrt1062" */
 #define BOX_BOARD_ID     CONFIG_BOARD          /* e.g. "teensy40" -- OTA compat filter */
 
+/* state/build is the SHELF IMAGE MATCH KEY: extio_ota_push_shelf picks the shelf
+ * image whose `build` equals this string. But the shelf validates that field with
+ *
+ *     fwBuildRe = ^[a-z0-9][a-z0-9_-]*$        (dserv-agent/firmware.go)
+ *
+ * which has NO SLASH -- and every Zephyr board target here contains one
+ * ("frdm_mcxn947/mcxn947/cpu0", "teensy40/mimxrt1062"). Publishing verbatim is
+ * rejected as "invalid or missing build", so until now NO Zephyr board could be
+ * put on the shelf at all; the RP2350 targets (usb/dual/w6300/...) are flat words
+ * and never hit it.
+ *
+ * So flatten the separators. `frdm_mcxn947/mcxn947/cpu0` becomes
+ * `frdm_mcxn947_mcxn947_cpu0` -- which is EXACTLY the string Zephyr itself uses
+ * for this board's conf/overlay filenames, so the shelf key and the board files
+ * agree and neither is a new convention to remember.
+ *
+ * Flattening the whole qualified target rather than publishing CONFIG_BOARD alone
+ * is deliberate: on a multi-core part cpu0 and cpu1 are DIFFERENT images, and
+ * `build` is the unique key the on-box updater matches. Collapsing them would let
+ * a box fetch an image built for the other core.
+ */
+static const char *box_build_key(void)
+{
+	static char key[48];
+
+	if (key[0] == '\0') {
+		size_t i = 0;
+		for (const char *p = BOX_BUILD_TARGET; *p && i < sizeof key - 1; p++) {
+			key[i++] = (*p == '/') ? '_' : *p;
+		}
+		key[i] = '\0';
+	}
+	return key;
+}
+
 /* ---- small helpers: one datapoint per item ---- */
 
 static void pub_str(const box_config_t *c, const char *leaf, const char *val)
@@ -74,7 +109,7 @@ static void announce_ident(const box_config_t *c)
 		pub_int(c, "ota/updates",     box_boot_updates());
 		pub_str(c, "ota/last_arm_ver", box_boot_last_arm_ver());
 	}
-	pub_str(c, "build",     BOX_BUILD_TARGET);   /* shelf image match key   */
+	pub_str(c, "build",     box_build_key());     /* shelf image match key   */
 	pub_str(c, "board",     BOX_BOARD_ID);       /* OTA compat filter       */
 	pub_str(c, "channel",   dserv_cfg_channel(c));
 	/* which device the console bound to -- a timing-relevant choice, so a host

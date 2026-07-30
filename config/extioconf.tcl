@@ -573,6 +573,21 @@ proc extio_ota_push_shelf {box {channel dev} {version ""}} {
     set bboard ""
     if { [dservExists extio/$box/state/board] } { set bboard [dservGet extio/$box/state/board] }
 
+    # FLATTEN SEPARATORS BEFORE MATCHING, and do it on the BOX side too.
+    #
+    # The shelf validates `build` against ^[a-z0-9][a-z0-9_-]*$ (no slash), while
+    # every Zephyr board target has them ("frdm_mcxn947/mcxn947/cpu0"). Both the
+    # publisher (extio-zephyr/publish.sh) and the firmware (box_announce.c
+    # box_build_key()) therefore map / -> _, so new images and new firmware agree.
+    #
+    # Doing it HERE as well is what makes the transition OTA-able rather than
+    # requiring a bench visit. A box still running pre-2026-07-29 firmware
+    # announces the SLASHED target, which would match no shelf entry -- so the one
+    # update that teaches it the new key could not itself be delivered over the
+    # air. Flattening the announced value closes that bootstrap gap. It is a no-op
+    # for the RP2350 targets, whose build names are flat words already.
+    set bbuild [string map {/ _} $bbuild]
+
     # 2. channel manifest (JSON is text -- https_get string return is fine here).
     set url "$base/api/firmware/extio/$channel"
     if { [catch { https_get $url -timeout 15000 } json] } {

@@ -387,20 +387,40 @@ func (a *Agent) handleFirmwarePublish(w http.ResponseWriter, r *http.Request, ch
 		return
 	}
 
-	// Required uf2.
+	// uf2: OPTIONAL since 2026-07-29, because it is an RP2350 concept.
+	//
+	// It was required, which quietly made the shelf RP2350-only: a UF2 is what the
+	// bootrom's mass-storage loader consumes, and the Zephyr boards (frdm_mcxn947,
+	// frdm_rw612, teensy4x) have no such artifact at all -- their OTA payload is an
+	// MCUboot-signed slot image, i.e. exactly the `bin` field. Publishing one was
+	// rejected with "uf2: no upload" and there was no way round it that did not
+	// involve naming a .bin as a .uf2, which would then be served to anything
+	// fetching the provisioning image.
+	//
+	// So: EITHER file may be omitted, but NOT BOTH -- a version entry carrying
+	// neither artifact is a manifest row pointing at nothing, which is worse than a
+	// rejected publish because it looks like a successful release.
+	img := FirmwareImage{Build: build, Board: board, Variant: variant, OtaCapable: ota}
+
 	uf2Name, uf2Size, uf2Sum, err := saveFirmwareUpload(r, "uf2", versionDir, "uf2")
-	if err != nil {
+	if err == nil {
+		img.File, img.Size, img.SHA256 = uf2Name, uf2Size, uf2Sum
+	} else if err != errNoUpload {
 		writeJSON(w, 400, map[string]string{"error": "uf2: " + err.Error()})
 		return
 	}
-	img := FirmwareImage{Build: build, Board: board, Variant: variant, OtaCapable: ota,
-		File: uf2Name, Size: uf2Size, SHA256: uf2Sum}
 
-	// Optional flat .bin (on-box updater fetches this; absent today is fine).
+	// Flat .bin -- the OTA payload the on-box updater pulls into the inactive slot.
 	if binName, binSize, binSum, berr := saveFirmwareUpload(r, "bin", versionDir, "bin"); berr == nil {
 		img.Bin, img.BinSize, img.BinSHA256 = binName, binSize, binSum
 	} else if berr != errNoUpload {
 		writeJSON(w, 400, map[string]string{"error": "bin: " + berr.Error()})
+		return
+	}
+
+	if img.File == "" && img.Bin == "" {
+		writeJSON(w, 400, map[string]string{
+			"error": "need at least one of uf2 (bench/provisioning image) or bin (OTA slot image)"})
 		return
 	}
 
@@ -431,8 +451,18 @@ func (a *Agent) handleFirmwarePublish(w http.ResponseWriter, r *http.Request, ch
 	}
 	a.writeLatest(channel, version)
 
+	// Report the sha of what was ACTUALLY published. This used to be uf2Sum
+	// unconditionally, which now that uf2 is optional would hand a bin-only
+	// publisher an EMPTY sha256 next to "ok": true -- a success response whose
+	// integrity field is blank, which a publisher script could reasonably compare
+	// against its local digest and "match" by both being empty.
+	sum := img.SHA256
+	if sum == "" {
+		sum = img.BinSHA256
+	}
 	writeJSON(w, 200, map[string]any{"ok": true, "channel": channel, "version": version,
-		"build": build, "sha256": uf2Sum, "manifest": m})
+		"build": build, "sha256": sum, "uf2Sha256": img.SHA256, "binSha256": img.BinSHA256,
+		"manifest": m})
 }
 
 func (a *Agent) writeManifest(m *FirmwareManifest) error {
