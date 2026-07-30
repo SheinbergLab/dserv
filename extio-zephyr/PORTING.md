@@ -4991,14 +4991,33 @@ issue exist, the one post-clone driver commit (`680606c`) is TX-only, and PR #10
 added this support "verified with ptp sample" with no documented linuxptp interop —
 which is exactly the kind of verification that would pass while the race is present.
 
-### What this does NOT settle
+### Settled: L2 was NEVER required either
 
-**Whether L2 is still required.** UDP/IPv4 failed across several builds pre-patch,
-which is more support than the other confounded comparisons had, but it was never
-retested WITH the patch. If UDP works now, the transport change and the `-2` in
-`systemd/dserv-ptp4l@.service` can both be reverted — which would restore RW612
-compatibility and remove a fleet-wide transport split. That is the next
-experiment, and it is worth running before treating L2 as a requirement.
+Retested with the patch, and the result reverses the earlier conclusion.
+**UDP/IPv4 converges 8/8 cold boots at 6-10 s**, with analog running at 1 kHz and
+`ptp4l` on its default transport (no `-2`). Conditions verified rather than assumed:
+`CONFIG_PTP_UDP_IPV4_PROTOCOL=y` in the built `.config`, `IEEE_802_3` not set, one
+ptp4l process without `-2`, and `ain/dbg/sweeps` advancing.
+
+So **the transport was a red herring from start to finish.** L2 was credited for
+what was really a lucky code layout, because that comparison rebuilt the binary
+like all the others. Both changes are reverted:
+
+* `CONFIG_PTP_IEEE_802_3_PROTOCOL` — gone from the board conf, with a comment
+  explaining why nobody should re-add it.
+* `-2` — gone from `systemd/dserv-ptp4l@.service`, same.
+
+That restores the fleet property worth having: **RW612 boxes do not override the
+transport, so one ptp4l on the default serves every box.** A split would have been
+a permanent tax paid for a misdiagnosis — and a transport mismatch fails SILENTLY
+(total silence, not dropped Syncs), so the tax would have been collected the first
+time someone moved a box between hosts.
+
+The honest scoreboard for the evening: of five hypotheses I advanced (transport,
+switch, MCUboot, logging, reset type) **none was the cause**. Of David's three
+(analog, boot-time link race, "didn't see these before the latest flash") the last
+was decisive, and the second was the right shape. The one thing that consistently
+worked was refusing to accept a single-boot result.
 
 ### Methodology, since it was the real story
 
