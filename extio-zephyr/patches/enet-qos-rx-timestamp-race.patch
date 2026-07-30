@@ -1,0 +1,74 @@
+diff --git a/drivers/ethernet/eth_nxp_enet_qos/eth_nxp_enet_qos_mac.c b/drivers/ethernet/eth_nxp_enet_qos/eth_nxp_enet_qos_mac.c
+index e641ed855bf..594dff4cd61 100644
+--- a/drivers/ethernet/eth_nxp_enet_qos/eth_nxp_enet_qos_mac.c
++++ b/drivers/ethernet/eth_nxp_enet_qos/eth_nxp_enet_qos_mac.c
+@@ -15,6 +15,7 @@ LOG_MODULE_REGISTER(eth_nxp_enet_qos_mac, CONFIG_ETHERNET_LOG_LEVEL);
+ #include <zephyr/net/phy.h>
+ #include <zephyr/kernel/thread_stack.h>
+ #include <zephyr/sys_clock.h>
++#include <zephyr/sys/barrier.h>
+ 
+ #if defined(CONFIG_ETH_NXP_ENET_QOS_MAC_UNIQUE_MAC_ADDRESS)
+ #include <zephyr/sys/crc.h>
+@@ -413,11 +414,57 @@ static void eth_nxp_enet_qos_rx(struct k_work *work)
+ 			{
+ 				uint32_t ctx_idx = rx_data->next_desc_idx;
+ 				volatile union nxp_enet_qos_rx_desc *ctx_desc = &desc_arr[ctx_idx];
+-
++				bool ctx_ready = false;
++
++				/* RACE: the context descriptor may not have LANDED yet.
++				 *
++				 * RX_TIMESTAMP_AVAILABLE_FLAG on the data descriptor is the
++				 * MAC PROMISING a context descriptor with the timestamp in
++				 * it. The DMA writes that slot back separately, so a peek
++				 * taken immediately after the data descriptor can legally
++				 * observe it still DMA-owned -- and the original code then
++				 * dropped the timestamp silently and moved on.
++				 *
++				 * The failure mode that costs you a day: the PTP stack logs
++				 * "drops Sync without valid RX timestamp" once per Sync, the
++				 * 1588 counter free-runs from boot, and every status field
++				 * still reads healthy because TX timestamping is unaffected
++				 * and Sync/Follow_Up/Delay_Req/Delay_Resp all complete -- a
++				 * tcpdump looks perfect. Whether you win the race depends on
++				 * instruction timing, so it is BUILD-DETERMINISTIC: adding 64
++				 * bytes of unrelated code flipped one image from 8/8 boots
++				 * synced to 4/4 failed. That is why it presents as flaky.
++				 *
++				 * Since the flag is a promise, waiting is CORRECT rather than
++				 * speculative -- but bounded, because trusting hardware to
++				 * always keep a promise is how you get an unbounded spin in an
++				 * RX thread. Writeback is sub-microsecond; the cap is orders
++				 * of magnitude beyond that and simply gives up if it is
++				 * missed, preserving the old behaviour in that case.
++				 */
+ 				if ((desc->write.control3 & RX_STATUS1_VALID_FLAG) &&
+-				    (desc->write.control1 & RX_TIMESTAMP_AVAILABLE_FLAG) &&
+-				    !(ctx_desc->write.control3 & OWN_FLAG) &&
+-				    (ctx_desc->write.control3 & RECEIVE_CONTEXT_DESCRIPTOR_FLAG)) {
++				    (desc->write.control1 & RX_TIMESTAMP_AVAILABLE_FLAG)) {
++					for (int spin = 0; spin < 256; spin++) {
++						if (!(ctx_desc->write.control3 & OWN_FLAG) &&
++						    (ctx_desc->write.control3 &
++						     RECEIVE_CONTEXT_DESCRIPTOR_FLAG)) {
++							ctx_ready = true;
++							break;
++						}
++						/* The descriptor is volatile, so each pass
++						 * re-reads it; the fence orders that read
++						 * against the DMA's write.
++						 */
++						barrier_dmem_fence_full();
++					}
++					if (!ctx_ready) {
++						LOG_WRN("RX timestamp promised but context "
++							"descriptor never arrived (idx %u)",
++							ctx_idx);
++					}
++				}
++
++				if (ctx_ready) {
+ 					pkt->timestamp.nanosecond = ctx_desc->write.vlan_tag;
+ 					pkt->timestamp.second = ctx_desc->write.control1;
+ 					net_pkt_set_rx_timestamping(pkt, true);

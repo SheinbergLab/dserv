@@ -419,6 +419,15 @@ static inline uint64_t event_stamp(uint64_t t_us)
 	return box_clock_stamp(&boxclk, t_us);
 }
 
+/* The console's `now` command, answered here because boxclk is private to this
+ * file. Deliberately the SAME call event_stamp() makes, so `now` reports the
+ * mapping that real event timestamps actually use rather than a parallel
+ * reimplementation that could agree in testing and diverge in the field. */
+uint64_t box_app_dserv_now_us(void)
+{
+	return event_stamp(box_gpio_now_us());
+}
+
 /* Publish one settled chord: extio/<name>/state/group/<label>, value = the
  * member bitmask (bit i = i-th LOWEST member pin, the order the manifest
  * announces), stamped at the episode's onset edge. */

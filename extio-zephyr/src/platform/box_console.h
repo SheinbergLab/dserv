@@ -26,6 +26,14 @@ int box_console_init(const box_config_t *cfg);
  * and non-blocking; call once per service pass. */
 void box_console_service(box_config_t *cfg);
 
+/* PROVIDED BY main.c, not by box_console.c -- the one call that goes the other
+ * way. main.c owns the box_clock instance (deliberately private: it is mutated by
+ * the sync path and nothing else should touch it), so the console's `now` command
+ * asks for the mapped result rather than being handed the struct. Declared here
+ * rather than in box_clock.h because that header is portable core, shared with the
+ * simulator, and has no globals in it. */
+uint64_t box_app_dserv_now_us(void);
+
 /* Queue text for output (non-blocking; silently drops if the TX ring is full). */
 /* Tell the CLI how many analog channels the platform actually fitted, so
  * `ain group G channels ...` validates against reality instead of against the

@@ -4933,3 +4933,79 @@ to settle; until then logging stays on, which is independently justified above.
 **Free sync check, no tooling:** the box's own boot banner prints
 `PTP hw clock: ready=1 now=<ns>`. Synced reads epoch (1.78e18 ns); free-running
 reads single-digit seconds.
+
+
+## 2026-07-29 (late) — the actual bug: an RX context-descriptor race, and a patch
+
+Everything above about the PTP transport is **superseded in its explanation**, and
+the correction matters more than the fix.
+
+### What was really wrong
+
+`eth_nxp_enet_qos_mac.c` reads the RX hardware timestamp out of a **context
+descriptor** that the DMA writes back *separately* from the data descriptor.
+`RX_TIMESTAMP_AVAILABLE_FLAG` on the data descriptor is the MAC PROMISING that
+context descriptor — but the driver peeked at the slot immediately and, if the DMA
+had not posted it yet, **silently dropped the timestamp**. No retry, no warning.
+
+Downstream that is invisible in every way that matters: TX timestamping is
+unaffected, the full Sync / Follow_Up / Delay_Req / Delay_Resp exchange completes,
+a tcpdump looks perfect, and the only symptom is
+`drops Sync without valid RX timestamp` from the PTP stack — which is off by
+default.
+
+**It is BUILD-DETERMINISTIC, not boot-random**, and that is what made it so
+expensive. Whether the peek wins depends on instruction timing, so one binary syncs
+on 8/8 boots and another fails on 4/4. Adding a `now` console command — 64 bytes of
+completely unrelated code — flipped a working image into a broken one. Every
+A-vs-B comparison during the evening rebuilt the binary, so **every one of them was
+confounded**: logging on/off, analog on/off, warm-reboot vs post-flash, and to a
+lesser extent L2 vs UDP. Each hypothesis "worked" once and then evaporated, which
+reads like flakiness and is actually an uncontrolled variable.
+
+David spotted it: *"Didn't see these before the latest edits/flash?"* — the failures
+tracked the flash, not any setting.
+
+### The patch
+
+`patches/enet-qos-rx-timestamp-race.patch` — bound a wait on the context descriptor
+instead of assuming it has landed. Waiting is CORRECT rather than speculative,
+because the flag is a promise; it is bounded anyway (256 spins with a
+`barrier_dmem_fence_full()`, writeback is sub-microsecond) because trusting hardware
+to always keep a promise is how you get an unbounded spin in an RX thread. If it is
+missed the old behaviour is preserved, and a `LOG_WRN` now says so rather than
+failing mute.
+
+Verified with analog ON at 1 kHz, i.e. the real operating condition, and with the
+boot loop rather than a single boot:
+
+    8/8 boots synced, 6-8 s uptime   (was 4/4 FAILED on the same config pre-patch)
+
+Convergence is also faster than the best pre-patch build (6-8 s vs 8-10 s), which
+is consistent with winning the race on the first Sync instead of an occasional one.
+
+Carried as a patch because it modifies upstream Zephyr in `~/zephyrproject`, which a
+`west update` would erase. Same convention as `ksz8081-retry-mdio.patch` and
+`ptp-mgmt-ds-packing.patch`. **Worth reporting upstream**: no fix and no matching
+issue exist, the one post-clone driver commit (`680606c`) is TX-only, and PR #107225
+added this support "verified with ptp sample" with no documented linuxptp interop —
+which is exactly the kind of verification that would pass while the race is present.
+
+### What this does NOT settle
+
+**Whether L2 is still required.** UDP/IPv4 failed across several builds pre-patch,
+which is more support than the other confounded comparisons had, but it was never
+retested WITH the patch. If UDP works now, the transport change and the `-2` in
+`systemd/dserv-ptp4l@.service` can both be reverted — which would restore RW612
+compatibility and remove a fleet-wide transport split. That is the next
+experiment, and it is worth running before treating L2 as a requirement.
+
+### Methodology, since it was the real story
+
+Three separate instances in one evening of **reading a retained datapoint as live**
+— including a boot-loop harness that scored 8/8 while measuring nothing, because
+dserv still held the previous boot's `ptp/ns`. And a fake **0.0 µs** `at_abs`
+accuracy from comparing a target against itself. The pattern in all of them: a
+number that looked like a measurement but was arithmetic on something already
+known. The defences that worked were `dservClear`-then-observe, an independent
+observer (the DI IRQ rather than the DO echo), and repeated trials instead of n=1.

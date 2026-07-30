@@ -4,6 +4,9 @@
 #include "box_console.h"
 #include "box_cli.h"
 #include "box_gpio.h"
+#if defined(CONFIG_PTP_CLOCK)
+#include "box_ptp.h"
+#endif
 #include "box_obs.h"
 #include "box_event.h"
 #include "box_uplink.h"
@@ -231,6 +234,58 @@ static void run_line(box_config_t *cfg, const char *line)
 		}
 		box_console_printf("OK verbose=%d (routine reg messages; full/failed always print)\n",
 				   box_uplink_verbose());
+		return;
+	}
+
+	/* `now` -- what time does the box think it is, and does that make SENSE?
+	 *
+	 * Platform-local for the same reason as verbose/adccal: it reaches into the
+	 * 1588 clock and the app's box_clock, neither of which the shared grammar (or
+	 * the RP2350 boxes that fork it) knows about.
+	 *
+	 * THE THIRD LINE IS THE POINT. On 2026-07-29 this box ran for hours with its
+	 * 1588 counter free-running from boot -- 56 years wrong -- while every status
+	 * field read healthy and rig_check.sh scored 11/11, because every other PTP
+	 * field is a proxy (sync/source=ptp means a paired READ succeeded; anchored
+	 * means ptpconf PUSHED an offset). The raw counter is the one value that
+	 * cannot lie, and the epoch-vs-uptime distinction is visible at a glance:
+	 * unsynced reads single-digit seconds, synced reads ~1.78e9.
+	 *
+	 * All three lines are printed as integer seconds + fractional digits rather
+	 * than floats, so this needs no CBPRINTF_FP_SUPPORT. */
+	if (strcmp(line, "now") == 0) {
+		uint64_t b = box_gpio_now_us();
+		uint64_t d = box_app_dserv_now_us();
+
+		box_console_printf("box    %llu.%06llu s  (local monotonic, since boot)\n",
+				   (unsigned long long) (b / 1000000ULL),
+				   (unsigned long long) (b % 1000000ULL));
+		if (d) {
+			box_console_printf("dserv  %llu.%06llu s  (what event timestamps use)\n",
+					   (unsigned long long) (d / 1000000ULL),
+					   (unsigned long long) (d % 1000000ULL));
+		} else {
+			box_console_printf("dserv  UNALIGNED -- no anchor yet; events publish"
+					   " arrival-stamped\n");
+		}
+#if defined(CONFIG_PTP_CLOCK)
+		if (box_ptp_ready()) {
+			uint64_t p = box_ptp_now_ns();
+			uint64_t ps = p / 1000000000ULL;
+
+			/* 1e9 s is ~2001, so nothing below it can be a wall clock. */
+			box_console_printf("ptp    %llu.%09llu s  %s\n",
+					   (unsigned long long) ps,
+					   (unsigned long long) (p % 1000000000ULL),
+					   ps > 1000000000ULL
+					   ? "EPOCH -- 1588 clock is SET (looks synced)"
+					   : "UPTIME -- 1588 clock is FREE-RUNNING, NOT synced");
+		} else {
+			box_console_printf("ptp    unavailable (clock device not ready)\n");
+		}
+#else
+		box_console_printf("ptp    not built (no CONFIG_PTP_CLOCK on this board)\n");
+#endif
 		return;
 	}
 
