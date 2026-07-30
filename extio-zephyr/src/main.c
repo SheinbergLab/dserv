@@ -517,6 +517,21 @@ static void groups_resync(void)
 #if defined(CONFIG_BOARD_FRDM_RW612)
 #define LED_PIN  12   /* hsgpio0.12 = user LED (active low physically) */
 #define BTN_PIN  11   /* hsgpio0.11 = User SW2 (active low, pull-up)    */
+#elif defined(CONFIG_BOARD_FRDM_MCXN947)
+/* box pin 9 = D9 = P0_10 = RED LED, declared GPIO_ACTIVE_LOW in the overlay so
+ * the pulse lights it. Pin 10 (GREEN) is deliberately NOT used: that is the
+ * conventional obs-mirror pin, and a boot heartbeat sharing it makes "is the rig
+ * in an observation period" ambiguous for the first second after every reset.
+ *
+ * Before this branch existed the #else below applied, so LED_PIN was 3 -- box
+ * pin 3 is D3 on this board, an ORDINARY HEADER PIN. Two costs, both real:
+ * there was no visible boot indicator (so "is it even booting?" needed a console
+ * or a scope -- it came up on 2026-07-29 while diagnosing wall power), and every
+ * boot fired three 120 ms pulses into D3, which is a signal pin someone may have
+ * wired something to. A board-specific default that lands on a signal pin is
+ * worse than no default. */
+#define LED_PIN  9    /* D9  = P0_10, RED user LED (active low in DT)   */
+#define BTN_PIN  17   /* A5  = P0_23, also SW2                          */
 #else                 /* Teensy 4.x: board LED is gpio2.3 */
 #define LED_PIN  3    /* gpio2.3 = on-board LED                         */
 #define BTN_PIN  4    /* gpio2.4 = a free pin for a test button         */

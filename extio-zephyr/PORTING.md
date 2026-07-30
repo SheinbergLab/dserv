@@ -4727,24 +4727,33 @@ setting saved months ago is its own trap. The result reads as a narrative:
     reg: config link restored
     reg: registered as extio/box
 
-### Wall power — expected to work, NOT yet verified
+### Wall power — VERIFIED 2026-07-29
 
-With `console=uart` and `mode=eth` nothing on the box depends on USB: the CLI
-goes to the MCU-Link over PCB traces (enumeration irrelevant), the data pipe is
-suppressed, and uplink/PTP/dserv are all Ethernet. So J17 into a charger should
-run a configured box.
+Confirmed on two boxes: J17 into a charger, **no USB host anywhere**, and both ran
+fully — `link=1`, DHCP address, PTP synced, `cmds_rx` advancing on command. Proof
+was the absence of the console: `/dev/cu.usbmodem*` empty and `pyocd list` showing
+zero probes while dserv saw both boxes healthy. With `console=uart` and `mode=eth`
+nothing on the box depends on USB — the CLI goes to the MCU-Link over PCB traces
+(enumeration irrelevant), the data pipe is suppressed, and uplink/PTP/dserv are all
+Ethernet.
 
-Two caveats before relying on it. **USB-C CC negotiation** — the board must
-present sink pull-downs for a charger to deliver power; test with the ACTUAL
-charger. And **all local observability is gone** — no host on the VCOM, no CDC,
-so dserv over Ethernet is the only way to see the box, and a network
-misconfiguration then needs a physical visit.
+**THE RED LED FLASHES ON CHARGER POWER, AND THAT IS EXPECTED.** It is the MCU-Link
+PROBE's own status indicator saying it has power but no USB host to enumerate to.
+It says nothing about the target. This looked alarming enough on first sight to
+read as a power fault, and I spent a round chasing USB-C CC negotiation before
+David called it correctly as a debugger signal. Do not chase it.
 
-Check it with FRESHNESS, not the value — a dead box serves its last reading
-forever:
+To confirm a box is actually up, use FRESHNESS, not the value -- a dead box serves
+its last reading forever:
 
-    dservctl -c 'expr {([now]-[dservTimestamp extio/box/state/watchdog])/1000000}'
+    sh host/clock_sane.sh extio/box01 extio/box2
 
+and check `cmds_rx` MOVES (publishing is not the same as listening).
+
+The one real cost stands: **all local observability is gone.** No host on the VCOM,
+no CDC, so dserv over Ethernet is the only view, and a network misconfiguration
+then needs a physical visit. That is precisely what `clock_sane.sh` and the
+freshness checks are for.
 
 ## 2026-07-29 (evening) — a stable MAC, PTP that actually syncs, and four confounds I walked into
 
