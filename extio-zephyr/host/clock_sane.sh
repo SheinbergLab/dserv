@@ -62,10 +62,29 @@ for B in $BOXES; do
 
   PS=$((NS / 1000000000))
   if [ "$PS" -lt 1000000000 ] 2>/dev/null; then
-    echo "  $B  FAIL -- ptp/ns = ${PS}s is UPTIME, not epoch: counter is FREE-RUNNING."
+    # TOO EARLY is not the same as WRONG. Convergence takes 6-10 s from boot
+    # (measured, 16 boots), so a young box legitimately reads uptime for a moment.
+    # Reporting that as FAIL sends you debugging a healthy box -- which it did to me
+    # about a minute after this script was written.
+    UP=$(dservctl -c "catch {dservGet $B/state/watchdog} v; set v" 2>/dev/null | tr -d '\r')
+    case "$UP" in ''|*[!0-9]*) UP=999;; esac
+    if [ "$UP" -lt 20 ]; then
+      echo "  $B  TOO EARLY -- up ${UP}s, ptp/ns still uptime. Sync lands at 6-10 s;"
+      echo "        re-run in a few seconds before believing anything."
+      rc=1; continue
+    fi
+    echo "  $B  FAIL -- ptp/ns = ${PS}s is UPTIME, not epoch: counter is FREE-RUNNING"
+    echo "        after ${UP}s, which is long past the 6-10 s it should take."
     echo "        Every box-stamped timestamp is garbage and at_abs fires at an"
-    echo "        arbitrary time. Check the transport matches BOTH ends: this board"
-    echo "        needs CONFIG_PTP_IEEE_802_3_PROTOCOL and ptp4l -2."
+    echo "        arbitrary time. Most likely causes, in order:"
+    echo "        1. patches/enet-qos-rx-timestamp-race.patch is NOT applied to the"
+    echo "           Zephyr tree this image was built from (a west update erases it)."
+    echo "        2. The PTP transport does not match on both ends. Box and ptp4l must"
+    echo "           agree; a mismatch is SILENT. Default is UDP/IPv4 on both, i.e. no"
+    echo "           CONFIG_PTP_*_PROTOCOL override and no -2 on ptp4l."
+    echo "        3. No grandmaster reachable: check dserv-ptp4l@<iface> is running."
+    echo "        Enable CONFIG_NET_LOG + CONFIG_PTP_LOG_LEVEL_INF and look for"
+    echo "        'drops Sync without valid RX timestamp' -- that names cause 1."
     rc=1; continue
   fi
 

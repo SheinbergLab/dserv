@@ -5028,3 +5028,56 @@ accuracy from comparing a target against itself. The pattern in all of them: a
 number that looked like a measurement but was arithmetic on something already
 known. The defences that worked were `dservClear`-then-observe, an independent
 observer (the DI IRQ rather than the DO echo), and repeated trials instead of n=1.
+
+
+## 2026-07-29 (end) — a second board, and why the MAC is now derived not printed
+
+Bringing up the second MCXN947 exposed the cost of the MAC fix as committed: the
+printed address is PER BOARD, so a second card needs its own overlay edit and its
+own build — which breaks the single-image OTA shelf. David's call was to switch to
+the driver's UID-derived option instead:
+
+    &enet_mac {
+            /delete-property/ zephyr,random-mac-address;
+            nxp,unique-mac;
+    };
+
+`nxp,unique-mac` takes the low 3 bytes from a CRC of `hwinfo_get_device_id()` under
+the Freescale OUI with the LAA bit set. **Stable per chip, from ONE binary for the
+whole fleet.** The bug we actually needed to fix was INSTABILITY, not lack of global
+uniqueness, and this fixes that.
+
+**The `/delete-property/` is load-bearing, and the binding says so:** `nxp,unique-mac`
+"will be overridden if the node has zephyr,random-mac-address or local-mac-address
+also". Leave either in place and the whole block is a silent no-op that reads
+correctly and does nothing — the same failure shape as the un-qualified board
+overlay on day one.
+
+Known trade-off, taken deliberately: upstream frames the option as bringup-grade —
+"a very low likelihood that the mac address is the same as another on the network
+... such as, testing, bringup, demos" — because it is a 24-bit hash. For a handful
+of rig boxes that is fine. The printed MACs (00:04:9F:09:D9:C4 and
+00:04:9F:09:CA:BF) remain the fallback if it ever is not, at the cost of per-board
+builds.
+
+Verified on board 2: derived MAC `ae:9a:22:34:8f:bd`, **identical across two
+reboots with the same DHCP lease (.53)** — which is the whole point, and answers
+the natural worry directly: it does NOT change per flash, because the silicon UID
+does not change. The random-per-boot MAC is exactly why leases kept moving
+(.45 -> .48) earlier in the day.
+
+`name box2` + `dserv ip` + `save` was all the per-board config needed; a fresh card
+otherwise defaults to `name=box` and would collide with board 1 in dserv.
+
+### clock_sane.sh: TOO EARLY is not WRONG
+
+Using the new tool on a freshly booted board immediately produced a false FAIL,
+about a minute after writing it. Convergence takes 6-10 s, so a young box
+legitimately reads uptime for a moment. It now reports **TOO EARLY** below 20 s
+uptime, and the FAIL path lists causes in likelihood order — starting with "the
+patch is not applied to the tree this image was built from", since a `west update`
+silently erases it. The stale advice to use L2/`-2` is gone.
+
+Same principle as the staleness check: **the distinction between "wrong" and
+"don't know" is the tool's job**, and both of this evening's worst detours came from
+a tool that confidently reported the wrong one.

@@ -124,40 +124,47 @@
 /*
  * ---- a STABLE MAC, and why this is not cosmetic ----
  *
- * frdm_mcxn947.dtsi:361 sets `zephyr,random-mac-address`, so this board
- * synthesises a locally-administered MAC with a fixed ae:9a:22 prefix and THREE
- * RANDOM LOW BYTES AT EVERY BOOT. Unlike the RW612 -- whose MAC comes out of the
- * wireless OTP and is therefore stable -- nothing here is fused, so the board has
- * no persistent identity unless we give it one.
+ * frdm_mcxn947.dtsi:361 sets `zephyr,random-mac-address`, so this board synthesises
+ * a locally-administered MAC with THREE RANDOM LOW BYTES AT EVERY BOOT. Unlike the
+ * RW612 -- whose MAC comes out of the wireless OTP and is therefore stable --
+ * nothing here is fused, so the board has no persistent identity unless we give it
+ * one.
  *
- * Two consequences, both observed on 2026-07-29 and neither of which looks like a
- * MAC problem when you hit it:
+ * Two consequences, neither of which looks like a MAC problem when you hit it:
  *
  *   1. DHCP hands out a NEW LEASE EVERY REBOOT (.45 -> .46 -> .47 -> .48 across
  *      four reboots in one session), because the server correctly sees a new
- *      client each time. A static lease CANNOT fix this -- static leases are
- *      keyed on the MAC, which is the unstable thing.
+ *      client each time. A static lease CANNOT fix this -- static leases are keyed
+ *      on the MAC, which is the unstable thing.
  *   2. PTP `clockIdentity` IS DERIVED FROM THE MAC, so the box's PTP identity
  *      changes every boot too. A grandmaster sees a brand-new clock after each
  *      reset, and two identities observed an hour apart (ae9a22.fffe.062efb and
- *      ae9a22.fffe.fa28e2) were the SAME BOX.
+ *      ae9a22.fffe.fa28e2) were the SAME BOX -- which sent me hunting for a second
+ *      PTP clock on the LAN that did not exist.
  *
- * 00:04:9F is Freescale/NXP's OUI and this address is printed on the board by the
- * PHY, i.e. it is genuinely assigned and globally unique -- strictly better than
- * the locally-administered address we were inventing.
+ * DELETING THE RANDOM PROPERTY IS LOAD-BEARING, not tidiness. Per the binding,
+ * `nxp,unique-mac` "will be overridden if the node has zephyr,random-mac-address or
+ * local-mac-address also" -- so leaving either in place makes this whole block a
+ * silent no-op that reads correctly and changes nothing. That is the same failure
+ * shape as the un-qualified board overlay on day one.
  *
- * DELETING THE RANDOM PROPERTY IS THE LOAD-BEARING HALF. The driver checks the
- * random flag and calls gen_random_mac() when it is set, so `local-mac-address`
- * ALONE is silently ignored: the overlay reads correctly, builds clean, and the
- * MAC still changes every boot. Same failure shape as the un-qualified board
- * overlay on day one -- present, plausible, and doing nothing.
+ * WHY unique-mac RATHER THAN THE PRINTED ADDRESS. Each board has a real NXP MAC
+ * printed on it (00:04:9F:09:D9:C4 and 00:04:9F:09:CA:BF here), and using those
+ * would be globally unique -- but it needs ONE IMAGE PER BOARD, which breaks the
+ * single-image OTA shelf. `nxp,unique-mac` derives the low 3 bytes from a CRC of
+ * the silicon UID under the Freescale OUI with the LAA bit set, giving a STABLE
+ * per-chip address from ONE binary for the whole fleet.
  *
- * PER-BOARD, NOT GLOBAL: this address belongs to THIS physical board. A second
- * MCXN947 needs its own printed MAC here, or the two will collide.
+ * The bug we needed to fix was INSTABILITY, not lack of global uniqueness, and this
+ * fixes that. Note upstream frames the option as bringup-grade -- "a very low
+ * likelihood that the mac address is the same as another on the network ... such
+ * as, testing, bringup, demos" -- because it is a 24-bit hash. For a handful of rig
+ * boxes that is fine; if it ever is not, the printed MACs are the fallback, at the
+ * cost of per-board builds.
  */
 &enet_mac {
 	/delete-property/ zephyr,random-mac-address;
-	local-mac-address = [00 04 9f 09 d9 c4];
+	nxp,unique-mac;
 };
 
 /* ---- analog input: the ON-CHIP LPADC ----
