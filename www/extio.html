@@ -85,15 +85,22 @@
   .grp .gval { font-family: ui-monospace, Menlo, monospace; font-size: 13px; color: var(--muted);
                padding: 1px 9px; border-radius: 6px; background: var(--off); }
   .grp .gval.on { background: #14351f; color: var(--green); }
-.cfg { margin-left:auto; font-size:11px; text-decoration:none; padding:1px 8px;
-       border:1px solid #38405a; border-radius:9px; color:#8fb6dd; }
-.cfg:hover { border-color:#5aa9e6; color:#cfe4f7; }
+#cfgbar { display:inline-flex; align-items:center; gap:6px; font-size:12px; color:#8d95a8; }
+#cfgbar select, #cfgbar button { background:#141720; color:#dfe3ec; border:1px solid #38405a;
+       border-radius:5px; padding:2px 7px; font:inherit; font-size:12px; }
+#cfgbar button { cursor:pointer; }
+#cfgbar button:hover { border-color:#5aa9e6; }
 </style>
 </head>
 <body>
 <header>
   <h1>extio boxes</h1>
   <div id="page-nav-container"></div>
+  <span id="cfgbar" hidden>
+    <label for="cfgsel">configure</label>
+    <select id="cfgsel"></select>
+    <button id="cfggo" type="button">open</button>
+  </span>
   <span id="conn"><span class="dot"></span><span id="conn-msg">connecting</span></span>
 </header>
 <div id="grid"></div>
@@ -349,8 +356,7 @@ function cardHtml(b) {
 
     return `<div class="title"><span class="live ${alive ? 'on' : ''}"></span>` +
            `<span class="name">${esc(b.name)}</span>${obs}${xchip}${fw}${bchip}${ip}` +
-           `<a class="cfg" href="${cfgHref(b.name)}" target="_blank" rel="noopener" ` +
-           `title="Configure ${esc(b.name)} (opens a new tab)">configure</a></div>` + desc +
+           `</div>` + desc +
            `<div class="meta"><b>up</b> ${fmtUptime(b.uptimeUs)} · <b>seen</b> ${fmtAge(age)}${target}${sync}${bat}</div>` +
            di + groups + dout + ain;
 }
@@ -391,6 +397,34 @@ function render() {
         }
     }
     dirty = new Set();
+    syncCfgBar();
+}
+
+/* The configure control lives in the HEADER, not in the cards.
+ *
+ * Cards are pure mirrors of datapoints -- they are rebuilt whenever a value
+ * moves, which for a live box is about once a second. Anything clickable inside
+ * them therefore has a one-second window that keeps being reset under the
+ * pointer, because a click needs mousedown AND mouseup on the SAME element.
+ * That is fixable by memoising the markup (and it still is, below), but it
+ * makes every future card change quietly load-bearing: add one more live field
+ * and the buttons start missing again, for reasons nobody will connect.
+ *
+ * Keeping the cards read-only removes the class of bug instead of managing it.
+ * The header does not participate in the datapoint render loop at all, and the
+ * picker below is rebuilt only when the SET OF BOXES changes -- not when their
+ * values do -- so the control a person is aiming at simply never moves. */
+let cfgNames = '';
+function syncCfgBar() {
+    const names = [...boxes.keys()].sort();
+    const key = names.join(',');
+    if (key === cfgNames) return;              /* box list unchanged -- leave it alone */
+    cfgNames = key;
+    const bar = document.getElementById('cfgbar');
+    const sel = document.getElementById('cfgsel');
+    bar.hidden = names.length === 0;
+    const keep = sel.value;
+    sel.innerHTML = names.map(n => `<option${n === keep ? ' selected' : ''}>${esc(n)}</option>`).join('');
 }
 
 /* refresh ages + liveness once a second even without updates */
@@ -407,7 +441,15 @@ function setConn(ok, msg) {
     document.getElementById('conn-msg').textContent = msg;
 }
 
+function initCfgBar() {
+    document.getElementById('cfggo').addEventListener('click', () => {
+        const n = document.getElementById('cfgsel').value;
+        if (n) window.open(cfgHref(n), '_blank', 'noopener');
+    });
+}
+
 async function init() {
+    initCfgBar();
     /* ?host=<host[:port]> -> watch a different rig's dserv (default: the one serving this page) */
     const qsHost = new URLSearchParams(location.search).get('host');
     conn = new DservConnection({
