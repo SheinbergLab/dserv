@@ -31,6 +31,20 @@ namespace eval ess {
     variable sync_displaced [list]             ;# files displaced by sync (local edits overwritten)
     variable viewers_dir {}                    ;# directory for viewer plugins (served at /viewers/)
 
+    # ── Workgroup manifest cache ─────────────────────────────────────
+    #
+    # GET /api/v1/ess/manifest/<wg> returns every system's script
+    # checksums plus the lib checksums -- everything both the pull and
+    # push previews need. Fetching it once turns a 14-request preview
+    # into a single request and lets a push preview for any system run
+    # with no network at all. Operations that change registry state
+    # invalidate it; the TTL bounds staleness for a long-open dialog.
+    #
+    variable manifest_cache {}
+    variable manifest_cache_key {}
+    variable manifest_cache_time 0
+    variable manifest_cache_ttl 60000
+
     # ── Sync-displaced file management ───────────────────────────────
     #
     # When sync_system overwrites a local base file that differs from
@@ -781,15 +795,9 @@ namespace eval ess {
             lappend all_errors "libs: $e"
         }
 
-        # Get workgroup manifest to discover system names
-        set url "${registry_url}/api/v1/ess/manifest/${registry_workgroup}?version=${version}"
-
-        if {[catch {
-            set response [https_get $url]
-            set data [json_to_dict $response]
-        } err]} {
-            error "Failed to fetch workgroup manifest: $err"
-        }
+        # Discover system names. Forced fresh: this is the real pull, not a
+        # preview, so it must not run off a cached view of the registry.
+        set data [_manifest_fetch $version 1]
 
         foreach sys_manifest [dict get $data systems] {
             set sys_name [dict get $sys_manifest system]
@@ -806,10 +814,791 @@ namespace eval ess {
         set nerr [llength $all_errors]
         ess_info "Full sync: $total_pulled pulled, $total_unchanged unchanged, $nerr errors" "sync"
 
+        _manifest_invalidate
+
         return [dict create \
             pulled $total_pulled \
             unchanged $total_unchanged \
             errors $all_errors]
+    }
+
+    # ── Resolve commit/push user ─────────────────────────────────────
+    proc _resolve_commit_user {{user_override ""}} {
+        variable overlay_path
+        if {$user_override ne ""} { return $user_override }
+        if {$overlay_path ne ""} { return [file tail $overlay_path] }
+        if {[info exists ::env(USER)]} { return $::env(USER) }
+        return ""
+    }
+
+    proc _local_relkey {protocol filename} {
+        if {$protocol eq "" || $protocol eq "_" || $protocol eq "_system"} {
+            return $filename
+        }
+        return [file join $protocol $filename]
+    }
+
+    proc _derive_system_script_type {filename} {
+        set base [file rootname $filename]
+        if {[string match *_extract $base]} { return extract }
+        if {[string match *_analyze $base]} { return analyze }
+        return system
+    }
+
+    proc _derive_protocol_script_type {protocol filename} {
+        set base [file rootname $filename]
+        if {$base eq $protocol} { return protocol }
+        set prefix "${protocol}_"
+        if {[string first $prefix $base] == 0} {
+            return [string range $base [string length $prefix] end]
+        }
+        return $base
+    }
+
+
+    proc _sync_project {} {
+        variable current
+        if {[info exists current(project)] && $current(project) ne ""} {
+            return $current(project)
+        }
+        if {[info exists ::ess::paths::project] && $::ess::paths::project ne ""} {
+            return $::ess::paths::project
+        }
+        return "ess"
+    }
+
+    # ── System → shared-lib dependency closure ───────────────────────
+    #
+    # Push is scoped to a single system, but shared libs live in the
+    # project-wide lib/ directory. Offer only the libs the system
+    # actually pulls in: scan its scripts for `package require`, keep the
+    # names a project lib provides, resolve each to the one .tm file Tcl
+    # would load, then recurse through those libs' own requires --
+    # planko-3.0 requires thread_pool, which no system names directly.
+    #
+    proc _lib_versions_by_name {lib_dir} {
+        set out [dict create]
+        foreach f [glob -nocomplain -directory $lib_dir *.tm] {
+            set fname [file tail $f]
+            if {![regexp {^(.+)-(\d+[\.\d]*)\.tm$} $fname -> name version]} continue
+            dict lappend out $name [list $version $fname]
+        }
+        return $out
+    }
+
+    # Tcl's rule: "version or later, same major" (or an exact match when
+    # -exact was given). An empty request takes the highest available.
+    proc _lib_resolve_version {versions req exact} {
+        set best ""
+        set best_v ""
+        foreach entry $versions {
+            lassign $entry v fname
+            if {$req ne ""} {
+                if {$exact} {
+                    if {[package vcompare $v $req] != 0} continue
+                } else {
+                    if {[lindex [split $v .] 0] ne [lindex [split $req .] 0]} continue
+                    if {[package vcompare $v $req] < 0} continue
+                }
+            }
+            if {$best_v eq "" || [package vcompare $v $best_v] > 0} {
+                set best_v $v
+                set best $fname
+            }
+        }
+        return $best
+    }
+
+    # Returns a list of {name version exact} triples. Comment-only lines
+    # are skipped so documentation examples ("#  package require tilemap")
+    # do not register as real dependencies.
+    proc _scan_package_requires {path} {
+        set found [list]
+        if {![file isfile $path]} { return $found }
+        if {[catch { set f [open $path r] }]} { return $found }
+        set content [read $f]
+        close $f
+
+        set re {package\s+require\s+(-exact\s+)?([A-Za-z_][\w:]*)\s*([0-9][\w.]*)?}
+        foreach line [split $content \n] {
+            if {[string index [string trimleft $line] 0] eq "#"} continue
+            foreach {- exact name version} [regexp -all -inline $re $line] {
+                lappend found [list $name $version [expr {$exact ne ""}]]
+            }
+        }
+        return $found
+    }
+
+    proc _collect_tcl_files {dir} {
+        set out [list]
+        if {![file isdirectory $dir]} { return $out }
+        foreach entry [glob -nocomplain -directory $dir *] {
+            set tail [file tail $entry]
+            if {[string match .* $tail]} continue
+            if {[file isdirectory $entry]} {
+                lappend out {*}[_collect_tcl_files $entry]
+            } elseif {[string match *.tcl $tail]} {
+                lappend out $entry
+            }
+        }
+        return $out
+    }
+
+    proc _system_lib_closure {system} {
+        variable system_path
+
+        set project [_sync_project]
+        set lib_dir [file join $system_path $project lib]
+        set by_name [_lib_versions_by_name $lib_dir]
+        if {[dict size $by_name] == 0} { return [list] }
+
+        set pending [list]
+        foreach f [_collect_tcl_files [file join $system_path $project $system]] {
+            lappend pending {*}[_scan_package_requires $f]
+        }
+
+        set resolved [dict create]
+        set seen [dict create]
+
+        while {[llength $pending] > 0} {
+            set req [lindex $pending 0]
+            set pending [lrange $pending 1 end]
+            lassign $req name version exact
+
+            if {![dict exists $by_name $name]} continue
+            set key "$name|$version|$exact"
+            if {[dict exists $seen $key]} continue
+            dict set seen $key 1
+
+            set fname [_lib_resolve_version [dict get $by_name $name] $version $exact]
+            if {$fname eq "" || [dict exists $resolved $fname]} continue
+            dict set resolved $fname 1
+
+            lappend pending {*}[_scan_package_requires [file join $lib_dir $fname]]
+        }
+
+        return [lsort [dict keys $resolved]]
+    }
+
+    # ── Preview JSON emission ────────────────────────────────────────
+    #
+    # dict_to_json -deep cannot represent a list of dicts: Tcl gives it no
+    # way to tell one apart from a flat dict, so it emits the whole list as
+    # a single JSON string. Preview payloads are arrays of objects, so they
+    # are built with yajl explicitly.
+    #
+    proc _preview_int {v} {
+        if {[string is integer -strict $v]} { return $v }
+        return 0
+    }
+
+    proc _preview_obj_array {obj items} {
+        $obj array_open
+        foreach item $items {
+            $obj map_open
+            dict for {k v} $item {
+                $obj string $k string $v
+            }
+            $obj map_close
+        }
+        $obj array_close
+    }
+
+    proc _preview_str_array {obj items} {
+        $obj array_open
+        foreach item $items {
+            $obj string $item
+        }
+        $obj array_close
+    }
+
+    # Serialize one _sync_*_preview result (the libs group or one system).
+    proc _preview_group_json {obj p} {
+        $obj map_open
+        $obj string to_pull
+        _preview_obj_array $obj [dict get $p to_pull]
+        $obj string skipped
+        _preview_obj_array $obj [dict get $p skipped]
+        if {[dict exists $p extra]} {
+            $obj string extra
+            _preview_str_array $obj [dict get $p extra]
+        }
+        $obj string unchanged
+        $obj number [_preview_int [dict get $p unchanged]]
+        if {[dict exists $p error]} {
+            $obj string error string [dict get $p error]
+        }
+        $obj map_close
+    }
+
+    proc _api_protocol {protocol} {
+        if {$protocol eq "" || $protocol eq "_system"} { return "_" }
+        return $protocol
+    }
+
+    proc _manifest_invalidate {} {
+        variable manifest_cache
+        variable manifest_cache_key
+        variable manifest_cache_time
+        set manifest_cache {}
+        set manifest_cache_key {}
+        set manifest_cache_time 0
+    }
+
+    proc _manifest_fetch {{version "main"} {force 0}} {
+        variable registry_url
+        variable registry_workgroup
+        variable manifest_cache
+        variable manifest_cache_key
+        variable manifest_cache_time
+        variable manifest_cache_ttl
+
+        if {$registry_url eq ""} {
+            error "Registry URL not configured"
+        }
+        if {$registry_workgroup eq ""} {
+            error "Workgroup not configured"
+        }
+
+        set key "${registry_workgroup}|${version}"
+        set now [clock milliseconds]
+
+        set usable 0
+        if {$manifest_cache ne "" && $manifest_cache_key eq $key} {
+            if {($now - $manifest_cache_time) < $manifest_cache_ttl} { set usable 1 }
+        }
+        if {!$force && $usable} { return $manifest_cache }
+
+        set url "${registry_url}/api/v1/ess/manifest/${registry_workgroup}?version=${version}"
+        if {[catch { set response [https_get $url] } err]} {
+            error "Failed to fetch workgroup manifest: $err"
+        }
+        # Safe to parse as a dict: the manifest carries checksums only, not
+        # script content (content is what breaks json_to_dict elsewhere).
+        if {[catch { set data [json_to_dict $response] } err]} {
+            error "Failed to parse workgroup manifest: $err"
+        }
+
+        set manifest_cache $data
+        set manifest_cache_key $key
+        set manifest_cache_time $now
+        return $data
+    }
+
+    # filename -> checksum for every lib in the workgroup.
+    proc _manifest_libs {data} {
+        set out [dict create]
+        if {![dict exists $data libs]} { return $out }
+        foreach lib [dict get $data libs] {
+            if {![dict exists $lib filename]} continue
+            set cs ""
+            catch { set cs [dict get $lib checksum] }
+            dict set out [dict get $lib filename] $cs
+        }
+        return $out
+    }
+
+    # Returns [list found sys_entry].
+    proc _manifest_find_system {data system} {
+        if {[dict exists $data systems]} {
+            foreach sys [dict get $data systems] {
+                if {![dict exists $sys system]} continue
+                if {[dict get $sys system] eq $system} { return [list 1 $sys] }
+            }
+        }
+        return [list 0 [dict create]]
+    }
+
+    # relkey -> {protocol type filename checksum} for one manifest entry.
+    proc _manifest_scripts_of {sys_entry} {
+        set out [dict create]
+        if {![dict exists $sys_entry scripts]} { return $out }
+        foreach s [dict get $sys_entry scripts] {
+            set protocol ""
+            set stype ""
+            set filename ""
+            set checksum ""
+            catch { set protocol [dict get $s protocol] }
+            catch { set stype    [dict get $s type] }
+            catch { set filename [dict get $s filename] }
+            catch { set checksum [dict get $s checksum] }
+            if {$stype eq "" && $filename eq ""} continue
+            if {$filename eq ""} { set filename $stype }
+            dict set out [_local_relkey $protocol $filename] [dict create \
+                protocol $protocol type $stype filename $filename checksum $checksum]
+        }
+        return $out
+    }
+
+    proc _sync_libs_preview {server_libs} {
+        variable system_path
+
+        set project [_sync_project]
+        set lib_dir [file join $system_path $project lib]
+        set to_pull [list]
+        set skipped [list]
+        set unchanged 0
+
+        set manifest_path [_base_lib_manifest_path $project]
+        set manifest [_base_manifest_read $manifest_path]
+
+        dict for {filename server_checksum} $server_libs {
+            set local_file [file join $lib_dir $filename]
+
+            set local_checksum ""
+            if {[file exists $local_file]} {
+                set local_checksum [sha256 -file $local_file]
+            }
+
+            if {$local_checksum eq $server_checksum} {
+                incr unchanged
+                continue
+            }
+
+            set base_checksum [_base_entry_get $manifest $filename]
+            if {$local_checksum eq ""} {
+                set decision pull
+            } else {
+                set decision [_base_decide $base_checksum $local_checksum $server_checksum]
+            }
+
+            if {$decision eq "keep_local"} {
+                lappend skipped [dict create filename $filename decision $decision]
+            } else {
+                lappend to_pull [dict create filename $filename decision $decision]
+            }
+        }
+
+        return [dict create to_pull $to_pull skipped $skipped unchanged $unchanged]
+    }
+
+    proc _sync_system_preview {system server_scripts} {
+        variable system_path
+
+        set project [_sync_project]
+        set to_pull [list]
+        set skipped [list]
+        set extra [list]
+        set unchanged 0
+
+        set local_relsum [dict create]
+        set sys_dir [file join $system_path $project $system]
+
+        if {[file exists $sys_dir]} {
+            foreach type {system extract analyze viewer} {
+                set filename [_script_filename $system "" $type]
+                set filepath [file join $sys_dir $filename]
+                if {[file exists $filepath]} {
+                    dict set local_relsum $filename [sha256 -file $filepath]
+                }
+            }
+            foreach proto_dir [glob -nocomplain -type d [file join $sys_dir *]] {
+                set proto [file tail $proto_dir]
+                if {[string match .* $proto]} continue
+                foreach type {protocol loaders variants stim extract viewer} {
+                    set filename [_script_filename $system $proto $type]
+                    set filepath [file join $proto_dir $filename]
+                    if {[file exists $filepath]} {
+                        dict set local_relsum [file join $proto $filename] \
+                            [sha256 -file $filepath]
+                    }
+                }
+            }
+        }
+
+        set manifest_path [_base_manifest_path $project $system]
+        set manifest [_base_manifest_read $manifest_path]
+
+        dict for {relkey info} $server_scripts {
+            set reg_checksum [dict get $info checksum]
+
+            set local_checksum ""
+            if {[dict exists $local_relsum $relkey]} {
+                set local_checksum [dict get $local_relsum $relkey]
+            }
+
+            if {$local_checksum eq $reg_checksum} {
+                incr unchanged
+                continue
+            }
+
+            set base_checksum [_base_entry_get $manifest $relkey]
+            if {$local_checksum eq ""} {
+                set decision pull
+            } else {
+                set decision [_base_decide $base_checksum $local_checksum $reg_checksum]
+            }
+
+            set entry [dict create \
+                relpath $relkey \
+                protocol [dict get $info protocol] \
+                type [dict get $info type] \
+                decision $decision]
+
+            if {$decision eq "keep_local"} {
+                lappend skipped $entry
+            } else {
+                lappend to_pull $entry
+            }
+        }
+
+        dict for {relkey cs} $local_relsum {
+            if {![dict exists $server_scripts $relkey]} {
+                lappend extra $relkey
+            }
+        }
+
+        return [dict create to_pull $to_pull skipped $skipped extra $extra unchanged $unchanged]
+    }
+
+    proc sync_preview {args} {
+        set version "main"
+        set force 0
+        for {set i 0} {$i < [llength $args]} {incr i} {
+            set a [lindex $args $i]
+            switch -- $a {
+                -force   { set force 1 }
+                -version { incr i; set version [lindex $args $i] }
+                default  { set version $a }
+            }
+        }
+
+        set data [_manifest_fetch $version $force]
+
+        set lib_preview [_sync_libs_preview [_manifest_libs $data]]
+        set systems [dict create]
+
+        if {[dict exists $data systems]} {
+            foreach sys_manifest [dict get $data systems] {
+                if {![dict exists $sys_manifest system]} continue
+                set sys_name [dict get $sys_manifest system]
+                dict set systems $sys_name [_sync_system_preview $sys_name \
+                    [_manifest_scripts_of $sys_manifest]]
+            }
+        }
+
+        package require yajltcl
+        set obj [yajl create #auto]
+        $obj map_open
+        $obj string libs
+        _preview_group_json $obj $lib_preview
+        $obj string systems
+        $obj map_open
+        dict for {sys_name sys_preview} $systems {
+            $obj string $sys_name
+            _preview_group_json $obj $sys_preview
+        }
+        $obj map_close
+        $obj map_close
+        set result [$obj get]
+        $obj delete
+        return $result
+    }
+
+    proc _push_scan_local_only {sys_dir server_relkeys} {
+        set results [list]
+        if {![file exists $sys_dir]} { return $results }
+
+        foreach entry [glob -nocomplain -directory $sys_dir *] {
+            if {[file isdirectory $entry]} {
+                set proto [file tail $entry]
+                if {[string match .* $proto]} continue
+                foreach sub [glob -nocomplain -directory $entry *] {
+                    if {[file isdirectory $sub]} continue
+                    set name [file tail $sub]
+                    if {[string match .* $name]} continue
+                    if {![regexp {\.(tcl|js)$} $name]} continue
+                    set relkey [_local_relkey $proto $name]
+                    if {[dict exists $server_relkeys $relkey]} continue
+                    lappend results [dict create \
+                        protocol $proto \
+                        type [_derive_protocol_script_type $proto $name] \
+                        filename $name \
+                        relkey $relkey]
+                }
+            } else {
+                set name [file tail $entry]
+                if {[string match .* $name]} continue
+                if {![regexp {\.(tcl|js)$} $name]} continue
+                set relkey $name
+                if {[dict exists $server_relkeys $relkey]} continue
+                lappend results [dict create \
+                    protocol "_" \
+                    type [_derive_system_script_type $name] \
+                    filename $name \
+                    relkey $relkey]
+            }
+        }
+        return $results
+    }
+
+    proc push_preview {system args} {
+        variable system_path
+
+        set version "main"
+        set fresh 0
+        for {set i 0} {$i < [llength $args]} {incr i} {
+            set a [lindex $args $i]
+            switch -- $a {
+                -fresh   -
+                -force   { set fresh 1 }
+                -version { incr i; set version [lindex $args $i] }
+                default  { set version $a }
+            }
+        }
+
+        set data [_manifest_fetch $version $fresh]
+
+        set project [_sync_project]
+        set sys_dir [file join $system_path $project $system]
+        set changed [list]
+        set new_scripts [list]
+        set missing [list]
+        set unchanged 0
+
+        lassign [_manifest_find_system $data $system] system_exists sys_entry
+
+        set server_scripts [dict create]
+        if {$system_exists} {
+            set server_scripts [_manifest_scripts_of $sys_entry]
+        }
+        set server_relkeys [dict create]
+        dict for {relkey -} $server_scripts {
+            dict set server_relkeys $relkey 1
+        }
+
+        dict for {relkey info} $server_scripts {
+            set protocol [dict get $info protocol]
+            set filename [dict get $info filename]
+            if {$protocol eq "" || $protocol eq "_system"} {
+                set local_path [file join $sys_dir $filename]
+            } else {
+                set local_path [file join $sys_dir $protocol $filename]
+            }
+
+            if {![file exists $local_path]} {
+                lappend missing $relkey
+                continue
+            }
+
+            set local_hash [sha256 -file $local_path]
+            if {$local_hash eq [dict get $info checksum]} {
+                incr unchanged
+            } else {
+                lappend changed [dict create \
+                    relkey $relkey \
+                    protocol $protocol \
+                    type [dict get $info type] \
+                    filename $filename \
+                    checksum [dict get $info checksum]]
+            }
+        }
+
+        set new_scripts [_push_scan_local_only $sys_dir $server_relkeys]
+
+        # Only the libs this system depends on, and only those with local
+        # changes. Lib checksums ride along in the same manifest, so this
+        # costs no extra request.
+        set libs [list]
+        set sys_libs [_system_lib_closure $system]
+        if {[llength $sys_libs] > 0} {
+            set lib_status [_lib_status_compare [_manifest_libs $data]]
+            foreach fname $sys_libs {
+                if {![dict exists $lib_status $fname]} continue
+                set st [dict get $lib_status $fname]
+                if {$st eq "modified" || $st eq "local_only"} {
+                    lappend libs $fname
+                }
+            }
+        }
+
+        package require yajltcl
+        set obj [yajl create #auto]
+        $obj map_open
+        $obj string system string $system
+        $obj string systemExists bool $system_exists
+        $obj string changed
+        _preview_obj_array $obj $changed
+        $obj string new
+        _preview_obj_array $obj $new_scripts
+        $obj string missing
+        _preview_str_array $obj $missing
+        $obj string unchanged
+        $obj number [_preview_int $unchanged]
+        $obj string libs
+        _preview_str_array $obj $libs
+        $obj map_close
+        set result [$obj get]
+        $obj delete
+        return $result
+    }
+
+    proc _push_put_script {system project relkey script_info user comment manifest_path manifest} {
+        variable registry_url
+        variable registry_workgroup
+
+        set protocol [dict get $script_info protocol]
+        set stype    [dict get $script_info type]
+        set filename [dict get $script_info filename]
+        set server_cs ""
+        if {[dict exists $script_info checksum]} {
+            set server_cs [dict get $script_info checksum]
+        }
+
+        if {$protocol eq "" || $protocol eq "_system" || $protocol eq "_"} {
+            set local_file [file join $::ess::system_path $project $system $filename]
+            set api_protocol "_"
+        } else {
+            set local_file [file join $::ess::system_path $project $system $protocol $filename]
+            set api_protocol $protocol
+        }
+
+        if {![file exists $local_file]} {
+            error "Local file not found: $relkey"
+        }
+
+        set f [open $local_file r]
+        set content [read $f]
+        close $f
+
+        set expected [_base_entry_get $manifest $relkey]
+        if {$expected eq ""} { set expected $server_cs }
+
+        set url "${registry_url}/api/v1/ess/script/${registry_workgroup}/${system}/${api_protocol}/${stype}"
+        set body [dict_to_json [dict create \
+            content $content \
+            updatedBy $user \
+            comment $comment \
+            expectedChecksum $expected]]
+
+        set response [https_put $url $body]
+
+        set new_checksum ""
+        catch { set new_checksum [json_get $response checksum] }
+        if {$new_checksum eq ""} { set new_checksum [sha256 $content] }
+        _base_entry_set manifest $relkey $new_checksum main $user
+        return $new_checksum
+    }
+
+    proc push_system {system args} {
+        variable registry_url
+        variable registry_workgroup
+        variable current
+
+        set user_override ""
+        set comment ""
+        set include_libs 0
+        set add_new 0
+
+        foreach {key val} $args {
+            switch -- $key {
+                -user          { set user_override $val }
+                -comment       { set comment $val }
+                -include_libs  { set include_libs $val }
+                -add           { set add_new 1 }
+            }
+        }
+
+        if {$registry_url eq ""} {
+            error "Registry URL not configured"
+        }
+        if {$registry_workgroup eq ""} {
+            error "Workgroup not configured"
+        }
+
+        set user [_resolve_commit_user $user_override]
+        if {$user ne ""} {
+            set role [_get_user_role $user]
+            if {$role eq "viewer"} {
+                error "User '$user' has role 'viewer' and cannot push to registry"
+            }
+        }
+
+        if {$comment eq ""} {
+            set comment "pushed from dserv"
+        }
+
+        set preview_json [push_preview $system -fresh]
+        set preview [json_to_dict $preview_json]
+
+        set changed [dict get $preview changed]
+        set new_scripts [dict get $preview new]
+        set system_exists [dict get $preview systemExists]
+        set lib_list [dict get $preview libs]
+
+        if {!$system_exists && !$add_new && ([llength $new_scripts] > 0 || [llength $changed] > 0)} {
+            error "System '$system' not on registry — use -add to create and push new scripts"
+        }
+
+        if {!$system_exists && $add_new && [llength $new_scripts] > 0} {
+            set first_proto "_"
+            foreach entry $new_scripts {
+                set p [dict get $entry protocol]
+                if {$p ne "" && $p ne "_" && $p ne "_system"} {
+                    set first_proto $p
+                    break
+                }
+            }
+            set scaffold_url "${registry_url}/api/v1/ess/scaffold/system"
+            set scaffold_body [dict_to_json [dict create \
+                workgroup $registry_workgroup \
+                system $system \
+                protocol $first_proto \
+                createdBy $user]]
+            if {[catch { https_post $scaffold_url $scaffold_body } serr]} {
+                error "Failed to scaffold system $system: $serr"
+            }
+        }
+
+        set project $current(project)
+        set manifest_path [_base_manifest_path $project $system]
+        set manifest [_base_manifest_read $manifest_path]
+
+        set pushed 0
+        set added 0
+        set lib_pushed 0
+        set errors [list]
+
+        foreach entry $changed {
+            set relkey [dict get $entry relkey]
+            if {[catch {
+                _push_put_script $system $project $relkey $entry $user $comment \
+                    $manifest_path manifest
+                incr pushed
+            } err]} {
+                lappend errors "$relkey: $err"
+            }
+        }
+
+        if {$add_new} {
+            foreach entry $new_scripts {
+                set relkey [dict get $entry relkey]
+                if {[catch {
+                    _push_put_script $system $project $relkey $entry $user $comment \
+                        $manifest_path manifest
+                    incr added
+                } err]} {
+                    lappend errors "$relkey: $err"
+                }
+            }
+        }
+
+        _base_manifest_write $manifest_path $manifest
+
+        if {$include_libs && [llength $lib_list] > 0} {
+            foreach fname $lib_list {
+                if {[catch {
+                    commit_lib $fname $comment $user
+                    incr lib_pushed
+                } lerr]} {
+                    lappend errors "lib/$fname: $lerr"
+                }
+            }
+        }
+
+        _manifest_invalidate
+
+        return [dict create pushed $pushed added $added lib_pushed $lib_pushed errors $errors]
     }
 
     # ── Push overlay file to server sandbox ───────────────────────────
@@ -953,7 +1742,7 @@ namespace eval ess {
     # type: system, protocol, loaders, variants, stim, etc.
     # comment: optional commit message
     #
-    proc commit_script {type {comment ""}} {
+    proc commit_script {type {comment ""} {user_override ""}} {
         variable system_path
         variable overlay_path
         variable registry_url
@@ -989,13 +1778,7 @@ namespace eval ess {
         # Map to registry API type and protocol
         lassign [_registry_type_mapping $type $current(protocol)] api_type api_protocol
 
-        # Identify who is committing
-        set user ""
-        if {$overlay_path ne ""} {
-            set user [file tail $overlay_path]
-        } elseif {[info exists ::env(USER)]} {
-            set user $::env(USER)
-        }
+        set user [_resolve_commit_user $user_override]
 
         # Check user's role before attempting commit
         if {$user ne ""} {
@@ -1061,6 +1844,7 @@ namespace eval ess {
         _base_manifest_write $manifest_path $manifest
 
         ess_info "Committed $type to registry ($registry_workgroup/$system)" "sync"
+        _manifest_invalidate
         return "success"
     }
 
@@ -1252,7 +2036,7 @@ namespace eval ess {
     # Reads the base lib file and PUTs it to the registry.
     # Requires the lib to be promoted (in base) first if overlay was active.
     #
-    proc commit_lib {filename {comment ""}} {
+    proc commit_lib {filename {comment ""} {user_override ""}} {
         variable system_path
         variable overlay_path
         variable registry_url
@@ -1286,13 +2070,7 @@ namespace eval ess {
             set version $v
         }
 
-        # Identify user
-        set user ""
-        if {$overlay_path ne ""} {
-            set user [file tail $overlay_path]
-        } elseif {[info exists ::env(USER)]} {
-            set user $::env(USER)
-        }
+        set user [_resolve_commit_user $user_override]
 
         # Check role
         if {$user ne ""} {
@@ -1320,6 +2098,7 @@ namespace eval ess {
         }
 
         ess_info "Committed lib $filename to registry ($registry_workgroup)" "sync"
+        _manifest_invalidate
         return "success"
     }
 
@@ -1458,63 +2237,65 @@ namespace eval ess {
     # Returns dict of {filename status} where status is:
     #   synced, modified, local_only, registry_only
     #
-    proc lib_sync_status {} {
+    # Compare local lib files against a filename -> checksum map. Shared
+    # by lib_sync_status (which fetches that map) and push_preview (which
+    # already has it from the workgroup manifest).
+    proc _lib_status_compare {server_libs} {
         variable system_path
-        variable registry_url
-        variable registry_workgroup
-        variable current
 
-        if {$registry_url eq ""} {
-            error "Registry URL not configured"
-        }
-
-        set project $current(project)
+        set project [_sync_project]
         set lib_dir [file join $system_path $project lib]
         set result [dict create]
+        set remaining $server_libs
 
-        # Get registry lib list with checksums
-        set url "${registry_url}/api/v1/ess/libs?workgroup=${registry_workgroup}"
-        if {[catch {
-            set response [https_get $url]
-            set data [json_to_dict $response]
-        } err]} {
-            ess_error "Failed to fetch lib list for sync status: $err" "sync"
-            return $result
-        }
-
-        set server_libs [dict create]
-        foreach lib [dict get $data libs] {
-            set fname [dict get $lib filename]
-            dict set server_libs $fname [dict get $lib checksum]
-        }
-
-        # Check local files against server
         if {[file exists $lib_dir]} {
             foreach f [glob -nocomplain -type f [file join $lib_dir *.tm]] {
                 set fname [file tail $f]
                 set local_checksum [sha256 -file $f]
 
-                if {[dict exists $server_libs $fname]} {
-                    set remote_checksum [dict get $server_libs $fname]
-                    if {$local_checksum eq $remote_checksum} {
+                if {[dict exists $remaining $fname]} {
+                    if {$local_checksum eq [dict get $remaining $fname]} {
                         dict set result $fname synced
                     } else {
                         dict set result $fname modified
                     }
-                    # Remove from server_libs so we can find registry_only later
-                    dict unset server_libs $fname
+                    dict unset remaining $fname
                 } else {
                     dict set result $fname local_only
                 }
             }
         }
 
-        # Any remaining server libs are registry_only
-        dict for {fname checksum} $server_libs {
+        dict for {fname checksum} $remaining {
             dict set result $fname registry_only
         }
 
         return $result
+    }
+
+    proc lib_sync_status {} {
+        variable registry_url
+        variable registry_workgroup
+
+        if {$registry_url eq ""} {
+            error "Registry URL not configured"
+        }
+
+        set url "${registry_url}/api/v1/ess/libs?workgroup=${registry_workgroup}"
+        if {[catch {
+            set response [https_get $url]
+            set data [json_to_dict $response]
+        } err]} {
+            ess_error "Failed to fetch lib list for sync status: $err" "sync"
+            return [dict create]
+        }
+
+        set server_libs [dict create]
+        foreach lib [dict get $data libs] {
+            dict set server_libs [dict get $lib filename] [dict get $lib checksum]
+        }
+
+        return [_lib_status_compare $server_libs]
     }
 
     # ── Helper: map internal type to registry API type + protocol ────
