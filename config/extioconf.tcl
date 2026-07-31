@@ -1179,9 +1179,27 @@ proc extio_ota_arm {box} {
     # Refuse locally rather than let the box refuse: same outcome, but the
     # reason is specific and arrives without a round trip. flash_verify is a
     # READ-BACK; ota/state=ok only means the bytes crossed the link.
-    set fv 0 ; catch { set fv [dservGet extio/$box/state/ota/flash_verify] }
+    # ABSENT and ZERO ARE DIFFERENT ANSWERS, and conflating them sends you to fix
+    # the wrong thing. `catch {set fv [dservGet ...]}` leaving fv at 0 reports
+    # "verify failed" for a datapoint that was never readable here -- which is
+    # what it did on 2026-07-31 while the box console plainly said
+    # "slot1 sha MATCHES". Say which one it is.
+    if { ![dservExists extio/$box/state/ota/flash_verify] } {
+        return "extio_ota_arm: $box -- state/ota/flash_verify is NOT PRESENT.\
+                Either verify has not run, or its reply is not reaching this\
+                interp. Check the box console: if it says `slot1 sha MATCHES`\
+                then the box answered and the datapoint is being lost between\
+                the box and here."
+    }
+    set fv [dservGet extio/$box/state/ota/flash_verify]
     if { $fv != 1 } {
-        return "extio_ota_arm: $box has no verified image (flash_verify=$fv) -- run extio_ota_verify $box first"
+        return "extio_ota_arm: $box read-back verify FAILED (flash_verify=$fv)\
+                -- the slot does not hold the image that was sent"
+    }
+    if { [dservExists extio/$box/state/ota/hdr_ok]
+         && [dservGet extio/$box/state/ota/hdr_ok] != 1 } {
+        return "extio_ota_arm: $box has no MCUboot header where MCUboot looks\
+                (hdr_ok=[dservGet extio/$box/state/ota/hdr_ok]) -- arm would be refused"
     }
     extio_request $box "arm" ota/arm 1 ota/arm {ne ""} 30000 \
         extio_ota_arm_done extio_ota_step_fail {ota/arm ota/arm_rc fw_ver}
