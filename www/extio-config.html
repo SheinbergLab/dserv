@@ -185,6 +185,23 @@ async function doSave(box) {
   await conn.send(`extio_cfg_save ${box}`, 'extio');
   dirty.clear(); renderPanel();
 }
+/* OTA. The lifecycle driver does the ordering, the retry-vs-fail decisions and
+ * the deadlines (config/extioconf.tcl); the page is a window onto
+ * state/ota/lifecycle, which is exactly why that roll-up key exists. Anything
+ * cleverer here would be a second, divergent implementation of a state machine
+ * that already has tests. */
+async function otaUpdate(box, channel) {
+  if (!confirm(`Update ${box} from the ${channel} shelf?\n\nThe box will reboot into a TRIAL boot and must be confirmed, or it reverts.`)) return;
+  try { alert(await conn.send(`extio_ota_update ${box} ${channel}`, 'extio')); }
+  catch (e) { alert('update failed to start: ' + (e.message || e)); }
+  renderPanel();
+}
+async function otaAbort(box)   { try { await conn.send(`extio_ota_abort ${box}`, 'extio'); } catch (e) {} renderPanel(); }
+async function otaConfirm(box) {
+  try { alert(await conn.send(`extio_ota_confirm ${box}`, 'extio')); }
+  catch (e) { alert('confirm failed: ' + (e.message || e)); }
+}
+
 async function doReboot(box) {
   if (dirty.size && !confirm(`${dirty.size} unsaved change(s) will be LOST. Reboot anyway?`)) return;
   await conn.send(`extio_cfg_reboot ${box}`, 'extio');
@@ -265,6 +282,59 @@ function panelBusy() {
   const a = document.activeElement;
   return a && a !== document.body && document.getElementById('panel')?.contains(a);
 }
+/* Phases that mean "something is in flight" -- Abort is offered, Update is not. */
+const OTA_BUSY = ['staging', 'verifying', 'arming', 'trial', 'confirming'];
+
+function fwSection(b) {
+  const lc   = get(b, 'ota/lifecycle', null);
+  const msg  = get(b, 'ota/lifecycle_msg', '');
+  const prog = get(b, 'ota/progress', null);
+  const trial = get(b, 'ota/trial') == 1;
+  const ch   = get(b, 'channel', 'dev');
+  const busy = lc !== null && OTA_BUSY.includes(String(lc));
+  const dead = liveness(b).cls === 'bad';
+
+  /* THE TRIAL STATE IS THE DANGEROUS ONE and gets the loudest treatment on the
+   * page: between arm and confirm, ANY reset reverts. That is the safety
+   * property working as designed, but it is also the state in which a box
+   * quietly loses an update nobody realises was pending. */
+  const trialBanner = trial ? `<div id="dirty" style="background:#3a1f15;border-color:#7a3a36;color:#ffb4a8">
+      <b>TRIAL BOOT — not yet permanent.</b> ${get(b, 'fw_ver', '?')} is running unconfirmed.
+      Any reset reverts it to the previous image.
+      <button class="primary" style="margin-left:10px" onclick="otaConfirm('${b}')">Confirm</button>
+      <span class="age" style="margin-left:8px">to reject: do not confirm — power cycle</span>
+    </div>` : '';
+
+  /* lifecycle is published only by extio_ota_update. A box driven by hand has
+   * none, so say so rather than rendering an empty progress line that looks
+   * like a stalled transfer. */
+  const lcRow = lc === null
+    ? `<tr><th>lifecycle</th><td colspan="3" class="age">no run recorded — updates driven by hand do not publish it</td></tr>`
+    : `<tr><th>lifecycle</th><td><b>${lc}</b> ${ageSpan(b, 'ota/lifecycle')}${
+         prog !== null && busy ? ` · ${prog}%` : ''}</td>
+       <td colspan="2" class="age">${msg}</td></tr>`;
+
+  return `
+    <h2>firmware</h2>
+    ${trialBanner}
+    <table>
+      <tr><th>running</th><td>${get(b, 'fw_ver', '—')} ${ageSpan(b, 'fw_ver')}</td>
+          <th>channel</th><td>${ch}</td></tr>
+      <tr><th>staged</th><td>${get(b, 'ota/staged_ver', '—')}</td>
+          <th>history</th><td class="age">${get(b, 'ota/updates', 0)} updates ·
+              ${get(b, 'ota/reverts', 0)} reverts · ${get(b, 'ota/rejects', 0)} rejects</td></tr>
+      ${lcRow}
+    </table>
+    <div style="display:flex;gap:10px;margin-top:10px">
+      <button ${busy || dead ? 'disabled' : ''} onclick="otaUpdate('${b}','${ch}')">
+        Update from ${ch} shelf</button>
+      <button class="danger" ${busy ? '' : 'disabled'} onclick="otaAbort('${b}')">Abort</button>
+    </div>
+    <p class="note">${dead ? 'Box is offline — an update cannot be started.' :
+      'Stage → verify → arm → trial boot → confirm, driven by <code>extio_ota_update</code>. ' +
+      'A box will refuse an image it is already running, so the shelf version must differ.'}</p>`;
+}
+
 function renderPanel() {
   if (panelBusy()) { redrawPending = true; return; }
   redrawPending = false;
@@ -411,6 +481,8 @@ function renderPanel() {
        told. They differ legitimately — held during an OTA, no group defined, or no pin in
        <code>ain</code> mode. Any <code>throttled</code> at all means a group is publishing faster
        than the uplink can afford.</p>
+
+    ${fwSection(b)}
 
     <h2>actions</h2>
     <div style="display:flex;gap:10px">
