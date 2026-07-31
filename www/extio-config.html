@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>extio setup</title>
+<link rel="stylesheet" href="css/page_nav.css">
+<style>
+:root {
+  --bg:#12141a; --panel:#1b1e26; --line:#2b3040; --ink:#dfe3ec; --dim:#8d95a8;
+  --ok:#4ec97a; --warn:#e3b341; --bad:#e5534b; --accent:#5aa9e6;
+}
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg); color:var(--ink);
+       font:14px/1.45 ui-sans-serif,-apple-system,Segoe UI,Roboto,sans-serif; }
+header { display:flex; align-items:center; gap:12px; padding:10px 16px;
+         border-bottom:1px solid var(--line); background:var(--panel); }
+header h1 { font-size:15px; margin:0; font-weight:600; letter-spacing:.02em; }
+#conn { font-size:12px; color:var(--dim); }
+#conn.up::before   { content:"● "; color:var(--ok); }
+#conn.down::before { content:"● "; color:var(--bad); }
+
+main { display:grid; grid-template-columns:300px 1fr; gap:0; height:calc(100vh - 45px); }
+#fleet { border-right:1px solid var(--line); overflow-y:auto; background:var(--panel); }
+#panel { overflow-y:auto; padding:16px 20px; }
+
+.box { padding:10px 14px; border-bottom:1px solid var(--line); cursor:pointer; }
+.box:hover { background:#222634; }
+.box.sel  { background:#243049; box-shadow:inset 3px 0 0 var(--accent); }
+.box .nm  { font-weight:600; display:flex; justify-content:space-between; align-items:baseline; }
+.box .sub { font-size:12px; color:var(--dim); margin-top:2px; }
+/* OFFLINE IS A VISUAL STATE, not a field you have to read. dserv retains every
+   datapoint forever, so a dead box renders a complete and entirely current-
+   looking card unless the UI says otherwise. */
+.box.stale { opacity:.45; }
+.pill { font-size:11px; padding:1px 7px; border-radius:9px; border:1px solid var(--line); }
+.pill.ok   { color:var(--ok);   border-color:#2c5b3c; }
+.pill.warn { color:var(--warn); border-color:#5b4a1e; }
+.pill.bad  { color:var(--bad);  border-color:#5b2c29; }
+
+h2 { font-size:13px; text-transform:uppercase; letter-spacing:.08em; color:var(--dim);
+     margin:22px 0 8px; font-weight:600; }
+h2:first-child { margin-top:0; }
+table { border-collapse:collapse; width:100%; max-width:900px; }
+td,th { padding:4px 10px 4px 0; text-align:left; vertical-align:top; font-size:13px; }
+th { color:var(--dim); font-weight:500; }
+tr.row:hover { background:#1e2230; }
+.age { font-size:11px; color:var(--dim); }
+.age.old { color:var(--warn); }
+.age.dead { color:var(--bad); }
+input,select { background:#141720; color:var(--ink); border:1px solid var(--line);
+               border-radius:4px; padding:3px 6px; font:inherit; font-size:13px; }
+input:focus,select:focus { outline:none; border-color:var(--accent); }
+input.w4 { width:78px; } input.w8 { width:150px; }
+button { background:#232838; color:var(--ink); border:1px solid var(--line);
+         border-radius:5px; padding:5px 12px; font:inherit; font-size:13px; cursor:pointer; }
+button:hover:not(:disabled) { border-color:var(--accent); }
+button:disabled { opacity:.4; cursor:default; }
+button.primary { background:#1d4f7c; border-color:#2d6da6; }
+button.danger  { background:#5b2c29; border-color:#7a3a36; }
+#dirty { margin:14px 0; padding:9px 12px; border-radius:6px;
+         background:#3a3115; border:1px solid #5b4a1e; color:var(--warn); font-size:13px; }
+#dirty.hide { display:none; }
+.note { color:var(--dim); font-size:12px; margin:6px 0 0; max-width:760px; }
+.empty { color:var(--dim); padding:40px 0; text-align:center; }
+code { background:#141720; padding:1px 5px; border-radius:3px; font-size:12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>extio setup</h1>
+  <span id="conn" class="down">connecting…</span>
+  <span style="flex:1"></span>
+  <span class="age" id="hint">config applies live · Save persists it</span>
+</header>
+
+<main>
+  <div id="fleet"><div class="empty">looking for boxes…</div></div>
+  <div id="panel"><div class="empty">select a box</div></div>
+</main>
+
+<script src="js/ws_manager.js"></script>
+<script src="js/DatapointManager.js"></script>
+<script src="js/PageNav.js"></script>
+<script>
+/* extio setup page -- fleet list + per-box configuration, over datapoints.
+ *
+ * SCOPE, deliberately: everything a box can be told once it is ALREADY talking
+ * to dserv. Bringing an unconfigured box onto the network (serial, the UDP
+ * beacon, its first address) stays with extio-setup, because none of it can be
+ * done through a datapoint the box cannot yet receive. The one overlap is
+ * dserv/ip: settable here, because a box that is connected can be re-pointed at
+ * another dserv -- it just cannot be pointed at its first one.
+ *
+ * TWO RULES THIS PAGE EXISTS TO ENFORCE, both learned the hard way:
+ *
+ *   1. dserv RETAINS. Every value below is rendered WITH ITS AGE, and a box
+ *      whose watchdog has stopped advancing goes visibly dim. A dead box
+ *      otherwise serves its last values forever and every field reads healthy --
+ *      that has produced wrong conclusions repeatedly, including a test harness
+ *      that scored 8/8 while measuring nothing.
+ *   2. LIVE IS NOT SAVED. Config applies immediately and is lost on reboot until
+ *      cmd/save. The banner tracks exactly which leaves are dirty.
+ */
+let conn = null, dp = null;
+const boxes = new Map();          /* name -> {leaf: {v, t}} */
+let sel = null, fetched = new Set();
+
+const now = () => Date.now() * 1000;   /* dserv timestamps are microseconds */
+
+function setConn(up, msg) {
+  const el = document.getElementById('conn');
+  el.className = up ? 'up' : 'down';
+  el.textContent = msg;
+}
+
+/* ---- datapoint plumbing ---- */
+function onExtio(name, val, ts) {
+  const m = /^extio\/([^/]+)\/state\/(.+)$/.exec(name);
+  if (!m) return;
+  const [, box, leaf] = m;
+  if (!boxes.has(box)) boxes.set(box, {});
+  boxes.get(box)[leaf] = { v: val, t: ts || now() };
+  renderFleet();
+  if (box === sel) renderPanel();
+}
+
+const get = (box, leaf, dflt = null) => {
+  const b = boxes.get(box); if (!b || !(leaf in b)) return dflt;
+  return b[leaf].v;
+};
+const ageOf = (box, leaf) => {
+  const b = boxes.get(box); if (!b || !(leaf in b)) return null;
+  return (now() - b[leaf].t) / 1e6;
+};
+
+/* A box is live if its WATCHDOG is advancing -- not if it has values. The
+ * watchdog is published once a second for exactly this purpose, and it is the
+ * only leaf whose staleness is unambiguous. */
+function liveness(box) {
+  const a = ageOf(box, 'watchdog');
+  if (a === null) return { cls: 'bad', txt: 'no watchdog' };
+  if (a > 10) return { cls: 'bad',  txt: 'offline ' + fmtAge(a) };
+  if (a > 3)  return { cls: 'warn', txt: 'slow ' + fmtAge(a) };
+  return { cls: 'ok', txt: 'live' };
+}
+function fmtAge(s) {
+  if (s === null) return '—';
+  if (s < 90) return Math.round(s) + 's';
+  if (s < 5400) return Math.round(s / 60) + 'm';
+  return Math.round(s / 3600) + 'h';
+}
+function ageSpan(box, leaf) {
+  const a = ageOf(box, leaf);
+  if (a === null) return '';
+  const cls = a > 60 ? 'dead' : a > 10 ? 'old' : '';
+  return `<span class="age ${cls}">${fmtAge(a)}</span>`;
+}
+
+/* ---- writes: named procs in the extio interp, never raw datapoint pokes ---- */
+async function cfgSet(box, leaf, value) {
+  try {
+    await conn.send(`extio_cfg_set ${box} ${leaf} {${value}}`, 'extio');
+    dirty.add(leaf);
+    renderPanel();
+  } catch (e) { alert(`set ${leaf} failed: ${e.message || e}`); }
+}
+let dirty = new Set();
+async function doSave(box) {
+  await conn.send(`extio_cfg_save ${box}`, 'extio');
+  dirty.clear(); renderPanel();
+}
+async function doReboot(box) {
+  if (dirty.size && !confirm(`${dirty.size} unsaved change(s) will be LOST. Reboot anyway?`)) return;
+  await conn.send(`extio_cfg_reboot ${box}`, 'extio');
+}
+
+/* ---- fleet list ---- */
+function renderFleet() {
+  const el = document.getElementById('fleet');
+  const names = [...boxes.keys()].sort();
+  if (!names.length) { el.innerHTML = '<div class="empty">no boxes seen</div>'; return; }
+  el.innerHTML = names.map(n => {
+    const L = liveness(n);
+    return `<div class="box ${n === sel ? 'sel' : ''} ${L.cls === 'bad' ? 'stale' : ''}"
+                 onclick="selectBox('${n}')">
+      <div class="nm"><span>${n}</span><span class="pill ${L.cls}">${L.txt}</span></div>
+      <div class="sub">${get(n, 'ip', '—')} · ${get(n, 'board', '?')}</div>
+      <div class="sub">fw ${get(n, 'fw_ver', '?')} · ain ${get(n, 'ain_en') == 1 ? 'on' : 'off'}</div>
+    </div>`;
+  }).join('');
+}
+function selectBox(n) { sel = n; dirty = new Set(); renderFleet(); renderPanel(); refreshDirty(n); }
+
+async function refreshDirty(box) {
+  try {
+    const r = await conn.send(`extio_cfg_dirty ${box}`, 'extio');
+    dirty = new Set(String(r || '').trim().split(/\s+/).filter(Boolean));
+    renderPanel();
+  } catch (e) { /* interp may predate the helper; the page still works read-only */ }
+}
+
+/* ---- per-box panel ---- */
+function field(box, leaf, cfgLeaf, opts = {}) {
+  const v = get(box, leaf, '');
+  const cls = opts.wide ? 'w8' : 'w4';
+  const id = `f_${cfgLeaf.replace(/\W/g, '_')}`;
+  return `<input class="${cls}" id="${id}" value="${v === null ? '' : v}"
+            onchange="cfgSet('${box}','${cfgLeaf}',this.value)">`;
+}
+
+function renderPanel() {
+  const el = document.getElementById('panel');
+  if (!sel || !boxes.has(sel)) { el.innerHTML = '<div class="empty">select a box</div>'; return; }
+  const b = sel, L = liveness(b);
+
+  /* PINS: driven by what the box ANNOUNCES (pins/in, pins/out), not by a table
+   * of what this page imagines the board has. The boards genuinely differ --
+   * MCXN947, RW612 and Teensy have different counts and different reserved
+   * pins -- and a hardcoded map would render confidently wrong pins for the
+   * next board added. The known gap: the announce carries only the ACTIVE
+   * pins, so a pin currently set to `off` is invisible here and there is no
+   * way to discover a board's full range or its reserved list. Adding
+   * pins/all + pins/reserved to box_announce_manifest() is the fix; until then
+   * this shows what exists rather than inventing what might. */
+  const pins = [...new Set(
+    (get(b, 'pins/in', '') + ',' + get(b, 'pins/out', ''))
+      .split(',').map(s => s.trim()).filter(s => s !== '')
+  )].map(Number).sort((x, y) => x - y);
+
+  const pinRows = pins.map(p => `<tr class="row">
+      <td><b>${p}</b></td>
+      <td>${field(b, `pin/${p}/label`, `pin/${p}/label`, { wide: 1 })}</td>
+      <td>${field(b, `pin/${p}/debounce_ms`, `pin/${p}/debounce_ms`)}</td>
+      <td>${field(b, `pin/${p}/pulse_us`, `pin/${p}/pulse_us`)}</td>
+    </tr>`).join('') ||
+    '<tr><td colspan="4" class="age">no active pins announced</td></tr>';
+
+  const groups = [0, 1, 2, 3].map(g => {
+    const lbl = get(b, `group/${g}/label`, ''), pinsv = get(b, `group/${g}/pins`, '');
+    if (lbl === '' && pinsv === '') return '';
+    return `<tr class="row"><td><b>${g}</b></td>
+      <td>${field(b, `group/${g}/label`, `group/${g}/label`, { wide: 1 })}</td>
+      <td>${field(b, `group/${g}/pins`, `group/${g}/pins`, { wide: 1 })}</td>
+      <td>${field(b, `group/${g}/settle_ms`, `group/${g}/settle_ms`)}</td></tr>`;
+  }).join('') || '<tr><td colspan="4" class="age">no groups defined</td></tr>';
+
+  const ainOn = get(b, 'ain_en') == 1;
+  const dbg = k => `${get(b, 'ain/dbg/' + k, '—')} ${ageSpan(b, 'ain/dbg/' + k)}`;
+
+  el.innerHTML = `
+    <div style="display:flex;align-items:baseline;gap:12px">
+      <h2 style="margin:0">${b}</h2>
+      <span class="pill ${L.cls}">${L.txt}</span>
+      <span class="age">watchdog ${ageSpan(b, 'watchdog')}</span>
+    </div>
+
+    <div id="dirty" class="${dirty.size ? '' : 'hide'}">
+      ${dirty.size} unsaved change(s): <code>${[...dirty].join('</code> <code>')}</code>
+      — applied live, but lost on reboot until you Save.
+    </div>
+
+    <h2>identity</h2>
+    <table>
+      <tr><th>name</th><td>${field(b, 'name', 'name', { wide: 1 })}</td>
+          <th>board</th><td>${get(b, 'board', '?')}</td></tr>
+      <tr><th>desc</th><td>${field(b, 'desc', 'desc', { wide: 1 })}</td>
+          <th>build</th><td>${get(b, 'build', '?')}</td></tr>
+      <tr><th>fw_ver</th><td>${get(b, 'fw_ver', '?')} ${ageSpan(b, 'fw_ver')}</td>
+          <th>boot</th><td>${get(b, 'boot', '?')}</td></tr>
+    </table>
+    <p class="note"><code>fw_ver</code> is what MCUboot actually booted.
+       <code>fw</code> is a build-time constant and can never show an update taking effect.</p>
+
+    <h2>network</h2>
+    <table>
+      <tr><th>ip</th><td>${get(b, 'ip', '—')} ${ageSpan(b, 'ip')}</td>
+          <th>transport</th><td>${get(b, 'transport', '—')}</td></tr>
+      <tr><th>dserv ip</th><td>${field(b, 'dserv/ip', 'dserv/ip', { wide: 1 })}</td>
+          <th>dserv port</th><td>${field(b, 'dserv/port', 'dserv/port')}</td></tr>
+    </table>
+    <p class="note">Re-pointing <code>dserv/ip</code> moves the box to another rig. It cannot be
+       set here for a box that has never reached a dserv — that is extio-setup's job.</p>
+
+    <h2>obs / sync</h2>
+    <table>
+      <tr><th>obs pin</th><td>${field(b, 'obs_pin', 'obs/pin')}</td>
+          <th>sync pin</th><td>${field(b, 'sync_pin', 'sync/pin')}</td></tr>
+    </table>
+
+    <h2>pins</h2>
+    <table><tr><th>pin</th><th>label</th><th>debounce ms</th><th>pulse µs</th></tr>${pinRows}</table>
+    <p class="note">Only pins the box announces as active (<code>pins/in</code> / <code>pins/out</code>)
+       appear. A pin set to <code>off</code> is not announced, so it cannot be shown or re-enabled
+       from here yet — that needs <code>pins/all</code> in the manifest.</p>
+
+    <h2>groups</h2>
+    <table><tr><th>#</th><th>label</th><th>pins</th><th>settle ms</th></tr>${groups}</table>
+
+    <h2>analog</h2>
+    <table>
+      <tr><th>enabled</th><td>
+            <select onchange="cfgSet('${b}','ain/enable',this.value)">
+              <option value="1" ${ainOn ? 'selected' : ''}>on</option>
+              <option value="0" ${ainOn ? '' : 'selected'}>off</option>
+            </select></td>
+          <th>base rate Hz</th><td>${field(b, 'ain/rate', 'ain/rate')}</td></tr>
+      <tr><th>running</th><td>${dbg('running')}</td><th>powered</th><td>${dbg('powered')}</td></tr>
+      <tr><th>sweeps</th><td>${dbg('sweeps')}</td><th>throttled</th><td>${dbg('throttled')}</td></tr>
+    </table>
+    <p class="note"><code>running</code> is what the box is DOING; <code>enabled</code> is what it was
+       told. They differ legitimately — held during an OTA, no group defined, or no pin in
+       <code>ain</code> mode. Any <code>throttled</code> at all means a group is publishing faster
+       than the uplink can afford.</p>
+
+    <h2>actions</h2>
+    <div style="display:flex;gap:10px">
+      <button class="primary" onclick="doSave('${b}')" ${dirty.size ? '' : 'disabled'}>
+        Save to flash${dirty.size ? ` (${dirty.size})` : ''}</button>
+      <button class="danger" onclick="doReboot('${b}')">Reboot</button>
+    </div>
+  `;
+}
+
+/* ---- boot ---- */
+async function init() {
+  const qsHost = new URLSearchParams(location.search).get('host');
+  conn = new DservConnection({
+    subprocess: 'extio',
+    dservHost: qsHost || null,
+    onStatus: (st) => setConn(st === 'connected', st),
+  });
+  try { await conn.connect(); } catch (e) { setConn(false, 'connection failed'); return; }
+  setConn(true, 'connected');
+
+  dp = new DatapointManager(conn, { autoGetKeys: false });
+  dp.subscribe('extio/*', onExtio);
+
+  /* @keys is pushed on every key add/remove, so this seeds retained values for
+   * boxes that were already present before this page loaded -- without it a box
+   * only appears once it happens to publish something. */
+  dp.on('keys:update', ({ keys }) => {
+    for (const k of keys) {
+      if (!/^extio\/[^/]+\/state\//.test(k)) continue;
+      if (fetched.has(k)) continue;
+      fetched.add(k); dp.sendGet(k);
+    }
+  });
+
+  /* Re-render on a timer as well as on updates: AGE changes with the clock, not
+   * with traffic, so a box going silent must become visibly stale on its own. */
+  setInterval(() => { renderFleet(); if (sel) renderPanel(); }, 1000);
+}
+window.addEventListener('DOMContentLoaded', init);
+</script>
+</body>
+</html>

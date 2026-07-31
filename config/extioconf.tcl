@@ -1251,6 +1251,79 @@ proc extio_ota_status {box} {
     return [join $out "\n"]
 }
 
+# ============================================================================
+# CONFIG WRITES -- the named, whitelisted surface a UI is allowed to touch
+# ============================================================================
+#
+# The web page talks to this interp by evaluating Tcl, so without a narrow API
+# the config page IS a Tcl console pointed at the rig. These procs are that
+# narrowing: a page can set a box's debounce, and cannot `exec rm`.
+#
+# WHITELISTED BY SHAPE, not by string equality, because the leaves are indexed
+# (pin/7/label, group/2/pins, ain/group/1/channels). The patterns below mirror
+# the sscanf formats in dserv_config.h; anything not matching is refused with the
+# leaf named, so a typo says so instead of silently setting a datapoint that no
+# box will ever read -- dserv accepts any name, which makes a misspelled leaf
+# indistinguishable from a working one.
+#
+# NOTE ON PERSISTENCE, because it is the thing operators lose settings to: these
+# apply LIVE and do NOT survive a reboot until `extio_cfg_save`. A couple
+# (console) additionally need the reboot to take effect at all. A UI that does
+# not show the difference will quietly cost somebody their pin map.
+
+set ::extio_cfg_writable {
+    name desc
+    net/mode net/ip net/mask net/gateway
+    dserv/ip dserv/port
+    wifi/ssid wifi/pass wifi/pm
+    obs/pin sync/pin
+    ain/enable ain/rate
+    console channel
+}
+set ::extio_cfg_writable_rx {
+    {^pin/[0-9]+/(mode|label|active_low|debounce_ms|pulse_us)$}
+    {^group/[0-9]+/(pins|label|settle_ms|quiet)$}
+    {^ain/group/[0-9]+/[a-z_]+$}
+}
+
+proc extio_cfg_writable {leaf} {
+    if { $leaf in $::extio_cfg_writable } { return 1 }
+    foreach rx $::extio_cfg_writable_rx { if { [regexp $rx $leaf] } { return 1 } }
+    return 0
+}
+
+proc extio_cfg_set {box leaf value} {
+    if { ![extio_cfg_writable $leaf] } {
+        error "extio_cfg_set: '$leaf' is not a writable config leaf"
+    }
+    if { ![dservExists extio/$box/state/fw] && ![dservExists extio/$box/state/board] } {
+        error "extio_cfg_set: no box '$box' has announced itself"
+    }
+    dservSet extio/$box/config/$leaf $value
+    lappend ::extio_cfg_dirty($box) $leaf
+    set ::extio_cfg_dirty($box) [lsort -unique $::extio_cfg_dirty($box)]
+    return "set $leaf = $value on $box (LIVE, not saved)"
+}
+
+# Leaves changed since the last save. The UI shows this; the box cannot, because
+# it has no idea which of its settings came from flash and which from a datapoint
+# five seconds ago.
+proc extio_cfg_dirty {box} {
+    if { [info exists ::extio_cfg_dirty($box)] } { return $::extio_cfg_dirty($box) }
+    return {}
+}
+
+proc extio_cfg_save {box} {
+    dservSet extio/$box/cmd/save 1
+    unset -nocomplain ::extio_cfg_dirty($box)
+    return "save sent to $box"
+}
+
+proc extio_cfg_reboot {box} {
+    dservSet extio/$box/cmd/reboot 1
+    return "reboot sent to $box -- unsaved changes are lost by definition"
+}
+
 proc extio_wire_common {} {                 ;# device-independent: sync + obs_pin
     dservAddMatch ess/in_obs
     dpointSetScript ess/in_obs usbio_forward
