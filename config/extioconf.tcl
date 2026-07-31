@@ -1024,9 +1024,23 @@ proc extio_ota_lc_fail {box why} {
 
 # ---- entry point ----------------------------------------------------------
 proc extio_ota_update {box {channel dev} {version ""}} {
+    # A lifecycle is only genuinely IN PROGRESS if it also has a request in
+    # flight. Guarding on the phase alone made this unrecoverable: any run that
+    # died between phases -- an error in a callback, a reload of this file,
+    # anything that dropped the pending request without publishing a terminal
+    # phase -- left `phase` stuck mid-lifecycle, and EVERY later call then
+    # errored out before publishing a single thing. From outside that is
+    # indistinguishable from nothing happening at all: no state/ota/lifecycle,
+    # no transfer, and the reason visible only in the return value of the
+    # command. Observed 2026-07-31.
     if { [info exists ::extio_ota_lc($box,phase)]
          && $::extio_ota_lc($box,phase) ni {idle done failed} } {
-        error "extio_ota_update: $box is already in '$::extio_ota_lc($box,phase)' -- extio_ota_abort $box first"
+        if { [info exists ::extio_req($box,label)] } {
+            error "extio_ota_update: $box is in '$::extio_ota_lc($box,phase)',\
+                   waiting on '$::extio_req($box,label)' -- extio_ota_abort $box to cancel"
+        }
+        puts "extio ota\[$box\]: previous run left phase\
+              '$::extio_ota_lc($box,phase)' with nothing in flight -- restarting"
     }
     extio_ota_lc_pub $box staging "staging $channel image"
 
@@ -1125,6 +1139,82 @@ proc extio_ota_lc_confirmed {box value} {
     }
     set v "?" ; catch { set v [dservGet extio/$box/state/fw_ver] }
     extio_ota_lc_pub $box done "running $v, confirmed permanent"
+}
+
+# ---- the lifecycle steps, individually ------------------------------------
+#
+# extio_ota_update drives all of these in order. They are ALSO exposed one at a
+# time, for two reasons. The manual path is what you fall back to when the
+# lifecycle is wedged -- which is exactly when you least want to be typing
+# `dservSet extio/<box>/cmd/ota/arm 1` from memory. And a bare dservSet reports
+# NOTHING: the box answers with a reason (refused_no_verified_image,
+# refused_in_obs, refused_no_image_header) that nothing surfaced, so a refused
+# arm looked identical to a silent one.
+#
+# Each shares the request layer, so each gets the clear-before-watch and the
+# mandatory deadline for free. One request in flight per box means a standalone
+# step and a running lifecycle cannot interleave -- intended, not a limitation.
+
+proc extio_ota_step_fail {box why} { puts "extio ota\[$box\]: $why" }
+
+proc extio_ota_verify {box} {
+    extio_request $box "verify" ota/verify 1 ota/flash_verify {in {1 0 -1}} 90000 \
+        extio_ota_verify_done extio_ota_step_fail \
+        {ota/flash_verify ota/hdr_ok ota/staged_ver}
+    return "verify sent to $box"
+}
+proc extio_ota_verify_done {box value} {
+    set hdr "?" ; catch { set hdr [dservGet extio/$box/state/ota/hdr_ok] }
+    set sv  "?" ; catch { set sv  [dservGet extio/$box/state/ota/staged_ver] }
+    if { $value == 1 && $hdr == 1 } {
+        puts "extio ota\[$box\]: verify OK -- slot holds $sv, header where MCUboot looks. Ready to arm."
+    } elseif { $value == 1 } {
+        puts "extio ota\[$box\]: read-back hash matches but hdr_ok=$hdr -- image staged at the wrong offset; arm would be refused"
+    } else {
+        puts "extio ota\[$box\]: verify FAILED (flash_verify=$value) -- the slot does NOT hold the image that was sent"
+    }
+}
+
+proc extio_ota_arm {box} {
+    # Refuse locally rather than let the box refuse: same outcome, but the
+    # reason is specific and arrives without a round trip. flash_verify is a
+    # READ-BACK; ota/state=ok only means the bytes crossed the link.
+    set fv 0 ; catch { set fv [dservGet extio/$box/state/ota/flash_verify] }
+    if { $fv != 1 } {
+        return "extio_ota_arm: $box has no verified image (flash_verify=$fv) -- run extio_ota_verify $box first"
+    }
+    extio_request $box "arm" ota/arm 1 ota/arm {ne ""} 30000 \
+        extio_ota_arm_done extio_ota_step_fail {ota/arm ota/arm_rc fw_ver}
+    return "arm sent to $box"
+}
+proc extio_ota_arm_done {box value} {
+    if { $value eq "armed" } {
+        puts "extio ota\[$box\]: ARMED -- box is rebooting into ONE trial boot. Any reset before confirm reverts."
+    } else {
+        set rc "?" ; catch { set rc [dservGet extio/$box/state/ota/arm_rc] }
+        puts "extio ota\[$box\]: arm refused: $value (rc=$rc)"
+    }
+}
+
+proc extio_ota_confirm {box} {
+    extio_request $box "confirm" ota/confirm 1 ota/confirm {in {confirmed failed}} 30000 \
+        extio_ota_confirm_done extio_ota_step_fail {ota/confirm ota/confirm_rc}
+    return "confirm sent to $box"
+}
+proc extio_ota_confirm_done {box value} {
+    set v "?" ; catch { set v [dservGet extio/$box/state/fw_ver] }
+    if { $value eq "confirmed" } {
+        puts "extio ota\[$box\]: CONFIRMED -- $v is now permanent"
+    } else {
+        puts "extio ota\[$box\]: confirm FAILED -- $v will REVERT on the next reset"
+    }
+}
+
+# Rejecting a trial is deliberately not a command: there is nothing to send.
+proc extio_ota_reject {box} {
+    return "to reject the trial on $box: do NOT confirm -- power cycle it. The\
+            previous image returns by construction and the box reports `revert`\
+            in state/ota/*. That is the safety property, not a workaround."
 }
 
 # One-line status for a human or a polling UI. AGE on every field, always:
