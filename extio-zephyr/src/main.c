@@ -379,6 +379,78 @@ static void pub_drain(int max)
 	}
 }
 
+/* ---- periodic counters: publish ONLY when they change ----
+ *
+ * The 1 Hz block was emitting 17 datapoints a second, TWELVE of them ain/dbg/*,
+ * and on a box with analog idle not one of those twelve ever changed: twelve
+ * 128-byte frames per second restating identical numbers. A single frame costs
+ * 275-864 us of CPU to send (CMakeLists.txt), so the telemetry alone was
+ * 0.5-1.5% of the service loop, most of it spent saying nothing.
+ *
+ * Bandwidth was never the issue -- 128 bytes is ~10 us of wire time at 100 Mb.
+ * It is PER-SEND overhead, which is why not sending is worth far more than
+ * sending more efficiently.
+ *
+ * KEYED BY THE LEAF POINTER, not by call order. Order-keyed slots would work
+ * today (the only conditional group is gated on box_adc_ready(), which never
+ * changes after init) but would silently compare a value against the WRONG
+ * history the first time anyone made a group conditional. The leaves are string
+ * literals with stable addresses, so identity is free and the failure mode is
+ * removed rather than merely avoided.
+ *
+ * A FULL REFRESH EVERY PUB_REFRESH_S, because change-only has one real failure:
+ * dserv retains, so a frame lost in transit leaves the host holding a stale
+ * value with nothing to correct it -- and for a genuinely static field like
+ * ain/dbg/chans, "until it changes again" is never. The refresh bounds that
+ * staleness to a known number of seconds. It is also what re-seeds a host that
+ * connected between refreshes without a full announce.
+ *
+ * WATCHDOG IS DELIBERATELY NOT ROUTED THROUGH HERE. Its whole purpose is to
+ * advance every second so a frozen one is diagnostic; making it conditional on
+ * change would be harmless today (it is a counter) and catastrophic the moment
+ * someone made it a level. */
+#define PUB_PERIODIC_MAX 24
+#define PUB_REFRESH_S    30
+
+static struct { const char *leaf; uint32_t v; uint8_t seen; } pub_hist[PUB_PERIODIC_MAX];
+static int     pub_force;          /* set once per pass; forces a full refresh */
+static int64_t pub_refresh_at;
+static uint32_t pub_suppressed;    /* frames NOT sent -- the win, measured */
+
+static void pub_periodic(const char *leaf, uint32_t v)
+{
+	unsigned i;
+
+	for (i = 0; i < PUB_PERIODIC_MAX; i++) {
+		if (pub_hist[i].leaf == leaf) {
+			break;
+		}
+		if (pub_hist[i].leaf == NULL) {
+			pub_hist[i].leaf = leaf;
+			break;
+		}
+	}
+	if (i < PUB_PERIODIC_MAX && pub_hist[i].seen && pub_hist[i].v == v && !pub_force) {
+		pub_suppressed++;
+		return;                    /* unchanged -- say nothing */
+	}
+	if (i < PUB_PERIODIC_MAX) {
+		pub_hist[i].seen = 1;
+		pub_hist[i].v = v;
+	}
+	/* i == MAX means the table overflowed: publish unconditionally rather than
+	 * drop the datapoint. Costs the old behaviour for the excess, never
+	 * silence. */
+	{
+		uint8_t pf[DSERV_MSG_LEN];
+		char pn[80];
+
+		dserv_state_name(&cfg, pn, sizeof pn, leaf);
+		dserv_msg_int(pf, pn, 0, (int32_t) v);
+		pub_enqueue(pf);
+	}
+}
+
 #if defined(BOX_HAVE_OTA_SLOT)
 static void ota_pub_int(const char *leaf, int32_t v)
 {
@@ -1788,7 +1860,26 @@ int main(void)
 			 * success and -1 only when name+payload overflow the 109-byte
 			 * payload. Checking for 0 silently publishes nothing, which on
 			 * the bench is indistinguishable from a dead ADC. */
-			if (dserv_msg_bytes(f, nm, blk.t0_us, payload, (uint32_t) plen) > 0) {
+			/* event_stamp(), NOT the raw box time. blk.t0_us is the box's
+			 * local monotonic clock; every other event this box publishes
+			 * goes through box_clock_stamp() to reach dserv's timeline, and
+			 * analog was the one path that did not -- the RP2350 has always
+			 * done it (wizchip_dserv_config.c: event_stamp(b->t0_us)) and the
+			 * Zephyr port dropped it.
+			 *
+			 * The failure is silent and plausible, which is why it survived:
+			 * the samples arrive, decode cleanly, and have exactly the right
+			 * SPACING -- lib/extio-1.0.tm reconstructs row k at (frame
+			 * timestamp) + k*interval_us and applies no correction -- so they
+			 * are simply placed at 1970 plus a few seconds while DI edges from
+			 * the same box sit correctly on the dserv timeline. A stream that
+			 * is internally consistent and absolutely wrong.
+			 *
+			 * event_stamp() also returns 0 before the clock is aligned, which
+			 * tells dserv to arrival-stamp: unaligned analog is then merely
+			 * imprecise instead of decades adrift. */
+			if (dserv_msg_bytes(f, nm, event_stamp(blk.t0_us), payload,
+					    (uint32_t) plen) > 0) {
 				pub_enqueue(f);
 			}
 		}
@@ -1994,6 +2085,13 @@ int main(void)
 			 * found watchdog was the ONLY datapoint affected -- every other one is
 			 * build-then-enqueue in order -- so this is the minimum change that
 			 * removes the class, not just the instance. */
+			/* One decision per pass, not per datapoint: a refresh deadline
+			 * crossed mid-block would otherwise split the pass into refreshed
+			 * and non-refreshed halves. */
+			pub_force = (k_uptime_get() >= pub_refresh_at);
+			if (pub_force) {
+				pub_refresh_at = k_uptime_get() + PUB_REFRESH_S * 1000;
+			}
 			{
 				uint8_t wf[DSERV_MSG_LEN];
 				char wn[80];
@@ -2009,15 +2107,9 @@ int main(void)
 				 * budget rather than a guess. */
 				uint32_t ul = 0, um = 0, ud = 0;
 				box_net_usb_send_stats(&ul, &um, &ud);
-				dserv_state_name(&cfg, name, sizeof name, "dbg/usb_send_us");
-				dserv_msg_int(f, name, 0, (int32_t) ul);
-				pub_enqueue(f);
-				dserv_state_name(&cfg, name, sizeof name, "dbg/usb_send_max_us");
-				dserv_msg_int(f, name, 0, (int32_t) um);
-				pub_enqueue(f);
-				dserv_state_name(&cfg, name, sizeof name, "dbg/usb_drops");
-				dserv_msg_int(f, name, 0, (int32_t) ud);
-				pub_enqueue(f);
+				pub_periodic("dbg/usb_send_us",     ul);
+				pub_periodic("dbg/usb_send_max_us", um);
+				pub_periodic("dbg/usb_drops",       ud);
 #if defined(BOX_HAVE_ADC)
 				/* Analog health, published because its absence cost a box.
 				 * box3 went silent on 2026-07-28 and there was NOTHING to
@@ -2054,9 +2146,7 @@ int main(void)
 						{ "ain/dbg/resumes",   arm },
 					};
 					for (unsigned ai2 = 0; ai2 < ARRAY_SIZE(as); ai2++) {
-						dserv_state_name(&cfg, name, sizeof name, as[ai2].leaf);
-						dserv_msg_int(f, name, 0, (int32_t) as[ai2].v);
-						pub_enqueue(f);
+						pub_periodic(as[ai2].leaf, as[ai2].v);
 					}
 				}
 #endif
@@ -2068,9 +2158,16 @@ int main(void)
 			 * climbing while cmds_rx sits frozen -- instead of the hours it
 			 * has cost twice, hiding behind a box whose every status field
 			 * read healthy. */
-			dserv_state_name(&cfg, name, sizeof name, "cmds_rx");
-			dserv_msg_int(f, name, 0, (int32_t) cmds_rx);
-			pub_enqueue(f);
+			pub_periodic("cmds_rx", (uint32_t) cmds_rx);
+
+			/* How many frames change-detection SAVED. Sent only on the refresh
+			 * tick, because it is a counter that moves every second and would
+			 * otherwise reintroduce exactly the per-second frame this whole
+			 * mechanism exists to remove -- an instrument that consumes what it
+			 * measures. Divide by the refresh interval for frames/s avoided. */
+			if (pub_force) {
+				pub_periodic("dbg/pub_suppressed", pub_suppressed);
+			}
 
 			/* Telemetry the queue itself dropped. Non-zero means the burst is
 			 * outrunning the drain. Published rather than left silent: a
