@@ -182,18 +182,28 @@ void box_announce_manifest(const box_config_t *c)
 	 * frames carry the same information, and only pins that differ from the
 	 * default appear at all. */
 	{
-		int ka = 0, kl = 0, kr = 0, kd = 0, kp = 0, kA = 0;
+		int ka = 0, kl = 0, kr = 0, kd = 0, kp = 0, kA = 0, kP = 0;
 		char all_csv[96], ain_csv[64], rsv_csv[64];
-		char deb_csv[96], pul_csv[96], alo_csv[64];
+		char deb_csv[96], pul_csv[96], alo_csv[64], pup_csv[64];
 		uint32_t rmask = box_gpio_reserved_mask();
 
 		all_csv[0] = ain_csv[0] = rsv_csv[0] = '\0';
-		deb_csv[0] = pul_csv[0] = alo_csv[0] = '\0';
+		deb_csv[0] = pul_csv[0] = alo_csv[0] = pup_csv[0] = '\0';
 
 		for (int i = 0; i < BOX_NPINS; i++) {
 			ka += snprintf(all_csv + ka, sizeof all_csv - ka, "%s%d", ka ? "," : "", i);
 			if ((rmask >> i) & 1u) {
 				kr += snprintf(rsv_csv + kr, sizeof rsv_csv - kr, "%s%d", kr ? "," : "", i);
+			}
+			/* pins/in deliberately merges modes 2 and 3, because a monitor
+			 * only cares that a pin is an input. A CONFIG ui does care --
+			 * otherwise its mode dropdown cannot show which of the two a pin
+			 * actually is, and rewrites in_pullup to in the first time anyone
+			 * touches an unrelated field on that row. Announced as a SUBSET of
+			 * pins/in rather than a separate mode list, so nothing that
+			 * consumes pins/in has to change. */
+			if (c->pin_mode[i] == 3) {
+				kP += snprintf(pup_csv + kP, sizeof pup_csv - kP, "%s%d", kP ? "," : "", i);
 			}
 			if (c->pin_mode[i] == PIN_MODE_AIN) {
 				kA += snprintf(ain_csv + kA, sizeof ain_csv - kA, "%s%d", kA ? "," : "", i);
@@ -213,6 +223,7 @@ void box_announce_manifest(const box_config_t *c)
 		pub_str(c, "pins/all",         all_csv);
 		pub_str(c, "pins/reserved",    rsv_csv);
 		pub_str(c, "pins/ain",         ain_csv);
+		pub_str(c, "pins/pullup",      pup_csv);   /* subset of pins/in */
 		pub_str(c, "pins/debounce_ms", deb_csv);   /* sparse n:ms  */
 		pub_str(c, "pins/pulse_us",    pul_csv);   /* sparse n:us  */
 		pub_str(c, "pins/active_low",  alo_csv);

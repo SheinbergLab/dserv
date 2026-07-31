@@ -247,7 +247,27 @@ function woField(box, cfgLeaf, wide) {
             onchange="if(this.value!==''){cfgSet('${box}','${cfgLeaf}',this.value)}">`;
 }
 
+/* DO NOT REDRAW WHILE THE USER IS IN THE PANEL.
+ *
+ * renderPanel() replaces #panel wholesale (the house style here -- see
+ * www/CLAUDE.md), and it is driven by every datapoint update PLUS a 1 Hz tick
+ * so ages stay honest. Both of those destroy the element you are interacting
+ * with: an open <select> closes the instant a frame arrives, and text you are
+ * typing is reset to the box's value. The dropdowns looked present but
+ * unusable, which is exactly what a 1 Hz DOM replace does to a menu.
+ *
+ * Skipping the redraw while focus is inside the panel costs a second of age
+ * staleness, only while you are actively editing, and only on the panel -- the
+ * fleet list keeps ticking. A `pending` flag makes sure the state you missed is
+ * drawn as soon as focus leaves, rather than waiting for the next update. */
+let redrawPending = false;
+function panelBusy() {
+  const a = document.activeElement;
+  return a && a !== document.body && document.getElementById('panel')?.contains(a);
+}
 function renderPanel() {
+  if (panelBusy()) { redrawPending = true; return; }
+  redrawPending = false;
   const el = document.getElementById('panel');
   if (!sel || !boxes.has(sel)) { el.innerHTML = '<div class="empty">select a box</div>'; return; }
   const b = sel, L = liveness(b);
@@ -265,6 +285,7 @@ function renderPanel() {
   const pinsIn  = csvNums(get(b, 'pins/in'));
   const pinsOut = csvNums(get(b, 'pins/out'));
   const pinsAin = csvNums(get(b, 'pins/ain'));
+  const pinsPup = csvNums(get(b, 'pins/pullup'));   /* subset of pins/in */
   const rsv     = new Set(csvNums(get(b, 'pins/reserved')));
   const alo     = new Set(csvNums(get(b, 'pins/active_low')));
   const deb     = sparse(get(b, 'pins/debounce_ms'));
@@ -279,18 +300,19 @@ function renderPanel() {
 
   const modeOf = p => rsv.has(p) ? 'reserved'
                     : pinsAin.includes(p) ? 'ain'
+                    : pinsPup.includes(p) ? 'in_pullup'
                     : pinsIn.includes(p)  ? 'in'
                     : pinsOut.includes(p) ? 'out' : 'off';
 
   const pinRows = pins.map(p => {
     const mode = modeOf(p), lvl = get(b, `di/${p}`, null), res = mode === 'reserved';
     const sel = ['off', 'in', 'in_pullup', 'out', 'ain'].map(o =>
-      `<option ${o === mode || (mode === 'in' && o === 'in_pullup' && false) ? 'selected' : ''}>${o}</option>`).join('');
+      `<option ${o === mode ? 'selected' : ''}>${o}</option>`).join('');
     return `<tr class="row" ${res ? 'style="opacity:.5"' : ''}>
       <td><b>${p}</b></td>
       <td>${res ? '<span class="age">reserved</span>'
                 : `<select onchange="cfgSet('${b}','pin/${p}/mode',this.value)">${sel}</select>`}</td>
-      <td>${mode === 'in' && lvl !== null ? `<b>${lvl}</b> ${ageSpan(b, 'di/' + p)}` : ''}</td>
+      <td>${(mode === 'in' || mode === 'in_pullup') && lvl !== null ? `<b>${lvl}</b> ${ageSpan(b, 'di/' + p)}` : ''}</td>
       <td>${res ? '' : field(b, `label/${p}`, `pin/${p}/label`, { wide: 1 })}</td>
       <td>${res ? '' : `<input class="w4" value="${deb.get(p) ?? ''}" placeholder="0"
               onchange="cfgSet('${b}','pin/${p}/debounce_ms',this.value)">`}</td>
@@ -401,13 +423,33 @@ function renderPanel() {
 
 /* ---- boot ---- */
 async function init() {
-  /* ?host=<host[:port]> and ?ssl=1|0 -- the standard three lines every page
-   * here needs (www/CLAUDE.md). ssl matters when the page and dserv disagree on
+  /* THE UI LOOP MUST NOT DEPEND ON THE CONNECTION.
+   *
+   * This used to `return` when connect() failed, and everything below -- the
+   * focusout catch-up AND the 1 Hz re-render -- was set up after that point. So
+   * a dserv that was briefly unreachable at page load left a page that never
+   * ticked again, even once autoReconnect restored the socket underneath it.
+   * Ages froze, staleness stopped being visible, and the deferred redraw never
+   * fired: precisely the "looks fine, is lying" failure this page exists to
+   * prevent, reproduced in the page itself.
+   *
+   * Everything that is purely local is therefore started FIRST and
+   * unconditionally. */
+  document.getElementById('panel').addEventListener('focusout', () => {
+    setTimeout(() => { if (redrawPending && !panelBusy()) renderPanel(); }, 0);
+  });
+
+  /* Re-render on a timer as well as on updates: AGE changes with the clock, not
+   * with traffic, so a box going silent must become visibly stale on its own.
+   * This is also the GUARANTEE behind the redraw deferral -- focusout only makes
+   * the catch-up snappier; the tick is what makes it certain. */
+  setInterval(() => { renderFleet(); if (sel) renderPanel(); }, 1000);
+
+  /* ?host=<host[:port]> and ?ssl=1|0 -- the standard three lines every page here
+   * needs (www/CLAUDE.md). ssl matters when the page and dserv disagree on
    * protocol, which is exactly the zero-deploy dev loop:
    *   python3 -m http.server 8090 --directory www
-   *   http://localhost:8090/extio-config.html?host=rig:2565&ssl=1
-   * Without forceSecure that combination fails to connect for a reason the page
-   * cannot report. */
+   *   http://localhost:8090/extio-config.html?host=rig:2565&ssl=1 */
   const qs = new URLSearchParams(location.search);
   const qsHost = qs.get('host'), qsSsl = qs.get('ssl');
   conn = new DservConnection({
@@ -417,15 +459,12 @@ async function init() {
     autoReconnect: true,
     onStatus: (st) => setConn(st === 'connected', st),
   });
-  try { await conn.connect(); } catch (e) { setConn(false, 'connection failed'); return; }
-  setConn(true, 'connected');
 
+  /* Subscribe REGARDLESS of whether this first attempt succeeds:
+   * DatapointManager re-subscribes on reconnect, so a page opened before dserv
+   * is up populates itself when dserv arrives instead of needing a reload. */
   dp = new DatapointManager(conn, { autoGetKeys: false });
   dp.subscribe('extio/*', onExtio);
-
-  /* @keys is pushed on every key add/remove, so this seeds retained values for
-   * boxes that were already present before this page loaded -- without it a box
-   * only appears once it happens to publish something. */
   dp.on('keys:update', ({ keys }) => {
     for (const k of keys) {
       if (!/^extio\/[^/]+\/state\//.test(k)) continue;
@@ -434,9 +473,8 @@ async function init() {
     }
   });
 
-  /* Re-render on a timer as well as on updates: AGE changes with the clock, not
-   * with traffic, so a box going silent must become visibly stale on its own. */
-  setInterval(() => { renderFleet(); if (sel) renderPanel(); }, 1000);
+  try { await conn.connect(); setConn(true, 'connected'); }
+  catch (e) { setConn(false, 'connection failed — retrying'); }
 }
 window.addEventListener('DOMContentLoaded', init);
 </script>
