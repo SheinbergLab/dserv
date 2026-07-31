@@ -124,25 +124,52 @@ cmd_flash() {
     local info
     info=$(diskutil info "/dev/$disk" 2>/dev/null) || die "no such disk: /dev/$disk"
 
-    local location size devname protocol
+    local location size devname protocol removable disk_bytes
     location=$(awk -F': *' '/Device Location/{print $2; exit}' <<<"$info" | xargs || true)
-    size=$(awk -F': *' '/Disk Size/{print $2; exit}' <<<"$info" | xargs || true)
+    size=$(sed -n 's/.*Disk Size: *\([0-9.]* [KMGT]B\).*/\1/p' <<<"$info" | head -1)
     devname=$(awk -F': *' '/Device \/ Media Name/{print $2; exit}' <<<"$info" | xargs || true)
     protocol=$(awk -F': *' '/Protocol/{print $2; exit}' <<<"$info" | xargs || true)
+    removable=$(awk -F': *' '/Removable Media/{print $2; exit}' <<<"$info" | xargs || true)
+    disk_bytes=$(sed -n 's/.*Disk Size:.*(\([0-9][0-9]*\) Bytes).*/\1/p' <<<"$info" | head -1)
 
     # Hard refusal, not a warning: this writes a partition table to the whole
     # device and there is no undo.
     [ "$location" = "Internal" ] && die "/dev/$disk is an INTERNAL disk -- refusing"
 
+    # Decompressed image size, used for both the capacity check and pv.
+    local img_bytes
+    img_bytes=$(zstd -lv "$img" 2>/dev/null | sed -n 's/.*Decompressed Size:.*(\([0-9][0-9]*\) B).*/\1/p')
+
+    # An undersized card is the failure that wastes the most time: dd dies
+    # partway and leaves a card that looks written but cannot boot.
+    if [ -n "$img_bytes" ] && [ -n "$disk_bytes" ] && [ "$disk_bytes" -lt "$img_bytes" ]; then
+        die "/dev/$disk is too small: $((disk_bytes/1000/1000)) MB capacity vs $((img_bytes/1000/1000)) MB image"
+    fi
+
     echo
     ylw "About to ERASE and overwrite:"
-    printf '  device   : /dev/%s\n  name     : %s\n  size     : %s\n  location : %s (%s)\n  image    : %s\n' \
-        "$disk" "${devname:-?}" "${size:-?}" "${location:-?}" "${protocol:-?}" "$img"
+    printf '  device    : /dev/%s\n  name      : %s\n  size      : %s\n  location  : %s (%s)\n  removable : %s\n  image     : %s%s\n' \
+        "$disk" "${devname:-?}" "${size:-?}" "${location:-?}" "${protocol:-?}" \
+        "${removable:-?}" "$img" \
+        "${img_bytes:+ ($((img_bytes/1000/1000)) MB written)}"
+
+    # "External" alone is a weak guarantee -- an external backup SSD is also
+    # External. Removable media (a card reader) reports "Removable"; a fixed
+    # external drive reports "Fixed". Don't refuse it outright (some readers
+    # do report Fixed), but make the user say so out loud.
+    local phrase="$disk"
+    if [ "$removable" != "Removable" ]; then
+        echo
+        red "WARNING: /dev/$disk is NOT removable media (Removable Media: ${removable:-unknown})."
+        red "An external hard drive or SSD looks like this. An SD card reader usually reports 'Removable'."
+        phrase="erase $disk"
+    fi
+
     echo
     red "This destroys everything on /dev/$disk."
-    printf "Type the disk identifier (%s) to confirm: " "$disk"
+    printf "Type '%s' to confirm: " "$phrase"
     local confirm; read -r confirm
-    [ "$confirm" = "$disk" ] || die "confirmation did not match -- aborted"
+    [ "$confirm" = "$phrase" ] || die "confirmation did not match -- aborted"
 
     echo; echo "caching sudo credentials..."; sudo -v
     echo "unmounting /dev/$disk ..."
@@ -152,14 +179,11 @@ cmd_flash() {
     # buffered /dev/diskN for a bulk sequential write.
     echo "writing to /dev/r$disk ..."
     if command -v pv >/dev/null 2>&1; then
-        # Give pv the DEcompressed size; the .wic expands ~1.4 GB -> 10 GB, so
-        # without -s the bar has no denominator.  Use `zstd -lv`, which prints
-        # exact bytes in parentheses -- pv rejects the "10 GiB" form that plain
-        # `zstd -l` gives.  sed, not awk match(), because BSD awk lacks it.
-        local raw
-        raw=$(zstd -lv "$img" 2>/dev/null | sed -n 's/.*Decompressed Size:.*(\([0-9][0-9]*\) B).*/\1/p')
-        if [ -n "$raw" ]; then
-            zstd -dc "$img" | pv -s "$raw" | sudo dd of="/dev/r$disk" bs=4m
+        # img_bytes came from `zstd -lv` above: exact bytes, because pv rejects
+        # the "10 GiB" form that plain `zstd -l` prints. (sed, not awk match(),
+        # because BSD awk lacks match() with an array.)
+        if [ -n "$img_bytes" ]; then
+            zstd -dc "$img" | pv -s "$img_bytes" | sudo dd of="/dev/r$disk" bs=4m
         else
             zstd -dc "$img" | pv | sudo dd of="/dev/r$disk" bs=4m
         fi
