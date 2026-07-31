@@ -85,6 +85,9 @@
   .grp .gval { font-family: ui-monospace, Menlo, monospace; font-size: 13px; color: var(--muted);
                padding: 1px 9px; border-radius: 6px; background: var(--off); }
   .grp .gval.on { background: #14351f; color: var(--green); }
+.cfg { margin-left:auto; font-size:11px; text-decoration:none; padding:1px 8px;
+       border:1px solid #38405a; border-radius:9px; color:#8fb6dd; }
+.cfg:hover { border-color:#5aa9e6; color:#cfe4f7; }
 </style>
 </head>
 <body>
@@ -196,7 +199,7 @@ function onExtio(msg) {
     } else if (leaf === 'battery') {
         b.battery = num;
     } else if (leaf === 'transport' || leaf === 'boot' || leaf === 'fw' ||
-               leaf === 'ip' || leaf === 'dserv') {
+               leaf === 'fw_ver' || leaf === 'ip' || leaf === 'dserv') {
         b.ident[leaf] = String(v);
     }
     /* watchdog/link/timer/sync raw parts: liveness only (lastSeen above) */
@@ -235,6 +238,19 @@ function fmtUptime(us) {
     return h < 48 ? h + 'h' : Math.floor(h / 24) + 'd';
 }
 
+/* Link into the configurator for THIS box, carrying ?host / ?ssl through.
+ * Without forwarding them a fleet page pointed at a remote rig would open a
+ * configurator pointed at the local one -- and it would look like it worked,
+ * right up until you edited the wrong box's pins. */
+function cfgHref(name) {
+    const q = new URLSearchParams();
+    const cur = new URLSearchParams(location.search);
+    if (cur.get('host')) q.set('host', cur.get('host'));
+    if (cur.get('ssl') !== null) q.set('ssl', cur.get('ssl'));
+    q.set('box', name);
+    return 'extio-config.html?' + q.toString();
+}
+
 function cardHtml(b) {
     const age = Date.now() - b.lastSeen;
     const alive = age < 4000;
@@ -243,7 +259,11 @@ function cardHtml(b) {
         ? `<span class="chip ${id.transport === 'usb' ? 'usb' : 'eth'}">${esc(id.transport)}</span>` : '';
     const bchip = id.boot
         ? `<span class="chip ${id.boot === 'watchdog' ? 'wdg' : ''}">boot: ${esc(id.boot)}</span>` : '';
-    const fw = id.fw ? `<span class="chip">${esc(id.fw)}</span>` : '';
+    /* fw_ver is what MCUboot ACTUALLY booted; fw is compiled in and cannot change
+     * when an OTA lands, so a box updated overnight would still show its old
+     * number here. Prefer fw_ver, fall back to fw for pre-MCUboot firmware. */
+    const fwv = id.fw_ver || id.fw;
+    const fw = fwv ? `<span class="chip" title="${id.fw_ver ? 'running image (MCUboot)' : 'build-time constant'}">${esc(fwv)}</span>` : '';
     const ip = (id.ip && id.ip !== '0.0.0.0') ? `<span class="meta mono">${esc(id.ip)}</span>` : '';
 
     /* render EXACTLY the box's active pins when it announces them (pins/in|out);
@@ -322,7 +342,8 @@ function cardHtml(b) {
     const desc = b.desc ? `<div class="desc">${esc(b.desc)}</div>` : '';
 
     return `<div class="title"><span class="live ${alive ? 'on' : ''}"></span>` +
-           `<span class="name">${esc(b.name)}</span>${obs}${xchip}${fw}${bchip}${ip}</div>` + desc +
+           `<span class="name">${esc(b.name)}</span>${obs}${xchip}${fw}${bchip}${ip}` +
+           `<a class="cfg" href="${cfgHref(b.name)}" title="Configure ${esc(b.name)}">configure</a></div>` + desc +
            `<div class="meta"><b>up</b> ${fmtUptime(b.uptimeUs)} · <b>seen</b> ${fmtAge(age)}${target}${sync}${bat}</div>` +
            di + groups + dout + ain;
 }

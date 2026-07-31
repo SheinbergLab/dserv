@@ -106,7 +106,7 @@ code { background:#141720; padding:1px 5px; border-radius:3px; font-size:12px; }
  */
 let conn = null, dp = null;
 const boxes = new Map();          /* name -> {leaf: {v, t}} */
-let sel = null, fetched = new Set();
+let sel = null, fetched = new Set(), pendingSelect = null;
 
 const now = () => Date.now() * 1000;   /* dserv timestamps are microseconds */
 
@@ -136,6 +136,7 @@ function onExtio(msg) {
   /* dserv's timestamp is microseconds; fall back to arrival time so a value
    * without one still ages rather than appearing frozen at zero. */
   boxes.get(box)[leaf] = { v, t: msg.timestamp || now() };
+  if (pendingSelect && box === pendingSelect) { pendingSelect = null; selectBox(box); return; }
   renderFleet();
   if (box === sel) renderPanel();
 }
@@ -613,6 +614,13 @@ async function init() {
       fetched.add(k); dp.sendGet(k);
     }
   });
+
+  /* ?box=<name> -- arriving from extio.html's per-card `configure` link. The
+   * box will not exist in `boxes` yet (nothing has been received), so remember
+   * it and select on first sight rather than selecting nothing and looking
+   * like the link was ignored. */
+  const wantBox = qs.get('box');
+  if (wantBox) pendingSelect = wantBox;
 
   const seed = () => { fetched = new Set(); dp.refreshKeys(); };
 
