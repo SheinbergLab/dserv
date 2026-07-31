@@ -114,13 +114,26 @@ function setConn(up, msg) {
   el.textContent = msg;
 }
 
-/* ---- datapoint plumbing ---- */
-function onExtio(name, val, ts) {
-  const m = /^extio\/([^/]+)\/state\/(.+)$/.exec(name);
+/* ---- datapoint plumbing ----
+ *
+ * DatapointManager invokes callbacks with ONE OBJECT, not (name, value, ts).
+ * Getting that wrong is silent: the regex below runs against an object, never
+ * matches, every update is discarded, and the page sits on "no boxes seen"
+ * while the socket is plainly connected. Signature copied from extio.html,
+ * which is the working reference. */
+function onExtio(msg) {
+  const m = /^extio\/([^/]+)\/state\/(.+)$/.exec(msg.name);
   if (!m) return;
   const [, box, leaf] = m;
+  let v = msg.data !== undefined ? msg.data : msg.value;
+  /* Box string datapoints carry a trailing C NUL -- dserv_msg_string sends
+   * strlen+1 -- so `pins/in` arrives as "0,1,4,12\0" and Number("12\0") is
+   * NaN. Cut at the NUL before anything else touches the value. */
+  if (typeof v === 'string') v = v.split('\x00')[0];
   if (!boxes.has(box)) boxes.set(box, {});
-  boxes.get(box)[leaf] = { v: val, t: ts || now() };
+  /* dserv's timestamp is microseconds; fall back to arrival time so a value
+   * without one still ages rather than appearing frozen at zero. */
+  boxes.get(box)[leaf] = { v, t: msg.timestamp || now() };
   renderFleet();
   if (box === sel) renderPanel();
 }
@@ -324,10 +337,20 @@ function renderPanel() {
 
 /* ---- boot ---- */
 async function init() {
-  const qsHost = new URLSearchParams(location.search).get('host');
+  /* ?host=<host[:port]> and ?ssl=1|0 -- the standard three lines every page
+   * here needs (www/CLAUDE.md). ssl matters when the page and dserv disagree on
+   * protocol, which is exactly the zero-deploy dev loop:
+   *   python3 -m http.server 8090 --directory www
+   *   http://localhost:8090/extio-config.html?host=rig:2565&ssl=1
+   * Without forceSecure that combination fails to connect for a reason the page
+   * cannot report. */
+  const qs = new URLSearchParams(location.search);
+  const qsHost = qs.get('host'), qsSsl = qs.get('ssl');
   conn = new DservConnection({
     subprocess: 'extio',
     dservHost: qsHost || null,
+    forceSecure: qsSsl !== null ? qsSsl === '1' : undefined,
+    autoReconnect: true,
     onStatus: (st) => setConn(st === 'connected', st),
   });
   try { await conn.connect(); } catch (e) { setConn(false, 'connection failed'); return; }
