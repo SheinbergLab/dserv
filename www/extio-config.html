@@ -63,6 +63,8 @@ button.danger  { background:#5b2c29; border-color:#7a3a36; }
 #dirty.hide { display:none; }
 .note { color:var(--dim); font-size:12px; margin:6px 0 0; max-width:760px; }
 .empty { color:var(--dim); padding:40px 0; text-align:center; }
+input.wo { border-style:dashed; color:var(--warn); }
+input.wo::placeholder { color:#6b6350; font-style:italic; }
 code { background:#141720; padding:1px 5px; border-radius:3px; font-size:12px; }
 </style>
 </head>
@@ -215,11 +217,21 @@ async function refreshDirty(box) {
 
 /* ---- per-box panel ---- */
 function field(box, leaf, cfgLeaf, opts = {}) {
-  const v = get(box, leaf, '');
+  let v = get(box, leaf, null);
+  if (v === null && opts.fallback !== undefined) v = opts.fallback;
   const cls = opts.wide ? 'w8' : 'w4';
-  const id = `f_${cfgLeaf.replace(/\W/g, '_')}`;
-  return `<input class="${cls}" id="${id}" value="${v === null ? '' : v}"
+  return `<input class="${cls}" value="${v === null ? '' : v}"
             onchange="cfgSet('${box}','${cfgLeaf}',this.value)">`;
+}
+
+/* WRITE-ONLY field: the box accepts this config leaf but never publishes it
+ * back, so there is nothing to show. An ordinary empty input would be a lie --
+ * indistinguishable from "the value is empty" -- so it is marked, and left
+ * blank on purpose. Everything here would stop being write-only the moment
+ * box_announce_manifest() published it. */
+function woField(box, cfgLeaf, wide) {
+  return `<input class="${wide ? 'w8' : 'w4'} wo" placeholder="write-only" title="The box accepts this setting but does not report it, so its current value cannot be shown."
+            onchange="if(this.value!==''){cfgSet('${box}','${cfgLeaf}',this.value)}">`;
 }
 
 function renderPanel() {
@@ -227,36 +239,48 @@ function renderPanel() {
   if (!sel || !boxes.has(sel)) { el.innerHTML = '<div class="empty">select a box</div>'; return; }
   const b = sel, L = liveness(b);
 
-  /* PINS: driven by what the box ANNOUNCES (pins/in, pins/out), not by a table
-   * of what this page imagines the board has. The boards genuinely differ --
-   * MCXN947, RW612 and Teensy have different counts and different reserved
-   * pins -- and a hardcoded map would render confidently wrong pins for the
-   * next board added. The known gap: the announce carries only the ACTIVE
-   * pins, so a pin currently set to `off` is invisible here and there is no
-   * way to discover a board's full range or its reserved list. Adding
-   * pins/all + pins/reserved to box_announce_manifest() is the fix; until then
-   * this shows what exists rather than inventing what might. */
-  const pins = [...new Set(
-    (get(b, 'pins/in', '') + ',' + get(b, 'pins/out', ''))
-      .split(',').map(s => s.trim()).filter(s => s !== '')
-  )].map(Number).sort((x, y) => x - y);
+  /* PINS. Read from what the box ANNOUNCES, which is NOT the same namespace you
+   * WRITE. The box publishes `label/<n>` and `di/<n>`; you set `pin/<n>/label`.
+   * Building the read side out of the config names -- which is what this page
+   * did first -- yields a full form of empty boxes that looks like a template.
+   *
+   * Driven by pins/in + pins/out rather than a per-board table: MCXN947, RW612
+   * and Teensy differ in count and reserved set, and a hardcoded map renders
+   * confidently wrong pins for the next board. Known gap: only ACTIVE pins are
+   * announced, so a pin set to `off` is invisible and cannot be re-enabled from
+   * here -- that needs pins/all in box_announce_manifest(). */
+  const pinsIn  = String(get(b, 'pins/in',  '')).split(',').filter(x => x !== '').map(Number);
+  const pinsOut = String(get(b, 'pins/out', '')).split(',').filter(x => x !== '').map(Number);
+  const pins = [...new Set([...pinsIn, ...pinsOut])].sort((x, y) => x - y);
 
-  const pinRows = pins.map(p => `<tr class="row">
+  const pinRows = pins.map(p => {
+    const dir = pinsIn.includes(p) ? 'in' : 'out';
+    const lvl = get(b, `di/${p}`, null);
+    return `<tr class="row">
       <td><b>${p}</b></td>
-      <td>${field(b, `pin/${p}/label`, `pin/${p}/label`, { wide: 1 })}</td>
-      <td>${field(b, `pin/${p}/debounce_ms`, `pin/${p}/debounce_ms`)}</td>
-      <td>${field(b, `pin/${p}/pulse_us`, `pin/${p}/pulse_us`)}</td>
-    </tr>`).join('') ||
-    '<tr><td colspan="4" class="age">no active pins announced</td></tr>';
+      <td class="age">${dir}</td>
+      <td>${dir === 'in' && lvl !== null ? `<b>${lvl}</b> ${ageSpan(b, 'di/' + p)}` : ''}</td>
+      <td>${field(b, `label/${p}`, `pin/${p}/label`, { wide: 1 })}</td>
+      <td>${woField(b, `pin/${p}/debounce_ms`)}</td>
+      <td>${woField(b, `pin/${p}/pulse_us`)}</td>
+    </tr>`;
+  }).join('') ||
+    '<tr><td colspan="6" class="age">no active pins announced</td></tr>';
 
-  const groups = [0, 1, 2, 3].map(g => {
-    const lbl = get(b, `group/${g}/label`, ''), pinsv = get(b, `group/${g}/pins`, '');
-    if (lbl === '' && pinsv === '') return '';
-    return `<tr class="row"><td><b>${g}</b></td>
-      <td>${field(b, `group/${g}/label`, `group/${g}/label`, { wide: 1 })}</td>
-      <td>${field(b, `group/${g}/pins`, `group/${g}/pins`, { wide: 1 })}</td>
-      <td>${field(b, `group/${g}/settle_ms`, `group/${g}/settle_ms`)}</td></tr>`;
-  }).join('') || '<tr><td colspan="4" class="age">no groups defined</td></tr>';
+  /* GROUPS are announced BY NAME (group/<name>/pins) with group/<name>/idx
+   * carrying the index -- writes are by index (config/group/<i>/pins). So the
+   * name is discovered from the keys and the index comes from the box, rather
+   * than assuming group N is at slot N. */
+  const gnames = Object.keys(boxes.get(b) || {})
+    .map(k => /^group\/([^/]+)\/idx$/.exec(k)).filter(Boolean).map(m => m[1]).sort();
+  const groups = gnames.map(gn => {
+    const gi = get(b, `group/${gn}/idx`);
+    return `<tr class="row"><td><b>${gi}</b></td>
+      <td>${field(b, `group/${gn}/label`, `group/${gi}/label`, { wide: 1, fallback: gn })}</td>
+      <td>${field(b, `group/${gn}/pins`, `group/${gi}/pins`, { wide: 1 })}</td>
+      <td>${field(b, `group/${gn}/settle_ms`, `group/${gi}/settle_ms`)}</td>
+      <td>${get(b, `group/${gn}`, '—')} ${ageSpan(b, `group/${gn}`)}</td></tr>`;
+  }).join('') || '<tr><td colspan="5" class="age">no groups announced</td></tr>';
 
   const ainOn = get(b, 'ain_en') == 1;
   const dbg = k => `${get(b, 'ain/dbg/' + k, '—')} ${ageSpan(b, 'ain/dbg/' + k)}`;
@@ -275,7 +299,7 @@ function renderPanel() {
 
     <h2>identity</h2>
     <table>
-      <tr><th>name</th><td>${field(b, 'name', 'name', { wide: 1 })}</td>
+      <tr><th>name</th><td>${field(b, '\u0000none', 'name', { wide: 1, fallback: b })}</td>
           <th>board</th><td>${get(b, 'board', '?')}</td></tr>
       <tr><th>desc</th><td>${field(b, 'desc', 'desc', { wide: 1 })}</td>
           <th>build</th><td>${get(b, 'build', '?')}</td></tr>
@@ -289,26 +313,26 @@ function renderPanel() {
     <table>
       <tr><th>ip</th><td>${get(b, 'ip', '—')} ${ageSpan(b, 'ip')}</td>
           <th>transport</th><td>${get(b, 'transport', '—')}</td></tr>
-      <tr><th>dserv ip</th><td>${field(b, 'dserv/ip', 'dserv/ip', { wide: 1 })}</td>
-          <th>dserv port</th><td>${field(b, 'dserv/port', 'dserv/port')}</td></tr>
+      <tr><th>dserv ip</th><td>${woField(b, 'dserv/ip', 1)}</td>
+          <th>dserv port</th><td>${woField(b, 'dserv/port')}</td></tr>
     </table>
     <p class="note">Re-pointing <code>dserv/ip</code> moves the box to another rig. It cannot be
        set here for a box that has never reached a dserv — that is extio-setup's job.</p>
 
     <h2>obs / sync</h2>
     <table>
-      <tr><th>obs pin</th><td>${field(b, 'obs_pin', 'obs/pin')}</td>
-          <th>sync pin</th><td>${field(b, 'sync_pin', 'sync/pin')}</td></tr>
+      <tr><th>obs pin</th><td>${field(b, 'obs_pin', 'obs/pin')} ${ageSpan(b, 'obs_pin')}</td>
+          <th>sync pin</th><td>${field(b, 'sync_pin', 'sync/pin')} ${ageSpan(b, 'sync_pin')}</td></tr>
     </table>
 
     <h2>pins</h2>
-    <table><tr><th>pin</th><th>label</th><th>debounce ms</th><th>pulse µs</th></tr>${pinRows}</table>
+    <table><tr><th>pin</th><th>dir</th><th>level</th><th>label</th><th>debounce ms</th><th>pulse µs</th></tr>${pinRows}</table>
     <p class="note">Only pins the box announces as active (<code>pins/in</code> / <code>pins/out</code>)
        appear. A pin set to <code>off</code> is not announced, so it cannot be shown or re-enabled
        from here yet — that needs <code>pins/all</code> in the manifest.</p>
 
     <h2>groups</h2>
-    <table><tr><th>#</th><th>label</th><th>pins</th><th>settle ms</th></tr>${groups}</table>
+    <table><tr><th>#</th><th>name</th><th>pins</th><th>settle ms</th><th>value</th></tr>${groups}</table>
 
     <h2>analog</h2>
     <table>
@@ -317,7 +341,7 @@ function renderPanel() {
               <option value="1" ${ainOn ? 'selected' : ''}>on</option>
               <option value="0" ${ainOn ? '' : 'selected'}>off</option>
             </select></td>
-          <th>base rate Hz</th><td>${field(b, 'ain/rate', 'ain/rate')}</td></tr>
+          <th>base rate Hz</th><td>${woField(b, 'ain/rate')}</td></tr>
       <tr><th>running</th><td>${dbg('running')}</td><th>powered</th><td>${dbg('powered')}</td></tr>
       <tr><th>sweeps</th><td>${dbg('sweeps')}</td><th>throttled</th><td>${dbg('throttled')}</td></tr>
     </table>
