@@ -1313,6 +1313,19 @@ proc extio_cfg_dirty {box} {
     return {}
 }
 
+# Ask the box to re-publish its FULL manifest now.
+#
+# The announce burst otherwise fires only when a host opens the pipe, and only
+# SOME config edits re-publish the manifest as a side effect (pin mode,
+# obs/sync, debounce, active_low, group, label, desc). Set ain/rate or dserv/ip
+# and NOTHING is published, so a UI keeps showing the old value -- which is
+# indistinguishable from the write having failed, and is exactly the kind of
+# silent staleness this tree keeps paying for.
+proc extio_cfg_announce {box} {
+    dservSet extio/$box/cmd/announce 1
+    return "announce requested from $box"
+}
+
 proc extio_cfg_save {box} {
     dservSet extio/$box/cmd/save 1
     unset -nocomplain ::extio_cfg_dirty($box)

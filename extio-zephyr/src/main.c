@@ -1512,6 +1512,13 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 #endif
 		groups_resync();          /* DI levels may have changed meaning */
 		box_announce_manifest(&cfg);   /* pins/in|out, obs_pin, sync_pin moved */
+	} else if (r == CFG_ANNOUNCE) {
+		/* Everything, not just the manifest: identity and the OTA counters
+		 * live in the burst, and a UI asking "what are you now" wants the
+		 * same picture it gets on connect rather than a subset that happens
+		 * to cover today's caller. */
+		box_announce_burst(&cfg, groups);
+		box_console_printf("cmd/announce -> full re-announce\n");
 	} else if (r == CFG_SAVE) {
 #if defined(BOX_HAVE_PERSIST)
 		if (box_obs_active()) {      /* never program flash mid-trial */

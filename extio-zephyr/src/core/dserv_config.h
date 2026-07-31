@@ -253,6 +253,15 @@ typedef enum {
     CFG_BOOTSEL,    /* cmd/bootsel -> reboot into USB BOOTSEL for reflashing */
     CFG_BLE_PAIR,   /* cmd/ble/pair <secs> -> open the receiver's pairing window (remote `ble pair`) */
     CFG_BLE_FORGET, /* cmd/ble/forget      -> clear the bond allowlist  (remote `ble forget`)      */
+    CFG_ANNOUNCE,   /* cmd/announce -> re-publish the FULL manifest right now.
+                     * The burst otherwise fires only when a host opens the pipe,
+                     * and only SOME config edits re-publish the manifest as a
+                     * side effect (pin mode, obs/sync, debounce, active_low,
+                     * group, label, desc). Change ain/rate or dserv/ip and
+                     * nothing is published at all, so a UI shows the old value
+                     * until the next reconnect -- indistinguishable from the
+                     * write having failed. This makes "tell me what you are
+                     * now" an explicit, cheap request instead of a wait. */
     CFG_UNKNOWN     /* under this box's name but unrecognized */
 } cfg_result_t;
 
@@ -704,6 +713,7 @@ static inline cfg_result_t dserv_cfg__cmd(const char *k, const dserv_msg_t *m,
         cmd->op = GPIO_OP_SCHED_TIMER; cmd->pin = (uint8_t) n;
         cmd->value = (uint32_t) dserv_msg_as_long(m); return CFG_GPIO;
     }
+    if (strcmp(k, "announce") == 0) return CFG_ANNOUNCE;
     if (strcmp(k, "save")    == 0) return CFG_SAVE;
     if (strcmp(k, "reboot")  == 0) return CFG_REBOOT;
     if (strcmp(k, "factory") == 0) return CFG_FACTORY;
@@ -771,6 +781,7 @@ static inline const char *dserv_cfg_result_str(cfg_result_t r)
     case CFG_DSERV_IP:   return "dserv_ip";
     case CFG_DSERV_PORT: return "dserv_port";
     case CFG_GPIO:       return "cmd_do";
+    case CFG_ANNOUNCE:   return "announce";
     case CFG_SAVE:       return "save";
     case CFG_REBOOT:     return "reboot";
     case CFG_FACTORY:    return "factory";

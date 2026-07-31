@@ -178,7 +178,27 @@ async function cfgSet(box, leaf, value) {
     await conn.send(`extio_cfg_set ${box} ${leaf} {${value}}`, 'extio');
     dirty.add(leaf);
     renderPanel();
+    askAnnounce(box);
   } catch (e) { alert(`set ${leaf} failed: ${e.message || e}`); }
+}
+
+/* Ask the box to re-publish after an edit, DEBOUNCED.
+ *
+ * Only some config changes re-announce as a side effect; ain/rate, dserv/ip,
+ * net/mode and pulse_us publish nothing at all, so without this the field you
+ * just changed keeps showing the old value -- which looks exactly like the
+ * write having failed, and would have people setting it twice.
+ *
+ * Debounced because a burst is ~40 frames: typing through four fields should
+ * cost one re-announce, not four. 400 ms is longer than the gap between
+ * keystroke-driven onchange events and far shorter than anyone waits before
+ * deciding a UI is broken. */
+let announceTimer = null;
+function askAnnounce(box) {
+  clearTimeout(announceTimer);
+  announceTimer = setTimeout(() => {
+    conn.send(`extio_cfg_announce ${box}`, 'extio').catch(() => {});
+  }, 400);
 }
 let dirty = new Set();
 async function doSave(box) {
@@ -222,7 +242,12 @@ function renderFleet() {
     </div>`;
   }).join('');
 }
-function selectBox(n) { sel = n; dirty = new Set(); renderFleet(); renderPanel(); refreshDirty(n); }
+function selectBox(n) {
+  sel = n; dirty = new Set(); renderFleet(); renderPanel(); refreshDirty(n);
+  /* Opening a box asks it to describe itself: retained values may predate the
+   * last edit made from a console, and there is no periodic re-announce. */
+  if (conn) conn.send(`extio_cfg_announce ${n}`, 'extio').catch(() => {});
+}
 
 async function refreshDirty(box) {
   try {
@@ -489,6 +514,7 @@ function renderPanel() {
       <button class="primary" onclick="doSave('${b}')" ${dirty.size ? '' : 'disabled'}>
         Save to flash${dirty.size ? ` (${dirty.size})` : ''}</button>
       <button class="danger" onclick="doReboot('${b}')">Reboot</button>
+      <button onclick="conn.send('extio_cfg_announce ${b}','extio')" title="Ask the box to re-publish everything now">Refresh from box</button>
     </div>
   `;
 }
