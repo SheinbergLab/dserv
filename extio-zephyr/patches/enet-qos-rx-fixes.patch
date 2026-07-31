@@ -1,5 +1,5 @@
 diff --git a/drivers/ethernet/eth_nxp_enet_qos/eth_nxp_enet_qos_mac.c b/drivers/ethernet/eth_nxp_enet_qos/eth_nxp_enet_qos_mac.c
-index e641ed855bf..56096fbe494 100644
+index e641ed855bf..780ad2dd32c 100644
 --- a/drivers/ethernet/eth_nxp_enet_qos/eth_nxp_enet_qos_mac.c
 +++ b/drivers/ethernet/eth_nxp_enet_qos/eth_nxp_enet_qos_mac.c
 @@ -15,6 +15,7 @@ LOG_MODULE_REGISTER(eth_nxp_enet_qos_mac, CONFIG_ETHERNET_LOG_LEVEL);
@@ -45,7 +45,44 @@ index e641ed855bf..56096fbe494 100644
  K_THREAD_STACK_DEFINE(enet_qos_rx_stack, CONFIG_ETH_NXP_ENET_QOS_RX_THREAD_STACK_SIZE);
  static struct k_work_q rx_work_queue;
  
-@@ -278,6 +307,47 @@ static bool software_owns_descriptor(volatile union nxp_enet_qos_rx_desc *desc)
+@@ -85,6 +114,36 @@ static void eth_nxp_enet_qos_phy_cb(const struct device *phy,
+ 			LOG_DBG("Link Half Duplex");
+ 			base->MAC_CONFIGURATION &= ~ENET_QOS_REG_PREP(MAC_CONFIGURATION, DM, 0b1);
+ 		}
++
++		if (IS_ENABLED(CONFIG_PTP_CLOCK_NXP_ENET_QOS)) {
++			/* Re-arm the RX timestamp engine on every carrier-up.
++			 *
++			 * The ptp_clock driver programs MAC_TIMESTAMP_CONTROL at
++			 * device-init time (dts ordinal right after this MAC), but the
++			 * PHY driver initializes AFTER that and resets the PHY -- and
++			 * the RX-path snapshot enable does not survive it. The CSR
++			 * readback DOES: the register reads fully armed while the MAC
++			 * writes back every frame with RS1V=0/TSA=0 and never emits a
++			 * context descriptor. The tell is extio_rxts: pkts climbing
++			 * with sv=ta pinned at 0 from boot (TX timestamping is per-
++			 * descriptor and unaffected, so PTP looks otherwise healthy).
++			 *
++			 * Rewriting the register with its OWN value re-latches the
++			 * enable into the receive path; proven over SWD on FRDM-MCXN947
++			 * (2026-07-31): wedged every boot, cured within one frame of a
++			 * same-value rewrite, sticky until the next reset. Doing it on
++			 * every carrier-up also covers link flaps and cable moves.
++			 *
++			 * Safe by construction: the self-clearing command bits (TSINIT,
++			 * TSUPDT, TSADDREG) read 0 when idle so writing the value back
++			 * issues no command, and before the ptp_clock driver has run
++			 * the register reads 0, making this a no-op.
++			 */
++			uint32_t tsctrl = base->MAC_TIMESTAMP_CONTROL;
++
++			base->MAC_TIMESTAMP_CONTROL = tsctrl;
++			LOG_DBG("Re-armed MAC_TIMESTAMP_CONTROL (%08x) on carrier up", tsctrl);
++		}
+ 	}
+ }
+ 
+@@ -278,6 +337,47 @@ static bool software_owns_descriptor(volatile union nxp_enet_qos_rx_desc *desc)
  	return (desc->write.control3 & OWN_FLAG) != OWN_FLAG;
  }
  
@@ -93,7 +130,7 @@ index e641ed855bf..56096fbe494 100644
  /* this function resumes the rx dma in case of underrun */
  static void enet_qos_dma_rx_resume(const struct device *dev)
  {
-@@ -329,11 +399,33 @@ static void eth_nxp_enet_qos_rx(struct k_work *work)
+@@ -329,11 +429,33 @@ static void eth_nxp_enet_qos_rx(struct k_work *work)
  		if (pkt == NULL) {
  			if ((desc->write.control3 & FIRST_DESCRIPTOR_FLAG) !=
  				FIRST_DESCRIPTOR_FLAG) {
@@ -128,7 +165,7 @@ index e641ed855bf..56096fbe494 100644
  				goto next;
  			}
  
-@@ -343,7 +435,8 @@ static void eth_nxp_enet_qos_rx(struct k_work *work)
+@@ -343,7 +465,8 @@ static void eth_nxp_enet_qos_rx(struct k_work *work)
  			if (!pkt) {
  				LOG_WRN("Could not alloc new RX pkt");
  				/* error: no new buffer, reuse previous immediately */
@@ -138,7 +175,7 @@ index e641ed855bf..56096fbe494 100644
  				eth_stats_update_errors_rx(data->iface);
  				goto next;
  			}
-@@ -366,7 +459,8 @@ static void eth_nxp_enet_qos_rx(struct k_work *work)
+@@ -366,7 +489,8 @@ static void eth_nxp_enet_qos_rx(struct k_work *work)
  				pkt_len, processed_len);
  			net_pkt_unref(pkt);
  			pkt = NULL;
@@ -148,7 +185,7 @@ index e641ed855bf..56096fbe494 100644
  			eth_stats_update_errors_rx(data->iface);
  			goto next;
  		}
-@@ -386,7 +480,8 @@ static void eth_nxp_enet_qos_rx(struct k_work *work)
+@@ -386,7 +510,8 @@ static void eth_nxp_enet_qos_rx(struct k_work *work)
  			LOG_WRN("No new RX buf available");
  			net_pkt_unref(pkt);
  			pkt = NULL;
@@ -158,7 +195,7 @@ index e641ed855bf..56096fbe494 100644
  			eth_stats_update_errors_rx(data->iface);
  			goto next;
  		}
-@@ -413,22 +508,101 @@ static void eth_nxp_enet_qos_rx(struct k_work *work)
+@@ -413,22 +538,101 @@ static void eth_nxp_enet_qos_rx(struct k_work *work)
  			{
  				uint32_t ctx_idx = rx_data->next_desc_idx;
  				volatile union nxp_enet_qos_rx_desc *ctx_desc = &desc_arr[ctx_idx];
@@ -269,7 +306,7 @@ index e641ed855bf..56096fbe494 100644
  					rx_data->next_desc_idx = (ctx_idx + 1U) % NUM_RX_BUFDESC;
  				}
  			}
-@@ -449,8 +623,7 @@ static void eth_nxp_enet_qos_rx(struct k_work *work)
+@@ -449,8 +653,7 @@ static void eth_nxp_enet_qos_rx(struct k_work *work)
  		LOG_DBG("Swap RX buf %p for %p", data->rx.reserved_bufs[desc_idx], new_buf);
  		/* Allow receive into a new buffer */
  		data->rx.reserved_bufs[desc_idx] = new_buf;
@@ -279,7 +316,7 @@ index e641ed855bf..56096fbe494 100644
  
  next:
  		desc_idx = rx_data->next_desc_idx;
-@@ -509,6 +682,35 @@ static void eth_nxp_enet_qos_mac_isr(const struct device *dev)
+@@ -509,6 +712,35 @@ static void eth_nxp_enet_qos_mac_isr(const struct device *dev)
  		if (ENET_QOS_REG_GET(DMA_CH_DMA_CHX_STAT, FBE, dma_ch0_interrupts)) {
  			LOG_ERR("Fatal bus error: RX:%x, TX:%x", (dma_ch0_interrupts >> 19) & 0x07,
  				(dma_ch0_interrupts >> 16) & 0x07);

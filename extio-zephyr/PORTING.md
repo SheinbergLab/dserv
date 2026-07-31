@@ -91,6 +91,68 @@ machinery), not 1 Hz datapoints.
 Keep the distinction that matters: a local free-running clock needs no peer and
 *should* tick (it now does); sync/discipline needs a grandmaster.
 
+### AUTOPSY: MCXN947 "the MAC reports no RX timestamps at all" — SOLVED 2026-07-31
+
+Symptom: `W: Port 1 drops Sync without valid RX timestamp` once per Sync,
+forever; 1588 counter free-runs from boot; box otherwise fully healthy. TX
+timestamping fine, so every PTP exchange completes and the failure looks like
+anything but what it is.
+
+**MECHANISM — the RX timestamp engine is armed at boot and then loses the
+arming, while the register keeps reading armed.** Init order on this SoC is
+MAC (dts ordinal 160, includes the DMA SWR) → ptp_clock (161, programs
+MAC_TIMESTAMP_CONTROL) → mdio (162) → PHY driver (163, resets the PHY). The
+snapshot enable does not survive what follows arming; the CSR readback does.
+Result: MAC_TIMESTAMP_CONTROL reads 0x00037f03 while the silicon behaves as
+TSENA=0 — every RX write-back has RS1V=0/TSA=0 and no context descriptor is
+ever emitted. TX is per-descriptor arming (TTSE) and is immune, which is why
+only the RX half dies.
+
+Proven three ways on the bench (probe `MJ2PGO1SNNGIV`):
+* **Halt-capture** — halt the core (driver stops reaping, DMA keeps writing
+  back), wait 2 s, read the raw ring at `DMA_CH0_RXDESC_LIST_ADDR`
+  (0x4010111C): eleven accumulated write-backs, all PTP event messages, all
+  RDES1=0. The silicon's own testimony, no driver interpretation in the loop.
+* **Same-value rewrite unwedges** — writing MAC_TIMESTAMP_CONTROL over SWD
+  with ANY value, including the exact value already in it, re-latches the
+  enable: 100% of frames stamped from the next frame on, sticky until reset.
+* **Reboot re-wedges** — deterministically, soft or cold. TSU rate was also
+  measured at 1.00006 vs host over 61 s, exonerating the clock tree.
+
+**FIX — re-arm on every carrier-up**, folded into
+`patches/enet-qos-rx-fixes.patch` (the PHY link callback rewrites
+MAC_TIMESTAMP_CONTROL with its own value; a no-op before the ptp_clock driver
+has run, side-effect-free because the self-clearing command bits read 0, and
+it also covers link flaps and cable moves). Verified on v0.4.0+8: sv==pkts
+from the first frame on both a post-flash boot and a warm reset, autonomous
+`Set clock time` on the console, and `clock_sane.sh` OK (epoch, TAI−37,
+fresh). This is an upstream Zephyr bug pair (any `nxp_enet_qos` user with
+CONFIG_PTP_CLOCK_NXP_ENET_QOS wedges the same way); worth filing with the
+re-arm as the proposed fix.
+
+History corrected, so nobody re-litigates it:
+* **"box1 has a TSA-absent hardware defect" is RETRACTED.** It was this
+  wedge. Nothing to RMA, and the sibling-board A/B became moot.
+* The 07-30 "A/A break" (untouched binary 4/4 → 0/6) stops being spooky once
+  the failure is boot-time arming vs PHY bring-up rather than build content —
+  and the board identity in those runs was never recorded anyway.
+* The "void" `CONFIG_NET_BUF_DATA_SIZE` 128-vs-512 test was actually VALID:
+  the register was misdecoded. `DMA_CHX_RX_CTRL.RBSZ_13_Y` is bits [14:3]
+  holding size[13:2] (the driver writes `size >> 2`), so 0x00010101 decodes
+  to RBSZ=**128**, not 512 — the board had been running the 128 build the
+  whole time (build-mcxn-ota was stale against the restored source conf until
+  the 0.4.0+8 pristine rebuild). The wedge reproduced on both 128 and 512;
+  buffer size was never a factor.
+
+The instrument that cracked it, worth keeping: `volatile uint32_t
+extio_rxts[8]` in the patched driver = {pkts, sv, ta, ctx, stamp, tsdrop,
+orphan, rearm}; address via `nm zephyr.elf | grep -w extio_rxts`, read with
+`pyocd cmd -t mcxn947 -u <probe> -c "read32 <addr> 0x20"`. Signatures:
+`sv=ta=0` with pkts climbing = THIS bug (confirm with a live TSCTRL poke in
+seconds); `tsdrop>0` = the context-descriptor race regime (the patch's other
+half). When the counters themselves are in doubt, the halt-capture above is
+the ground truth.
+
 ---
 
 ## Tier 1 — box functionality rigs depend on
