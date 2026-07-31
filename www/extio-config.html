@@ -590,6 +590,22 @@ async function init() {
    * is up populates itself when dserv arrives instead of needing a reload. */
   dp = new DatapointManager(conn, { autoGetKeys: false });
   dp.subscribe('extio/*', onExtio);
+
+  /* SEED FROM THE RETAINED VALUES, or the page shows only what happens to be
+   * published after it loads.
+   *
+   * A subscription delivers CHANGES. Almost everything this page renders --
+   * board, build, fw_ver, pins/*, dserv/ip, the whole manifest -- is published
+   * once in the announce burst when a box connects, and there is no periodic
+   * re-announce. So a page opened at any other moment saw a handful of live
+   * leaves (di, watchdog) and nothing else, and looked "partly filled" in a way
+   * that varied with when you opened it.
+   *
+   * refreshKeys() subscribes to @keys AND requests it once, so we learn the
+   * keys that already exist and can sendGet each one. Called AFTER connect
+   * because the request needs a socket, and again on every reconnect -- with
+   * `fetched` cleared, since a box that reconnected in the meantime has values
+   * we never asked for. */
   dp.on('keys:update', ({ keys }) => {
     for (const k of keys) {
       if (!/^extio\/[^/]+\/state\//.test(k)) continue;
@@ -598,8 +614,19 @@ async function init() {
     }
   });
 
-  try { await conn.connect(); setConn(true, 'connected'); }
-  catch (e) { setConn(false, 'connection failed — retrying'); }
+  const seed = () => { fetched = new Set(); dp.refreshKeys(); };
+
+  try {
+    await conn.connect();
+    setConn(true, 'connected');
+    seed();
+  } catch (e) {
+    setConn(false, 'connection failed — retrying');
+  }
+
+  /* autoReconnect brings the socket back without reloading the page; the values
+   * do not come back with it unless we ask again. */
+  if (conn.on) conn.on('connected', seed);
 }
 window.addEventListener('DOMContentLoaded', init);
 </script>
