@@ -59,6 +59,10 @@ proc start { { camera_id 0 } } {
         puts "Error initializing camera: $result"
         return
     }
+
+    # Pi CSI: call before cameraConfigure. 90/270 use software rotation;
+    # libcamera hardware orientation supports 0 and 180 only.
+    # cameraSetRotation 90
     
     # Configure camera at native 1920x1080 30Hz preview 320x240
     if {[catch {cameraConfigure 1920 1080 30.0 320 240} result]} {
@@ -90,10 +94,10 @@ proc start { { camera_id 0 } } {
         return
     }
 
-    cameraSetFrameSkipRate 30
+    # For ~10s JPEG snapshots: skip 100 (~3.3 fps processed) + callback every 3rd
+    cameraSetFrameSkipRate 100
     
-    # Start continuous callback mode on every non skipped frame (1fps)
-    if {[catch {cameraStartContinuousCallback my_frame_handler "camera" 1} result]} {
+    if {[catch {cameraStartContinuousCallback my_frame_handler "camera" 3} result]} {
         puts "Error starting continuous callback: $result"
         return
     }

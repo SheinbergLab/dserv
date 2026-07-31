@@ -51,9 +51,9 @@ This module provides a comprehensive interface to Raspberry Pi cameras through l
 - USB cameras supported via libcamera
 
 ### Software
-- libcamera and libcamera-dev (tested with 0.5.2)
+- libcamera and libcamera-dev (0.5.x on older Pi OS; 0.7.x on current Raspberry Pi OS / Debian trixie)
 - libjpeg-dev (optional, for JPEG support)
-- Tcl 8.6 or later
+- Tcl 9.0 (`tcl9.0-dev` on Debian)
 - Data server framework
 
 ### Build Defines
@@ -62,15 +62,30 @@ This module provides a comprehensive interface to Raspberry Pi cameras through l
 
 ## Building
 
+On Raspberry Pi, the easiest path is the setup script (builds against your
+system libcamera — important on Pi OS with libcamera 0.7+):
+
 ```bash
-# Install dependencies
-sudo apt-get install libcamera-dev libjpeg-dev
-
-# Build the module
-make
-
-# The module will be built as dserv_camera.so
+git clone https://github.com/sheinberglab/dserv
+sudo ./dserv/scripts/setup-camera.sh
+# then from dserv Tcl: send camera start
 ```
+
+Manual build from a source checkout (camera module only):
+
+```bash
+sudo apt-get install cmake g++ libcamera-dev tcl9.0-dev libjpeg-dev
+cd modules
+cmake -DBUILD_CAMERA=ON -DCMAKE_BUILD_TYPE=Release -B build
+cmake --build build --target camera_capture
+# output: build/dserv_camera.so
+```
+
+Or use `scripts/setup-camera.sh`, which builds only the camera module without
+requiring other dserv module dependencies (ALSA, etc.).
+
+Prebuilt `dserv-camera-rpi` release debs target libcamera 0.5. On Pi OS with
+libcamera 0.7+, build from source instead of installing the release deb.
 
 ## Quick Start
 
@@ -145,9 +160,14 @@ See the [full documentation](https://github.com/your-org/dserv) for complete com
 - `cameraSetBlueGain gain` - Set blue gain (0.5-4.0)
 
 **Other:**
-- `cameraSetRotation degrees` - Set rotation (0, 90, 180, 270) - call before configure
+- `cameraSetRotation degrees` - Set rotation (0, 90, 180, 270) — **call before `cameraConfigure`**
 - `cameraSetTargetFPS fps` - Set target frame rate
 - `cameraStatus` - Get comprehensive status
+
+On Raspberry Pi CSI cameras, libcamera hardware orientation supports **0° and 180°**
+only. **90° and 270°** are applied in software during JPEG encode (`rotation_mode`
+`software` in `cameraStatus`). Pi/libcamera RGB888 buffers are BGR-ordered; the
+module swaps R/B when encoding JPEG for non-USB cameras.
 
 ## Usage Examples
 
@@ -364,8 +384,19 @@ set status [cameraStatus]
 # - brightness, contrast, sharpness: current values
 # - auto_white_balance: boolean
 # - red_gain, blue_gain: WB gains
+# - rotation: degrees (0, 90, 180, 270)
+# - rotation_mode: "none", "hardware", or "software"
 # - ae_settled: has auto-exposure converged
 ```
+
+### Troubleshooting Pi color or rotation
+
+**Red and blue swapped in preview JPEGs** — build a current `dserv_camera.so`
+(from this repo). Stock builds before the BGR fix treat Pi RGB888 buffers as RGB.
+
+**Rotation has no effect at 90°/270°** — call `cameraSetRotation` before
+`cameraConfigure`. Check `send camera check_status` for `rotation_mode software`.
+EXIF-only rotation (older builds) does not rotate pixels in most viewers.
 
 ## See Also
 
