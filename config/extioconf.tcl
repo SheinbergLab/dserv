@@ -879,6 +879,270 @@ proc extio_ota_on_state {dp data} {
     }
 }
 
+# ============================================================================
+# REQUEST/RESPONSE over datapoints -- the missing layer under the OTA lifecycle
+# ============================================================================
+#
+# Everything that sets a `cmd/...` and waits for a `state/...` has the same four
+# problems, and dservWhen solves none of them by itself. It is the right
+# primitive -- the only non-blocking observation we have, and blocking would
+# deadlock the interp that produces the value -- but it is a transport, not a
+# protocol.
+#
+#   1. NO CORRELATION. `state/ota/arm = armed` does not say WHICH arm it
+#      answers. dserv never deletes a datapoint, and dservWhen does a LEVEL
+#      CHECK AT REGISTRATION -- it fires immediately if the current value
+#      already satisfies. So a reply retained from the previous run satisfies a
+#      watch armed for a fresh one, and the caller proceeds against a box that
+#      has done nothing. Reading a retained value as live is the single most
+#      repeated mistake in this tree (PORTING.md records four, including a
+#      boot-loop harness that scored 8/8 while measuring nothing).
+#
+#   2. NO TIMEOUT. It has to be bolted on with dservAfter and cancelled on
+#      every exit path, including the ones you did not think of.
+#
+#   3. ABSENCE IS NOT OBSERVABLE. A dead box publishes nothing, so "failed" and
+#      "still working" are the same signal until a deadline fires. That is not
+#      hypothetical: `dserv.live=down` with a frozen watchdog is exactly what a
+#      slow transfer looks like from here.
+#
+#   4. THE SEQUENCE LIVES ONLY IN THE READER'S HEAD -- N callbacks each arming
+#      the next, with the order implied rather than stated.
+#
+# extio_await / extio_request fix 1-3 by construction: the clear cannot be
+# forgotten because it is inside the call, and the deadline is a required
+# argument rather than an optional habit. ONE request in flight per box, which
+# is what makes correlation trivial -- there is only ever one thing it could be
+# the answer to.
+#
+# ORDER IS clear -> watch -> send, and it is not arbitrary. Clearing after
+# arming would race the reply; sending before arming could let a fast box reply
+# unobserved. A reply that lands between the clear and the watch is still
+# caught, because of the level check in (1) -- the same property that makes
+# stale values dangerous makes this ordering safe.
+
+set ::extio_req_seq 0
+
+# Wait for a reply that some OTHER action will provoke (or that needs no
+# command at all -- e.g. a box re-announcing after a reset).
+proc extio_await {box label reply predicate timeout_ms on_ok on_fail {clear {}}} {
+    extio_req_clear $box
+    foreach k $clear { catch { dservClear extio/$box/state/$k } }
+
+    set id [incr ::extio_req_seq]
+    set ::extio_req($box,id)     $id
+    set ::extio_req($box,label)  $label
+    set ::extio_req($box,on_ok)  $on_ok
+    set ::extio_req($box,on_fail) $on_fail
+    set ::extio_req($box,timer) \
+        [dservAfter $timeout_ms [list extio_req_timeout $box $id $label $timeout_ms]]
+    set ::extio_req($box,when) \
+        [dservWhen extio/$box/state/$reply $predicate extio_req_reply]
+    return $id
+}
+
+# ...and the common case: send a command, then wait for its reply.
+proc extio_request {box label cmd value reply predicate timeout_ms on_ok on_fail {clear {}}} {
+    set id [extio_await $box $label $reply $predicate $timeout_ms $on_ok $on_fail $clear]
+    catch { dservSet extio/$box/cmd/$cmd $value }
+    return $id
+}
+
+# Drop whatever this box has in flight. Both elements are ROUTINELY absent (no
+# request yet, already-completed request), and in this file `catch` is not
+# silence -- errormon traces every raised error even when caught -- so test
+# first rather than catching the expected case.
+proc extio_req_clear {box} {
+    if { [info exists ::extio_req($box,when)] }  { catch { dservWhenCancel $::extio_req($box,when) } }
+    if { [info exists ::extio_req($box,timer)] } { catch { dservAfterCancel $::extio_req($box,timer) } }
+    array unset ::extio_req $box,*
+}
+
+proc extio_req_reply {dp value} {
+    if { ![regexp {^extio/([^/]+)/state/} $dp -> box] } return
+    if { ![info exists ::extio_req($box,on_ok)] } return     ;# already resolved
+    set cb $::extio_req($box,on_ok)
+    extio_req_clear $box                                     ;# cancel the deadline FIRST
+    {*}$cb $box $value
+}
+
+proc extio_req_timeout {box id label ms} {
+    # Ignore a deadline for a request that already resolved: the timer and the
+    # reply can both be in flight, and the id makes that unambiguous.
+    if { ![info exists ::extio_req($box,id)] || $::extio_req($box,id) != $id } return
+    set cb $::extio_req($box,on_fail)
+    extio_req_clear $box
+    {*}$cb $box "no reply to '$label' within [expr {$ms/1000}]s -- box stopped responding?"
+}
+
+# ============================================================================
+# OTA LIFECYCLE -- stage -> verify -> arm -> trial boot -> confirm
+# ============================================================================
+#
+# WHICH DATAPOINTS MATTER. This map is half the point of the section: a web page
+# and a human need the same one, and until now it lived only in CHEATSHEET.md
+# where code cannot consult it and it cannot go stale loudly.
+#
+#   state/ota/state        idle|staging|verify|ok|fail  -- transfer outcome
+#   state/ota/result       none|too_big|flash|size_mismatch|sha_mismatch|
+#                          sha_init|bad_state|bad_geometry
+#   state/ota/progress     0..100
+#   state/ota/ack          contiguous byte cursor (also paces the resender)
+#   state/ota/flash_verify 1 match | 0 mismatch | -1 nothing staged. A READ-BACK
+#                          hash: state=ok only says the bytes crossed the link,
+#                          this says what is actually IN the slot.
+#   state/ota/hdr_ok       1 = MCUboot header readable WHERE MCUBOOT LOOKS
+#   state/ota/staged_ver   version in the slot (published by verify)
+#   state/ota/arm          armed|failed|refused_in_obs|
+#                          refused_no_verified_image|refused_no_image_header
+#   state/ota/confirm      confirmed|failed
+#   state/ota/trial        1 = running an unconfirmed image
+#   state/fw_ver           what MCUboot ACTUALLY booted. NOT state/fw, which is
+#                          a build-time constant and can never show an update.
+#
+# Rolled up into ONE key for the UI:
+#   state/ota/lifecycle      idle|staging|verifying|arming|trial|confirming|
+#                            done|failed
+#   state/ota/lifecycle_msg  the same, as a sentence
+#
+# Each phase below is now one extio_request/extio_await plus a validator. The
+# clear-before-watch and the deadline are inside the layer, so they cannot be
+# forgotten per-phase -- which is exactly how the retained-value trap gets
+# reintroduced.
+
+proc extio_ota_lc_pub {box phase msg} {
+    set ::extio_ota_lc($box,phase) $phase
+    catch { dservSet extio/$box/state/ota/lifecycle     $phase }
+    catch { dservSet extio/$box/state/ota/lifecycle_msg $msg }
+    puts "extio ota\[$box\]: $phase -- $msg"
+}
+
+proc extio_ota_lc_fail {box why} {
+    extio_req_clear $box
+    extio_ota_lc_pub $box failed $why
+}
+
+# ---- entry point ----------------------------------------------------------
+proc extio_ota_update {box {channel dev} {version ""}} {
+    if { [info exists ::extio_ota_lc($box,phase)]
+         && $::extio_ota_lc($box,phase) ni {idle done failed} } {
+        error "extio_ota_update: $box is already in '$::extio_ota_lc($box,phase)' -- extio_ota_abort $box first"
+    }
+    extio_ota_lc_pub $box staging "staging $channel image"
+
+    # Watch armed BEFORE the push: push_shelf blocks for seconds on the shelf
+    # fetch and the transfer itself can finish quickly on a docked box.
+    extio_await $box "transfer" ota/state {in {ok fail}} 180000 \
+        extio_ota_lc_staged extio_ota_lc_fail \
+        {ota/state ota/result ota/progress ota/ack ota/flash_verify ota/hdr_ok
+         ota/staged_ver ota/arm ota/arm_rc ota/confirm ota/confirm_rc}
+
+    if { [catch { extio_ota_push_shelf $box $channel $version } r] } {
+        extio_ota_lc_fail $box "shelf: $r"
+        return "ota $box: FAILED before transfer -- $r"
+    }
+    return "ota $box: lifecycle started -- watch extio/$box/state/ota/lifecycle"
+}
+
+proc extio_ota_abort {box} {
+    extio_req_clear $box
+    catch { extio_ota_cancel ::extio_ota_timer $box }
+    catch { dservSet extio/$box/cmd/ota/abort 1 }
+    extio_ota_lc_pub $box failed "aborted by operator"
+}
+
+# ---- phases ---------------------------------------------------------------
+proc extio_ota_lc_staged {box value} {
+    if { $value ne "ok" } {
+        set r "?" ; catch { set r [dservGet extio/$box/state/ota/result] }
+        extio_ota_lc_fail $box "transfer failed ($r)"
+        return
+    }
+    extio_ota_lc_pub $box verifying "read-back hashing the slot"
+    extio_request $box "verify" ota/verify 1 ota/flash_verify {in {1 0 -1}} 90000 \
+        extio_ota_lc_verified extio_ota_lc_fail \
+        {ota/flash_verify ota/hdr_ok ota/staged_ver}
+}
+
+proc extio_ota_lc_verified {box value} {
+    if { $value != 1 } {
+        extio_ota_lc_fail $box "read-back hash mismatch (flash_verify=$value) -- the slot does NOT hold the image we sent"
+        return
+    }
+    # hdr_ok and staged_ver are published in the same breath as flash_verify, so
+    # they are readable now. Refusing here beats letting the box refuse the arm:
+    # same outcome, but the reason is ours and more specific.
+    set hdr 0 ; catch { set hdr [dservGet extio/$box/state/ota/hdr_ok] }
+    if { $hdr != 1 } {
+        extio_ota_lc_fail $box "no MCUboot header where MCUboot looks (hdr_ok=$hdr) -- image staged at the wrong offset"
+        return
+    }
+    set sv "" ; catch { set sv [dservGet extio/$box/state/ota/staged_ver] }
+    set ::extio_ota_lc($box,want_ver) $sv
+
+    # fw_ver is cleared HERE, with the arm, not later: arming resets the box, and
+    # fw_ver reappearing is how we learn it came back. Clearing it after the reset
+    # would race the announce burst and could erase the very fact we are waiting
+    # for; a retained value would report the OLD boot as proof of the new one.
+    extio_ota_lc_pub $box arming "arming trial boot of $sv"
+    extio_request $box "arm" ota/arm 1 ota/arm {ne ""} 30000 \
+        extio_ota_lc_armed extio_ota_lc_fail {ota/arm ota/arm_rc fw_ver}
+}
+
+proc extio_ota_lc_armed {box value} {
+    if { $value ne "armed" } {
+        extio_ota_lc_fail $box "arm refused: $value"
+        return
+    }
+    # No command to send -- the box is already resetting into the MCUboot swap.
+    # fw_ver was cleared with the arm, so any value now is a fresh announce.
+    extio_ota_lc_pub $box trial "swapping + rebooting into the trial image"
+    extio_await $box "trial boot" fw_ver {ne ""} 120000 \
+        extio_ota_lc_booted extio_ota_lc_fail
+}
+
+proc extio_ota_lc_booted {box value} {
+    set want ""
+    if { [info exists ::extio_ota_lc($box,want_ver)] } { set want $::extio_ota_lc($box,want_ver) }
+    # The box is back and has said which image MCUboot chose. If that is not the
+    # staged one, the trial did not take -- MCUboot declined it, or it booted and
+    # reverted -- and confirming would be meaningless.
+    if { $want ne "" && $value ne $want } {
+        extio_ota_lc_fail $box "trial did not take: booted $value, staged $want -- check state/ota/rejects and the boot reason"
+        return
+    }
+    extio_ota_lc_pub $box confirming "trial image $value is live -- confirming"
+    # The command ARRIVING is itself the liveness proof: a "publishing but deaf"
+    # image cannot ack it, and the deadline catches precisely that.
+    extio_request $box "confirm" ota/confirm 1 ota/confirm {in {confirmed failed}} 30000 \
+        extio_ota_lc_confirmed extio_ota_lc_fail {ota/confirm ota/confirm_rc}
+}
+
+proc extio_ota_lc_confirmed {box value} {
+    if { $value ne "confirmed" } {
+        extio_ota_lc_fail $box "confirm failed -- the image will REVERT on the next reset"
+        return
+    }
+    set v "?" ; catch { set v [dservGet extio/$box/state/fw_ver] }
+    extio_ota_lc_pub $box done "running $v, confirmed permanent"
+}
+
+# One-line status for a human or a polling UI. AGE on every field, always:
+# dserv retains, so a dead box serves its last values forever and every field
+# reads healthy. The value alone is not evidence.
+proc extio_ota_status {box} {
+    set out {}
+    foreach k {ota/lifecycle ota/lifecycle_msg ota/state ota/progress ota/ack
+               ota/flash_verify ota/hdr_ok ota/staged_ver ota/arm ota/confirm
+               ota/trial fw_ver} {
+        set d extio/$box/state/$k
+        if { ![dservExists $d] } continue
+        set age [format %.0f [expr {([now] - [dservTimestamp $d]) / 1000000.0}]]
+        lappend out "$k=[dservGet $d] (${age}s)"
+    }
+    return [join $out "\n"]
+}
+
 proc extio_wire_common {} {                 ;# device-independent: sync + obs_pin
     dservAddMatch ess/in_obs
     dpointSetScript ess/in_obs usbio_forward
