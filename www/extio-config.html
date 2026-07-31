@@ -227,12 +227,32 @@ async function doReboot(box) {
   await conn.send(`extio_cfg_reboot ${box}`, 'extio');
 }
 
-/* ---- fleet list ---- */
+/* ---- fleet list ----
+ *
+ * MEMOISED, and that is a correctness fix rather than an optimisation. This
+ * replaced #fleet wholesale on every datapoint update and every 1 Hz tick, and
+ * a click needs mousedown and mouseup on the SAME element -- so a frame landing
+ * mid-press destroyed the card and no click event fired at all. It presented as
+ * "sometimes takes a few presses to select a box", which reads like a UI being
+ * flaky rather than like the DOM being pulled out from under the pointer.
+ *
+ * The panel solved this by refusing to redraw while focus is inside it, but the
+ * fleet list must keep ticking -- it is where liveness lives, and freezing it
+ * would hide the one thing it exists to show. So instead: build the HTML, and
+ * only touch the DOM when it actually DIFFERS. Card content changes when a
+ * value or a liveness BUCKET changes, not with every tick, so the overwhelming
+ * majority of renders now leave the DOM completely alone and a press always
+ * lands. */
+let fleetHtml = null;
 function renderFleet() {
   const el = document.getElementById('fleet');
   const names = [...boxes.keys()].sort();
-  if (!names.length) { el.innerHTML = '<div class="empty">no boxes seen</div>'; return; }
-  el.innerHTML = names.map(n => {
+  if (!names.length) {
+    const empty = '<div class="empty">no boxes seen</div>';
+    if (fleetHtml !== empty) { el.innerHTML = fleetHtml = empty; }
+    return;
+  }
+  const html = names.map(n => {
     const L = liveness(n);
     return `<div class="box ${n === sel ? 'sel' : ''} ${L.cls === 'bad' ? 'stale' : ''}"
                  onclick="selectBox('${n}')">
@@ -241,9 +261,10 @@ function renderFleet() {
       <div class="sub">v${get(n, 'fw_ver', get(n, 'fw', '?'))} · ain ${get(n, 'ain_en') == 1 ? 'on' : 'off'}</div>
     </div>`;
   }).join('');
+  if (html !== fleetHtml) { el.innerHTML = fleetHtml = html; }
 }
 function selectBox(n) {
-  sel = n; dirty = new Set(); renderFleet(); renderPanel(); refreshDirty(n);
+  sel = n; dirty = new Set(); panelHtml = null; renderFleet(); renderPanel(); refreshDirty(n);
   /* Opening a box asks it to describe itself: retained values may predate the
    * last edit made from a console, and there is no periodic re-announce. */
   if (conn) conn.send(`extio_cfg_announce ${n}`, 'extio').catch(() => {});
@@ -360,11 +381,16 @@ function fwSection(b) {
       'A box will refuse an image it is already running, so the shelf version must differ.'}</p>`;
 }
 
+let panelHtml = null;
 function renderPanel() {
   if (panelBusy()) { redrawPending = true; return; }
   redrawPending = false;
   const el = document.getElementById('panel');
-  if (!sel || !boxes.has(sel)) { el.innerHTML = '<div class="empty">select a box</div>'; return; }
+  if (!sel || !boxes.has(sel)) {
+    const empty = '<div class="empty">select a box</div>';
+    if (panelHtml !== empty) { el.innerHTML = panelHtml = empty; }
+    return;
+  }
   const b = sel, L = liveness(b);
 
   /* PINS. Read from what the box ANNOUNCES, which is NOT the same namespace you
@@ -436,7 +462,7 @@ function renderPanel() {
   const ainOn = get(b, 'ain_en') == 1;
   const dbg = k => `${get(b, 'ain/dbg/' + k, '—')} ${ageSpan(b, 'ain/dbg/' + k)}`;
 
-  el.innerHTML = `
+  const html = `
     <div style="display:flex;align-items:baseline;gap:12px">
       <h2 style="margin:0">${b}</h2>
       <span class="pill ${L.cls}">${L.txt}</span>
@@ -517,6 +543,7 @@ function renderPanel() {
       <button onclick="conn.send('extio_cfg_announce ${b}','extio')" title="Ask the box to re-publish everything now">Refresh from box</button>
     </div>
   `;
+  if (html !== panelHtml) { el.innerHTML = panelHtml = html; }
 }
 
 /* ---- boot ---- */
