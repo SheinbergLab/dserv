@@ -201,7 +201,7 @@ function renderFleet() {
                  onclick="selectBox('${n}')">
       <div class="nm"><span>${n}</span><span class="pill ${L.cls}">${L.txt}</span></div>
       <div class="sub">${get(n, 'ip', '—')} · ${get(n, 'board', '?')}</div>
-      <div class="sub">fw ${get(n, 'fw_ver', '?')} · ain ${get(n, 'ain_en') == 1 ? 'on' : 'off'}</div>
+      <div class="sub">v${get(n, 'fw_ver', get(n, 'fw', '?'))} · ain ${get(n, 'ain_en') == 1 ? 'on' : 'off'}</div>
     </div>`;
   }).join('');
 }
@@ -229,6 +229,19 @@ function field(box, leaf, cfgLeaf, opts = {}) {
  * indistinguishable from "the value is empty" -- so it is marked, and left
  * blank on purpose. Everything here would stop being write-only the moment
  * box_announce_manifest() published it. */
+/* The manifest sends per-pin scalars SPARSELY as "n:v,n:v" -- only pins that
+ * differ from the default -- because one datapoint per pin would be ~72 extra
+ * frames per announce into a 40-deep publish queue, which is the burst that
+ * drops single-shot frames. Absent therefore means "default", not "unknown". */
+const sparse = (str) => {
+  const m = new Map();
+  String(str || '').split(',').filter(Boolean).forEach(kv => {
+    const [k, v] = kv.split(':'); if (k !== undefined && v !== undefined) m.set(+k, v);
+  });
+  return m;
+};
+const csvNums = (str) => String(str || '').split(',').filter(x => x !== '').map(Number);
+
 function woField(box, cfgLeaf, wide) {
   return `<input class="${wide ? 'w8' : 'w4'} wo" placeholder="write-only" title="The box accepts this setting but does not report it, so its current value cannot be shown."
             onchange="if(this.value!==''){cfgSet('${box}','${cfgLeaf}',this.value)}">`;
@@ -249,23 +262,44 @@ function renderPanel() {
    * confidently wrong pins for the next board. Known gap: only ACTIVE pins are
    * announced, so a pin set to `off` is invisible and cannot be re-enabled from
    * here -- that needs pins/all in box_announce_manifest(). */
-  const pinsIn  = String(get(b, 'pins/in',  '')).split(',').filter(x => x !== '').map(Number);
-  const pinsOut = String(get(b, 'pins/out', '')).split(',').filter(x => x !== '').map(Number);
-  const pins = [...new Set([...pinsIn, ...pinsOut])].sort((x, y) => x - y);
+  const pinsIn  = csvNums(get(b, 'pins/in'));
+  const pinsOut = csvNums(get(b, 'pins/out'));
+  const pinsAin = csvNums(get(b, 'pins/ain'));
+  const rsv     = new Set(csvNums(get(b, 'pins/reserved')));
+  const alo     = new Set(csvNums(get(b, 'pins/active_low')));
+  const deb     = sparse(get(b, 'pins/debounce_ms'));
+  const pul     = sparse(get(b, 'pins/pulse_us'));
+  /* pins/all is the BOARD's pin set. Falling back to the active lists keeps the
+   * page working against a box on older firmware -- it just cannot then show a
+   * pin that is currently `off`, which is exactly the gap pins/all closes. */
+  const all = csvNums(get(b, 'pins/all'));
+  const pins = (all.length ? all
+                : [...new Set([...pinsIn, ...pinsOut])]).sort((x, y) => x - y);
+  const havePinsAll = all.length > 0;
+
+  const modeOf = p => rsv.has(p) ? 'reserved'
+                    : pinsAin.includes(p) ? 'ain'
+                    : pinsIn.includes(p)  ? 'in'
+                    : pinsOut.includes(p) ? 'out' : 'off';
 
   const pinRows = pins.map(p => {
-    const dir = pinsIn.includes(p) ? 'in' : 'out';
-    const lvl = get(b, `di/${p}`, null);
-    return `<tr class="row">
+    const mode = modeOf(p), lvl = get(b, `di/${p}`, null), res = mode === 'reserved';
+    const sel = ['off', 'in', 'in_pullup', 'out', 'ain'].map(o =>
+      `<option ${o === mode || (mode === 'in' && o === 'in_pullup' && false) ? 'selected' : ''}>${o}</option>`).join('');
+    return `<tr class="row" ${res ? 'style="opacity:.5"' : ''}>
       <td><b>${p}</b></td>
-      <td class="age">${dir}</td>
-      <td>${dir === 'in' && lvl !== null ? `<b>${lvl}</b> ${ageSpan(b, 'di/' + p)}` : ''}</td>
-      <td>${field(b, `label/${p}`, `pin/${p}/label`, { wide: 1 })}</td>
-      <td>${woField(b, `pin/${p}/debounce_ms`)}</td>
-      <td>${woField(b, `pin/${p}/pulse_us`)}</td>
+      <td>${res ? '<span class="age">reserved</span>'
+                : `<select onchange="cfgSet('${b}','pin/${p}/mode',this.value)">${sel}</select>`}</td>
+      <td>${mode === 'in' && lvl !== null ? `<b>${lvl}</b> ${ageSpan(b, 'di/' + p)}` : ''}</td>
+      <td>${res ? '' : field(b, `label/${p}`, `pin/${p}/label`, { wide: 1 })}</td>
+      <td>${res ? '' : `<input class="w4" value="${deb.get(p) ?? ''}" placeholder="0"
+              onchange="cfgSet('${b}','pin/${p}/debounce_ms',this.value)">`}</td>
+      <td>${res ? '' : `<input class="w4" value="${pul.get(p) ?? ''}" placeholder="0"
+              onchange="cfgSet('${b}','pin/${p}/pulse_us',this.value)">`}</td>
+      <td>${res ? '' : `<input type="checkbox" ${alo.has(p) ? 'checked' : ''}
+              onchange="cfgSet('${b}','pin/${p}/active_low',this.checked?1:0)">`}</td>
     </tr>`;
-  }).join('') ||
-    '<tr><td colspan="6" class="age">no active pins announced</td></tr>';
+  }).join('') || '<tr><td colspan="7" class="age">no pins announced</td></tr>';
 
   /* GROUPS are announced BY NAME (group/<name>/pins) with group/<name>/idx
    * carrying the index -- writes are by index (config/group/<i>/pins). So the
@@ -303,18 +337,24 @@ function renderPanel() {
           <th>board</th><td>${get(b, 'board', '?')}</td></tr>
       <tr><th>desc</th><td>${field(b, 'desc', 'desc', { wide: 1 })}</td>
           <th>build</th><td>${get(b, 'build', '?')}</td></tr>
-      <tr><th>fw_ver</th><td>${get(b, 'fw_ver', '?')} ${ageSpan(b, 'fw_ver')}</td>
-          <th>boot</th><td>${get(b, 'boot', '?')}</td></tr>
+      <tr><th>fw_ver</th><td>${get(b, 'fw_ver', '—')} ${ageSpan(b, 'fw_ver')}</td>
+          <th>fw</th><td>${get(b, 'fw', '—')}</td></tr>
+      <tr><th>boot</th><td>${get(b, 'boot', '?')}</td>
+          <th>channel</th><td>${get(b, 'channel', '—')}</td></tr>
     </table>
-    <p class="note"><code>fw_ver</code> is what MCUboot actually booted.
-       <code>fw</code> is a build-time constant and can never show an update taking effect.</p>
+    <p class="note"><code>fw_ver</code> is what MCUboot actually booted — the one to trust after an
+       OTA. <code>fw</code> is compiled in and never changes, so it can look correct on a box running
+       something else entirely. A <code>—</code> for <code>fw_ver</code> means the box has no MCUboot
+       image manager (it is only announced under <code>CONFIG_MCUBOOT_IMG_MANAGER</code>), so it is
+       not OTA-capable.</p>
 
     <h2>network</h2>
     <table>
       <tr><th>ip</th><td>${get(b, 'ip', '—')} ${ageSpan(b, 'ip')}</td>
           <th>transport</th><td>${get(b, 'transport', '—')}</td></tr>
-      <tr><th>dserv ip</th><td>${woField(b, 'dserv/ip', 1)}</td>
-          <th>dserv port</th><td>${woField(b, 'dserv/port')}</td></tr>
+      <tr><th>dserv ip</th><td>${field(b, 'dserv/ip', 'dserv/ip', { wide: 1 })} ${ageSpan(b, 'dserv/ip')}</td>
+          <th>dserv port</th><td>${field(b, 'dserv/port', 'dserv/port')}</td></tr>
+      <tr><th>net mode</th><td>${field(b, 'net/mode', 'net/mode', { wide: 1 })}</td><th></th><td></td></tr>
     </table>
     <p class="note">Re-pointing <code>dserv/ip</code> moves the box to another rig. It cannot be
        set here for a box that has never reached a dserv — that is extio-setup's job.</p>
@@ -326,10 +366,10 @@ function renderPanel() {
     </table>
 
     <h2>pins</h2>
-    <table><tr><th>pin</th><th>dir</th><th>level</th><th>label</th><th>debounce ms</th><th>pulse µs</th></tr>${pinRows}</table>
-    <p class="note">Only pins the box announces as active (<code>pins/in</code> / <code>pins/out</code>)
-       appear. A pin set to <code>off</code> is not announced, so it cannot be shown or re-enabled
-       from here yet — that needs <code>pins/all</code> in the manifest.</p>
+    <table><tr><th>pin</th><th>mode</th><th>level</th><th>label</th><th>debounce ms</th><th>pulse µs</th><th>act low</th></tr>${pinRows}</table>
+    <p class="note">${havePinsAll
+       ? 'Every pin the board maps, from <code>pins/all</code>; reserved pins are shown but refused by the box. Blank debounce/pulse means the default (0) — the manifest sends only pins that differ.'
+       : 'This box predates <code>pins/all</code>, so only ACTIVE pins appear and a pin set to <code>off</code> cannot be shown or re-enabled. Update its firmware to configure the full map.'}</p>
 
     <h2>groups</h2>
     <table><tr><th>#</th><th>name</th><th>pins</th><th>settle ms</th><th>value</th></tr>${groups}</table>
@@ -341,7 +381,7 @@ function renderPanel() {
               <option value="1" ${ainOn ? 'selected' : ''}>on</option>
               <option value="0" ${ainOn ? '' : 'selected'}>off</option>
             </select></td>
-          <th>base rate Hz</th><td>${woField(b, 'ain/rate')}</td></tr>
+          <th>base rate Hz</th><td>${field(b, 'ain/rate', 'ain/rate')} ${ageSpan(b, 'ain/rate')}</td></tr>
       <tr><th>running</th><td>${dbg('running')}</td><th>powered</th><td>${dbg('powered')}</td></tr>
       <tr><th>sweeps</th><td>${dbg('sweeps')}</td><th>throttled</th><td>${dbg('throttled')}</td></tr>
     </table>

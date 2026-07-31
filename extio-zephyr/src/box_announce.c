@@ -60,13 +60,24 @@ static const char *box_build_key(void)
 
 /* ---- small helpers: one datapoint per item ---- */
 
+/* A frame carries name + payload in ~109 bytes, and dserv_msg_build REFUSES
+ * (returns -1) rather than truncating when they do not fit. Ignoring that -- as
+ * this did -- sends whatever was left in the buffer, so an over-long value
+ * becomes a garbage datapoint or a silently missing one. Neither is visible
+ * from the host, which is the worst property a manifest can have: a UI renders
+ * a confident, incomplete pin map and nothing says so.
+ *
+ * Publish a marker instead. "!toolong" is short enough to always fit, and a
+ * consumer showing it is being told the truth about what happened. */
 static void pub_str(const box_config_t *c, const char *leaf, const char *val)
 {
 	uint8_t f[DSERV_MSG_LEN];
 	char nm[80];
 
 	dserv_state_name(c, nm, sizeof nm, leaf);
-	dserv_msg_string(f, nm, 0, val);
+	if (dserv_msg_string(f, nm, 0, val) <= 0) {
+		dserv_msg_string(f, nm, 0, "!toolong");
+	}
 	box_uplink_send(f, DSERV_MSG_LEN);
 }
 
@@ -151,6 +162,76 @@ void box_announce_manifest(const box_config_t *c)
 	}
 	pub_str(c, "pins/in",  in_csv);
 	pub_str(c, "pins/out", out_csv);
+
+	/* ---- what the board HAS, not just what is currently switched on ----
+	 *
+	 * pins/in and pins/out above describe the ACTIVE map, which is what a
+	 * monitor wants. A CONFIGURATION UI needs the other half: a pin set to
+	 * `off` appears in neither list, so it cannot be shown, let alone
+	 * re-enabled, and there is no way to learn that pin 5 is the PHY's MDIO
+	 * rather than merely unused. Without this a page must hardcode a table per
+	 * board -- and MCXN947 / RW612 / Teensy differ in count AND in which pins
+	 * are reserved, so that table renders confidently wrong pins for whichever
+	 * board is added next.
+	 *
+	 * SPARSE `n:v` FOR THE PER-PIN SCALARS, not one datapoint per pin. Dense
+	 * would be 4 x BOX_NPINS extra frames per announce -- ~72 here -- into a
+	 * 40-deep publish queue, which is precisely the burst that drops the
+	 * single-shot frames at the end of an operation (see main.c's watchdog
+	 * catch-up note; that is how an OTA result reads as "never ran"). Six
+	 * frames carry the same information, and only pins that differ from the
+	 * default appear at all. */
+	{
+		int ka = 0, kl = 0, kr = 0, kd = 0, kp = 0, kA = 0;
+		char all_csv[96], ain_csv[64], rsv_csv[64];
+		char deb_csv[96], pul_csv[96], alo_csv[64];
+		uint32_t rmask = box_gpio_reserved_mask();
+
+		all_csv[0] = ain_csv[0] = rsv_csv[0] = '\0';
+		deb_csv[0] = pul_csv[0] = alo_csv[0] = '\0';
+
+		for (int i = 0; i < BOX_NPINS; i++) {
+			ka += snprintf(all_csv + ka, sizeof all_csv - ka, "%s%d", ka ? "," : "", i);
+			if ((rmask >> i) & 1u) {
+				kr += snprintf(rsv_csv + kr, sizeof rsv_csv - kr, "%s%d", kr ? "," : "", i);
+			}
+			if (c->pin_mode[i] == PIN_MODE_AIN) {
+				kA += snprintf(ain_csv + kA, sizeof ain_csv - kA, "%s%d", kA ? "," : "", i);
+			}
+			if (c->debounce_ms[i]) {
+				kd += snprintf(deb_csv + kd, sizeof deb_csv - kd, "%s%d:%u",
+					       kd ? "," : "", i, (unsigned) c->debounce_ms[i]);
+			}
+			if (c->do_pulse_us[i]) {
+				kp += snprintf(pul_csv + kp, sizeof pul_csv - kp, "%s%d:%u",
+					       kp ? "," : "", i, (unsigned) c->do_pulse_us[i]);
+			}
+			if ((c->di_active_low >> i) & 1u) {
+				kl += snprintf(alo_csv + kl, sizeof alo_csv - kl, "%s%d", kl ? "," : "", i);
+			}
+		}
+		pub_str(c, "pins/all",         all_csv);
+		pub_str(c, "pins/reserved",    rsv_csv);
+		pub_str(c, "pins/ain",         ain_csv);
+		pub_str(c, "pins/debounce_ms", deb_csv);   /* sparse n:ms  */
+		pub_str(c, "pins/pulse_us",    pul_csv);   /* sparse n:us  */
+		pub_str(c, "pins/active_low",  alo_csv);
+	}
+
+	/* Settings the box accepted but never reported back, so a UI could only
+	 * offer a blank box that is indistinguishable from "the value is empty".
+	 * dserv/ip is the one that matters most: it is how you discover which rig a
+	 * box is pointed at without opening its console. */
+	{
+		char ip[20];
+
+		snprintf(ip, sizeof ip, "%u.%u.%u.%u", c->dserv_ip[0], c->dserv_ip[1],
+			 c->dserv_ip[2], c->dserv_ip[3]);
+		pub_str(c, "dserv/ip",   ip);
+		pub_int(c, "dserv/port", c->dserv_port);
+		pub_int(c, "ain/rate",   dserv_cfg_ain_rate(c));
+		pub_str(c, "net/mode",   c->net_mode ? "static" : "dhcp");
+	}
 
 	/* Special-function pins; -1 = off, so DISABLING one updates the retained
 	 * value instead of leaving a ghost pointing at a pin that is now ordinary. */
