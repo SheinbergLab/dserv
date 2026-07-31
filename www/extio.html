@@ -369,7 +369,26 @@ function render() {
         const b = boxes.get(name);
         const alive = Date.now() - b.lastSeen < 4000;
         el.className = 'box' + (alive ? '' : ' offline');
-        if (dirty.has(name)) el.innerHTML = cardHtml(b);
+        if (dirty.has(name)) {
+            /* ONLY REPLACE WHEN THE MARKUP ACTUALLY CHANGED.
+             *
+             * onExtio marks a box dirty on EVERY datapoint, including the
+             * once-a-second watchdog, so this used to rebuild the card's
+             * innerHTML about once a second even when nothing visible moved. A
+             * click needs mousedown AND mouseup on the same element, so
+             * anything clickable inside the card -- the `configure` link -- had
+             * a one-second window that kept being reset underneath the pointer.
+             * It presents as a link that "sometimes does not take", which reads
+             * as flakiness rather than as the DOM being replaced mid-press.
+             *
+             * This is cheap because a steady box produces IDENTICAL markup
+             * between ticks: `seen` reads "now" under 2 s and `up` is bucketed
+             * to minutes past 90 s, so neither churns; di/do only change on real
+             * edges. cardHtml() is recomputed either way -- it is a string
+             * build, not a layout -- and only the DOM write is skipped. */
+            const html = cardHtml(b);
+            if (html !== b.lastHtml) { el.innerHTML = html; b.lastHtml = html; }
+        }
     }
     dirty = new Set();
 }
