@@ -1,9 +1,13 @@
 # extio box pin map — FRDM-MCXN947
 
-**Box pin *n* IS Arduino D*n*.** The number you send in `cmd/do/<n>` and
-`config/pin/<n>` is the number printed on the board. No lookup table needed for
-the common case — this file is for *routing*, i.e. deciding which header pin to
-run each external signal to.
+**Box pin *n* IS Arduino D*n*, and ain channel *k* IS Arduino A*k*.** The
+number you send in `cmd/do/<n>` and `config/pin/<n>` is the number printed on
+the board, and the analog strip is the channel list in order. No lookup table
+needed for the common case — this file is for *routing*, i.e. deciding which
+header pin to run each external signal to. The UNO header is the box's ONE
+field connector: a screw-terminal shield (or a custom one) reaches every box
+pin, digital and analog, with the shield's silkscreen agreeing with the box
+numbering.
 
 The map itself lives in `boards/frdm_mcxn947_mcxn947_cpu0.overlay`
 (`zephyr,user/box-gpios`); `src/platform/box_gpio.c` resolves it. Everything
@@ -36,34 +40,38 @@ the obs mirror and the sync input. Everything here is 3.3 V; **the MCXN947 is no
 | 11 | D11 | P0_24 | free | **B16** | CT0_MAT0 | FC1_P0 (SPI MOSI) |
 | 12 | D12 | P0_26 | free | **B18** | CT0_MAT2 | FC1_P2 (SPI MISO) |
 | 13 | D13 | P0_25 | free | **B17** | CT0_MAT1 | FC1_P1 (SPI SCK) |
-| 14 | A2 | P0_14 | free — or **ain ch3** | **B14** | — | switchable at runtime |
-| 15 | A3 | P0_22 | free — or **ain ch4** | **A14** | — | switchable at runtime |
-| 16 | A4 | P0_15 | free — or **ain ch5** | **B15** | — | switchable at runtime |
-| 17 | A5 | P0_23 | free — **also SW2** | **A15** | — | FC1_P3, CMP2 |
+| 14 | A2 | P0_14 | free — or **ain ch2** | **B14** | — | switchable at runtime |
+| 15 | A3 | P0_22 | free — or **ain ch3** | **A14** | — | switchable at runtime |
+| 16 | A4 | P0_15 | free — or **ain ch4**, **via SJ8** | **B15** | — | switchable at runtime |
+| 17 | A5 | P0_23 | free — or **ain ch5** — **also SW2** | **A15** | — | FC1_P3, CMP2 |
 
-**16 usable digital pins** (17 mapped, minus D5 to the PHY) — of which **three
-are dual-purpose**: A2/A3/A4 are digital until you say `pin 14 mode ain`, and
-digital again when you say `pin 14 mode out`. No rebuild either way.
+**16 usable digital pins** (17 mapped, minus D5 to the PHY) — of which **four
+are dual-purpose**: A2/A3/A4/A5 are digital until you say `pin 14 mode ain`,
+and digital again when you say `pin 14 mode out`. No rebuild either way.
 
 Under the old one-port scheme there were 11, and D0/D1/D3/D6 were unreachable
 at all.
 
-**Reserved pins are refused by the CLI**, not silently ignored: `pin 14 mode out`
-answers `ERR pin 14 is reserved on this board`. Before that gate existed the
-mode was stored and echoed back by `show` while the pad stayed wired to the
-converter — a config that reported a mode the hardware did not have.
+**Reserved pins are refused by the CLI**, not silently ignored: `pin 5 mode out`
+answers `ERR pin 5 is reserved on this board`. Before that gate existed the
+mode was stored and echoed back by `show` while the pad stayed wired to
+whatever owns it — a config that reported a mode the hardware did not have.
+Only **D5** is reserved today: an earlier revision reserved 14–16 as well, when
+the analog strip was allocated at build time; runtime `ain` gating (below)
+replaced blanket reservation for pads the box legitimately shares.
 
 Three things that are easy to trip over:
 
 * **Every digital pin above is also an ADC input.** Analog is not confined to
-  the J8 pads — any of these can become an `ain` channel by adding a
+  the A strip — any of these can become an `ain` channel by adding a
   `channel@N` to the overlay. The cost is that the pin stops being digital.
   (D3 is the exception that matters: it is **ADC1**, and only `lpadc0` is
   enabled, so it is *not* usable as analog today.)
-* **Box pin 1 (D1) is DAC0_OUT.** That is the pad `adccal` drives for the
-  DAC→ADC calibration sweep. If you route something to D1, `adccal` stops being
-  available (and vice versa — leaving a jumper on D1 means box pin 1 must stay
-  unconfigured).
+* **Box pin 1 (D1) is DAC0_OUT** — and box pin 0 (D0) is DAC1_OUT; see the DAC
+  section. D1 is the pad `adccal` drives for the DAC→ADC calibration sweep,
+  and since the analog move the whole loop lives on the header: **jumper
+  D1 → A0**. If you route something to D1, `adccal` stops being available (and
+  vice versa — leaving a jumper on D1 means box pin 1 must stay unconfigured).
 * **D6's alternate list includes ENET0_MDC**, which is the PHY's other pin. It
   is *not* muxed there by this board — MDC is on P1_20 — but do not let a future
   pinctrl edit put it back.
@@ -89,22 +97,26 @@ flag. Until then the LED is full-brightness on/off.
 
 ## Analog inputs (`ain` channels)
 
-Configured in the overlay as `channel@N` children of `lpadc0`; the box announces
-the fitted count in `state/ain/dbg/chans` and the CLI validates against it.
+**ain channel *k* IS Arduino A*k*** — the analog twin of the digital rule, and
+the whole strip lands on `lpadc0` (no second converter: D3 is the only ADC1
+pin on the header and it stays digital). Configured in the overlay as
+`channel@N` children; the box announces the fitted count in
+`state/ain/dbg/chans` and the CLI validates against it.
 
-| ain channel | ADC0 input | SoC pad | header | costs a digital pin? |
+| ain channel | Arduino | ADC0 input | SoC pad | costs a digital pin? |
 |---|---|---|---|---|
-| 0 | A1 | P4_15 | J8-20 | no |
-| 1 | B1 | P4_19 | J8-24 | no |
-| 2 | A2 | P4_23 | J8-28 | no |
-| 3 | B14 | P0_14 | **Arduino A2** | yes — box pin 14 |
-| 4 | A14 | P0_22 | **Arduino A3** | yes — box pin 15 |
-| 5 | B15 | P0_15 | **Arduino A4** | yes — box pin 16 |
+| 0 | **A0** | 0A | ADC0_A0 — dedicated pad | no — always analog |
+| 1 | **A1** | 0B | ADC0_B0 — dedicated pad | no — always analog |
+| 2 | **A2** | B14 | P0_14 | yes — box pin 14 |
+| 3 | **A3** | A14 | P0_22 | yes — box pin 15 |
+| 4 | **A4** | B15 | P0_15 — **via SJ8** | yes — box pin 16 |
+| 5 | **A5** | A15 | P0_23 — **also SW2** | yes — box pin 17 |
 
-Channels 0-2 are on dedicated port-4 pads that are not box pins at all, so they
-are **always analog**. Channels 3-5 share box pins 14/15/16 and are analog only
-while that pin is in `ain` mode — **`pin 14 mode ain` / `pin 14 mode out`, live,
-no rebuild and no reboot.**
+Channels 0/1 sit on **dedicated analog-only package pads** — not port pins, no
+GPIO function at all, which is why Zephyr's `arduino_header` gpio-map starts at
+A2 and why these two cost nothing and need no pinctrl. Channels 2-5 share box
+pins 14-17 and are analog only while that pin is in `ain` mode — **`pin 14
+mode ain` / `pin 14 mode out`, live, no rebuild and no reboot.**
 
 The split is deliberate: **the BOARD declares what is possible**
 (`zephyr,user/box-ain-pins`, indexed by ain channel, `0xff` = dedicated pad),
@@ -115,25 +127,41 @@ index that shifted between reboots would be worse than a rebuild.
 A group naming a channel whose pin is currently digital does not carry a stale
 value for it: the group mask is intersected with what was actually sampled, so
 the block **honestly reports fewer channels**. Verified live — with pin 15
-digital the `aux` block goes `mask 60, nchan 4` → `mask 44, nchan 3` and back. **A5 was
-left alone on purpose: it is also SW2, the user button.** The remaining port-4
-pads (P4_12/13/16/17) would have cost nothing, but their header positions are
-not verified in the schematic, and a silkscreened pin you can actually reach
-beats a pad that might not be brought out.
+digital the `aux` block goes `mask 60, nchan 4` → `mask 44, nchan 3` and back.
 
-Adding a channel needs BOTH a `channel@N` and the pad in a pinctrl group — the
-board's own `pinmux_lpadc0` covers only the three J8 pads, so a channel declared
-without extending pinctrl leaves the pad muxed as GPIO and the converter reads a
-disconnected input. Silent wrong answer, same shape as the RW612's un-muxed
-digital pads. Full scale is **3300 mV** (`voltage-ref = <0>`,
-channels on `ADC_REF_EXTERNAL0`), measured, not assumed — see PORTING.md.
+Two positions carry board-level caveats:
+
+* **A4 (P0_15) reaches the header through solder jumper SJ8** (default 1-2 =
+  ADC; 2-3 reroutes the position to P2_0/TRIG_IN5). A board with SJ8 flipped
+  reads a disconnected input, **silently**.
+* **A5 (P0_23) is also SW2, the user button.** The net is pulled up to 3.3 V
+  and pressing the button **shorts it to ground** — including whatever the rig
+  wired to the A5 terminal. Unloaded it idles at ~3.3 V. The compromised
+  position: allocate it last, never to a source that minds a dead short.
+
+### Migration from the J8 scheme
+
+Images before 2026-07-31 had ch0-2 on J8-20/24/28 (`P4_15`/`P4_19`/`P4_23`)
+and ch3-5 on A2/A3/A4. Persisted group configs keep their channel INDICES
+across the reflash, but those indices now resolve one A position over (**old
+ch3/4/5 = new ch2/3/4**) and nothing samples the J8 pads any more. Updating a
+rig: re-jumper (wires on J8-20/24/28 land on A0/A1/A2), re-check `ain group`
+definitions, re-run eye calibration.
+
+Adding a channel on a PORT pad needs BOTH a `channel@N` and the pad in
+`pinmux_box_ain` — a channel declared without the pinctrl entry leaves the pad
+muxed as GPIO and the converter reads a disconnected input. Silent wrong
+answer, same shape as the RW612's un-muxed digital pads. (Dedicated pads like
+A0/A1 have no PORT function and need no pinctrl.) Full scale is **3300 mV**
+(`voltage-ref = <0>`, channels on `ADC_REF_EXTERNAL0`), measured, not assumed —
+see PORTING.md.
 
 Up to **8** channels are supported end to end (`AIN_MAX_CH`, `BOX_ADC_MAX_CH`,
-and the CLI now takes its ceiling from the fitted count). To add more, declare
-further `channel@N` with the right `zephyr,input-positive` — either the
-remaining port-4 pads (P4_12/P4_13/P4_16/P4_17, header positions unverified —
-check the schematic) or any Arduino pin from the table above, accepting the loss
-of that digital pin.
+and the CLI now takes its ceiling from the fitted count). To add ch6/7, declare
+further `channel@N` with the right `zephyr,input-positive` — the retired J8
+pads (`P4_15`/`P4_19`/`P4_23` = CH1A/CH1B/CH2A on J8-20/24/28, the
+pre-migration home) cost no digital pin but leave the shield; any Arduino D pin
+from the table above stays on the shield at the cost of that digital pin.
 
 ### THROUGHPUT: six channels at 1 kHz in ONE group LOSES HALF THE DATA
 
@@ -159,6 +187,34 @@ that a casual check looks at — `sweeps`, `dropped`, `late` — stays healthy.
 converted at 1 kHz; groups decimate on the *publish* side only. So the slow
 signals cost sampling time regardless, they just do not cost frames.
 
+## DAC outputs
+
+| DAC | bits | driver | output pad | header | status |
+|---|---|---|---|---|---|
+| `dac0` | 12 | `nxp,lpdac` — proven (`adccal`) | P4_2 | **D1** | enabled |
+| `dac1` | 12 | `nxp,lpdac` — same driver | P4_3 | **D0** | in the SoC tree, disabled |
+| `dac2` | 14 | `nxp,hpdac` — driver exists, unproven here | dedicated pad | **none documented** | disabled |
+
+Both 12-bit LPDACs land on the UNO header: D0/D1 are the analog-OUT corner,
+opposite the A strip. `dac0` costs **box pin 1** whenever something drives it
+(today: `adccal`). Enabling `dac1` is a board-overlay change — a pinctrl group
+with `DAC1_OUT_PIO4_3` plus `status = "okay"` — and costs **box pin 0** the
+same way. Neither pad has any other claim (LPUART2 on those pads is unused;
+the console is FC4 on the MCU-Link).
+
+Full scale is ~3.3 V — `adccal` measured DAC and ADC code-for-code, i.e. they
+share a reference (see PORTING.md) — so ~0.81 mV/LSB, and the KNOWN FLOOR
+applies: codes below ~700 clamp at ~517 mV, reproducible, unexplained. Fine
+for a test stimulus or a coarse control voltage; characterize before trusting
+it as a precision source. Zephyr's driver is immediate `dac_write_value` only —
+the output changes at command rate, there is no buffered waveform path.
+
+`dac2`, the 14-bit high-precision DAC, has a Zephyr driver (`nxp,hpdac`) but
+UM12018 never mentions it: its dedicated output pad has **no documented route
+to any header on this board**. Check the schematic before planning anything
+around it. Being a dedicated pad it would cost no box pin and no pinmux —
+routing is the only question.
+
 ## Owned by the firmware — not box pins
 
 | function | pads |
@@ -168,8 +224,8 @@ signals cost sampling time regardless, they just do not cost frames.
 | console UART (MCU-Link VCOM) | P1_8, P1_9 (flexcomm4) |
 | USB HS (box CDCs) | usb1 + usbphy1, no header pads |
 | QSPI flash (NVS storage) | flexspi |
-| LPADC inputs | P4_15, P4_19, P4_23 (J8) + P0_14, P0_22, P0_15 (A2/A3/A4) |
-| DAC0_OUT | P4_2 (= D1) |
+| LPADC inputs | ADC0_A0, ADC0_B0 (dedicated, = A0/A1) + P0_14, P0_22, P0_15, P0_23 (A2–A5, only while in `ain` mode) |
+| DAC0_OUT | P4_2 (= D1) — and DAC1_OUT is P4_3 (= D0) if ever enabled |
 
 ## Other boards in this tree
 

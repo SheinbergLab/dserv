@@ -89,16 +89,19 @@
 		 * channel is always analog. A channel bound to a box pin is
 		 * samplable only while that pin is in `ain` mode.
 		 *
-		 * ch0-2 = J8 pads (dedicated).  ch3/4/5 = box pins 14/15/16
-		 * (Arduino A2/A3/A4), which stay ordinary digital pins until
-		 * someone says `pin 14 mode ain`.
+		 * ain channel k IS Arduino Ak -- the analog twin of "box pin n IS
+		 * Dn". ch0/1 = ADC0_A0/ADC0_B0, dedicated ANALOG-ONLY package pads
+		 * wired straight to A0/A1: no port, no GPIO function, which is why
+		 * Zephyr's arduino_header gpio-map starts at A2 and why they cost
+		 * nothing here. ch2-5 = box pins 14-17 (A2-A5), ordinary digital
+		 * pins until someone says `pin 14 mode ain`.
 		 *
 		 * The BOARD declares what is possible; the CONFIG decides what is
 		 * used. That split is why analog allocation no longer needs a
 		 * firmware rebuild -- which matters because every other setting on
 		 * this box is runtime and persisted, and one exception means an
 		 * image per rig. */
-		box-ain-pins = [ff ff ff 0e 0f 10];
+		box-ain-pins = [ff ff 0e 0f 10 11];
 	};
 };
 
@@ -173,23 +176,33 @@
  * box_adc.c binds to. No SPI, no chip select -- the whole class of problem that
  * parked the MCP3204 on the RW612 does not exist here.
  *
- * PIN CHOICE: the three pads the board ALREADY muxes, and NO pinmux change.
- * `pinmux_lpadc0` in frdm_mcxn947-pinctrl.dtsi brings out exactly:
+ * PIN CHOICE: the Arduino analog strip, ALL SIX of it -- ain channel k IS Ak,
+ * the analog twin of the digital map above. The UNO header is the box's ONE
+ * field connector (a screw-terminal or custom shield reaches every box pin,
+ * digital AND analog), and per UM12018 Table 20 every A position lands on
+ * THIS converter:
  *
- *   ADC0_A1 = P4_15   -> box ain channel 0
- *   ADC0_B1 = P4_19   -> box ain channel 1
- *   ADC0_A2 = P4_23   -> box ain channel 2
+ *   ch0 = A0 = ADC0_A0 (CH0A)    ch1 = A1 = ADC0_B0 (CH0B)
+ *   ch2 = A2 = P0_14   (CH14B)   ch3 = A3 = P0_22   (CH14A)
+ *   ch4 = A4 = P0_15   (CH15B)   ch5 = A5 = P0_23   (CH15A)
  *
- * These are J8 pins 20 / 24 / 28 (samples/drivers/adc/adc_dt names them). Three
- * single-ended channels covers an eye feed's X / Y / pupil.
+ * A0/A1 are the find that made this free: DEDICATED analog-only package pads,
+ * not port pins -- no GPIO function, no pinmux, no digital cost, and the
+ * reason Zephyr's arduino_header gpio-map starts at A2 (there is no gpio to
+ * map). No second converter either: D3 is the only ADC1 pin on the header and
+ * it stays digital.
  *
- * WHY NOT THE ARDUINO ANALOG STRIP. A2/A3/A4/A5 are P0_14 / P0_22 / P0_15 /
- * P0_23 = ADC0 B14 / A14 / B15 / A15, so they work -- but port 0 is
- * `box-gpio-port`, so every analog pin taken there DELETES a digital box pin. Those
- * four are box pins 14, 22, 15, 23 (and 23 is SW2). We have 11 digital pins;
- * spending 4 of them on channels we do not yet need is the wrong trade. The
- * port-4 pads cost nothing because the box has no digital claim on port 4.
- * Documented as the extension path when a 4th+ channel is actually wanted.
+ * SUPERSEDES the J8 scheme (ch0-2 = P4_15/P4_19/P4_23 = J8-20/24/28, ch3-5 =
+ * A2/A3/A4), which optimised for zero digital-pin cost back when the box had
+ * 11 digital pins and no per-pin map. With the map, ch2-5 are runtime
+ * dual-purpose, so the standing cost is zero until a rig actually says
+ * `pin N mode ain` -- and one shield that reaches everything is worth more
+ * than three always-on pads off-header. MIGRATION for rigs wired to J8: the
+ * old ch3/4/5 are the new ch2/3/4. Persisted group configs keep their channel
+ * INDICES and those indices now resolve one A position over -- re-jumper
+ * (J8-20/24/28 wiring lands on A0/A1/A2), re-check `ain group` definitions,
+ * re-run eye calibration. The J8 pads remain the proven zero-cost pool if
+ * ch6/7 (AIN_MAX_CH = 8) are ever fitted, at the price of leaving the shield.
  *
  * THE CHANNEL MAP IS THE POINT. box_adc.c used to assume channel n IS input n,
  * which is true of an MCP3204 and false here: `channel_id` indexes a CMD-register
@@ -198,16 +211,18 @@
  * 0,1`) resolve to a specific pad -- and keeps that resolution a BOARD property,
  * exactly like the pin-map proposal in PORTING.md.
  */
-/* The Arduino analog pads used by ain channels 3-5. The board's own
- * `pinmux_lpadc0` covers ONLY the three J8 pads, so without this the pad stays
- * muxed as GPIO and the converter reads a disconnected input -- a silent wrong
- * answer, the same shape as the RW612's un-muxed digital pads. */
+/* The four port-0 pads behind ain channels 2-5 (A2-A5). A0/A1 appear in no
+ * pinctrl group because dedicated pads have no PORT function to mux. A port
+ * pad left out of this group stays muxed as GPIO and the converter reads a
+ * disconnected input -- a silent wrong answer, the same shape as the RW612's
+ * un-muxed digital pads. */
 &pinctrl {
 	pinmux_box_ain: pinmux_box_ain {
 		group0 {
 			pinmux = <ADC0_B14_PIO0_14>,   /* A2 */
 				 <ADC0_A14_PIO0_22>,   /* A3 */
-				 <ADC0_B15_PIO0_15>;   /* A4 */
+				 <ADC0_B15_PIO0_15>,   /* A4 -- via SJ8, default 1-2 */
+				 <ADC0_A15_PIO0_23>;   /* A5 -- net shared with SW2 */
 			slew-rate = "fast";
 			drive-strength = "low";
 		};
@@ -225,10 +240,11 @@ box_adc: &lpadc0 {
 	#address-cells = <1>;
 	#size-cells = <0>;
 
-	/* BOTH groups: the board's three J8 pads plus our three Arduino ones.
-	 * Overriding pinctrl-0 replaces the board's value, so `pinmux_lpadc0` has
-	 * to be repeated here or channels 0-2 quietly stop working. */
-	pinctrl-0 = <&pinmux_lpadc0 &pinmux_box_ain>;
+	/* ONLY our group. Overriding pinctrl-0 REPLACES the board's value, and
+	 * that is now the intent: the board's `pinmux_lpadc0` (the three J8
+	 * pads) retires with the J8 channels -- an analog-muxed pad no channel
+	 * reads is the misleading kind of tidy. */
+	pinctrl-0 = <&pinmux_box_ain>;
 	pinctrl-names = "default";
 
 	/*
@@ -242,7 +258,9 @@ box_adc: &lpadc0 {
 	 * CFG[REFSEL] is the way out, but the FSL headers only call the options
 	 * Alt1/Alt2/Alt3, so which one is VDDA is a reference-manual question. It
 	 * was settled instead by MEASUREMENT, using the `adccal` DAC->ADC sweep
-	 * (box_console.c) with a jumper from DAC0_OUT (P4_2 / J1-4) to J8-20:
+	 * (box_console.c) with a jumper from DAC0_OUT (P4_2 / J1-4) to J8-20 --
+	 * which was ain ch0 at the time; on the Arduino map the same sweep is a
+	 * jumper from D1 to A0, two positions on the same header:
 	 *
 	 *   voltage-ref = 1   ADC saturates at DAC code ~2256      -> full scale 1.8 V
 	 *   voltage-ref = 0   NO saturation, adc_code == dac_code   -> full scale = the DAC's
@@ -278,7 +296,7 @@ box_adc: &lpadc0 {
 		zephyr,vref-mv = <3300>;
 		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
 		zephyr,resolution = <12>;
-		zephyr,input-positive = <MCUX_LPADC_CH1A>;   /* P4_15, J8-20 */
+		zephyr,input-positive = <MCUX_LPADC_CH0A>;   /* ADC0_A0, Arduino A0 */
 	};
 
 	channel@1 {
@@ -288,7 +306,7 @@ box_adc: &lpadc0 {
 		zephyr,vref-mv = <3300>;
 		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
 		zephyr,resolution = <12>;
-		zephyr,input-positive = <MCUX_LPADC_CH1B>;   /* P4_19, J8-24 */
+		zephyr,input-positive = <MCUX_LPADC_CH0B>;   /* ADC0_B0, Arduino A1 */
 	};
 
 	channel@2 {
@@ -298,18 +316,28 @@ box_adc: &lpadc0 {
 		zephyr,vref-mv = <3300>;
 		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
 		zephyr,resolution = <12>;
-		zephyr,input-positive = <MCUX_LPADC_CH2A>;   /* P4_23, J8-28 */
+		zephyr,input-positive = <MCUX_LPADC_CH14B>;  /* P0_14, Arduino A2 */
 	};
 
-	/* ---- channels 3-5: the Arduino analog strip ----
-	 * These COST DIGITAL PINS -- box 14/15/16 (A2/A3/A4) are listed in
-	 * `box-reserved` above so the digital side refuses them outright rather
-	 * than letting `pin 14 mode out` fight the converter for the pad. A5 is
-	 * deliberately left alone: it is also SW2, the user button.
-	 * Chosen over the remaining port-4 pads (P4_12/13/16/17), which would have
-	 * cost no digital pins, because their header positions are NOT verified in
-	 * the schematic and a silkscreened pin you can actually reach beats a pad
-	 * that might not be brought out. */
+	/* ---- channels 2-5: the shared half of the strip ----
+	 * These share box pins 14-17 (A2-A5) via `box-ain-pins` above: digital
+	 * until `pin N mode ain`, and box_ain intersects each group mask with
+	 * what is actually analog, so a group never carries a stale value for a
+	 * pin that went digital. (v1 put 14-16 in `box-reserved` for a blanket
+	 * refusal; the runtime-mode commit replaced that with gating but this
+	 * comment kept claiming the reservation for two more commits.
+	 * Reservation is for pads the box must NEVER touch, like D5/MDIO --
+	 * mode gating is what arbitrates a pad two subsystems legitimately
+	 * share.)
+	 *
+	 * TWO CAVEATS THAT LIVE ON THE BOARD, NOT IN THIS FILE:
+	 *  - A4/P0_15 reaches the header through solder jumper SJ8 (default
+	 *    1-2 = ADC; 2-3 reroutes the position to P2_0/TRIG_IN5). A board
+	 *    with SJ8 flipped reads a disconnected input, silently.
+	 *  - A5/P0_23 is ALSO SW2: the net is pulled up to 3V3 and the button
+	 *    SHORTS IT TO GROUND -- including whatever the rig wired to the A5
+	 *    terminal. Unloaded it idles at ~3.3 V. The compromised position:
+	 *    allocate it LAST, never to a source that minds a dead short. */
 	channel@3 {
 		reg = <3>;
 		zephyr,gain = "ADC_GAIN_1";
@@ -317,7 +345,7 @@ box_adc: &lpadc0 {
 		zephyr,vref-mv = <3300>;
 		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
 		zephyr,resolution = <12>;
-		zephyr,input-positive = <MCUX_LPADC_CH14B>;  /* P0_14, Arduino A2 */
+		zephyr,input-positive = <MCUX_LPADC_CH14A>;  /* P0_22, Arduino A3 */
 	};
 
 	channel@4 {
@@ -327,7 +355,7 @@ box_adc: &lpadc0 {
 		zephyr,vref-mv = <3300>;
 		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
 		zephyr,resolution = <12>;
-		zephyr,input-positive = <MCUX_LPADC_CH14A>;  /* P0_22, Arduino A3 */
+		zephyr,input-positive = <MCUX_LPADC_CH15B>;  /* P0_15, Arduino A4 */
 	};
 
 	channel@5 {
@@ -337,6 +365,6 @@ box_adc: &lpadc0 {
 		zephyr,vref-mv = <3300>;
 		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
 		zephyr,resolution = <12>;
-		zephyr,input-positive = <MCUX_LPADC_CH15B>;  /* P0_15, Arduino A4 */
+		zephyr,input-positive = <MCUX_LPADC_CH15A>;  /* P0_23, Arduino A5 */
 	};
 };
