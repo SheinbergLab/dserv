@@ -84,6 +84,7 @@ code { background:#141720; padding:1px 5px; border-radius:3px; font-size:12px; }
 <script src="js/ws_manager.js"></script>
 <script src="js/DatapointManager.js"></script>
 <script src="js/PageNav.js"></script>
+<script src="js/extio_silk.js"></script>
 <script>
 /* extio setup page -- fleet list + per-box configuration, over datapoints.
  *
@@ -299,8 +300,13 @@ function selectBox(n) {
 
 async function refreshDirty(box) {
   try {
-    const r = await conn.send(`extio_cfg_dirty ${box}`, 'extio');
-    dirty = new Set(String(r || '').trim().split(/\s+/).filter(Boolean));
+    const r = String(await conn.send(`extio_cfg_dirty ${box}`, 'extio') || '');
+    /* A Tcl-level error arrives as a RESOLVED "!TCL_ERROR ..." string, not a
+     * rejection -- split blindly and the error MESSAGE becomes five fake
+     * dirty leaves in the banner. No helper in the interp means no dirty
+     * info, exactly like the catch below. */
+    if (r.startsWith('!TCL_ERROR')) return;
+    dirty = new Set(r.trim().split(/\s+/).filter(Boolean));
     updateDirtyUi(); renderPanel();
   } catch (e) { /* interp may predate the helper; the page still works read-only */ }
 }
@@ -335,6 +341,14 @@ const csvNums = (str) => String(str || '').split(',').filter(x => x !== '').map(
 function woField(box, cfgLeaf, wide) {
   return `<input class="${wide ? 'w8' : 'w4'} wo" placeholder="write-only" title="The box accepts this setting but does not report it, so its current value cannot be shown."
             onchange="if(this.value!==''){cfgSet('${box}','${cfgLeaf}',this.value)}">`;
+}
+
+/* Silkscreen name for a pin VALUE (obs/sync fields): annotation only, and only
+ * when the value is actually a mapped pin number. */
+function silkPin(sk, v) {
+  const n = Number(v);
+  const s = sk && Number.isInteger(n) ? sk.pin(n) : null;
+  return s ? ` <span class="age">${s}</span>` : '';
 }
 
 /* DO NOT REDRAW WHILE THE USER IS IN THE PANEL.
@@ -419,6 +433,9 @@ function renderPanel() {
     return;
   }
   const b = sel, L = liveness(b);
+  /* Silkscreen names for this board, or null -- annotation beside the numeric
+   * ids, never a replacement for them (the number is the wire contract). */
+  const sk = ExtioSilk.of(get(b, 'board'));
 
   /* PINS. Read from what the box ANNOUNCES, which is NOT the same namespace you
    * WRITE. The box publishes `label/<n>` and `di/<n>`; you set `pin/<n>/label`.
@@ -457,7 +474,7 @@ function renderPanel() {
     const sel = ['off', 'in', 'in_pullup', 'out', 'ain'].map(o =>
       `<option ${o === mode ? 'selected' : ''}>${o}</option>`).join('');
     return `<tr class="row" ${res ? 'style="opacity:.5"' : ''}>
-      <td><b>${p}</b></td>
+      <td><b>${p}</b>${sk && sk.pin(p) ? ` <span class="age">${sk.pin(p)}</span>` : ''}</td>
       <td>${res ? '<span class="age">reserved</span>'
                 : `<select onchange="cfgSet('${b}','pin/${p}/mode',this.value)">${sel}</select>`}</td>
       <td>${(mode === 'in' || mode === 'in_pullup') && lvl !== null ? `<b>${lvl}</b> ${ageSpan(b, 'di/' + p)}` : ''}</td>
@@ -488,6 +505,33 @@ function renderPanel() {
 
   const ainOn = get(b, 'ain_en') == 1;
   const dbg = k => `${get(b, 'ain/dbg/' + k, '—')} ${ageSpan(b, 'ain/dbg/' + k)}`;
+
+  /* ain CHANNEL MAP -- rendered only for boards with silkscreen names. The
+   * channel COUNT comes from the box (ain/dbg/chans) when it has said; the
+   * map itself is the board's published contract (extio-zephyr/PINMAP.md).
+   * This page cannot tell firmware vintage apart, so the note owns the one
+   * way the labels can lie: a pre-A0/A1 image samples ch0-2 on J8. */
+  let ainMap = '';
+  if (sk && sk.ain) {
+    const nch = Number(get(b, 'ain/dbg/chans')) || 6;
+    const rows = Array.from({ length: nch }, (_, k) => {
+      const gate = sk.ainPin(k);
+      const state = gate === null
+        ? '<span class="age">dedicated pad — always analog</span>'
+        : pinsAin.includes(gate)
+          ? `pin ${gate} — <b>ain</b>`
+          : `pin ${gate} — <span class="age">digital now (set pin ${gate} to ain to sample)</span>`;
+      return `<tr class="row"><td><b>${k}</b></td><td><b>${sk.ain(k) ?? '—'}</b></td><td>${state}</td></tr>`;
+    }).join('');
+    ainMap = `<table style="margin-top:10px">
+      <tr><th>ain ch</th><th>header</th><th>pad</th></tr>${rows}</table>
+    <p class="note">ain channel <i>k</i> is Arduino A<i>k</i>. ch0/1 are dedicated pads and always
+       analog; ch2–5 sample only while their pin is in <code>ain</code> mode (the group mask shrinks
+       honestly meanwhile). A4 reaches the header through solder jumper SJ8; A5 shares SW2 — pressing
+       the button grounds the net — so allocate it last. Labels assume the current Arduino-strip map:
+       a box on a pre-A0/A1 image samples ch0–2 on J8-20/24/28 instead — update it before trusting
+       them.</p>`;
+  }
 
   const html = `
     <div style="display:flex;align-items:baseline;gap:12px">
@@ -528,15 +572,16 @@ function renderPanel() {
 
     <h2>obs / sync</h2>
     <table>
-      <tr><th>obs pin</th><td>${field(b, 'obs_pin', 'obs/pin')} ${ageSpan(b, 'obs_pin')}</td>
-          <th>sync pin</th><td>${field(b, 'sync_pin', 'sync/pin')} ${ageSpan(b, 'sync_pin')}</td></tr>
+      <tr><th>obs pin</th><td>${field(b, 'obs_pin', 'obs/pin')}${silkPin(sk, get(b, 'obs_pin'))} ${ageSpan(b, 'obs_pin')}</td>
+          <th>sync pin</th><td>${field(b, 'sync_pin', 'sync/pin')}${silkPin(sk, get(b, 'sync_pin'))} ${ageSpan(b, 'sync_pin')}</td></tr>
     </table>
 
     <h2>pins</h2>
     <table><tr><th>pin</th><th>mode</th><th>level</th><th>label</th><th>debounce ms</th><th>pulse µs</th><th>act low</th></tr>${pinRows}</table>
     <p class="note">${havePinsAll
        ? 'Every pin the board maps, from <code>pins/all</code>; reserved pins are shown but refused by the box. Blank debounce/pulse means the default (0) — the manifest sends only pins that differ.'
-       : 'This box predates <code>pins/all</code>, so only ACTIVE pins appear and a pin set to <code>off</code> cannot be shown or re-enabled. Update its firmware to configure the full map.'}</p>
+       : 'This box predates <code>pins/all</code>, so only ACTIVE pins appear and a pin set to <code>off</code> cannot be shown or re-enabled. Update its firmware to configure the full map.'}${
+       sk ? ' Pin numbers ARE the silkscreen: box pin <i>n</i> is Arduino D<i>n</i>, and pins 14–17 are the A2–A5 positions.' : ''}</p>
 
     <h2>groups</h2>
     <table><tr><th>#</th><th>name</th><th>pins</th><th>settle ms</th><th>value</th></tr>${groups}</table>
@@ -556,6 +601,7 @@ function renderPanel() {
        told. They differ legitimately — held during an OTA, no group defined, or no pin in
        <code>ain</code> mode. Any <code>throttled</code> at all means a group is publishing faster
        than the uplink can afford.</p>
+    ${ainMap}
 
     ${fwSection(b)}
 

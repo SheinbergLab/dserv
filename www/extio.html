@@ -109,6 +109,7 @@
 <script src="js/ws_manager.js"></script>
 <script src="js/DatapointManager.js"></script>
 <script src="js/PageNav.js"></script>
+<script src="js/extio_silk.js"></script>
 <script>
 'use strict';
 
@@ -206,7 +207,8 @@ function onExtio(msg) {
     } else if (leaf === 'battery') {
         b.battery = num;
     } else if (leaf === 'transport' || leaf === 'boot' || leaf === 'fw' ||
-               leaf === 'fw_ver' || leaf === 'ip' || leaf === 'dserv') {
+               leaf === 'fw_ver' || leaf === 'ip' || leaf === 'dserv' ||
+               leaf === 'board') {
         b.ident[leaf] = String(v);
     }
     /* watchdog/link/timer/sync raw parts: liveness only (lastSeen above) */
@@ -268,6 +270,11 @@ function cardHtml(b) {
     const age = Date.now() - b.lastSeen;
     const alive = age < 4000;
     const id = b.ident;
+    /* Silkscreen names (Arduino Dn/Ak) for this board, or null. Caption for an
+     * UNLABELLED pin prefers the silkscreen -- that is the string printed next
+     * to the physical pin someone is probing -- and the tooltip always carries
+     * the numeric id, which is what every command and datapoint speaks. */
+    const sk = ExtioSilk.of(id.board);
     const xchip = id.transport
         ? `<span class="chip ${id.transport === 'usb' ? 'usb' : 'eth'}">${esc(id.transport)}</span>` : '';
     const bchip = id.boot
@@ -292,8 +299,9 @@ function cardHtml(b) {
             inPins.map(pin => {
                 const d = b.di.get(pin) || { v: 0, count: 0 };
                 const lbl = b.labels.get(pin);
-                const cap = lbl ? esc(lbl) : 'di ' + pin;
-                const ttl = lbl ? `${esc(lbl)} · di ${pin}` : `di ${pin}`;
+                const silk = sk && sk.pin(pin);
+                const cap = lbl ? esc(lbl) : (silk || 'di ' + pin);
+                const ttl = [lbl && esc(lbl), 'di ' + pin, silk].filter(Boolean).join(' · ');
                 return `<div class="di"><div class="btn ${d.v ? 'on' : ''}"></div>` +
                        `<div class="pin${lbl ? ' lbl' : ''}" title="${ttl}">${cap}</div>` +
                        `<div class="cnt" title="${d.count} press${d.count === 1 ? '' : 'es'}">&times;${d.count}</div></div>`;
@@ -304,8 +312,9 @@ function cardHtml(b) {
         dout = '<div class="sect"><div class="lbl">outputs</div><div class="dos">' +
             outPins.map(pin => {
                 const lbl = b.labels.get(pin);
-                const cap = lbl ? esc(lbl) : 'do ' + pin;
-                const ttl = lbl ? `${esc(lbl)} · do ${pin}` : `do ${pin}`;
+                const silk = sk && sk.pin(pin);
+                const cap = lbl ? esc(lbl) : (silk || 'do ' + pin);
+                const ttl = [lbl && esc(lbl), 'do ' + pin, silk].filter(Boolean).join(' · ');
                 return `<div class="do"><div class="led ${b.dout.get(pin) ? 'on' : ''}"></div>` +
                        `<div class="pin${lbl ? ' lbl' : ''}" title="${ttl}">${cap}</div></div>`;
             }).join('') + '</div></div>';
@@ -325,8 +334,9 @@ function cardHtml(b) {
         ain = '<div class="sect"><div class="lbl">analog</div>' +
             [...b.ain.keys()].sort((a, c) => a - c).map(ch => {
                 const v = b.ain.get(ch);
+                const silk = sk && sk.ain ? sk.ain(ch) : null;
                 const pct = Math.max(0, Math.min(100, ((v + 32768) / 65535) * 100));
-                return `<div class="ain"><span class="ch">ain ${ch}</span>` +
+                return `<div class="ain"><span class="ch" title="ain ch ${ch}">${silk || 'ain ' + ch}</span>` +
                        `<div class="bar"><div class="fill" style="width:${pct.toFixed(1)}%"></div></div>` +
                        `<span class="val">${v}</span></div>`;
             }).join('') + '</div>';
@@ -339,7 +349,8 @@ function cardHtml(b) {
         const parts = [b.syncSource];
         if (b.syncTransport != null) parts.push(b.syncTransport + 'µs');
         if (b.syncRate != null) parts.push((b.syncRate / 1000).toFixed(0) + 'ppm');
-        const stip = b.syncPin >= 0 ? `TTL sync input on pin ${b.syncPin}`
+        const ssilk = sk && b.syncPin >= 0 ? sk.pin(b.syncPin) : null;
+        const stip = b.syncPin >= 0 ? `TTL sync input on pin ${b.syncPin}${ssilk ? ` (${ssilk})` : ''}`
                    : b.syncSource === 'hw' ? 'hardware-synced' : 'software-synced (frame arrival)';
         sync = ` · <b title="${stip}">sync</b> ${parts.join(' ')} (${fmtAge(Date.now() - b.syncAt)})`;
     }
@@ -349,8 +360,9 @@ function cardHtml(b) {
 
     /* obs indicator: pulses with the box's OWN received obs periods (honest --
      * only lights when THIS box is getting edges). Tooltip names the mirror pin. */
+    const osilk = sk && b.obsPin >= 0 ? sk.pin(b.obsPin) : null;
     const obs = b.inObs != null
-        ? `<span class="obs ${b.inObs ? 'on' : ''}" title="${b.obsPin >= 0 ? 'obs mirror on pin ' + b.obsPin : 'obs tracking'}">obs</span>`
+        ? `<span class="obs ${b.inObs ? 'on' : ''}" title="${b.obsPin >= 0 ? 'obs mirror on pin ' + b.obsPin + (osilk ? ` (${osilk})` : '') : 'obs tracking'}">obs</span>`
         : '';
     const desc = b.desc ? `<div class="desc">${esc(b.desc)}</div>` : '';
 
@@ -450,11 +462,17 @@ function initCfgBar() {
 
 async function init() {
     initCfgBar();
-    /* ?host=<host[:port]> -> watch a different rig's dserv (default: the one serving this page) */
-    const qsHost = new URLSearchParams(location.search).get('host');
+    /* ?host=<host[:port]> -> watch a different rig's dserv (default: the one
+     * serving this page), ?ssl=1|0 when the page and dserv protocols differ --
+     * the standard three lines (www/CLAUDE.md). ssl was missing here, so the
+     * zero-deploy dev loop (http://localhost:8090 against a wss dserv) sat on
+     * "connecting" forever while extio-config.html connected fine. */
+    const qs = new URLSearchParams(location.search);
+    const qsHost = qs.get('host'), qsSsl = qs.get('ssl');
     conn = new DservConnection({
         subprocess: 'ess',
         dservHost: qsHost || null,
+        forceSecure: qsSsl !== null ? qsSsl === '1' : undefined,
         onStatus: (st, msg) => setConn(st === 'connected' ? true : st === 'connecting' ? null : false, st),
     });
     try {
