@@ -1,0 +1,186 @@
+diff --git a/drivers/ethernet/eth_nxp_enet_qos/eth_nxp_enet_qos_mac.c b/drivers/ethernet/eth_nxp_enet_qos/eth_nxp_enet_qos_mac.c
+index e641ed855bf..c82572d638c 100644
+--- a/drivers/ethernet/eth_nxp_enet_qos/eth_nxp_enet_qos_mac.c
++++ b/drivers/ethernet/eth_nxp_enet_qos/eth_nxp_enet_qos_mac.c
+@@ -12,9 +12,16 @@
+ #include <zephyr/logging/log.h>
+ LOG_MODULE_REGISTER(eth_nxp_enet_qos_mac, CONFIG_ETHERNET_LOG_LEVEL);
+ 
++/* extio debug counters -- see the RX path. File scope so SWD can find the symbol.
++ * volatile so the compiler cannot keep them in registers across the loop, which
++ * would make a halted read show stale values. [0]=pkts [1]=sv [2]=ta [3]=ctx
++ * [4]=stamp. */
++volatile uint32_t extio_rxts[5];
++
+ #include <zephyr/net/phy.h>
+ #include <zephyr/kernel/thread_stack.h>
+ #include <zephyr/sys_clock.h>
++#include <zephyr/sys/barrier.h>
+ 
+ #if defined(CONFIG_ETH_NXP_ENET_QOS_MAC_UNIQUE_MAC_ADDRESS)
+ #include <zephyr/sys/crc.h>
+@@ -333,6 +340,29 @@ static void eth_nxp_enet_qos_rx(struct k_work *work)
+ 					(desc->write.control3 >> 28) & 0x0f);
+ 				/* Error statistics for this packet already updated earlier */
+ 				LOG_DBG("dropping frame from errored packet");
++				/* RESTORE buf1_addr BEFORE HANDING THE DESCRIPTOR BACK.
++				 *
++				 * read and write are a UNION, and the DMA has already
++				 * written back over this descriptor -- so read.buf1_addr
++				 * currently holds write-back STATUS, not a buffer pointer.
++				 * Setting only .control gives the DMA OWN plus
++				 * BUF1_ADDR_VALID over a garbage address, and the next
++				 * packet is DMA'd to it.
++				 *
++				 * Observed on an FRDM-MCXN947 during an OTA blast, which is
++				 * the traffic pattern that actually exhausts the RX pool:
++				 *   W: No new RX buf available   (x4)
++				 *   E: Fatal bus error: RX:4, TX:0
++				 * after which the interface is dead and no socket-level
++				 * recovery can help -- only a reset. That is the long-
++				 * standing "dserv.live=down, does not self-heal, fixed
++				 * instantly by an SWD reset" symptom.
++				 *
++				 * The buffer itself is fine and still ours: the drop paths
++				 * never swap reserved_bufs[], which is why reusing it is
++				 * correct -- only the address had to be rewritten.
++				 */
++				desc->read.buf1_addr = (uint32_t)data->rx.reserved_bufs[desc_idx]->data;
+ 				desc->read.control = rx_desc_refresh_flags;
+ 				goto next;
+ 			}
+@@ -343,6 +373,8 @@ static void eth_nxp_enet_qos_rx(struct k_work *work)
+ 			if (!pkt) {
+ 				LOG_WRN("Could not alloc new RX pkt");
+ 				/* error: no new buffer, reuse previous immediately */
++				/* see the buf1_addr note above */
++				desc->read.buf1_addr = (uint32_t)data->rx.reserved_bufs[desc_idx]->data;
+ 				desc->read.control = rx_desc_refresh_flags;
+ 				eth_stats_update_errors_rx(data->iface);
+ 				goto next;
+@@ -366,6 +398,8 @@ static void eth_nxp_enet_qos_rx(struct k_work *work)
+ 				pkt_len, processed_len);
+ 			net_pkt_unref(pkt);
+ 			pkt = NULL;
++			/* see the buf1_addr note above */
++			desc->read.buf1_addr = (uint32_t)data->rx.reserved_bufs[desc_idx]->data;
+ 			desc->read.control = rx_desc_refresh_flags;
+ 			eth_stats_update_errors_rx(data->iface);
+ 			goto next;
+@@ -386,6 +420,8 @@ static void eth_nxp_enet_qos_rx(struct k_work *work)
+ 			LOG_WRN("No new RX buf available");
+ 			net_pkt_unref(pkt);
+ 			pkt = NULL;
++			/* see the buf1_addr note above */
++			desc->read.buf1_addr = (uint32_t)data->rx.reserved_bufs[desc_idx]->data;
+ 			desc->read.control = rx_desc_refresh_flags;
+ 			eth_stats_update_errors_rx(data->iface);
+ 			goto next;
+@@ -413,11 +449,104 @@ static void eth_nxp_enet_qos_rx(struct k_work *work)
+ 			{
+ 				uint32_t ctx_idx = rx_data->next_desc_idx;
+ 				volatile union nxp_enet_qos_rx_desc *ctx_desc = &desc_arr[ctx_idx];
++				bool ctx_ready = false;
++
++				/* RACE: the context descriptor may not have LANDED yet.
++				 *
++				 * RX_TIMESTAMP_AVAILABLE_FLAG on the data descriptor is the
++				 * MAC PROMISING a context descriptor with the timestamp in
++				 * it. The DMA writes that slot back separately, so a peek
++				 * taken immediately after the data descriptor can legally
++				 * observe it still DMA-owned -- and the original code then
++				 * dropped the timestamp silently and moved on.
++				 *
++				 * The failure mode that costs you a day: the PTP stack logs
++				 * "drops Sync without valid RX timestamp" once per Sync, the
++				 * 1588 counter free-runs from boot, and every status field
++				 * still reads healthy because TX timestamping is unaffected
++				 * and Sync/Follow_Up/Delay_Req/Delay_Resp all complete -- a
++				 * tcpdump looks perfect. Whether you win the race depends on
++				 * instruction timing, so it is BUILD-DETERMINISTIC: adding 64
++				 * bytes of unrelated code flipped one image from 8/8 boots
++				 * synced to 4/4 failed. That is why it presents as flaky.
++				 *
++				 * Since the flag is a promise, waiting is CORRECT rather than
++				 * speculative -- but bounded, because trusting hardware to
++				 * always keep a promise is how you get an unbounded spin in an
++				 * RX thread. Writeback is sub-microsecond; the cap is orders
++				 * of magnitude beyond that and simply gives up if it is
++				 * missed, preserving the old behaviour in that case.
++				 */
++				/* ---- INSTRUMENTATION (extio, 2026-07-30) ----
++				 *
++				 * `drops Sync without valid RX timestamp` is
++				 * INTERMITTENT on the FRDM-MCXN947: the same binary
++				 * with the same config syncs on one boot and not the
++				 * next. A whole day of behavioural A/B -- analog on/off,
++				 * Kconfig arms, board swaps, power cycles -- produced
++				 * five confident explanations and retracted all five,
++				 * because every arm was 3-8 boots of an intermittent
++				 * fault.
++				 *
++				 * What DID hold across every failing boot is that the
++				 * warning below never fired once. So the spin is not
++				 * losing the race; this block is not being ENTERED, and
++				 * exactly one of the two conditions above is false. These
++				 * counters say which, from a SINGLE boot, instead of
++				 * thirty. Read-only: counters and a rate-limited log.
++				 *
++				 *   pkts    packets reaching the PTP block
++				 *   sv      RX_STATUS1_VALID_FLAG set
++				 *   ta      RX_TIMESTAMP_AVAILABLE_FLAG set
++				 *   ctx     context descriptor arrived
++				 *   stamp   timestamp actually attached
++				 *
++				 * `ta` pinned at 0 while `pkts` climbs means the MAC
++				 * never promises a timestamp -- a different defect from
++				 * the context-descriptor race this file already patches.
++				 *
++				 * SILENT ON PURPOSE -- read over SWD, never logged.
++				 * The first version printed a summary every 2 s, and
++				 * LOG_MODE_MINIMAL is SYNCHRONOUS: that is a blocking
++				 * 115200-baud UART write inside the RX path, on a bug
++				 * that is already timing-sensitive. An instrument that
++				 * can change the result it is measuring is not an
++				 * instrument. Counters only; read them with
++				 *   pyocd commander -t mcxn947 -c "read32 <&extio_rxts> 0x14"
++				 */
++				extio_rxts[0]++;                                  /* pkts  */
++				if (desc->write.control3 & RX_STATUS1_VALID_FLAG) {
++					extio_rxts[1]++;                          /* sv    */
++				}
++				if (desc->write.control1 & RX_TIMESTAMP_AVAILABLE_FLAG) {
++					extio_rxts[2]++;                          /* ta    */
++				}
+ 
+ 				if ((desc->write.control3 & RX_STATUS1_VALID_FLAG) &&
+-				    (desc->write.control1 & RX_TIMESTAMP_AVAILABLE_FLAG) &&
+-				    !(ctx_desc->write.control3 & OWN_FLAG) &&
+-				    (ctx_desc->write.control3 & RECEIVE_CONTEXT_DESCRIPTOR_FLAG)) {
++				    (desc->write.control1 & RX_TIMESTAMP_AVAILABLE_FLAG)) {
++					for (int spin = 0; spin < 256; spin++) {
++						if (!(ctx_desc->write.control3 & OWN_FLAG) &&
++						    (ctx_desc->write.control3 &
++						     RECEIVE_CONTEXT_DESCRIPTOR_FLAG)) {
++							ctx_ready = true;
++							break;
++						}
++						/* The descriptor is volatile, so each pass
++						 * re-reads it; the fence orders that read
++						 * against the DMA's write.
++						 */
++						barrier_dmem_fence_full();
++					}
++					if (!ctx_ready) {
++						LOG_WRN("RX timestamp promised but context "
++							"descriptor never arrived (idx %u)",
++							ctx_idx);
++					}
++				}
++
++				if (ctx_ready) {
++					extio_rxts[3]++;                  /* ctx   */
++					extio_rxts[4]++;                  /* stamp */
+ 					pkt->timestamp.nanosecond = ctx_desc->write.vlan_tag;
+ 					pkt->timestamp.second = ctx_desc->write.control1;
+ 					net_pkt_set_rx_timestamping(pkt, true);

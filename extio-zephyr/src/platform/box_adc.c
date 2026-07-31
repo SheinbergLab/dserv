@@ -7,6 +7,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
 #include <zephyr/drivers/adc.h>
+#include <zephyr/pm/device.h>
 #include <errno.h>
 #include <string.h>
 
@@ -30,7 +31,9 @@ static const struct device *adc = DEVICE_DT_GET(ADC_NODE);
 static uint8_t  nch, res;
 static uint16_t vref_mv;
 static uint8_t  ready;
+static uint8_t  powered;
 static uint32_t sweep_max_us, sweep_n;
+static uint32_t pm_suspends, pm_resumes;
 
 /* How many channels the fitted part has.
  *
@@ -151,7 +154,74 @@ int box_adc_init(void)
 	vref_mv = DT_PROP_OR(ADC_NODE, zephyr_vref_mv, 3300);
 #endif
 	ready   = 1;
+	/* The device is ACTIVE coming out of init on both paths: without
+	 * CONFIG_PM_DEVICE nothing ever suspends it, and with it (and no runtime
+	 * PM) pm_device_driver_init() resumes it. Latched rather than queried so
+	 * that "powered" means what THIS file did, not what a PM subsystem we do
+	 * not otherwise use believes. */
+	powered = 1;
 	return 0;
+}
+
+/* ---- power ----
+ *
+ * -EALREADY is treated as success on both paths. pm_device_action_run() returns
+ * it when the device is already in the requested state, which is the ordinary
+ * outcome of a redundant call and not something a caller should have to
+ * distinguish -- the postcondition asked for holds either way. */
+int box_adc_suspend(void)
+{
+	if (!ready) {
+		return -ENODEV;
+	}
+#if defined(CONFIG_PM_DEVICE)
+	if (!powered) {
+		return 0;
+	}
+	int rc = pm_device_action_run(adc, PM_DEVICE_ACTION_SUSPEND);
+
+	if (rc == 0 || rc == -EALREADY) {
+		powered = 0;
+		pm_suspends++;
+		return 0;
+	}
+	/* Left POWERED on failure, deliberately: a converter we failed to switch
+	 * off is still a converter that answers, and claiming otherwise would make
+	 * box_adc_sweep() refuse work it could actually do. */
+	return rc;
+#else
+	return -ENOTSUP;
+#endif
+}
+
+int box_adc_resume(void)
+{
+	if (!ready) {
+		return -ENODEV;
+	}
+#if defined(CONFIG_PM_DEVICE)
+	if (powered) {
+		return 0;
+	}
+	int rc = pm_device_action_run(adc, PM_DEVICE_ACTION_RESUME);
+
+	if (rc == 0 || rc == -EALREADY) {
+		powered = 1;
+		pm_resumes++;
+		return 0;
+	}
+	return rc;
+#else
+	return -ENOTSUP;      /* never suspended, so nothing to undo */
+#endif
+}
+
+int box_adc_powered(void) { return powered; }
+
+void box_adc_pm_stats(uint32_t *suspends, uint32_t *resumes)
+{
+	if (suspends) *suspends = pm_suspends;
+	if (resumes)  *resumes  = pm_resumes;
 }
 
 int box_adc_pin_of(uint8_t ch)
@@ -190,6 +260,11 @@ int box_adc_sweep(uint8_t mask, uint16_t *out, uint8_t max, uint64_t *when_us)
 {
 	if (!ready) {
 		return -ENODEV;
+	}
+	/* NOT a nicety -- see box_adc.h. adc_read() on a suspended LPADC blocks
+	 * forever, silently, because adc_context waits with K_FOREVER. */
+	if (!powered) {
+		return -EAGAIN;
 	}
 	if (!out || !mask) {
 		return -EINVAL;
@@ -263,6 +338,10 @@ void box_adc_stats_reset(void) { sweep_max_us = sweep_n = 0; }
 
 int         box_adc_init(void)     { return -ENODEV; }
 int         box_adc_ready(void)    { return 0; }
+int         box_adc_suspend(void)  { return -ENODEV; }
+int         box_adc_resume(void)   { return -ENODEV; }
+int         box_adc_powered(void)  { return 0; }
+void        box_adc_pm_stats(uint32_t *s, uint32_t *r) { if (s) *s = 0; if (r) *r = 0; }
 int         box_adc_pin_of(uint8_t ch) { ARG_UNUSED(ch); return -1; }
 uint8_t     box_adc_active_mask(const box_config_t *c) { ARG_UNUSED(c); return 0; }
 const char *box_adc_name(void)     { return "none"; }

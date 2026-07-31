@@ -19,4 +19,16 @@ bool box_ptp_ready(void);
 /* Current PTP hardware time in nanoseconds, or 0 if unavailable. */
 uint64_t box_ptp_now_ns(void);
 
+/* Has the 1588 counter actually been SET to master time, as opposed to merely
+ * running?
+ *
+ * Tested against the EPOCH, which is the one PTP fact on this box that cannot
+ * lie. Every other indicator is a proxy that reads healthy on an unsynced box:
+ * `ready` means the device exists, `sync/source=ptp` means a paired read
+ * succeeded, `anchored` means ptpconf pushed us an offset. On 2026-07-29 all
+ * three said yes while the counter was 56 years wrong. A free-running counter
+ * reads seconds-since-boot; a disciplined one reads ~1.78e9 s. Nothing between
+ * those is reachable, so the threshold needs no tuning. */
+bool box_ptp_synced(void);
+
 #endif /* BOX_PTP_H */

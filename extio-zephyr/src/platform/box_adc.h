@@ -41,11 +41,50 @@
 #define BOX_ADC_MAX_CH 8          /* the widest part we intend to fit */
 
 /* Bring the converter up. 0 on success, or a negative errno; -ENODEV means no
- * ADC is fitted on this board, which is not an error -- most boxes have none. */
+ * ADC is fitted on this board, which is not an error -- most boxes have none.
+ *
+ * Runs the driver's one-time work: channel setup, and on the MCXN947 the LPADC's
+ * blocking offset+gain auto-calibration. That calibration stays HERE, at boot,
+ * rather than in resume() below -- it is per-silicon trim, it does not decay
+ * while the converter is off, and moving it would drag a spin-on-GCC[RDY] onto
+ * whichever thread happened to switch analog back on. */
 int box_adc_init(void);
 
-/* 1 once init() has succeeded. Everything below returns -ENODEV until then. */
+/* 1 once init() has succeeded. Everything below returns -ENODEV until then.
+ * READY IS NOT POWERED -- see box_adc_powered(). */
 int box_adc_ready(void);
+
+/* ---- POWER: the converter can be switched off and back on at runtime ----
+ *
+ * WHY THIS EXISTS. Analog was the one subsystem on this box that was decided at
+ * boot and could only be changed by rebooting -- every other setting is live and
+ * persisted. That is the "config field that lies" shape this tree keeps meeting,
+ * and it also meant an OTA blast, which needs the service loop and the flash and
+ * nothing else, ran alongside a sampler publishing up to 400 frames/s at
+ * 275-864 us of CPU each.
+ *
+ * IMPLEMENTED OVER ZEPHYR'S DEVICE PM, not by hand. adc_mcux_lpadc.c already
+ * ships a PM callback that does exactly the right things in the right order
+ * (LPADC_Enable false, pinctrl SLEEP state, regulator_disable -- and the reverse
+ * on resume); it simply is not built unless CONFIG_PM_DEVICE is set. So this is
+ * a Kconfig line plus a call, and the SoC-specific knowledge stays in the driver
+ * where it belongs.
+ *
+ * BOARDS WITHOUT A PM CALLBACK (the RW612's mcp320x has none) return -ENOTSUP
+ * and stay powered. That is not a failure: the sampler above still stops, which
+ * is where the CPU and uplink cost actually is. Only the milliamps stay.
+ *
+ * CALL THESE FROM THE SAMPLING THREAD AND NOWHERE ELSE. They are not serialised
+ * against box_adc_sweep() -- see the -EAGAIN note there for why that matters
+ * more than it sounds. box_ain.c owns this device; nothing else may touch it. */
+int box_adc_suspend(void);   /* 0, or -ENOTSUP where the driver has no PM hook */
+int box_adc_resume(void);    /* 0, or -ENOTSUP; safe to call when already up   */
+int box_adc_powered(void);   /* 1 = converting is possible right now           */
+
+/* How many times the converter has actually been switched, since boot. Real
+ * numbers rather than a state anyone has to trust: a `resumes` that climbs while
+ * `sweeps` does not is a resume path that returns 0 and does nothing. */
+void box_adc_pm_stats(uint32_t *suspends, uint32_t *resumes);
 
 /* What is actually fitted, straight from the devicetree/driver rather than from
  * a build-time assumption -- a box that reports 4 channels while an 8-channel
@@ -71,6 +110,14 @@ uint8_t     box_adc_active_mask(const box_config_t *c);
  * Reads every channel set in `mask` (bit n = channel n) into out[], packed
  * densely in ascending channel order -- so a mask of 0b1010 yields out[0]=ch1,
  * out[1]=ch3. Returns the number of samples written, or a negative errno.
+ *
+ * RETURNS -EAGAIN WHEN THE CONVERTER IS SUSPENDED, and that check is not
+ * defensive tidiness. Zephyr's adc_context waits on a semaphore with
+ * ADC_CONTEXT_WAIT_FOR_COMPLETION_TIMEOUT, which defaults to K_FOREVER and which
+ * adc_mcux_lpadc.c does not override -- so reading a disabled LPADC parks the
+ * calling thread for good, with no error, no log line and no watchdog of its
+ * own. A suspended converter must be refused HERE rather than trusted to be
+ * refused by every caller.
  *
  * `when_us`, if non-NULL, receives the box-clock timestamp taken immediately
  * after the sweep completes. That stamp is the point of this whole exercise: it

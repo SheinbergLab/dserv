@@ -148,7 +148,12 @@ typedef struct {
     /* v18: analog input -- originally the MCP3204 SPI ADC, now any converter
      * behind box_adc.h (on-chip LPADC on the MCXN947). A channel scan (2-axis
      * joystick on CH0/CH1) published as one packed state/ain/scan snapshot. Off
-     * by default, leaves the SPI0 pins free. Applied at boot (SPI init). */
+     * by default.
+     *
+     * APPLIED LIVE on Zephyr boards: clearing it stops the sampler and (where
+     * the driver has a PM hook) powers the converter down; setting it brings
+     * both back. Nothing here needs a reboot. The RP2350 build is the one where
+     * this claimed the SPI0 pins at init and therefore did. */
     uint8_t  ain_en;
 
     /* v19: firmware update channel this box TRACKS (extio-setup / OTA compare
@@ -164,8 +169,8 @@ typedef struct {
      * together with one sampling policy. The analog twin of DI chord groups
      * (box_group.h / box_ain_group.h): the box knows channels/labels/policy,
      * never device semantics (that stays host-side). A group is ACTIVE iff
-     * ain_group_chans[g] != 0. ain_en stays the master switch (claims the SPI0
-     * pins + inits the ADC); with ain_en and NO group defined, dserv_cfg_ain_
+     * ain_group_chans[g] != 0. ain_en stays the master switch; with it set and
+     * NO group defined, dserv_cfg_ain_
      * default() synthesizes group 0 = {0,1} on-change "joystick" so the stick
      * just works. ain_rate is the box-wide base SCAN rate; a group publishes at
      * base/decimate (0/1 = every scan), optionally boxcar-averaged (flags bit0).

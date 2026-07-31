@@ -1,0 +1,36 @@
+diff --git a/subsys/net/lib/ptp/transport.c b/subsys/net/lib/ptp/transport.c
+index c6a911484f1..9cd3020cb5c 100644
+--- a/subsys/net/lib/ptp/transport.c
++++ b/subsys/net/lib/ptp/transport.c
+@@ -327,7 +327,21 @@ static int transport_send_udp(int socket, int port, void *buf, int length,
+ 							   : sizeof(struct net_sockaddr_in6);
+ 	cnt = zsock_sendto(socket, buf, length, 0, addr, addrlen);
+ 	if (cnt < 1) {
+-		LOG_ERR("Failed to send message");
++#if defined(CONFIG_PTP_UDP_IPV4_PROTOCOL)
++		/* The port enables on NET_EVENT_IF_UP -- carrier, not address --
++		 * so on every DHCP boot the first multicast send lands here
++		 * before an IPv4 address is bound, and the failure is EXPECTED.
++		 * Logging it as a bare error every boot has two costs: readers
++		 * learn to skip E: lines, and a real mid-run send failure prints
++		 * an identical string. Demote the addressless case; keep the
++		 * real one loud and give it its errno so it can be diagnosed.
++		 */
++		if (net_if_ipv4_get_global_addr(NULL, NET_ADDR_PREFERRED) == NULL) {
++			LOG_DBG("Send skipped: no IPv4 address bound yet (errno %d)", errno);
++			return -EFAULT;
++		}
++#endif
++		LOG_ERR("Failed to send message (errno %d)", errno);
+ 		return -EFAULT;
+ 	}
+ 
+@@ -357,7 +371,7 @@ static int transport_send_l2(struct ptp_port *port, int socket, void *buf, int l
+ 
+ 	cnt = zsock_sendto(socket, buf, length, 0, (struct net_sockaddr *)&addr, sizeof(addr));
+ 	if (cnt < 1) {
+-		LOG_ERR("Failed to send L2 message");
++		LOG_ERR("Failed to send L2 message (errno %d)", errno);
+ 		return -EFAULT;
+ 	}
+ 

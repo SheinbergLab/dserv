@@ -173,6 +173,22 @@ static void adc_cal(uint8_t ch)
 		return;
 	}
 
+	/* TAKE THE CONVERTER before touching it. Two reasons, and the second is the
+	 * one that bites: the sampler may have SUSPENDED the device (analog
+	 * disabled, or held aside for an OTA), in which case every sweep below
+	 * would return -EAGAIN and this command -- the one you reach for precisely
+	 * when analog is otherwise idle -- would print a column of errors. And the
+	 * ain thread otherwise owns the device outright, so sweeping underneath it
+	 * would interleave our ramp with its cadence.
+	 *
+	 * The borrow outlives the sweep on purpose: (steps+1) * settle plus the
+	 * console writes, rounded well up, so a wedge here costs analog a bounded
+	 * outage rather than a permanent one. */
+	if (box_ain_borrow((ADCCAL_STEPS + 1) * ADCCAL_SETTLE + 2000) != 0) {
+		box_console_write("ERR sampler would not yield the converter\r\n");
+		return;
+	}
+
 	snprintf(ln, sizeof ln,
 		 "dac0 (P4_2 / J1-4) -> ain ch%u; adc %u-bit, vref %u mV\r\n",
 		 ch, box_adc_bits(), vref);
@@ -202,6 +218,11 @@ static void adc_cal(uint8_t ch)
 	/* Leave the pin low rather than parked at full scale -- a DAC left driving
 	 * is a surprise for whatever gets jumpered next. */
 	(void) dac_write_value(dac, 0, 0);
+
+	/* Hand it back. The sampler decides whether that means resuming or leaving
+	 * it suspended -- we do not know, and guessing is how the two views of the
+	 * device drift apart. */
+	box_ain_return();
 }
 #endif /* BOX_HAVE_ADC && CONFIG_DAC */
 

@@ -473,7 +473,22 @@ static inline cli_action_t box_cli_exec(box_config_t *c, const char *line,
     }
     if (sscanf(line, "ain enable %d", &v) == 1) { /* master switch for analog input, whatever converter is fitted */
         c->ain_en = v ? 1 : 0; c->applied_count++;
-        snprintf(out, outsz, "OK ain enable=%d (save+reboot to apply)\r\n", c->ain_en); return CLI_OK;
+        /* RETURNS CLI_AIN, AND THAT IS THE WHOLE FIX. It used to return CLI_OK,
+         * which is the one return value the console dispatch does nothing with --
+         * so `ain enable 0/1` set the config byte and NEVER told the sampler.
+         * Every other `ain ...` command here already returned CLI_AIN.
+         *
+         * So the old "(save+reboot to apply)" was RIGHT IN EFFECT and wrong in
+         * its reason. It was written as an RP2350 statement (there ain_en claimed
+         * the SPI0 pins at init, so a reboot genuinely was required); on Zephyr
+         * the pins come from pinctrl regardless, and I removed the message on the
+         * strength of that -- while the reboot requirement was in fact still real,
+         * created by this missing return one line down.
+         *
+         * CAUGHT ONLY ON HARDWARE: `ain enable 0` printed OK, and the box went on
+         * sampling with ain/dbg/running=1 and sweeps still climbing. Reading the
+         * code found the intent; running it found the return value. */
+        snprintf(out, outsz, "OK ain enable=%d (live; `save` to persist)\r\n", c->ain_en); return CLI_AIN;
     }
     if (sscanf(line, "oled enable %d", &v) == 1) { /* SSD1306 SPI status display (see PINMAP.md) */
         c->oled_en = v ? 1 : 0; c->applied_count++;

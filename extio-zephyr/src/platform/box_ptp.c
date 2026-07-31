@@ -51,3 +51,11 @@ uint64_t box_ptp_now_ns(void)
 	}
 	return (uint64_t) t.second * 1000000000ULL + t.nanosecond;
 }
+
+bool box_ptp_synced(void)
+{
+	/* 1e17 ns = ~3.17 years of uptime, i.e. unreachable by a free-running
+	 * counter on a box that reboots, and ~17x below the current epoch. Any
+	 * threshold in that whole range behaves identically -- see box_ptp.h. */
+	return box_ptp_now_ns() > 100000000000000000ULL;
+}

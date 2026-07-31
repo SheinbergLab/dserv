@@ -244,6 +244,91 @@ static int64_t  ota_dbg_until;
 #define BOX_OTA_ACK_EVERY   8192u   /* ack the cursor at least this often */
 #define BOX_OTA_CHUNK_HDR   8u      /* seq u32 LE + crc32 u32 LE */
 
+/* How long each OTA step keeps analog switched off (box_ain_hold).
+ *
+ * Refreshed on every chunk, so the real hold lasts as long as the transfer keeps
+ * moving. 2 s is chosen from the other end: it is how long analog stays dead
+ * after the host STOPS, i.e. the cost of a vanished host, and it comfortably
+ * covers the gap between chunks even when the host pauses for an ack. Making it
+ * generous would only lengthen the outage nobody asked for.
+ *
+ * WHY HOLD AT ALL. An OTA needs the service loop and the flash; analog needs the
+ * same service loop to publish, and at the per-group ceiling two groups can ask
+ * for ~400 frames/s at 275-864 us of CPU each. That contention is arithmetic, not
+ * a hypothesis -- unlike the analog-vs-PTP story, which our own boot loops
+ * refuted (PORTING.md, "the actual bug: an RX context-descriptor race"). */
+#define BOX_OTA_AIN_HOLD_MS 2000u
+#endif /* BOX_HAVE_OTA_SLOT -- the analog boot hold below is not OTA-specific */
+
+#if defined(BOX_HAVE_ADC)
+/* ---- analog does not start until PTP has locked ----
+ *
+ * The sampler used to come up with the box and run at the configured rate --
+ * 1 kHz on this board -- from before the network was even up, straight through
+ * PTP convergence. Nothing needs it that early: the first analog sample matters
+ * to an experiment, and no experiment has started 8 seconds into boot. Whereas
+ * every sample taken before the clock is disciplined carries a box-clock stamp
+ * that is seconds-to-decades wrong, so it is not merely useless, it is data that
+ * has to be thrown away later by someone who notices.
+ *
+ * Whether it also HELPS convergence is deliberately left as an open question and
+ * not claimed here -- our own boot loops have refuted that story once already.
+ * The justification above stands on its own either way.
+ *
+ * CEILING, because a box with no grandmaster must still work. If PTP never
+ * locks, analog starts anyway at BOOT_HOLD_MAX and the console says so, rather
+ * than a box that is silently and permanently analog-dead on a LAN that happens
+ * to have no master. That is the same rule as every other deadline here: the
+ * failure of the thing we are waiting for must not be able to disable us. */
+#define BOX_AIN_BOOT_HOLD_MAX_MS  60000
+#define BOX_AIN_BOOT_HOLD_STEP_MS 1500     /* re-armed each pass; > the loop period */
+
+static uint8_t ain_boot_released;
+
+static void ain_boot_gate(void)
+{
+	if (ain_boot_released) {
+		return;
+	}
+
+	/* NOTHING TO GATE. With ain_en clear, or with no group defined, no sample
+	 * was ever going to be taken -- so holding achieves nothing and, worse,
+	 * announcing a release states an event that did not happen. The first
+	 * version printed "analog: released ... samples are stamped on a
+	 * free-running clock" on a box with ain_en=0, i.e. it reported sampling
+	 * that could not occur, after holding a nonexistent sampler for a full
+	 * minute.
+	 *
+	 * Deliberately NOT latching ain_boot_released here: analog can be enabled
+	 * at runtime, and if that happens before PTP locks it should still get the
+	 * same treatment. Re-evaluated every pass instead. */
+	if (!cfg.ain_en || dserv_ain_active_count(&cfg) == 0) {
+		return;
+	}
+
+#if defined(CONFIG_PTP_CLOCK)
+	if (box_ptp_synced()) {
+		ain_boot_released = 1;
+		box_console_printf("analog: released at %lld ms -- PTP locked\n",
+				   k_uptime_get());
+		return;
+	}
+	if (k_uptime_get() < BOX_AIN_BOOT_HOLD_MAX_MS) {
+		box_ain_hold(BOX_AIN_BOOT_HOLD_STEP_MS);
+		return;
+	}
+	ain_boot_released = 1;
+	box_console_printf("analog: released at %d ms WITHOUT PTP -- samples are "
+			   "stamped on a free-running clock\n",
+			   BOX_AIN_BOOT_HOLD_MAX_MS);
+#else
+	ain_boot_released = 1;      /* no 1588 on this board; nothing to wait for */
+#endif
+}
+#endif /* BOX_HAVE_ADC */
+
+#if defined(BOX_HAVE_OTA_SLOT)
+
 static int64_t   ota_res_until;   /* re-announce window for the TERMINAL result */
 static uint32_t  g_ota_base;      /* where the image starts inside slot1 */
 static box_ota_t g_ota;
@@ -313,6 +398,19 @@ static void ota_pub_str(const char *leaf, const char *v)
 	dserv_state_name(&cfg, nm, sizeof nm, leaf);
 	dserv_msg_string(f, nm, 0, v);
 	pub_enqueue(f);
+}
+
+/* Push analog aside for the next step of this transfer.
+ *
+ * Called at the TOP of each flash-touching OTA command, but AFTER its obs gate:
+ * an observation period outranks an update (the OTA defers to it), so analog --
+ * which is what an obs is often there to record -- must not be switched off for
+ * work that is not happening. */
+static void ota_ain_yield(void)
+{
+#if defined(BOX_HAVE_ADC)
+	box_ain_hold(BOX_OTA_AIN_HOLD_MS);
+#endif
 }
 
 /* Terminal outcome: state + result together, and mark them for re-announce.
@@ -883,6 +981,7 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 			box_console_printf("cmd/ota/begin -> refused, in_obs\n");
 			return;
 		}
+		ota_ain_yield();      /* begin erases the trailer -- that is flash work */
 		if (strlen(arg) < 65 || box_ota_parse_sha(arg, sha) != 0) {
 			g_ota.state = BOX_OTA_DONE_FAIL;
 			g_ota.err   = BOX_OTA_ERR_SHA_INIT;
@@ -963,6 +1062,9 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 			ota_pub_int("ota/ack", (int32_t) g_ota.received);
 			return;
 		}
+		/* Refreshed per chunk, which is what makes the hold last exactly as
+		 * long as the transfer is actually progressing -- and no longer. */
+		ota_ain_yield();
 		if (m.datalen <= BOX_OTA_CHUNK_HDR) {
 			ota_pub_int("ota/ack", (int32_t) g_ota.received);
 			return;
@@ -1032,6 +1134,9 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 			ota_pub_int("ota/flash_verify", -1);
 			return;
 		}
+		/* A read-back of the whole slot is a long uninterrupted stretch of
+		 * flash work on this very thread -- the same reason as the blast. */
+		ota_ain_yield();
 		if (left == 0 || box_ota_flash_open() != 0) {
 			ota_pub_int("ota/flash_verify", -1);
 			box_console_printf("cmd/ota/verify -> nothing staged\n");
@@ -1321,6 +1426,18 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 		 * left the pin unclaimed, so the mirror drove nothing. The console CLI
 		 * path already re-applied (CLI_PIN); the datapoint path did not. */
 		box_gpio_apply_config(&cfg);
+#if defined(BOX_HAVE_ADC)
+		/* ...AND the sampler, for the same reason one line up. `pin N mode
+		 * ain` moves a pad between GPIO and the converter, so it changes
+		 * box_adc_active_mask() -- and the sweep mask is derived from that.
+		 * The console path (CLI_PIN) already did this; the datapoint path did
+		 * not, so `config/pin/14/mode = ain` over dserv re-muxed the pad and
+		 * left the sampler's mask stale: a channel now wired to the ADC and
+		 * never swept, or worse, a pad handed back to GPIO while the mask
+		 * still asked for it. Same defect the comment above describes for
+		 * obs/sync pins, one subsystem over. */
+		box_ain_apply();
+#endif
 		groups_resync();          /* DI levels may have changed meaning */
 		box_announce_manifest(&cfg);   /* pins/in|out, obs_pin, sync_pin moved */
 	} else if (r == CFG_SAVE) {
@@ -1445,6 +1562,12 @@ int main(void)
 	 * comes up. Returns -ENODEV on a box with no Click fitted, which is the
 	 * ordinary case and not worth reporting as a failure. */
 	(void) box_ain_init(&cfg);
+
+	/* Hold from BEFORE the sampler's first tick, so analog never runs even
+	 * momentarily on an undisciplined clock. The service loop re-arms this via
+	 * ain_boot_gate() until PTP locks; if we somehow never reach the loop, the
+	 * deadline expires and analog starts by itself. */
+	box_ain_hold(BOX_AIN_BOOT_HOLD_STEP_MS);
 
 	/* Teach the CLI what the converter actually has, so `ain group G channels`
 	 * validates against the fitted count instead of the MCP3204's four. Must
@@ -1635,6 +1758,11 @@ int main(void)
 		pub_drain(pubq_per_pass);
 
 #if defined(BOX_HAVE_ADC)
+		/* Keep analog held until the 1588 clock is disciplined. Re-arms a
+		 * short deadline each pass rather than latching a flag, so the hold
+		 * dies with the loop instead of outliving it. */
+		ain_boot_gate();
+
 		/* Analog blocks, built on the sampling thread and sent from HERE:
 		 * exactly one thread ever writes the uplink. Bounded per pass for the
 		 * same reason as pub_drain -- a burst of blocks must not hold the loop
@@ -1899,8 +2027,10 @@ int main(void)
 				 * failure in one glance. Only sent when an ADC is fitted. */
 				if (box_adc_ready()) {
 					uint32_t asw = 0, abl = 0, adr = 0, alt = 0, ath = 0, amx = 0, an = 0;
+					uint32_t asp = 0, arm = 0;
 					box_ain_stats(&asw, &abl, &adr, &alt, &ath);
 					box_adc_stats(&amx, &an);
+					box_adc_pm_stats(&asp, &arm);
 					struct { const char *leaf; uint32_t v; } as[] = {
 						{ "ain/dbg/sweeps",    asw },
 						{ "ain/dbg/blocks",    abl },
@@ -1909,6 +2039,19 @@ int main(void)
 						{ "ain/dbg/throttled", ath },
 						{ "ain/dbg/sweep_max_us", amx },
 						{ "ain/dbg/chans",     box_adc_channels() },
+						/* WHAT THE BOX IS DOING, next to what it was told.
+						 * `running` 0 with ain_en 1 is now a legible state
+						 * (held for an OTA, no group defined, or no pin in
+						 * ain mode) rather than a silent dead sampler --
+						 * which is the state box3 was in with nothing to
+						 * look at. `powered` distinguishes "we suspended
+						 * the converter" from "we merely stopped asking":
+						 * on a board with no PM hook the first stays 1. */
+						{ "ain/dbg/running",   (uint32_t) box_ain_running() },
+						{ "ain/dbg/powered",   (uint32_t) box_adc_powered() },
+						{ "ain/dbg/holds",     box_ain_holds() },
+						{ "ain/dbg/suspends",  asp },
+						{ "ain/dbg/resumes",   arm },
 					};
 					for (unsigned ai2 = 0; ai2 < ARRAY_SIZE(as); ai2++) {
 						dserv_state_name(&cfg, name, sizeof name, as[ai2].leaf);

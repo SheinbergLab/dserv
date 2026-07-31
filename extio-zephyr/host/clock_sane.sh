@@ -77,7 +77,7 @@ for B in $BOXES; do
     echo "        after ${UP}s, which is long past the 6-10 s it should take."
     echo "        Every box-stamped timestamp is garbage and at_abs fires at an"
     echo "        arbitrary time. Most likely causes, in order:"
-    echo "        1. patches/enet-qos-rx-timestamp-race.patch is NOT applied to the"
+    echo "        1. patches/enet-qos-rx-fixes.patch is NOT applied to the"
     echo "           Zephyr tree this image was built from (a west update erases it)."
     echo "        2. The PTP transport does not match on both ends. Box and ptp4l must"
     echo "           agree; a mismatch is SILENT. Default is UDP/IPv4 on both, i.e. no"

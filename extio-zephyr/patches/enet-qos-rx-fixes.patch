@@ -1,0 +1,335 @@
+diff --git a/drivers/ethernet/eth_nxp_enet_qos/eth_nxp_enet_qos_mac.c b/drivers/ethernet/eth_nxp_enet_qos/eth_nxp_enet_qos_mac.c
+index e641ed855bf..56096fbe494 100644
+--- a/drivers/ethernet/eth_nxp_enet_qos/eth_nxp_enet_qos_mac.c
++++ b/drivers/ethernet/eth_nxp_enet_qos/eth_nxp_enet_qos_mac.c
+@@ -15,6 +15,7 @@ LOG_MODULE_REGISTER(eth_nxp_enet_qos_mac, CONFIG_ETHERNET_LOG_LEVEL);
+ #include <zephyr/net/phy.h>
+ #include <zephyr/kernel/thread_stack.h>
+ #include <zephyr/sys_clock.h>
++#include <zephyr/sys/barrier.h>
+ 
+ #if defined(CONFIG_ETH_NXP_ENET_QOS_MAC_UNIQUE_MAC_ADDRESS)
+ #include <zephyr/sys/crc.h>
+@@ -34,6 +35,34 @@ BUILD_ASSERT((ENET_QOS_RX_BUFFER_SIZE * NUM_RX_BUFDESC) >= ENET_QOS_MAX_NORMAL_F
+ static const uint32_t rx_desc_refresh_flags =
+ 	OWN_FLAG | RX_INTERRUPT_ON_COMPLETE_FLAG | BUF1_ADDR_VALID_FLAG;
+ 
++/* extio debug counters -- RX timestamp path. File scope so SWD can find the
++ * symbol; volatile so the compiler cannot keep them in registers across the
++ * loop, which would make a halted read show stale values.
++ *
++ *   [0] pkts    last-descriptor frames reaching the PTP block
++ *   [1] sv      ... with RX_STATUS1_VALID set
++ *   [2] ta      ... with RX_TIMESTAMP_AVAILABLE set
++ *   [3] ctx     context descriptors consumed in line
++ *   [4] stamp   timestamps actually attached to a pkt
++ *   [5] tsdrop  promised timestamps the MAC then dropped (TD set, no
++ *               context descriptor was ever going to arrive)
++ *   [6] orphan  context descriptors recycled via the not-first-descriptor
++ *               path, i.e. their data descriptor never got a timestamp
++ *   [7] rearm   descriptors rearmed by any drop path
++ *
++ * `ta` pinned at 0 while `pkts` climbs means the MAC never promises a
++ * timestamp -- a different defect from the context-descriptor race patched
++ * below, and the discriminator for the box1 no-sync investigation.
++ *
++ * SILENT ON PURPOSE -- read over SWD, never logged. LOG_MODE_MINIMAL is
++ * SYNCHRONOUS: a periodic print here would be a blocking 115200-baud UART
++ * write inside the RX path, on behaviour that is timing-sensitive. An
++ * instrument that can change the result it is measuring is not an
++ * instrument. Read with:
++ *   pyocd commander -t mcxn947 -c "read32 <&extio_rxts> 0x20"
++ */
++volatile uint32_t extio_rxts[8];
++
+ K_THREAD_STACK_DEFINE(enet_qos_rx_stack, CONFIG_ETH_NXP_ENET_QOS_RX_THREAD_STACK_SIZE);
+ static struct k_work_q rx_work_queue;
+ 
+@@ -278,6 +307,47 @@ static bool software_owns_descriptor(volatile union nxp_enet_qos_rx_desc *desc)
+ 	return (desc->write.control3 & OWN_FLAG) != OWN_FLAG;
+ }
+ 
++/* Hand a descriptor back to the DMA with its read format FULLY rebuilt.
++ *
++ * read and write are a UNION over the same 16 bytes, and by the time software
++ * owns a descriptor the DMA has already written back over it -- so every word
++ * holds write-back STATUS, not read-format content. In particular
++ * read.buf1_addr (RDES0) now holds a VLAN word, the nanoseconds half of a
++ * timestamp, or zero, depending on which write-back format landed. Handing
++ * the slot back by setting only .control gives the DMA OWN + BUF1_ADDR_VALID
++ * over that stale word, and the next arriving frame is DMA'd through it:
++ *
++ *   W: RX buffer underrun / No new RX buf available
++ *   E: Fatal bus error: RX:4, TX:0
++ *
++ * after which the RX engine halts and only a reset recovers the box -- the
++ * long-standing "dserv.live=down, does not self-heal, fixed instantly by an
++ * SWD reset" symptom. Reproduced on demand on an FRDM-MCXN947 by an OTA
++ * blast, the one traffic pattern that reliably drains the frag pool
++ * (2026-07-30; at CONFIG_NET_BUF_DATA_SIZE=128 a full-size frame spans 12 of
++ * the 16 descriptors, so a mid-frame drop hands back MANY stale slots).
++ *
++ * The buffer is still ours in every caller: no path swaps reserved_bufs[]
++ * without arming the new address in the same breath, so pointing RDES0 back
++ * at reserved_bufs[] is always correct. RDES1/RDES2 are rewritten too, even
++ * though the DMA is documented to ignore them with BUF2_ADDR_VALID clear:
++ * correctness here must not depend on which write-back format last landed.
++ * The barrier orders the address words ahead of the OWN handover.
++ *
++ * CALLERS THAT READ THE SLOT MUST READ FIRST: for a context descriptor,
++ * RDES0/RDES1 are exactly the timestamp words this rewrite destroys.
++ */
++static void rx_desc_rearm(struct nxp_enet_qos_rx_data *rx_data, uint32_t desc_idx)
++{
++	volatile union nxp_enet_qos_rx_desc *desc = &rx_data->descriptors[desc_idx];
++
++	desc->read.buf1_addr = (uint32_t)rx_data->reserved_bufs[desc_idx]->data;
++	desc->read.reserved = 0;
++	desc->read.buf2_addr = 0;
++	barrier_dmem_fence_full();
++	desc->read.control = rx_desc_refresh_flags;
++}
++
+ /* this function resumes the rx dma in case of underrun */
+ static void enet_qos_dma_rx_resume(const struct device *dev)
+ {
+@@ -329,11 +399,33 @@ static void eth_nxp_enet_qos_rx(struct k_work *work)
+ 		if (pkt == NULL) {
+ 			if ((desc->write.control3 & FIRST_DESCRIPTOR_FLAG) !=
+ 				FIRST_DESCRIPTOR_FLAG) {
++				/* Everything that is not the start of a fresh frame lands
++				 * here: continuation and last descriptors of a frame whose
++				 * head was dropped, and -- with hardware timestamping on --
++				 * CONTEXT descriptors whose data descriptor was dropped
++				 * before the timestamp block ran, or whose write-back lost
++				 * the bounded wait there. Under an OTA blast this path
++				 * recycles more slots than the happy path does, so a full
++				 * rearm here is load-bearing, not defensive.
++				 *
++				 * A context descriptor recycled here is an ORPHAN: its
++				 * frame has already been delivered or dropped without a
++				 * timestamp, so there is no reader left for the timestamp
++				 * words the rearm overwrites. That makes the rearm safe
++				 * for PTP by construction -- the only consumer of context
++				 * content (the timestamp block below) reads slots strictly
++				 * AHEAD of this walk, never behind it.
++				 */
++				if (IS_ENABLED(CONFIG_PTP_CLOCK_NXP_ENET_QOS) &&
++				    (desc->write.control3 & RECEIVE_CONTEXT_DESCRIPTOR_FLAG)) {
++					extio_rxts[6]++;
++				}
+ 				LOG_DBG("receive packet mask %X ",
+ 					(desc->write.control3 >> 28) & 0x0f);
+ 				/* Error statistics for this packet already updated earlier */
+ 				LOG_DBG("dropping frame from errored packet");
+-				desc->read.control = rx_desc_refresh_flags;
++				extio_rxts[7]++;
++				rx_desc_rearm(rx_data, desc_idx);
+ 				goto next;
+ 			}
+ 
+@@ -343,7 +435,8 @@ static void eth_nxp_enet_qos_rx(struct k_work *work)
+ 			if (!pkt) {
+ 				LOG_WRN("Could not alloc new RX pkt");
+ 				/* error: no new buffer, reuse previous immediately */
+-				desc->read.control = rx_desc_refresh_flags;
++				extio_rxts[7]++;
++				rx_desc_rearm(rx_data, desc_idx);
+ 				eth_stats_update_errors_rx(data->iface);
+ 				goto next;
+ 			}
+@@ -366,7 +459,8 @@ static void eth_nxp_enet_qos_rx(struct k_work *work)
+ 				pkt_len, processed_len);
+ 			net_pkt_unref(pkt);
+ 			pkt = NULL;
+-			desc->read.control = rx_desc_refresh_flags;
++			extio_rxts[7]++;
++			rx_desc_rearm(rx_data, desc_idx);
+ 			eth_stats_update_errors_rx(data->iface);
+ 			goto next;
+ 		}
+@@ -386,7 +480,8 @@ static void eth_nxp_enet_qos_rx(struct k_work *work)
+ 			LOG_WRN("No new RX buf available");
+ 			net_pkt_unref(pkt);
+ 			pkt = NULL;
+-			desc->read.control = rx_desc_refresh_flags;
++			extio_rxts[7]++;
++			rx_desc_rearm(rx_data, desc_idx);
+ 			eth_stats_update_errors_rx(data->iface);
+ 			goto next;
+ 		}
+@@ -413,22 +508,101 @@ static void eth_nxp_enet_qos_rx(struct k_work *work)
+ 			{
+ 				uint32_t ctx_idx = rx_data->next_desc_idx;
+ 				volatile union nxp_enet_qos_rx_desc *ctx_desc = &desc_arr[ctx_idx];
++				bool ctx_ready = false;
++
++				/* RACE: the context descriptor may not have LANDED yet.
++				 *
++				 * RX_TIMESTAMP_AVAILABLE_FLAG on the data descriptor is the
++				 * MAC PROMISING a context descriptor with the timestamp in
++				 * it. The DMA writes that slot back separately, so a peek
++				 * taken immediately after the data descriptor can legally
++				 * observe it still DMA-owned -- and the original code then
++				 * dropped the timestamp silently and moved on.
++				 *
++				 * The failure mode that costs you a day: the PTP stack logs
++				 * "drops Sync without valid RX timestamp" once per Sync, the
++				 * 1588 counter free-runs from boot, and every status field
++				 * still reads healthy because TX timestamping is unaffected
++				 * and Sync/Follow_Up/Delay_Req/Delay_Resp all complete -- a
++				 * tcpdump looks perfect. Whether you win the race depends on
++				 * instruction timing, so it is BUILD-DETERMINISTIC: adding 64
++				 * bytes of unrelated code flipped one image from 8/8 boots
++				 * synced to 4/4 failed. That is why it presents as flaky.
++				 *
++				 * Since the flag is a promise, waiting is CORRECT rather than
++				 * speculative -- but bounded, because trusting hardware to
++				 * always keep a promise is how you get an unbounded spin in an
++				 * RX thread. Writeback is sub-microsecond; the cap is orders
++				 * of magnitude beyond that and simply gives up if it is
++				 * missed, preserving the old behaviour in that case.
++				 */
++				extio_rxts[0]++;                                  /* pkts  */
++				if (desc->write.control3 & RX_STATUS1_VALID_FLAG) {
++					extio_rxts[1]++;                          /* sv    */
++				}
++				if (desc->write.control1 & RX_TIMESTAMP_AVAILABLE_FLAG) {
++					extio_rxts[2]++;                          /* ta    */
++				}
+ 
+ 				if ((desc->write.control3 & RX_STATUS1_VALID_FLAG) &&
+-				    (desc->write.control1 & RX_TIMESTAMP_AVAILABLE_FLAG) &&
+-				    !(ctx_desc->write.control3 & OWN_FLAG) &&
+-				    (ctx_desc->write.control3 & RECEIVE_CONTEXT_DESCRIPTOR_FLAG)) {
++				    (desc->write.control1 & RX_TIMESTAMP_AVAILABLE_FLAG)) {
++					if (desc->write.control1 & RX_TIMESTAMP_DROPPED_FLAG) {
++						/* The MAC took the snapshot and then threw
++						 * it away -- it could not claim the next
++						 * descriptor when the frame completed, which
++						 * is ROUTINE while the ring runs full (the
++						 * OTA-blast regime). No context descriptor
++						 * was or will be emitted for this frame, so
++						 * spinning for one only burns 256 iterations
++						 * per frame in the code path that is already
++						 * behind, and the "never arrived" warning it
++						 * ends in is noise with a bounded, named
++						 * cause. The frame is delivered unstamped --
++						 * only its timestamp was lost, and PTP event
++						 * messages are rare enough that theirs
++						 * practically never is.
++						 */
++						extio_rxts[5]++;          /* tsdrop */
++					} else {
++						for (int spin = 0; spin < 256; spin++) {
++							if (!(ctx_desc->write.control3 &
++							      OWN_FLAG) &&
++							    (ctx_desc->write.control3 &
++							     RECEIVE_CONTEXT_DESCRIPTOR_FLAG)) {
++								ctx_ready = true;
++								break;
++							}
++							/* The descriptor is volatile, so each
++							 * pass re-reads it; the fence orders
++							 * that read against the DMA's write.
++							 */
++							barrier_dmem_fence_full();
++						}
++						if (!ctx_ready) {
++							LOG_WRN("RX timestamp promised but "
++								"context descriptor never "
++								"arrived (idx %u)",
++								ctx_idx);
++						}
++					}
++				}
++
++				if (ctx_ready) {
++					extio_rxts[3]++;                          /* ctx   */
++					extio_rxts[4]++;                          /* stamp */
+ 					pkt->timestamp.nanosecond = ctx_desc->write.vlan_tag;
+ 					pkt->timestamp.second = ctx_desc->write.control1;
+ 					net_pkt_set_rx_timestamping(pkt, true);
+ 
+-					/* Recycle the context descriptor slot as a
+-					 * regular RX descriptor - the reserved_buf at
+-					 * this index was untouched by the context write.
++					/* Recycle the context slot as a regular RX
++					 * descriptor -- the reserved_buf at this index was
++					 * untouched by the context write-back, so the rearm
++					 * points RDES0 straight back at it. Timestamp words
++					 * were consumed ABOVE; the rearm overwrites them,
++					 * and that order is the whole contract (see
++					 * rx_desc_rearm).
+ 					 */
+-					ctx_desc->read.buf1_addr =
+-						(uint32_t)data->rx.reserved_bufs[ctx_idx]->data;
+-					ctx_desc->read.control = rx_desc_refresh_flags;
++					rx_desc_rearm(rx_data, ctx_idx);
+ 					rx_data->next_desc_idx = (ctx_idx + 1U) % NUM_RX_BUFDESC;
+ 				}
+ 			}
+@@ -449,8 +623,7 @@ static void eth_nxp_enet_qos_rx(struct k_work *work)
+ 		LOG_DBG("Swap RX buf %p for %p", data->rx.reserved_bufs[desc_idx], new_buf);
+ 		/* Allow receive into a new buffer */
+ 		data->rx.reserved_bufs[desc_idx] = new_buf;
+-		desc->read.buf1_addr = (uint32_t)new_buf->data;
+-		desc->read.control = rx_desc_refresh_flags;
++		rx_desc_rearm(rx_data, desc_idx);
+ 
+ next:
+ 		desc_idx = rx_data->next_desc_idx;
+@@ -509,6 +682,35 @@ static void eth_nxp_enet_qos_mac_isr(const struct device *dev)
+ 		if (ENET_QOS_REG_GET(DMA_CH_DMA_CHX_STAT, FBE, dma_ch0_interrupts)) {
+ 			LOG_ERR("Fatal bus error: RX:%x, TX:%x", (dma_ch0_interrupts >> 19) & 0x07,
+ 				(dma_ch0_interrupts >> 16) & 0x07);
++			/* Post-mortem RX ring dump. An FBE halts the DMA engine for
++			 * good -- nothing short of a reset restarts it -- so there is
++			 * no live traffic left to perturb and no better moment to
++			 * name the defect. ~18 synchronous LOG lines cost ~150 ms at
++			 * 115200 on LOG_MODE_MINIMAL, paid once, after death.
++			 *
++			 * How to read it: cur_rxdesc is the descriptor the DMA choked
++			 * on; (cur_rxdesc - ring) / 16 is its index. cur_rxbuf is the
++			 * address it was transferring through when the bus errored --
++			 * a value that is obviously not a RAM buffer (0, a VLAN word,
++			 * a timestamp fraction) convicts a stale hand-back; compare
++			 * that slot's RDES0 against its buf= column, which is where
++			 * reserved_bufs[] says the buffer really lives. OWN tells you
++			 * which side held each slot at death.
++			 */
++			LOG_ERR("FBE: cur_rxdesc=%08x cur_rxbuf=%08x ring=%08x next_idx=%u",
++				base->DMA_CH[0].DMA_CHX_CUR_HST_RXDESC,
++				base->DMA_CH[0].DMA_CHX_CUR_HST_RXBUF,
++				(uint32_t)&rx_data->descriptors[0], rx_data->next_desc_idx);
++			for (int i = 0; i < NUM_RX_BUFDESC; i++) {
++				volatile union nxp_enet_qos_rx_desc *d = &rx_data->descriptors[i];
++
++				LOG_ERR("FBE: rx[%02d] %08x %08x %08x %08x buf=%08x", i,
++					d->read.buf1_addr, d->read.reserved, d->read.buf2_addr,
++					d->read.control,
++					rx_data->reserved_bufs[i] != NULL
++						? (uint32_t)rx_data->reserved_bufs[i]->data
++						: 0U);
++			}
+ 		}
+ 		if (ENET_QOS_REG_GET(DMA_CH_DMA_CHX_STAT, RBU, dma_ch0_interrupts)) {
+ 			LOG_WRN("RX buffer underrun");
+diff --git a/drivers/ethernet/eth_nxp_enet_qos/nxp_enet_qos_priv.h b/drivers/ethernet/eth_nxp_enet_qos/nxp_enet_qos_priv.h
+index 5f378281dd7..dac42653634 100644
+--- a/drivers/ethernet/eth_nxp_enet_qos/nxp_enet_qos_priv.h
++++ b/drivers/ethernet/eth_nxp_enet_qos/nxp_enet_qos_priv.h
+@@ -29,7 +29,13 @@
+ #define RECEIVE_CONTEXT_DESCRIPTOR_FLAG BIT(30)
+ #define OWN_FLAG                        BIT(31)
+ #define RX_STATUS1_VALID_FLAG           BIT(26)
++/* write-back RDES1 (write.control1), valid when RX_STATUS1_VALID is set in RDES3 */
+ #define RX_TIMESTAMP_AVAILABLE_FLAG     BIT(14)
++/* write-back RDES1, TD: the MAC captured a timestamp and then dropped it (no
++ * descriptor free for the context write-back when the frame completed). TSA
++ * may still be set alongside it; when TD is set NO context descriptor follows.
++ */
++#define RX_TIMESTAMP_DROPPED_FLAG       BIT(15)
+ 
+ #define RX_INTERRUPT_ON_COMPLETE_FLAG BIT(30)
+ #define TX_INTERRUPT_ON_COMPLETE_FLAG BIT(31)

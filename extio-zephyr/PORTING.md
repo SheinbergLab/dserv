@@ -5090,3 +5090,372 @@ silently erases it. The stale advice to use L2/`-2` is gone.
 Same principle as the staleness check: **the distinction between "wrong" and
 "don't know" is the tool's job**, and both of this evening's worst detours came from
 a tool that confidently reported the wrong one.
+
+
+## 2026-07-30 — analog becomes a subsystem you can switch off, and the reboot it never needed
+
+**Status: written and building on all four boards; NOT yet run on silicon.** Every
+claim below about behaviour is a claim about code, not a measurement. The bench
+checks that would turn them into findings are listed at the end.
+
+### The premise this started from, and why it was wrong
+
+The question was whether the analog-vs-PTP interference from 2026-07-29 is also
+biting OTA. It is not, because there was no such interference. The entry above
+("the actual bug: an RX context-descriptor race") already records that analog was
+ruled out with a fresh boot showing `sweeps 0 → 0` while the clock still
+free-ran, that the cause was the ENET_QOS RX context descriptor, and that the
+patched image converges **8/8 boots with analog running at 1 kHz**. The memory of
+"analog and PTP needed coordination" is an artefact of the same confound that ate
+that whole evening: every A/B rebuilt the binary, and the race was decided by
+instruction layout.
+
+Recorded here because the belief survived the correction by a day, which is the
+interesting part. The written finding was right and the recollection was wrong.
+
+The one measured cost analog imposes is unchanged and small: p90 loopback tail
+higher and less repeatable by ~50-200 µs, median/floor/p99 identical.
+
+### What was actually worth fixing
+
+Analog was the last subsystem on this box decided at boot. Four separate gaps,
+all of the same family:
+
+1. **`ain enable` told operators to reboot.** `box_cli.h` printed
+   `(save+reboot to apply)`. That is an RP2350 statement -- there `ain_en` claimed
+   the SPI0 pins at init. On every Zephyr board the converter's pins come from
+   pinctrl at driver init regardless, so `ain_en` has only ever been sampler
+   policy, and `box_ain_apply()` has applied it live since the CLI_AIN dispatch
+   landed. **The string was the whole "need to reboot".** Same for two comments in
+   `dserv_config.h` that still described the SPI0 pin claim.
+2. **The sampler never stopped.** With `union_mask == 0` the thread still armed
+   its `k_timer` and woke every period to `continue`. At `ain_rate 1000` that is
+   1000 timer interrupts and 1000 wakeups per second **on a box with analog
+   disabled**, against a 10 µs system tick.
+3. **The converter was never powered down.** `box_adc_init()` configured every
+   channel at boot and latched `ready` forever; there was no un-init.
+4. **The datapoint path never told the sampler about pin modes.** `CFG_PIN_MODE`
+   called `box_gpio_apply_config()` but not `box_ain_apply()`, so
+   `config/pin/14/mode = ain` over dserv re-muxed the pad and left the sweep mask
+   stale. The console path (`CLI_PIN`) already did this. Exactly the defect the
+   comment immediately above it describes for obs/sync pins.
+
+### The shape it took
+
+`box_ain`'s thread now **owns the converter outright** -- init, suspend, resume
+and sweep all happen there and nowhere else, so there is no lock and no window
+where the service loop could suspend a device mid-sweep. Callers state what they
+want; the thread decides when to act.
+
+Power comes from **Zephyr's device PM, not from new code**. `adc_mcux_lpadc.c`
+already ships a PM callback doing the right things in the right order
+(`LPADC_Enable(false)`, pinctrl SLEEP, `regulator_disable`, and the reverse) --
+it simply was not compiled. `CONFIG_PM_DEVICE=y` plus `pm_device_action_run()` is
+the whole mechanism. Boards whose driver has no PM hook (the RW612's mcp320x)
+get `-ENOTSUP` and stay powered; the sampler still stops, which is where the CPU
+and uplink cost actually is.
+
+**The OTA gate is a DEADLINE, not a flag** (`box_ain_hold(ms)`, refreshed per
+chunk). A pause/unpause pair would have left analog dead forever the first time a
+host vanished mid-transfer, presenting as working hardware that stopped producing
+data -- the shape that cost us box3. Stop refreshing, for any reason including
+crashing, and analog returns by itself. Held after each command's obs gate, never
+before it: an observation period outranks an update.
+
+Justification for the gate is arithmetic, not the refuted PTP story: at the
+per-group ceiling two groups can ask for ~400 frames/s at 275-864 µs of CPU each,
+on the same single service-loop thread that acks chunks.
+
+### Two things found while doing it
+
+* **`adc_read()` on a suspended LPADC blocks FOREVER.** `adc_context` waits with
+  `ADC_CONTEXT_WAIT_FOR_COMPLETION_TIMEOUT`, which defaults to `K_FOREVER` and
+  which the driver does not override. No error, no log line, no watchdog of its
+  own. `box_adc_sweep()` therefore refuses with `-EAGAIN` when suspended, in the
+  sweep itself rather than trusting callers.
+* **`adccal` would have broken.** It sweeps from the console thread, so with the
+  sampler suspending the device it would have printed a column of `-EAGAIN` --
+  and it is the command you reach for precisely when analog is otherwise idle.
+  It now takes the converter with `box_ain_borrow()`, which **waits for the
+  sampler to actually be stopped** (it can be parked in `k_timer_status_sync` for
+  a whole period, so "asked to stop" and "has stopped" are up to 1/`ain_rate`
+  apart), and hands it back with `box_ain_return()` -- which clears the hold and
+  lets the sampler decide the resting state rather than guessing it.
+
+### New observability
+
+`ain/dbg/running` and `ain/dbg/powered` alongside the existing counters, plus
+`holds` / `suspends` / `resumes`. `running=0` with `ain_en=1` is now a legible
+state rather than a silent dead sampler. `powered` separates "we suspended the
+converter" from "we merely stopped asking" -- on a board with no PM hook the
+first stays 1.
+
+### ON SILICON — what actually happened
+
+The analog work VERIFIED on the board, with dserv datapoints checked for AGE so a
+retained value could not masquerade as live:
+
+* `ain enable 0` -> `running=0`, `powered=0`, `sweeps` frozen, `suspends` +1.
+  `ain enable 1` -> all of it reverses, `resumes` +1, sweeps resume at 1 kHz.
+  **No reboot.**
+* The OTA hold fires and SELF-EXPIRES: `powered=0` one second after
+  `cmd/ota/begin`, back to `running=1 powered=1` two seconds later with the host
+  never sending another byte. That is the case a successful OTA never exercises.
+* `adccal` borrows the converter from a SUSPENDED state, converts, and returns it
+  to whatever the live config says (back to suspended). Numbers were meaningless
+  because no DAC->ADC jumper was fitted -- a flat ~430 drifting the wrong way is
+  the floating-pin signature.
+
+### TWO BUGS THE BENCH FOUND THAT READING DID NOT
+
+1. **`ain enable` returned `CLI_OK`** -- the one value the console dispatch does
+   nothing with -- so it set the config byte and NEVER called `box_ain_apply()`.
+   Every other `ain ...` command already returned `CLI_AIN`. So the old
+   "(save+reboot to apply)" was RIGHT IN EFFECT and wrong in its stated reason,
+   and I deleted it on the strength of the wrong reason while the requirement was
+   still real. Fixed by returning `CLI_AIN`.
+2. **`box_ain_borrow()` raced its own thread.** It gave the wake semaphore before
+   claiming the device, so the sampler woke, saw a device nothing wanted, and
+   SUSPENDED it out from under the borrower -- every `adccal` sweep returned
+   -EAGAIN, with `suspends` 2->3 against `resumes` 1->2 in `ain/dbg`. A hold is
+   not enough: "not wanted" is exactly the condition that triggers suspend. Fixed
+   with an explicit `borrowed` flag that the thread refuses to act on in EITHER
+   direction, and which expires with the hold.
+
+### CONFIG_PM_DEVICE: ADDED, THEN REMOVED ON ITS OWN MERITS
+
+Weighed properly, it bought only the converter's own current. Everything that
+costs this box something -- the sampler's wakeups, the publishes competing with
+the service loop, OTA contention -- is fixed by the SAMPLER stopping, which is app
+code. It would not even have released the pads (`PINCTRL_STATE_SLEEP` is not
+defined in this overlay). Removed. `box_adc_suspend()` returns -ENOTSUP here and
+`box_ain` already handles that -- it is how the RW612's mcp320x behaves.
+
+### A RETRACTION, AND THE METHOD THAT CAUGHT IT
+
+I reported, with a table, that `CONFIG_PM_DEVICE_POWER_DOMAIN=y` breaks ENET_QOS
+RX timestamping: "0/8 synced with it on, 13/17 with it off, reproducible in both
+directions." **That was wrong.** Every arm rebuilt the binary, so every comparison
+was confounded -- the identical trap this document already devotes a section to,
+which I quoted while walking into it.
+
+**What caught it was an A/A control**: the UNTOUCHED baseline binary scored 4/4
+early in the session and **0/6** an hour later. Same bytes, same board. Once the
+same input gives both answers, no A/B in the set means anything.
+
+Second methodology failure, same session: the first boot-loop harness returned as
+soon as the console went quiet, so on a quiet boot it asked `now` at 7 s uptime --
+before the 6-10 s convergence window -- and scored FREE-RUNNING. A failing score
+that measured nothing, the exact mirror of the retained-datapoint loop that once
+scored 8/8 measuring nothing. **Wait a fixed wall-clock interval from the reset;
+never let the box's own chatter set the measurement window.**
+
+### THE REAL OPEN DEFECT: box1 SPECIFICALLY
+
+Established, each with a control:
+
+* **box2 syncs first try** on the same LAN, same grandmaster, last night's
+  firmware. So the master, the switch and the firmware family are all fine.
+  (ptp4l on 192.168.88.50 has been up continuously since Jul 29 20:17.)
+* **box1 fails with analog FULLY DISABLED** -- `ain.en=0` saved and rebooted,
+  applied=111. **Analog is not the cause**, which also settles the question this
+  whole day started from.
+* **box1 fails on the untouched baseline firmware** (0/6).
+* **box1 fails after a COLD power cycle** (`boot: brownout`), so it is not state
+  latched across warm resets.
+* **box1 synced 4/4 earlier the same day** on that same baseline image.
+* **`never_arrived=0` in every failing boot.** The patch's own warning never
+  fires, so the driver is not losing the context-descriptor race -- it never
+  reaches the timestamp block at all. `RX_TIMESTAMP_AVAILABLE_FLAG` is not being
+  set. **This is a SECOND, DISTINCT defect from the one patched on 2026-07-29,
+  and that warning is the discriminator between them.**
+
+Link is 100 Mb full duplex, PHY ID 7C121, `PTP hw clock: ready=1`, Syncs arriving
+at ~1/s. `E: Failed to send message` on box1 boots is the PTP stack's `sendto`
+failing once before DHCP completes -- investigated and discarded.
+
+### NEXT, IN ORDER
+
+1. **Swap box1's and box2's Ethernet cables and switch ports.** Physical, one
+   minute, and it splits the remaining space cleanly: fault follows the cable/port
+   -> LAN; follows the board -> board. Everything else is guesswork until this is
+   done. (Precedent: the third RW612 had a dead PHY and needed an RMA.)
+2. If it follows the board, instrument the driver to log WHY the flag is absent --
+   whether `RX_STATUS1_VALID_FLAG` or `RX_TIMESTAMP_AVAILABLE_FLAG` is the one
+   missing. That names the second defect.
+3. Only then re-run the boot loop on the analog build. **Note the consequence of
+   the new boot gate on an unsyncable box: analog is held for the full 60 s
+   ceiling and then released with a console line saying it started WITHOUT PTP.**
+   That is the ceiling doing its job, but it means box1 currently takes a minute
+   to start sampling.
+4. The OTA-window `dserv.live=down` hang is still untouched and still wants the
+   Segger on `box_uplink`'s `active` / `sock` / `connecting`.
+
+
+## 2026-07-30 (late) — the OTA fatal bus error, named to the word, and the fix
+
+**Status: written and building (RAM 47.8%); NOT yet on silicon.** The mechanism
+below is established from the descriptor contract and the reproduced UART
+signature; the bench checklist at the end is what turns the fix into a finding.
+
+### The defect
+
+An OTA push kills the box, on demand:
+
+    cmd/ota/begin -> staging 251172 B into slot1
+    W: RX buffer underrun
+    W: No new RX buf available   (x2)
+    E: Fatal bus error: RX:4, TX:0
+    uplink: peer not draining -- closing socket so it can be re-established
+
+after which the RX engine is halted in hardware and NOTHING host-side can help,
+because the box can no longer receive. This is the long-standing
+"`dserv.live=down`, does not self-heal, fixed instantly by an SWD reset" — item 4
+above, now with a cause.
+
+`eth_nxp_enet_qos_mac.c` descriptors are a UNION: the driver writes the `read`
+view (RDES0 = buffer address), the DMA writes back the `write` view (RDES0 =
+VLAN word, or the NANOSECONDS HALF OF A TIMESTAMP for a context descriptor).
+Four recycle sites handed a descriptor back to the DMA by rewriting ONLY
+`.control` — OWN + BUF1_ADDR_VALID over whatever write-back status was left in
+RDES0. The next frame into that slot is DMA'd through a garbage address:
+`RX:4` is the DMA saying the resulting AHB write errored. It could as easily
+have LANDED — nanoseconds as an address sweep 0..0x3B9AC9FF, which crosses RAM
+— so the visible crash is the kind outcome.
+
+### Why an OTA, and nothing else, reliably fires it
+
+Geometry, not mystery. `CONFIG_NET_BUF_DATA_SIZE` was the DEFAULT 128, and the
+driver's DMA buffer size derives from it: a full-size 1514 B TCP segment spans
+TWELVE of the sixteen RX descriptors, plus a CONTEXT descriptor per frame
+because the PTP clock driver sets TSENALL (every frame is stamped, not just
+PTP). The blast is ~3300 datapoint sets that TCP coalesces into exactly such
+segments, sustained; 16 of the 36 RX frags are permanently pinned to the ring,
+so the floating pool is 20 bufs against 12-per-frame demand — `net_pkt_get_frag`
+failure mid-frame is not an edge case, it is the operating point. And ONE
+mid-frame drop sends EVERY remaining descriptor of that frame — continuations,
+the last descriptor, then the orphaned context descriptor — through the
+`!FIRST_DESCRIPTOR` drop path, each handed back half-built. The ring comes
+round in under two frames at this geometry, and the DMA walks onto a poisoned
+slot within milliseconds.
+
+That also corrects last session's framing that "the context-descriptor path
+carries most of the traffic when timestamping is on": context descriptors are
+one slot in thirteen. The `!FD` path carries most of the traffic under drops —
+context descriptors, continuations and last-descriptors alike — which is why
+restoring three drop sites and skipping that one could not be sufficient.
+
+### The claim "restoring buf1_addr there costs PTP sync" — RE-EXAMINED, not repeated
+
+Last session measured 4/4 power cycles losing PTP sync with the `!FD` restore
+in, against a synced build without it, and recorded the exclusion as load-
+bearing ("measured, not reasoned"). Three facts say that measurement was the
+confound again, wearing the patch's clothes:
+
+* **No mechanism exists.** The only reader of context-descriptor content is the
+  timestamp block, and it reads the slot strictly AHEAD of the walk
+  (`next_desc_idx`, before the loop advances). The `!FD` path rearms the slot
+  AT the walk position. Ring order makes rearm-before-read impossible within a
+  pass, and across passes the packet is already gone either way.
+* **The DMA-visible topology is unchanged by the restore.** The old code handed
+  the slot back with OWN set too — the restore only changes whether the address
+  under OWN is a buffer or garbage. A build that "synced without the restore"
+  was a build whose orphaned context slots were live bombs; that it synced
+  tells you the `!FD` path essentially never ran on those boots, i.e. the
+  comparison never exercised the difference.
+* **The instrument for the alternative already existed.** Those 4/4 runs were
+  taken on box1 in the same window where the UNTOUCHED baseline binary went 4/4
+  synced to 0/6 an hour later — the A/A break this document already records.
+  box1's TSA-absent defect fails exactly like "the patch broke PTP".
+
+Fourth appearance of the rebuilt-binary/sick-board confound family. This time
+the discriminators ship in the image: `extio_rxts[2]` (`ta`) pinned at zero
+names box1's defect, `extio_rxts[6]` (`orphan`) counts `!FD`-path context
+recycles actually happening, and the never-arrived warning still names a lost
+race. If sync degrades on this build, one boot of counters adjudicates — not
+thirty behavioural A/Bs.
+
+### The fix (patches/enet-qos-rx-fixes.patch — now the ONE patch)
+
+* **`rx_desc_rearm()`** rebuilds the FULL read format — RDES0 from
+  `reserved_bufs[]`, RDES1/RDES2 zeroed, barrier, THEN control with OWN — and
+  every hand-back goes through it: all four drop sites, the inline context
+  recycle, the success-path swap. Correctness no longer depends on which
+  write-back format last landed in a slot. The one ordering contract (consume
+  timestamp words BEFORE the rearm overwrites them) is stated at the helper and
+  honoured at the single site it binds.
+* **`RX_TIMESTAMP_DROPPED_FLAG` (RDES1 bit 15, TD) gates the context wait.**
+  When the MAC could not claim a slot for the context write-back it says so —
+  routine while the ring runs full. Spinning 256 times for a descriptor that
+  is DOCUMENTED not to be coming, then warning "never arrived", was pure noise
+  in the code path already furthest behind; now it is `extio_rxts[5]` and no
+  spin. The frame is delivered unstamped, which for OTA traffic is its normal
+  state anyway.
+* **The FBE handler now performs the descriptor dump** last session called for
+  — `CUR_HST_RXDESC` / `CUR_HST_RXBUF` (the address the DMA choked on) plus all
+  sixteen ring slots against where `reserved_bufs[]` says their buffers live.
+  ~150 ms of synchronous UART, paid once, after the engine is already dead. If
+  an FBE ever fires again it arrives pre-named.
+* **`extio_rxts` grows to 8 words** (pyocd read is `0x20` now): pkts / sv / ta /
+  ctx / stamp / tsdrop / orphan / rearm. Still silent on purpose.
+* **Board conf: `CONFIG_NET_BUF_DATA_SIZE=512`** — margin, not the fix. A full
+  frame drops from 12 data descriptors to 3 (+1 context); +27 KB across the two
+  pools, RAM 47.8%. Ring and pool counts deliberately untouched — the pinning
+  ratio (16 of 36) is why raising the ring alone would starve the stack.
+
+Housekeeping: the three mutually-conflicting RX patch files were a standing
+hazard (apply the wrong one after `west update`). `enet-qos-rx-fixes.patch` is
+now the full driver diff including the 07-29 race wait; the race and instrument
+patches moved to `patches/superseded/` with a README. `clock_sane.sh` and the
+board-conf comments now name the consolidated patch.
+
+### Flashing note (west runs outside the app dir, so the pack pin needs help)
+
+`pyocd.yaml` is only read from pyOCD's *project dir* (default `$PWD`), and west
+must run from `~/zephyrproject` — so the pack pin was silently not in effect
+there. The working invocation, from anywhere:
+
+    PYOCD_PROJECT_DIR=~/src/dserv/extio-zephyr west flash \
+        -d ~/src/dserv/extio-zephyr/build-mcxn-ota --domain extio-zephyr \
+        -r pyocd --dev-id <probe-uid>
+
+`--domain extio-zephyr` flashes the app slot only and never touches MCUboot's
+region; `pyocd list` gives the per-board probe UID (two FRDMs stay apart that
+way). A global `PYOCD_PROJECT_DIR` in `.zshrc` was considered and declined —
+too repo-specific for the shell profile; the prefix is the convention.
+
+### `E: Failed to send message` on every boot — silenced at the source
+
+The one-per-boot error between gpio init and the DHCP line was understood
+(PTP's first multicast send fires before DHCP binds — the port enables on
+NET_EVENT_IF_UP, which is CARRIER, not address) and left as known noise. It is
+now fixed instead, for the two costs known noise carries in a channel of
+record: readers learn to skip `E:` lines, and a REAL mid-run send failure
+would print the IDENTICAL bare string — no errno, no context.
+
+`patches/ptp-transport-send-errno.patch` (subsys/net/lib/ptp/transport.c):
+the addressless-boot case is demoted to DBG (invisible at our INF level), and
+every remaining send failure — UDP and L2 — now carries its errno. So the
+line's absence is the norm, and its appearance mid-run is an anomaly with a
+reason code, which is the polarity a boot log should have. Upstream-worthy
+for the same reason the race patch is.
+
+In the tree from v0.4.0+2 (VERSION_TWEAK bumped so the artifact cannot be
+confused with the v0.4.0+1 image published to the shelf as 0.49.11-dirty —
+that image predates this change and still prints the line once per boot).
+
+### ON SILICON — what would make this a finding
+
+1. SWD-flash (OTA is the thing under repair), then an OTA blast. PASS =
+   `state/ota/ack` cursor reaches size, swap+confirm completes, ZERO FBE. The
+   drops and RBUs will still print — they are the geometry working as designed,
+   TCP's job to absorb.
+2. `extio_rxts` over pyocd after the blast: `tsdrop`/`orphan`/`rearm` nonzero
+   proves the previously-poisoning paths ran and were survived — the difference
+   between "fixed" and "not exercised".
+3. The boot loop, unchanged, for PTP: convergence rate on this build vs the
+   8/8 baseline, with the counters read on any failing boot BEFORE blaming the
+   rearm (see above: `ta=0` is box1's disease, not the patch's).
+4. An OTA on a SYNCED box, then `clock_sane.sh` after: does sync survive the
+   blast, and if it stepped, did it re-converge. TD-dropped Sync stamps during
+   the blast are expected and fine; permanent loss afterwards is not.
