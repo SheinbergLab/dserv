@@ -241,7 +241,13 @@ function fmtUptime(us) {
 /* Link into the configurator for THIS box, carrying ?host / ?ssl through.
  * Without forwarding them a fleet page pointed at a remote rig would open a
  * configurator pointed at the local one -- and it would look like it worked,
- * right up until you edited the wrong box's pins. */
+ * right up until you edited the wrong box's pins.
+ *
+ * OPENS IN A NEW TAB. This page is the thing you leave up during an experiment
+ * -- live DI, chord groups, liveness -- so navigating away from it to change a
+ * debounce is the wrong trade: you lose sight of the rig at exactly the moment
+ * you are changing it. rel=noopener because target=_blank without it hands the
+ * opened page a handle back to this one. */
 function cfgHref(name) {
     const q = new URLSearchParams();
     const cur = new URLSearchParams(location.search);
@@ -343,7 +349,8 @@ function cardHtml(b) {
 
     return `<div class="title"><span class="live ${alive ? 'on' : ''}"></span>` +
            `<span class="name">${esc(b.name)}</span>${obs}${xchip}${fw}${bchip}${ip}` +
-           `<a class="cfg" href="${cfgHref(b.name)}" title="Configure ${esc(b.name)}">configure</a></div>` + desc +
+           `<a class="cfg" href="${cfgHref(b.name)}" target="_blank" rel="noopener" ` +
+           `title="Configure ${esc(b.name)} (opens a new tab)">configure</a></div>` + desc +
            `<div class="meta"><b>up</b> ${fmtUptime(b.uptimeUs)} · <b>seen</b> ${fmtAge(age)}${target}${sync}${bat}</div>` +
            di + groups + dout + ain;
 }
