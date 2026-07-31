@@ -174,10 +174,36 @@ function ageSpan(box, leaf) {
 }
 
 /* ---- writes: named procs in the extio interp, never raw datapoint pokes ---- */
+const dirtyText = () => dirty.size
+  ? `${dirty.size} unsaved change(s): <code>${[...dirty].join('</code> <code>')}</code>` +
+    ' — applied live, but lost on reboot until you Save.'
+  : '';
+const saveText = () => `Save to flash${dirty.size ? ` (${dirty.size})` : ''}`;
+
+/* Update ONLY the dirty banner and the Save button, without a redraw.
+ *
+ * An edit leaves focus inside the panel, so renderPanel() correctly defers --
+ * redrawing would destroy the control just used. But the whole POINT of the
+ * edit is that "unsaved changes" has become true, and deferring that until
+ * focus happens to leave meant Save stayed greyed out while changes piled up.
+ * The user reasonably read that as the change not registering.
+ *
+ * So: touch the two elements that reflect dirty state, in place, and leave the
+ * rest of the DOM (and the focus) exactly where it is. Same principle as
+ * everywhere else on these pages -- do not replace what someone is pointing at
+ * -- applied to the one case where the state genuinely must update mid-edit. */
+function updateDirtyUi() {
+  const banner = document.getElementById('dirty');
+  const btn = document.getElementById('savebtn');
+  if (banner) { banner.innerHTML = dirtyText(); banner.className = dirty.size ? '' : 'hide'; }
+  if (btn) { btn.textContent = saveText(); btn.disabled = dirty.size === 0; }
+}
+
 async function cfgSet(box, leaf, value) {
   try {
     await conn.send(`extio_cfg_set ${box} ${leaf} {${value}}`, 'extio');
     dirty.add(leaf);
+    updateDirtyUi();      /* immediate: renderPanel() defers while focus is in the panel */
     renderPanel();
     askAnnounce(box);
   } catch (e) { alert(`set ${leaf} failed: ${e.message || e}`); }
@@ -204,7 +230,7 @@ function askAnnounce(box) {
 let dirty = new Set();
 async function doSave(box) {
   await conn.send(`extio_cfg_save ${box}`, 'extio');
-  dirty.clear(); renderPanel();
+  dirty.clear(); updateDirtyUi(); renderPanel();
 }
 /* OTA. The lifecycle driver does the ordering, the retry-vs-fail decisions and
  * the deadlines (config/extioconf.tcl); the page is a window onto
@@ -275,7 +301,7 @@ async function refreshDirty(box) {
   try {
     const r = await conn.send(`extio_cfg_dirty ${box}`, 'extio');
     dirty = new Set(String(r || '').trim().split(/\s+/).filter(Boolean));
-    renderPanel();
+    updateDirtyUi(); renderPanel();
   } catch (e) { /* interp may predate the helper; the page still works read-only */ }
 }
 
@@ -470,10 +496,7 @@ function renderPanel() {
       <span class="age">watchdog ${ageSpan(b, 'watchdog')}</span>
     </div>
 
-    <div id="dirty" class="${dirty.size ? '' : 'hide'}">
-      ${dirty.size} unsaved change(s): <code>${[...dirty].join('</code> <code>')}</code>
-      — applied live, but lost on reboot until you Save.
-    </div>
+    <div id="dirty" class="${dirty.size ? '' : 'hide'}">${dirtyText()}</div>
 
     <h2>identity</h2>
     <table>
@@ -538,8 +561,8 @@ function renderPanel() {
 
     <h2>actions</h2>
     <div style="display:flex;gap:10px">
-      <button class="primary" onclick="doSave('${b}')" ${dirty.size ? '' : 'disabled'}>
-        Save to flash${dirty.size ? ` (${dirty.size})` : ''}</button>
+      <button id="savebtn" class="primary" onclick="doSave('${b}')" ${dirty.size ? '' : 'disabled'}>
+        ${saveText()}</button>
       <button class="danger" onclick="doReboot('${b}')">Reboot</button>
       <button onclick="conn.send('extio_cfg_announce ${b}','extio')" title="Ask the box to re-publish everything now">Refresh from box</button>
     </div>
