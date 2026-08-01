@@ -277,22 +277,41 @@ class DservConnection {
             return this.handleMessage(assembled);
         }
 
-        // Determine if this is a datapoint message (should NOT resolve pending requests)
-        const isDatapoint = typeof data === 'object' && data.name && 
-                           (data.data !== undefined || data.value !== undefined);
-        
-        // Only resolve pending requests for non-datapoint messages
-        if (this.pendingRequests.size > 0 && !isDatapoint) {
-            const [id, req] = this.pendingRequests.entries().next().value;
-            this.pendingRequests.delete(id);
-            
-            // Resolve with string or result field
-            if (typeof data === 'string') {
-                req.resolve(data);
-            } else if (data && data.result !== undefined) {
-                req.resolve(data.result);
+        // requestId-matched responses (evalAsync): resolve exactly the
+        // request that asked, never FIFO. Errors reject the promise.
+        if (typeof data === 'object' && data.requestId &&
+            this.pendingRequests.has(data.requestId)) {
+            const req = this.pendingRequests.get(data.requestId);
+            this.pendingRequests.delete(data.requestId);
+            if (data.status === 'error') {
+                req.reject(new Error(data.error || 'Tcl error'));
             } else {
-                req.resolve(JSON.stringify(data));
+                req.resolve(data.result !== undefined ? data.result : '');
+            }
+            return;
+        }
+
+        // Determine if this is a datapoint message (should NOT resolve pending requests)
+        const isDatapoint = typeof data === 'object' && data.name &&
+                           (data.data !== undefined || data.value !== undefined);
+
+        // Only resolve pending requests for non-datapoint messages.
+        // requestId-keyed entries (evalAsync, string keys) are excluded —
+        // they resolve only via the requestId match above.
+        if (this.pendingRequests.size > 0 && !isDatapoint) {
+            const fifo = [...this.pendingRequests.entries()].find(([k]) => typeof k === 'number');
+            if (fifo) {
+                const [id, req] = fifo;
+                this.pendingRequests.delete(id);
+
+                // Resolve with string or result field
+                if (typeof data === 'string') {
+                    req.resolve(data);
+                } else if (data && data.result !== undefined) {
+                    req.resolve(data.result);
+                } else {
+                    req.resolve(JSON.stringify(data));
+                }
             }
         }
         
@@ -367,6 +386,44 @@ class DservConnection {
             });
 
             this.ws.send(command);
+        });
+    }
+
+    /**
+     * Evaluate a Tcl script in the main interp via the async requestId
+     * protocol. Unlike sendRaw/send (legacy text protocol, which blocks
+     * the server's websocket event loop while the script runs), this
+     * frees the loop immediately and the response is matched back by
+     * requestId, so concurrent requests can never cross-resolve.
+     * Rejects on Tcl error.
+     */
+    async evalAsync(script, timeoutMs = 30000) {
+        if (!this.connected || !this.ws) {
+            throw new Error('Not connected');
+        }
+        if (this.ws.readyState !== WebSocket.OPEN) {
+            throw new Error(`WebSocket not ready (state: ${this.ws.readyState})`);
+        }
+
+        return new Promise((resolve, reject) => {
+            const id = `req_${++this.requestId}`;
+            const timeout = setTimeout(() => {
+                this.pendingRequests.delete(id);
+                reject(new Error('Request timeout'));
+            }, timeoutMs);
+
+            this.pendingRequests.set(id, {
+                resolve: (data) => {
+                    clearTimeout(timeout);
+                    resolve(data);
+                },
+                reject: (err) => {
+                    clearTimeout(timeout);
+                    reject(err);
+                }
+            });
+
+            this.ws.send(JSON.stringify({ cmd: 'eval', script, requestId: id }));
         });
     }
 

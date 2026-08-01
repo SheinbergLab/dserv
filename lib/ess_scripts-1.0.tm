@@ -751,9 +751,18 @@ namespace eval scripts {
     #
     proc pull_all {} {
         variable state
-        _require_registry
-        if {[_ess_running]} { error "Cannot pull while an experiment is running" }
-        if {$state ne "idle"} { error "scripts subprocess busy ($state)" }
+        # Every invocation ends with exactly one scripts/sync_result
+        # publication — guard refusals included — so datapoint-driven
+        # clients never wait on an operation that already failed.
+        if {[catch {
+            _require_registry
+            if {[_ess_running]} { error "Cannot pull while an experiment is running" }
+            if {$state ne "idle"} { error "scripts subprocess busy ($state)" }
+        } err]} {
+            _publish_result sync_result [dict create op pull_all \
+                pulled 0 unchanged 0 errors [list $err]]
+            error $err
+        }
 
         _set_state syncing pull_all
         if {[catch { set result [ess::sync_base] } err]} {
@@ -773,9 +782,15 @@ namespace eval scripts {
 
     proc pull {system {version main}} {
         variable state
-        _require_registry
-        if {[_ess_running]} { error "Cannot pull while an experiment is running" }
-        if {$state ne "idle"} { error "scripts subprocess busy ($state)" }
+        if {[catch {
+            _require_registry
+            if {[_ess_running]} { error "Cannot pull while an experiment is running" }
+            if {$state ne "idle"} { error "scripts subprocess busy ($state)" }
+        } err]} {
+            _publish_result sync_result [dict create op pull system $system \
+                pulled 0 unchanged 0 errors [list $err]]
+            error $err
+        }
 
         _set_state syncing pull
         if {[catch { set result [ess::sync_system $system $version] } err]} {
@@ -804,43 +819,53 @@ namespace eval scripts {
     #
     proc push {system args} {
         variable state
-        _require_registry
+        # Like pull_all: exactly one scripts/push_result publication per
+        # invocation, whether the push ran, was refused, or failed.
+        if {[catch {
+            _require_registry
 
-        set user ""
-        set comment ""
-        set include_libs 0
-        set add_new 0
-        foreach {k v} $args {
-            switch -- $k {
-                -user         { set user $v }
-                -comment      { set comment $v }
-                -include_libs { set include_libs $v }
-                -add          { set add_new $v }
-                default       { error "push: unknown option $k" }
-            }
-        }
-        if {$user eq ""} {
-            catch {
-                if {[dservExists ess/registry/user]} {
-                    set user [dservGet ess/registry/user]
+            set user ""
+            set comment ""
+            set include_libs 0
+            set add_new 0
+            foreach {k v} $args {
+                switch -- $k {
+                    -user         { set user $v }
+                    -comment      { set comment $v }
+                    -include_libs { set include_libs $v }
+                    -add          { set add_new $v }
+                    default       { error "push: unknown option $k" }
                 }
             }
-        }
-        if {$user eq "" && [info exists ::env(USER)]} { set user $::env(USER) }
-        if {$user ne ""} {
-            set role [ess::_get_user_role $user]
-            if {$role eq "viewer"} {
-                error "User '$user' has role 'viewer' and cannot push"
+            if {$user eq ""} {
+                catch {
+                    if {[dservExists ess/registry/user]} {
+                        set user [dservGet ess/registry/user]
+                    }
+                }
             }
+            if {$user eq "" && [info exists ::env(USER)]} { set user $::env(USER) }
+            if {$user ne ""} {
+                set role [ess::_get_user_role $user]
+                if {$role eq "viewer"} {
+                    error "User '$user' has role 'viewer' and cannot push"
+                }
+            }
+            if {$comment eq ""} { set comment "pushed from dserv" }
+            if {$state ne "idle"} { error "scripts subprocess busy ($state)" }
+        } err]} {
+            _publish_result push_result [dict create op push system $system \
+                pushed 0 added 0 lib_pushed 0 errors [list $err]]
+            error $err
         }
-        if {$comment eq ""} { set comment "pushed from dserv" }
-        if {$state ne "idle"} { error "scripts subprocess busy ($state)" }
 
         _set_state pushing $system
         if {[catch {
             set result [_push_engine $system $user $comment $include_libs $add_new]
         } err]} {
             _set_state idle push
+            _publish_result push_result [dict create op push system $system \
+                pushed 0 added 0 lib_pushed 0 errors [list $err]]
             error $err
         }
         _manifest_invalidate
@@ -951,6 +976,39 @@ namespace eval scripts {
         catch { set new_cs [json_get $response checksum] }
         if {$new_cs eq ""} { set new_cs [sha256 $content] }
         return $new_cs
+    }
+
+    # ── Workgroup user roster (registry passthrough) ────────────────
+    #
+    # Routed through this subprocess (rather than browser → registry
+    # directly) so the GUI works even when the browser can't reach the
+    # registry host — the rig's outbound HTTPS is the only requirement.
+    # Responses are the registry's own JSON, republished on scripts/users.
+    #
+    proc users {} {
+        _require_registry
+        set url "$::ess::registry_url/api/v1/ess/users?workgroup=$::ess::registry_workgroup"
+        set response [https_get $url]
+        catch { dservSet scripts/users $response }
+        return $response
+    }
+
+    proc user_add {username {fullName ""} {email ""} {role editor}} {
+        _require_registry
+        if {$username eq ""} { error "username required" }
+        set url "$::ess::registry_url/api/v1/ess/user/$::ess::registry_workgroup/$username"
+        set body [dict_to_json [dict create username $username \
+            fullName $fullName email $email role $role]]
+        https_post $url $body
+        return [users]
+    }
+
+    proc user_remove {username} {
+        _require_registry
+        if {$username eq ""} { error "username required" }
+        set url "$::ess::registry_url/api/v1/ess/user/$::ess::registry_workgroup/$username"
+        https_delete $url
+        return [users]
     }
 
     # ── Diff (local vs registry) ────────────────────────────────────

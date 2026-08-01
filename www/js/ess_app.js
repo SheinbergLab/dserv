@@ -813,16 +813,20 @@ function reconnect() {
 }
 
 /**
- * Sync scripts by calling ess::sync_base
+ * Open the Cloud Sync dialog (SyncModal.js), backed by the `scripts`
+ * subprocess: workgroup-wide pull/push previews with 3-way status,
+ * per-file diffs, version history, and pull/push actions.
  */
+let syncModal = null;
 function syncScripts() {
-    if (connection && connection.ws && connection.connected) {
-        const message = { cmd: 'eval', script: 'ess::sync_base' };
-        connection.ws.send(JSON.stringify(message));
-        log('Syncing scripts (ess::sync_base)...', 'info');
-    } else {
+    if (!connection || !connection.connected) {
         log('Cannot sync: not connected to dserv', 'error');
+        return;
     }
+    if (!syncModal) {
+        syncModal = new SyncModal({ connection, dpManager, essControl, log });
+    }
+    syncModal.open();
 }
 
 /**
