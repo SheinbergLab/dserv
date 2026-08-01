@@ -5025,3 +5025,7 @@ select.ess-param-select {
 .ess-sync-action-stash:hover {
     color: var(--ess-error, #f87171);
 }
+
+#sync-dirty-badge[hidden] {
+    display: none;
+}

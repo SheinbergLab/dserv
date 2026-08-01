@@ -874,12 +874,15 @@ a { color: #58a6ff; }
         return;
     }
     
-    // Cache: no-cache for HTML, short cache for assets
+    // Cache: no-cache for HTML and application code (js/css) so a rig
+    // GUI picks up installed updates on a plain reload — a 1h-cached
+    // SyncModal.js kept running stale code after installs. Images and
+    // fonts keep the short cache; they're content, not code.
     const char* cache_control = "no-cache";
     std::string ext = file_path.substr(file_path.rfind('.') + 1);
-    if (ext == "js" || ext == "css" || ext == "png" || ext == "jpg" || 
+    if (ext == "png" || ext == "jpg" ||
         ext == "gif" || ext == "svg" || ext == "woff" || ext == "woff2" || ext == "ico") {
-        cache_control = "public, max-age=3600";  // 1 hour for assets
+        cache_control = "public, max-age=3600";  // 1 hour for static assets
     }
     
     res->writeHeader("Content-Type", get_content_type(file_path))
