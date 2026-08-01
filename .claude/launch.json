@@ -4,25 +4,62 @@
     {
       "name": "www",
       "runtimeExecutable": "python3",
-      "runtimeArgs": ["-m", "http.server", "8090", "--directory", "www"],
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8090",
+        "--directory",
+        "www"
+      ],
       "port": 8090
     },
     {
       "name": "www2",
       "runtimeExecutable": "python3",
-      "runtimeArgs": ["-m", "http.server", "8091", "--directory", "www"],
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8091",
+        "--directory",
+        "www"
+      ],
       "port": 8091
     },
     {
       "name": "www3",
       "runtimeExecutable": "python3",
-      "runtimeArgs": ["-m", "http.server", "8092", "--directory", "www"],
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8092",
+        "--directory",
+        "www"
+      ],
       "port": 8092
+    },
+    {
+      "name": "www4",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8093",
+        "--directory",
+        "www"
+      ],
+      "port": 8093
     },
     {
       "name": "extio-setup",
       "runtimeExecutable": "go",
-      "runtimeArgs": ["-C", "tools/extio-setup", "run", ".", "-open=false", "-dev"],
+      "runtimeArgs": [
+        "-C",
+        "tools/extio-setup",
+        "run",
+        ".",
+        "-open=false",
+        "-dev"
+      ],
       "port": 2569
     }
   ]
