@@ -37,6 +37,7 @@
 #endif
 #include "box_net_usb.h"
 #include "box_uplink.h"
+#include "box_pub.h"
 #include "box_event.h"
 #if defined(CONFIG_NETWORKING)
 #include "box_net_eth.h"
@@ -151,48 +152,13 @@ BUILD_ASSERT(BOX_NPINS <= 32, "abs_pub_pending is a uint32_t bitmask");
 static volatile uint32_t abs_pub_pending;
 #endif /* CONFIG_PTP_CLOCK */
 
-/* ---- deferred telemetry queue ----
- * The 1 Hz status burst pushed ~28 frames back-to-back, each a BLOCKING send of
- * 81-410 us. Measured on both boxes: the service loop's typical pass is 20 us,
- * its MAX was ~9.5 ms. Once a second the box stopped serving commands for that
- * long.
- *
- * Timing accuracy never depended on this -- timer callbacks preempt from the
- * timer ISR, and DI edges are stamped in their own ISR -- but an immediate
- * cmd/do/<pin> landing in the burst waited up to 9.5 ms, which is an order of
- * magnitude worse than the transport jitter time-triggering exists to remove.
- *
- * So the burst is now queued and drained a couple of frames per pass. Only
- * TELEMETRY goes in here: it is last-value-wins by nature, which is what makes
- * dropping the oldest on overflow the right policy. Events (DI edges, fired
- * pins) keep their own paths -- they must not be dropped. */
-#define PUBQ_DEPTH        40  /* > one full burst, so a burst never self-drops */
-#define PUBQ_PER_PASS_DEF  2  /* frames drained per service pass (runtime knob) */
-
-static uint8_t pubq[PUBQ_DEPTH][DSERV_MSG_LEN];
-static uint16_t pubq_head, pubq_tail, pubq_dropped;
-
-/* cmd/pubq/bypass 1 -> send inline, i.e. the pre-queue behaviour. Exists ONLY
- * so the queue can be A/B'd at RUNTIME: reflashing between arms would reset the
- * boxes, re-anchor PTP and shift thermal state, confounding exactly the
- * difference being measured. With a runtime switch the two arms can be
- * interleaved instead, so slow drift cannot alias into the comparison. */
-static uint8_t pubq_bypass;
-/* Drain rate, runtime-settable via cmd/pubq/per_pass so it can be A/B'd without
- * reflashing.
- *
- * SETTLED 2026-07-27: it does not matter. Three arms (inline / 2 per pass /
- * 8 per pass), 5 interleaved reps each, 100 shots per run: two-box skew medians
- * 15.2 / 14.3 / 15.6 us, p90 37.8 / 36.2 / 37.0 us -- indistinguishable, with
- * within-arm spread far exceeding any between-arm difference. An earlier
- * 5-pair run that showed 2/pass ~4 us WORSE on p90 did NOT replicate; p90 from
- * 100 shots carries ~10 samples' worth of information and five reps agreeing is
- * ~6% likely by chance.
- *
- * So the knob exists for re-opening the question with a method that can resolve
- * a few microseconds, not because a setting is known to be better. The queue
- * itself is justified by bounded work per pass, nothing more. */
-static uint8_t pubq_per_pass = PUBQ_PER_PASS_DEF;
+/* ---- deferred publishing ----
+ * The telemetry pubq that lived here (drained N frames per loop pass) grew into
+ * box_pub.c: two classes of queue and a dedicated below-main thread that is the
+ * only writer of the uplink. The history that motivated it -- the ~9.5 ms loop
+ * stalls from inline send bursts, and the SETTLED 2026-07-27 A/B showing drain
+ * granularity does NOT move two-box skew (stamps are ISR-side; the stall is
+ * pure command latency) -- is recorded with the mechanism, in box_pub.c. */
 
 #if defined(BOX_HAVE_OTA_SLOT)
 /* Last cmd/ota/flashtest result, held in statics and RE-ANNOUNCED over several
@@ -355,28 +321,14 @@ static const box_ota_flash_t g_ota_flash_ops = {
 };
 #endif
 
+/* Stage-1 shim: everything that used the old telemetry pubq lands in box_pub's
+ * BULK class -- same drop-oldest, same last-value-wins contract, drained by the
+ * publisher thread instead of budgeted loop passes. Call sites get classified
+ * event-vs-bulk individually in stage 2; until then the name stays, so this
+ * diff is the mechanism and not two dozen renames. */
 static void pub_enqueue(const uint8_t *f)
 {
-	if (pubq_bypass) {
-		box_uplink_send(f, DSERV_MSG_LEN);
-		return;
-	}
-	uint16_t nxt = (uint16_t)((pubq_head + 1) % PUBQ_DEPTH);
-
-	if (nxt == pubq_tail) {                 /* full: drop the OLDEST sample */
-		pubq_tail = (uint16_t)((pubq_tail + 1) % PUBQ_DEPTH);
-		pubq_dropped++;
-	}
-	memcpy(pubq[pubq_head], f, DSERV_MSG_LEN);
-	pubq_head = nxt;
-}
-
-static void pub_drain(int max)
-{
-	while (max-- > 0 && pubq_tail != pubq_head) {
-		box_uplink_send(pubq[pubq_tail], DSERV_MSG_LEN);
-		pubq_tail = (uint16_t)((pubq_tail + 1) % PUBQ_DEPTH);
-	}
+	(void) box_pub_bulk(f);
 }
 
 /* ---- periodic counters: publish ONLY when they change ----
@@ -409,7 +361,7 @@ static void pub_drain(int max)
  * advance every second so a frozen one is diagnostic; making it conditional on
  * change would be harmless today (it is a counter) and catastrophic the moment
  * someone made it a level. */
-#define PUB_PERIODIC_MAX 24
+#define PUB_PERIODIC_MAX 32   /* was 24; +7 dbg/pub_* leaves joined at stage 1 */
 #define PUB_REFRESH_S    30
 
 static struct { const char *leaf; uint32_t v; uint8_t seen; } pub_hist[PUB_PERIODIC_MAX];
@@ -851,37 +803,49 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 		}
 	}
 
+	/* ---- publisher knobs (box_pub.c; the measurement method is documented
+	 * there with the SETTLED result the old per_pass arm produced) ---- */
+	{
+		if (leaf && strcmp(leaf, "cmd/pubq/bypass") == 0) {
+			box_pub_set_bypass(dserv_msg_as_long(&m) ? 1 : 0);
+
+			uint8_t f4[DSERV_MSG_LEN];
+			char nm4[80];
+			dserv_state_name(&cfg, nm4, sizeof nm4, "pubq/bypass");
+			dserv_msg_int(f4, nm4, 0, (int32_t) box_pub_bypass());
+			pub_enqueue(f4);
+			return;
+		}
+
+		if (leaf && strcmp(leaf, "cmd/pubq/gather") == 0) {
+			box_pub_set_gather((int) dserv_msg_as_long(&m));
+
+			uint8_t f6[DSERV_MSG_LEN];
+			char nm6[80];
+			dserv_state_name(&cfg, nm6, sizeof nm6, "pubq/gather");
+			dserv_msg_int(f6, nm6, 0, (int32_t) box_pub_gather());
+			pub_enqueue(f6);
+			return;
+		}
+
+		/* INERT since the publisher thread: there is no per-pass drain budget
+		 * to set any more. Kept because the interleaved-A/B scripts set it and
+		 * read the echo; answering keeps them runnable against any firmware. */
+		if (leaf && strcmp(leaf, "cmd/pubq/per_pass") == 0) {
+			uint8_t f5[DSERV_MSG_LEN];
+			char nm5[80];
+			dserv_state_name(&cfg, nm5, sizeof nm5, "pubq/per_pass");
+			dserv_msg_int(f5, nm5, 0, (int32_t) dserv_msg_as_long(&m));
+			pub_enqueue(f5);
+			return;
+		}
+	}
+
 #if defined(CONFIG_PTP_CLOCK)
 	/* <prefix>/cmd/sched/debug 0|1 -- arm the at_abs diagnostics. Runtime, not
 	 * persisted: turn it on against a live box, read sched/dbg_*, turn it off.
 	 * See sched_dbg_publish() for why it may only run after the timer is armed. */
 	{
-		if (leaf && strcmp(leaf, "cmd/pubq/per_pass") == 0) {
-			long v = dserv_msg_as_long(&m);
-
-			if (v < 1)  v = 1;
-			if (v > PUBQ_DEPTH) v = PUBQ_DEPTH;
-			pubq_per_pass = (uint8_t) v;
-
-			uint8_t f5[DSERV_MSG_LEN];
-			char nm5[80];
-			dserv_state_name(&cfg, nm5, sizeof nm5, "pubq/per_pass");
-			dserv_msg_int(f5, nm5, 0, (int32_t) pubq_per_pass);
-			pub_enqueue(f5);
-			return;
-		}
-
-		if (leaf && strcmp(leaf, "cmd/pubq/bypass") == 0) {
-			pubq_bypass = dserv_msg_as_long(&m) ? 1 : 0;
-
-			uint8_t f4[DSERV_MSG_LEN];
-			char nm4[80];
-			dserv_state_name(&cfg, nm4, sizeof nm4, "pubq/bypass");
-			dserv_msg_int(f4, nm4, 0, (int32_t) pubq_bypass);
-			pub_enqueue(f4);
-			return;
-		}
-
 		if (leaf && strcmp(leaf, "cmd/sched/debug") == 0) {
 			sched_dbg = dserv_msg_as_long(&m) ? 1 : 0;
 
@@ -1666,6 +1630,7 @@ int main(void)
 	}
 #endif
 	box_uplink_init(&cfg);       /* USB (and Ethernet where present) up */
+	box_pub_init();              /* ...then the thread that writes it */
 
 	box_console_init(&cfg);      /* binds CDC or console UART per console_mode */
 	dserv_framer_reset(&rx_framer);
@@ -1831,10 +1796,10 @@ int main(void)
 		box_uplink_service(&cfg);         /* carrier/strap selection + (re)connect */
 		box_console_service(&cfg);        /* two-way CLI (non-blocking, bounded) */
 
-		/* A couple of queued telemetry frames per pass. Bounded ON PURPOSE:
-		 * the point is that no single pass can be held hostage by the backlog,
-		 * so command latency stays flat instead of spiking once a second. */
-		pub_drain(pubq_per_pass);
+		/* No drain call here any more: queued frames leave through the
+		 * publisher thread (box_pub.c), which runs in the gaps this loop
+		 * spends parked in box_event_wait(). The loop's job is to ENQUEUE
+		 * in memcpy time and get back to inbound commands. */
 
 #if defined(BOX_HAVE_ADC)
 		/* Keep analog held until the 1588 clock is disciplined. Re-arms a
@@ -1842,11 +1807,14 @@ int main(void)
 		 * dies with the loop instead of outliving it. */
 		ain_boot_gate();
 
-		/* Analog blocks, built on the sampling thread and sent from HERE:
-		 * exactly one thread ever writes the uplink. Bounded per pass for the
-		 * same reason as pub_drain -- a burst of blocks must not hold the loop
-		 * hostage and spike command latency. */
-		for (int ai = 0; ai < 2; ai++) {
+		/* Analog blocks, built on the sampling thread, stamped and ENQUEUED
+		 * here. The uplink's single-writer invariant now lives one level down:
+		 * exactly one thread -- box_pub's -- ever writes the transport, and
+		 * the loop's remaining direct sends share it safely through
+		 * box_uplink's lock until stage 2 reclassifies them. Draining ALL
+		 * queued blocks per pass is fine now that a block costs a memcpy, not
+		 * a 275-864 us send: the old 2-per-pass budget was send-cost math. */
+		for (;;) {
 			ain_block_t blk;
 			uint8_t payload[12 + AIN_BLOCK_MAX * 2];
 			uint8_t f[DSERV_MSG_LEN];
@@ -2056,7 +2024,12 @@ int main(void)
 			 * happened to be emitted -- rig_check and any historical reading
 			 * are unaffected. And the gap is now published explicitly as
 			 * dbg/wd_skipped instead of only being inferable from a jump in
-			 * the watchdog value, so a stall is easier to see, not harder. */
+			 * the watchdog value, so a stall is easier to see, not harder.
+			 *
+			 * (The 40-deep loop-drained queue above is history -- bulk frames
+			 * now go to box_pub's 96-deep class with a thread draining at
+			 * wire speed -- but the policy stays: the flash burst blocks THIS
+			 * loop either way, and one honest burst beats N stale ones.) */
 			next_wd += 1000;
 			if (next_wd <= wd_now) {
 				uint32_t miss = (uint32_t)((wd_now - next_wd) / 1000) + 1u;
@@ -2176,13 +2149,24 @@ int main(void)
 				pub_periodic("dbg/pub_suppressed", pub_suppressed);
 			}
 
-			/* Telemetry the queue itself dropped. Non-zero means the burst is
-			 * outrunning the drain. Published rather than left silent: a
-			 * queue that quietly discards data is exactly the failure shape
-			 * this project keeps getting caught by. */
-			dserv_state_name(&cfg, name, sizeof name, "dbg/pubq_dropped");
-			dserv_msg_int(f, name, 0, (int32_t) pubq_dropped);
-			pub_enqueue(f);
+			/* What the publisher dropped, delayed, and batched. Published
+			 * rather than left silent: a queue that quietly discards data is
+			 * exactly the failure shape this project keeps getting caught by.
+			 * wait_max is enqueue->wire for the slowest frame -- the number
+			 * the bypass/gather A/B arms exist to compare. hwm grazing the
+			 * queue depth (box_pub.c) is the "grow it" signal. */
+			{
+				box_pub_stats_t ps;
+
+				box_pub_get_stats(&ps);
+				pub_periodic("dbg/pub_bulk_drop",   ps.bulk_dropped);
+				pub_periodic("dbg/pub_ev_drop",     ps.ev_dropped);
+				pub_periodic("dbg/pub_wire_drop",   ps.wire_dropped);
+				pub_periodic("dbg/pub_wait_max_us", ps.wait_max_us);
+				pub_periodic("dbg/pub_bulk_hwm",    ps.bulk_hwm);
+				pub_periodic("dbg/pub_gathers",     ps.gathers);
+				pub_periodic("dbg/pub_frames",      ps.gather_frames);
+			}
 
 			/* Cumulative 1 Hz beats the loop was too stalled to emit. Nonzero
 			 * means something held the loop for >1 s -- an OTA burst does this

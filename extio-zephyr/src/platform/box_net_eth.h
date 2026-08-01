@@ -54,6 +54,10 @@ int box_net_eth_poll(uint8_t *buf, int max);
 /* Send one frame; 0 if the whole frame went out, <0 otherwise. */
 int box_net_eth_send(const uint8_t *buf, int len);
 
+/* Gathered send (box_pub.c): len = k * 128. Returns frame-aligned bytes
+ * accepted, 0 = buffer full (retry later), -1 = no usable session. */
+int box_net_eth_send_stream(const uint8_t *buf, int len);
+
 /* ---- config server: dserv's connect-back for subscribed datapoints ---- */
 
 /* The port advertised in %reg. Same value as the Pico (CFG_PORT) so a rig's

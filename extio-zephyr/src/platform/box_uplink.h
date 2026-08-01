@@ -28,6 +28,7 @@ typedef struct {
 	int (*connected)(void);                      /* session up                   */
 	int (*poll)(uint8_t *buf, int max);          /* inbound; BOX_NET_RESET on connect */
 	int (*send)(const uint8_t *buf, int len);    /* one 128-byte frame out       */
+	int (*send_stream)(const uint8_t *buf, int len); /* k*128 gathered; bytes taken */
 	int (*self_register)(const box_config_t *cfg); /* announce to dserv on connect */
 } box_uplink_if;
 
@@ -43,6 +44,15 @@ int box_uplink_poll(uint8_t *buf, int max);
 
 /* Send one frame out the active uplink; 0 ok, <0 if none active / send failed. */
 int box_uplink_send(const uint8_t *buf, int len);
+
+/* Gathered send for the publisher thread (box_pub.c): len = k * 128. Returns
+ * frame-aligned bytes accepted, 0 = transport full (retry after a pause), -1 =
+ * no active/usable uplink (drop the remainder). */
+int box_uplink_send_stream(const uint8_t *buf, int len);
+
+/* 1 iff an uplink is active and its session is up -- the publisher's "is it
+ * worth dequeuing" gate. Frames enqueued while this is 0 simply wait. */
+int box_uplink_ready(void);
 
 /* Name of the active uplink ("eth"/"usb"), or "none". */
 const char *box_uplink_active_name(void);

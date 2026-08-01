@@ -3,6 +3,7 @@
  */
 #include "box_net_eth.h"
 #include "box_event.h"
+#include "dserv_msg.h"                  /* DSERV_MSG_LEN: the wire record size */
 
 #include <zephyr/kernel.h>
 #include <zephyr/net/net_if.h>
@@ -15,6 +16,10 @@
 static struct net_if *iface;
 static int sock = -1;
 static int connecting;          /* 1 = a non-blocking connect() is in flight */
+/* Unsent tail of a frame the socket half-took -- partial-frame custody; the
+ * mechanism and its rationale live with txp_flush() in the send section. */
+static uint8_t txp_buf[DSERV_MSG_LEN];
+static int     txp_len;
 
 /* ---- config server: dserv connects BACK here with our subscribed datapoints ----
  * Two sockets in opposite directions is dserv's subscription model, not a choice:
@@ -190,6 +195,7 @@ int box_net_eth_connect(const uint8_t dserv_ip[4], uint16_t port)
 	if (sock < 0) {
 		return -1;
 	}
+	txp_len = 0;                    /* no half-sent frame carries into a new session */
 	tcp_nodelay(sock);                       /* publishes are small and latency-critical */
 	zsock_fcntl(sock, ZVFS_F_SETFL, ZVFS_O_NONBLOCK);
 
@@ -427,6 +433,60 @@ void box_net_eth_send_stats(uint32_t *last_us, uint32_t *max_us)
 static unsigned uplink_eagain;
 static unsigned uplink_drops;      /* lifetime, for state/dbg */
 
+/* ---- partial-frame custody (txp_*) ----
+ *
+ * The wire format is fixed 128-byte records with NO framing bytes to resync on
+ * (dserv's '>' reader counts, it does not scan), so a frame that goes out in
+ * two pieces MUST NOT have another writer's frame spliced between the pieces
+ * -- that desyncs every record that follows. And two writers now exist: the
+ * publisher thread (gathered sends, box_pub.c) and the service loop (bypass
+ * mode, plus the stage-1 direct-send sites).
+ *
+ * So: the moment the socket takes PART of a frame, the transport takes custody
+ * of that frame's unsent tail. Every send path flushes the tail before writing
+ * anything new, and the partially-taken frame is reported to its caller as
+ * accepted -- it is no longer the caller's to retry or drop. The wire stays
+ * record-aligned no matter which thread shows up next (box_uplink's lock
+ * serializes the calls themselves).
+ *
+ * This replaces the old short-write policy -- close and reconnect, "a partial
+ * one is unusable anyway" -- which was right only while no caller could
+ * resume. Custody resumes. (txp_buf/txp_len are declared with the session
+ * state at the top of the file; connect() clears them for a new session.) */
+static void uplink_failed(const char *why);
+
+/* 0 = clear, -1 = tail still pending (buffer full), -2 = session died. */
+static int txp_flush(void)
+{
+	while (txp_len > 0) {
+		int n = zsock_send(sock, txp_buf, (size_t) txp_len, 0);
+
+		if (n < 0) {
+			int err = errno;
+
+			if (err == EAGAIN || err == EWOULDBLOCK) {
+				return -1;
+			}
+			uplink_failed("send error (pending tail)");
+			return -2;
+		}
+		if (n == 0) {
+			return -1;
+		}
+		txp_len -= n;
+		if (txp_len > 0) {
+			memmove(txp_buf, txp_buf + n, (size_t) txp_len);
+		}
+	}
+	return 0;
+}
+
+static void txp_stash(const uint8_t *tail, int len)
+{
+	memcpy(txp_buf, tail, (size_t) len);
+	txp_len = len;
+}
+
 static void uplink_failed(const char *why)
 {
 	printk("uplink: %s -- closing socket so it can be re-established\n", why);
@@ -436,6 +496,7 @@ static void uplink_failed(const char *why)
 	sock = -1;
 	connecting = 0;
 	uplink_eagain = 0;
+	txp_len = 0;                    /* the half-sent frame died with the session */
 }
 
 unsigned box_net_eth_uplink_drops(void) { return uplink_drops; }
@@ -457,6 +518,21 @@ int box_net_eth_send(const uint8_t *buf, int len)
 		uplink_drops++;
 		return -1;
 	}
+	int pf = txp_flush();
+
+	if (pf == -2) {
+		uplink_drops++;
+		return -1;
+	}
+	if (pf == -1) {
+		/* The socket still owes a prior frame's tail: nothing new may go out
+		 * ahead of it. Same accounting and strike logic as a full buffer. */
+		uplink_drops++;
+		if (++uplink_eagain >= UPLINK_EAGAIN_LIMIT) {
+			uplink_failed("peer not draining");
+		}
+		return -1;
+	}
 	uint32_t t0 = k_cycle_get_32();
 	int n = zsock_send(sock, buf, (size_t) len, 0);
 	int err = errno;
@@ -468,6 +544,14 @@ int box_net_eth_send(const uint8_t *buf, int len)
 	}
 
 	if (n == len) {
+		uplink_eagain = 0;
+		return 0;
+	}
+	if (n > 0) {
+		/* Short write: the socket took part of the frame, so the frame is no
+		 * longer droppable -- take custody of the tail (txp_*) and report it
+		 * sent. The old policy closed the connection here. */
+		txp_stash(buf + n, len - n);
 		uplink_eagain = 0;
 		return 0;
 	}
@@ -483,10 +567,79 @@ int box_net_eth_send(const uint8_t *buf, int len)
 		}
 		return -1;
 	}
-	/* Hard error, or a short write we cannot resume from mid-frame (the wire
-	 * format is fixed-length records, so a partial one is unusable anyway). */
-	uplink_failed(n < 0 ? "send error" : "short write");
+	if (n == 0) {
+		/* send() taking zero bytes without an error is a full buffer in
+		 * different clothes. */
+		if (++uplink_eagain >= UPLINK_EAGAIN_LIMIT) {
+			uplink_failed("peer not draining");
+		}
+		return -1;
+	}
+	uplink_failed("send error");
 	return -1;
+}
+
+/* Byte-granular send for GATHERED frames (box_pub.c). `len` must be a multiple
+ * of DSERV_MSG_LEN. Returns bytes accepted -- ALWAYS frame-aligned, because a
+ * partially-taken frame is stashed (txp_*) and reported as accepted -- or 0
+ * when the buffer is full (caller retries after a pause), or -1 when there is
+ * no usable session (caller drops the remainder, exactly what every frame got
+ * when the loop sent into a dead socket). */
+int box_net_eth_send_stream(const uint8_t *buf, int len)
+{
+	if (sock < 0 || connecting) {
+		return -1;
+	}
+	int pf = txp_flush();
+
+	if (pf == -2) {
+		return -1;
+	}
+	if (pf == -1) {
+		if (++uplink_eagain >= UPLINK_EAGAIN_LIMIT) {
+			uplink_failed("peer not draining");
+			return -1;
+		}
+		return 0;
+	}
+	uint32_t t0 = k_cycle_get_32();
+	int n = zsock_send(sock, buf, (size_t) len, 0);
+	int err = errno;
+	uint32_t dt = k_cyc_to_us_floor32(k_cycle_get_32() - t0);
+
+	send_last_us = dt;
+	if (dt > send_max_us) {
+		send_max_us = dt;
+	}
+
+	if (n < 0) {
+		if (err == EAGAIN || err == EWOULDBLOCK ||
+		    err == ENOTCONN || err == EINPROGRESS || err == EALREADY) {
+			if (++uplink_eagain >= UPLINK_EAGAIN_LIMIT) {
+				uplink_failed("peer not draining");
+				return -1;
+			}
+			return 0;
+		}
+		uplink_failed("send error");
+		return -1;
+	}
+	if (n == 0) {
+		if (++uplink_eagain >= UPLINK_EAGAIN_LIMIT) {
+			uplink_failed("peer not draining");
+			return -1;
+		}
+		return 0;
+	}
+	uplink_eagain = 0;
+
+	int rem = n % DSERV_MSG_LEN;
+
+	if (rem) {
+		txp_stash(buf + n, DSERV_MSG_LEN - rem);
+		n += DSERV_MSG_LEN - rem;        /* that frame is ours now: count it sent */
+	}
+	return n;
 }
 
 /* ---- in-stack residence time ----

@@ -136,3 +136,32 @@ int box_net_usb_client_send(const uint8_t *buf, int len)
 	}
 	return 0;
 }
+
+int box_net_usb_client_send_stream(const uint8_t *buf, int len)
+{
+	if (!box_net_usb_reading()) {
+		return -1;
+	}
+	/* Whole frames only: the ring is drained by the CDC ISR with no notion of
+	 * record boundaries, so a partial frame here would be a partial frame on
+	 * the wire. Truncating to frame granularity is what makes the caller's
+	 * resume-at-offset arithmetic stay record-aligned. */
+	uint32_t space = ring_buf_space_get(&tx_rb);
+	int take = (int) MIN((uint32_t) len, space);
+
+	take -= take % 128;                     /* the ring is declared in 128s too */
+	if (take == 0) {
+		return 0;
+	}
+	uint32_t t0 = k_cycle_get_32();
+
+	(void) ring_buf_put(&tx_rb, buf, (uint32_t) take);
+	uart_irq_tx_enable(data_dev);
+	uint32_t dt = k_cyc_to_us_floor32(k_cycle_get_32() - t0);
+
+	usend_last_us = dt;
+	if (dt > usend_max_us) {
+		usend_max_us = dt;
+	}
+	return take;
+}

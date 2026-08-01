@@ -36,6 +36,11 @@ void box_net_usb_send_stats(uint32_t *last_us, uint32_t *max_us, uint32_t *drops
 
 int box_net_usb_client_send(const uint8_t *buf, int len);
 
+/* Gathered send (box_pub.c): len = k * 128. Puts as many WHOLE frames as the
+ * TX ring has room for; returns that byte count (0 = ring full, -1 = host not
+ * draining). Frame-atomic by construction -- the ring never takes a partial. */
+int box_net_usb_client_send_stream(const uint8_t *buf, int len);
+
 /* 1 iff the host has the DATA tty open (DTR asserted) -- i.e. actually draining. */
 int box_net_usb_reading(void);
 

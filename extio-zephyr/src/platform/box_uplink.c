@@ -17,6 +17,20 @@
 static uint8_t strap_override(uint8_t persisted);   /* defined with the arbiter below */
 #endif
 
+/* Routine (successful, non-full) registration chatter. Off by default -- see
+ * the printk in the reg thread. Runtime only, deliberately NOT persisted: it is
+ * a debugging aid for the session you are in, and a box that boots chatty
+ * because of a setting saved months ago is its own small trap.
+ *
+ * OUTSIDE the networking guard: the console's `verbose` command links against
+ * these on every board, and a USB-only build (teensy40) has no registration to
+ * be verbose about but must still link. (Broken by the console command's
+ * arrival in 34fe2cfb; caught by the stage-1 publisher build sweep.) */
+static int reg_verbose;
+
+void box_uplink_set_verbose(int on) { reg_verbose = (on != 0); }
+int  box_uplink_verbose(void)       { return reg_verbose; }
+
 /* A box that has DECLARED Ethernet (persisted `mode eth`, or the strap pulled)
  * enumerates the console CDC only -- no binary data pipe. Otherwise a host sees
  * a pipe the box will never read: dserv's extio subprocess claims the port,
@@ -49,12 +63,14 @@ static int u_usb_connect(const box_config_t *c)   { (void) c; return 0; } /* enu
 static int u_usb_connected(void)                  { return box_net_usb_reading(); } /* host draining (DTR) */
 static int u_usb_poll(uint8_t *b, int m)          { return box_net_usb_server_poll(b, m); }
 static int u_usb_send(const uint8_t *b, int l)    { return box_net_usb_client_send(b, l); }
+static int u_usb_send_stream(const uint8_t *b, int l) { return box_net_usb_client_send_stream(b, l); }
 static int u_usb_register(const box_config_t *c)  { (void) c; return 0; } /* host module owns forwarding (v1) */
 
 static const box_uplink_if uplink_usb = {
 	.name = "usb", .init = u_usb_init, .available = u_usb_available,
 	.connect = u_usb_connect, .connected = u_usb_connected,
-	.poll = u_usb_poll, .send = u_usb_send, .self_register = u_usb_register,
+	.poll = u_usb_poll, .send = u_usb_send, .send_stream = u_usb_send_stream,
+	.self_register = u_usb_register,
 };
 
 /* Ethernet is only present on boards with a MAC+PHY (frdm_rw612, teensy41).
@@ -79,6 +95,7 @@ static int u_eth_connect(const box_config_t *c)   { return box_net_eth_connect(c
 static int u_eth_connected(void)                  { return box_net_eth_connected(); }
 static int u_eth_poll(uint8_t *b, int m)          { return box_net_eth_poll(b, m); }
 static int u_eth_send(const uint8_t *b, int l)    { return box_net_eth_send(b, l); }
+static int u_eth_send_stream(const uint8_t *b, int l) { return box_net_eth_send_stream(b, l); }
 /* ---- %reg / %match self-registration (Ethernet only) ----
  *
  * dserv forwards a datapoint to a subscriber only if some client has told it to,
@@ -124,14 +141,6 @@ static struct {
 } reg_req;
 
 /* Snapshot what the thread needs; never let it read the live config. */
-/* Routine (successful, non-full) registration chatter. Off by default -- see
- * the printk below. Runtime only, deliberately NOT persisted: it is a debugging
- * aid for the session you are in, and a box that boots chatty because of a
- * setting saved months ago is its own small trap. */
-static int reg_verbose;
-
-void box_uplink_set_verbose(int on) { reg_verbose = (on != 0); }
-int  box_uplink_verbose(void)       { return reg_verbose; }
 
 static void reg_request(const box_config_t *c, int full)
 {
@@ -284,13 +293,24 @@ static int u_eth_register(const box_config_t *c)
 static const box_uplink_if uplink_eth = {
 	.name = "eth", .init = u_eth_init, .available = u_eth_available,
 	.connect = u_eth_connect, .connected = u_eth_connected,
-	.poll = u_eth_poll, .send = u_eth_send, .self_register = u_eth_register,
+	.poll = u_eth_poll, .send = u_eth_send, .send_stream = u_eth_send_stream,
+	.self_register = u_eth_register,
 };
 #endif /* CONFIG_NETWORKING */
 
 /* ---- arbiter state ---- */
 
 static const box_uplink_if *active;
+
+/* Serializes every path that touches the active transport's session: the
+ * publisher thread's sends, the loop's bypass/direct sends, inbound poll, and
+ * the service pass that can close/reopen/SWAP the transport under all of them.
+ * Without it, box_pub closing a struck-out socket races the loop's recv on the
+ * same fd -- and with the reg thread opening sockets concurrently, a recycled
+ * fd number is a real hazard, not a theoretical one. Hold times are bounded:
+ * every send is non-blocking (EAGAIN returns, never waits) and connect() is
+ * the deliberately non-blocking one (box_net_eth.c). */
+static K_MUTEX_DEFINE(uplink_lock);
 #define ETH_PROMOTE_PASSES 20            /* debounce: carrier must hold before we pick eth */
 static int eth_streak;
 
@@ -411,7 +431,7 @@ static void eth_reg_watchdog(const box_config_t *cfg)
 }
 #endif
 
-void box_uplink_service(const box_config_t *cfg)
+static void uplink_service_locked(const box_config_t *cfg)
 {
 	const box_uplink_if *want = desired(cfg);
 
@@ -441,14 +461,56 @@ void box_uplink_service(const box_config_t *cfg)
 	}
 }
 
+void box_uplink_service(const box_config_t *cfg)
+{
+	k_mutex_lock(&uplink_lock, K_FOREVER);
+	uplink_service_locked(cfg);
+	k_mutex_unlock(&uplink_lock);
+}
+
 int box_uplink_poll(uint8_t *buf, int max)
 {
-	return active ? active->poll(buf, max) : 0;
+	k_mutex_lock(&uplink_lock, K_FOREVER);
+	int r = active ? active->poll(buf, max) : 0;
+
+	k_mutex_unlock(&uplink_lock);
+	return r;
 }
 
 int box_uplink_send(const uint8_t *buf, int len)
 {
-	return active ? active->send(buf, len) : -1;
+	k_mutex_lock(&uplink_lock, K_FOREVER);
+	int r = active ? active->send(buf, len) : -1;
+
+	k_mutex_unlock(&uplink_lock);
+	return r;
+}
+
+int box_uplink_send_stream(const uint8_t *buf, int len)
+{
+	k_mutex_lock(&uplink_lock, K_FOREVER);
+	int r;
+
+	if (!active) {
+		r = -1;
+	} else if (active->send_stream) {
+		r = active->send_stream(buf, len);
+	} else {
+		/* A transport without a stream op still takes one frame at a time --
+		 * correctness first, batching where supported. */
+		r = (active->send(buf, DSERV_MSG_LEN) == 0) ? DSERV_MSG_LEN : -1;
+	}
+	k_mutex_unlock(&uplink_lock);
+	return r;
+}
+
+int box_uplink_ready(void)
+{
+	k_mutex_lock(&uplink_lock, K_FOREVER);
+	int r = active && active->connected();
+
+	k_mutex_unlock(&uplink_lock);
+	return r;
 }
 
 const char *box_uplink_active_name(void)

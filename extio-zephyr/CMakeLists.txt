@@ -21,6 +21,7 @@ target_sources(app PRIVATE
 	src/platform/box_net_usb.c     # block #4: CDC-ACM frame transport
 	src/platform/box_event.c       # service-loop wakeup (ISR-driven)
 	src/platform/box_uplink.c      # block #6: uplink arbiter
+	src/platform/box_pub.c         # publish queues + the uplink-writer thread
 )
 
 # Persistent settings -- exactly one box_flash backend behind box_flash.h:
