@@ -47,9 +47,11 @@ class VariantOptionsModal {
         this.argName = argName;
         this.variant = this.essControl?.state?.currentVariant || '';
         this.testDirty = false;
+        this.preEditDecision = null;   // set async by _loadFileStatus
 
         this._buildModal();
         document.body.appendChild(this._overlay);
+        this._loadFileStatus();
 
         try {
             const raw = await this.connection.evalAsync(
@@ -62,11 +64,102 @@ class VariantOptionsModal {
                 label: o.bare ? '' : o.label,
                 value: o.value
             }));
+            this._origRows = this.rows.map(r => ({ ...r }));
             this._setTitle();
             this._renderRows();
         } catch (err) {
             this._showError(`Failed to load options: ${err.message}`);
         }
+    }
+
+    // Per-file 3-way status: warn before editing a stale or diverged
+    // file, and decide whether push-after-save is safe (only when the
+    // file matched the cloud before this edit).
+    async _loadFileStatus() {
+        const sys = this.essControl?.state?.currentSystem || '';
+        const proto = this.essControl?.state?.currentProtocol || '';
+        try {
+            const raw = await this.connection.evalAsync(
+                `send scripts {scripts::file_status {${this._tclSafe(sys)}} {${this._tclSafe(proto)}} variants}`);
+            this.preEditDecision = JSON.parse(raw).decision;
+        } catch (err) {
+            this.preEditDecision = 'unknown';
+        }
+        const banner = this._overlay?.querySelector('#varopt-banner');
+        if (!banner) return;
+        let msg = '';
+        let isError = false;
+        switch (this.preEditDecision) {
+            case 'pull':
+                msg = 'The cloud has a newer version of this variants file — '
+                    + 'Pull All in Sync Tasks first, or this edit may conflict.';
+                break;
+            case 'conflict':
+            case 'cold':
+                msg = 'This variants file has diverged from the cloud — resolve '
+                    + 'it in Sync Tasks before editing.';
+                isError = true;
+                break;
+            case 'keep_local':
+                msg = 'This file has other unpushed local changes — auto-push is '
+                    + 'off; push the whole file from Sync Tasks.';
+                break;
+            case 'local_only':
+                msg = 'This file is not on the cloud yet — push its system from '
+                    + 'Sync Tasks when ready.';
+                break;
+        }
+        banner.textContent = msg;
+        banner.hidden = !msg;
+        banner.classList.toggle('error', isError);
+        this._updateAutopushUI();
+    }
+
+    _autopushWanted() {
+        return localStorage.getItem('ess_varopt_autopush') !== '0';
+    }
+
+    // Auto-push is offered only when the file was clean before the edit
+    // and a registry user is selected (attribution).
+    _autopushAllowed() {
+        return this.preEditDecision === 'unchanged' &&
+               !!localStorage.getItem('ess_registry_user');
+    }
+
+    _updateAutopushUI() {
+        const cb = this._overlay?.querySelector('#varopt-autopush');
+        if (!cb) return;
+        const allowed = this._autopushAllowed();
+        cb.disabled = !allowed;
+        cb.checked = allowed && this._autopushWanted();
+        const label = this._overlay.querySelector('.ess-varopt-autopush');
+        if (!label) return;
+        if (!localStorage.getItem('ess_registry_user')) {
+            label.title = 'Select a user in Sync Tasks to enable pushing';
+        } else if (this.preEditDecision === 'keep_local') {
+            label.title = 'File has other unpushed changes — push from Sync Tasks';
+        } else if (this.preEditDecision !== 'unchanged') {
+            label.title = 'File is not in sync with the cloud';
+        } else {
+            label.title = '';
+        }
+    }
+
+    // Human-readable commit comment from the option-list delta.
+    _pushComment() {
+        const show = r => (r.label && r.label !== r.value)
+            ? `${r.label}=${r.value}` : r.value;
+        const before = (this._origRows || []).map(show);
+        const after = this.rows.map(show);
+        const added = after.filter(x => !before.includes(x));
+        const removed = before.filter(x => !after.includes(x));
+        const parts = [];
+        if (added.length) parts.push(`added ${added.join(', ')}`);
+        if (removed.length) parts.push(`removed ${removed.join(', ')}`);
+        if (!parts.length) parts.push('reordered options');
+        let c = `${this.variant}/${this.argName}: ${parts.join('; ')}`;
+        if (c.length > 120) c = c.slice(0, 117) + '...';
+        return c;
     }
 
     _close() {
@@ -86,6 +179,14 @@ class VariantOptionsModal {
             .replace(/</g, '&lt;')
             .replace(/>/g, '&gt;')
             .replace(/"/g, '&quot;');
+    }
+
+    // Strip characters that could break out of a braced Tcl word —
+    // used for names/comments interpolated into commands (option
+    // VALUES go through _tclBrace instead, since they may contain
+    // balanced braces).
+    _tclSafe(str) {
+        return String(str ?? '').replace(/[{}\[\]$\\;]/g, '');
     }
 
     // Wrap a string as one braced Tcl word. Values may contain braces
@@ -117,11 +218,16 @@ class VariantOptionsModal {
                     <button type="button" class="ess-modal-close" id="varopt-close">&times;</button>
                 </div>
                 <div class="ess-modal-body">
+                    <div class="ess-varopt-banner" id="varopt-banner" hidden></div>
                     <div class="ess-varopt-hint">First option is the default. Leave the label
                         empty for plain values; use a label when the dropdown should show a
                         name for a longer value.</div>
                     <div id="varopt-rows"></div>
                     <button type="button" class="ess-modal-btn cancel ess-varopt-add" id="varopt-add">+ Add option</button>
+                    <label class="ess-varopt-autopush">
+                        <input type="checkbox" id="varopt-autopush">
+                        Push to cloud after save
+                    </label>
                     <div class="ess-varopt-status" id="varopt-status"></div>
                 </div>
                 <div class="ess-modal-footer">
@@ -143,6 +249,9 @@ class VariantOptionsModal {
             inputs[inputs.length - 1]?.focus();
         });
         this._overlay.querySelector('#varopt-save').addEventListener('click', () => this._save());
+        this._overlay.querySelector('#varopt-autopush').addEventListener('change', (e) => {
+            localStorage.setItem('ess_varopt_autopush', e.target.checked ? '1' : '0');
+        });
 
         const rowsEl = this._overlay.querySelector('#varopt-rows');
         rowsEl.addEventListener('click', (e) => {
@@ -271,6 +380,34 @@ class VariantOptionsModal {
             await this.connection.evalAsync('ess::reload_variant', 60000);
             this.testDirty = false;
             this.log(`Options for '${this.argName}' saved (${result}) and variant reloaded`, 'info');
+
+            // Push-after-save: only the safe case — file was in sync with
+            // the cloud before this edit, a user is selected, and the
+            // checkbox is on. Failure never loses work: the save and
+            // reload already happened; the file just stays local.
+            const cb = this._overlay.querySelector('#varopt-autopush');
+            if (cb && cb.checked && !cb.disabled) {
+                this._showStatus('Pushing to cloud...');
+                const sys = this._tclSafe(this.essControl?.state?.currentSystem || '');
+                const proto = this._tclSafe(this.essControl?.state?.currentProtocol || '');
+                const user = this._tclSafe(localStorage.getItem('ess_registry_user') || '');
+                const comment = this._tclSafe(this._pushComment());
+                try {
+                    await this.connection.evalAsync(
+                        `send scripts {scripts::push_file {${sys}} {${proto}} variants`
+                        + ` -user {${user}} -comment {${comment}}}`, 30000);
+                    this.log(`Pushed ${proto} variants to cloud: ${comment}`, 'info');
+                } catch (err) {
+                    this.log(`Variants saved locally; push failed: ${err.message}`, 'warn');
+                    this._showError(`Saved & reloaded, but the push failed: ${err.message}`
+                        + ' — push from Sync Tasks.');
+                    return;   // leave the dialog open so the note is seen
+                }
+            } else {
+                // badge refresh for the save-without-push path
+                this.connection.evalAsync('sendNoReply scripts {scripts::dirty}')
+                    .catch(() => {});
+            }
             this._close();
         } catch (err) {
             this._showError(`Save failed: ${err.message}`);

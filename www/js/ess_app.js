@@ -102,6 +102,7 @@ async function init() {
         initHostnameDisplay();
         initJuiceIndicator();
         initBatteryIndicator();
+        initSyncDirtyBadge();
         
         // Small delay to ensure subscriptions are registered on server
         // before we touch the datapoints
@@ -809,6 +810,42 @@ function reconnect() {
                 log(`Reconnection failed: ${e.message}`, 'error');
             });
         }, 500);
+    }
+}
+
+/**
+ * Unpushed-changes badge on the Sync Tasks button, fed by scripts/dirty
+ * (a purely local scan in the scripts subprocess: files differing from
+ * their .sync_base entries plus canonical local-new files). Refreshed
+ * after sync/push operations and every few minutes by the subprocess.
+ */
+function initSyncDirtyBadge() {
+    const btn = document.getElementById('sync-btn');
+    if (!btn || !dpManager) return;
+
+    let badge = document.getElementById('sync-dirty-badge');
+    if (!badge) {
+        badge = document.createElement('span');
+        badge.id = 'sync-dirty-badge';
+        badge.hidden = true;
+        btn.appendChild(badge);
+    }
+
+    dpManager.subscribe('scripts/dirty', (data) => {
+        try {
+            const d = JSON.parse(data.value !== undefined ? data.value : data.data);
+            const n = d.count || 0;
+            badge.textContent = n;
+            badge.hidden = n === 0;
+            btn.title = n === 0
+                ? 'Sync tasks with the cloud (pull / push)'
+                : `${n} unpushed local change(s):\n${(d.files || []).join('\n')}`;
+        } catch (e) { /* ignore malformed */ }
+    });
+
+    // Subscriptions only fire on change — ask for the current value.
+    if (connection?.evalAsync) {
+        connection.evalAsync('catch {dservTouch scripts/dirty}').catch(() => {});
     }
 }
 
