@@ -248,7 +248,6 @@ class ESSControl {
                             </select>
                         </div>
                         <button id="ess-reload-system" class="ess-reload-btn" title="Reload System">↻</button>
-                        <button id="ess-clone-system" class="ess-reload-btn" title="New system (clone an existing one)">+</button>
                     </div>
 
                     <!-- Protocol -->
@@ -260,7 +259,6 @@ class ESSControl {
                             </select>
                         </div>
                         <button id="ess-reload-protocol" class="ess-reload-btn" title="Reload Protocol">↻</button>
-                        <button id="ess-clone-protocol" class="ess-reload-btn" title="New protocol (clone an existing one)">+</button>
                     </div>
                     
                     <!-- Variant -->
@@ -646,10 +644,14 @@ class ESSControl {
         });
         
         this.elements.systemSelect.addEventListener('change', (e) => {
+            if (this.handleCloneOption(e.target, e.target.value, 'system',
+                    this.state.currentSystem)) return;
             this.setSystem(e.target.value);
         });
-        
+
         this.elements.protocolSelect.addEventListener('change', (e) => {
+            if (this.handleCloneOption(e.target, e.target.value, 'protocol',
+                    this.state.currentProtocol)) return;
             this.setProtocol(e.target.value);
         });
         
@@ -662,13 +664,6 @@ class ESSControl {
         this.elements.reloadSystem.addEventListener('click', () => this.reloadSystem());
         this.elements.reloadProtocol.addEventListener('click', () => this.reloadProtocol());
         this.elements.reloadVariant.addEventListener('click', () => this.reloadVariant());
-
-        this.container.querySelector('#ess-clone-system')?.addEventListener('click', () => {
-            if (typeof cloneScriptDialog === 'function') cloneScriptDialog('system');
-        });
-        this.container.querySelector('#ess-clone-protocol')?.addEventListener('click', () => {
-            if (typeof cloneScriptDialog === 'function') cloneScriptDialog('protocol');
-        });
         
         // Auto-reload checkbox
         this.elements.autoReloadCheckbox.addEventListener('change', (e) => {
@@ -1130,10 +1125,38 @@ class ESSControl {
         } else {
             this.populateSelect(this.elements.systemSelect, systems, '-- Select System --');
         }
-        
+        this.appendCloneOption(this.elements.systemSelect, 'system');
+
         if (this.state.currentSystem) {
             this.updateSelectValue(this.elements.systemSelect, this.state.currentSystem);
         }
+    }
+
+    /**
+     * Append a separated "New system/protocol…" entry to a selector.
+     * Selecting it opens the clone dialog (see handleCloneOption) and the
+     * selector snaps back to the current value.
+     */
+    appendCloneOption(select, kind) {
+        const sep = document.createElement('option');
+        sep.disabled = true;
+        sep.textContent = '─────────────';
+        select.appendChild(sep);
+        const opt = document.createElement('option');
+        opt.value = '__clone__';
+        opt.textContent = kind === 'system' ? 'New system…' : 'New protocol…';
+        select.appendChild(opt);
+    }
+
+    /**
+     * Intercept the "New …" entry: restore the selector to the current
+     * value and open the clone dialog. Returns true when intercepted.
+     */
+    handleCloneOption(select, value, kind, currentValue) {
+        if (value !== '__clone__') return false;
+        select.value = currentValue || '';
+        if (typeof cloneScriptDialog === 'function') cloneScriptDialog(kind);
+        return true;
     }
 
   /**
@@ -1183,6 +1206,7 @@ class ESSControl {
         const protocols = this.parseListData(data);
         this.state.protocols = protocols;
         this.populateSelect(this.elements.protocolSelect, protocols, '-- Select Protocol --');
+        this.appendCloneOption(this.elements.protocolSelect, 'protocol');
         if (this.state.currentProtocol) {
             this.updateSelectValue(this.elements.protocolSelect, this.state.currentProtocol);
         }
