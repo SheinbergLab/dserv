@@ -37,4 +37,9 @@ scripts::init
 # ess::sync_base hack in essconf.tcl.)
 dservAfter 5000 scripts::initial_sync
 
+# Periodic unpushed-changes scan (scripts/dirty, feeds the Sync badge).
+# Purely local (base-manifest compare, no network); self-re-arms every
+# 5 minutes so out-of-band edits surface without any GUI action.
+dservAfter 8000 scripts::_dirty_periodic
+
 puts "scripts subprocess configured"
