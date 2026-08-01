@@ -80,6 +80,12 @@ source [file join $dspath config/commands.tcl]
 # add ability to call ess functions from main tclserver
 source [file join $dspath config/essctrl.tcl]
 
+# start the script-management subprocess (registry sync/push/preview/diff
+# engine; keeps registry HTTP and tree hashing off the ess and main
+# interps — see config/scriptsconf.tcl). Runs the deferred initial
+# workgroup sync a few seconds after boot.
+subprocess scripts "source [file join $dspath config/scriptsconf.tcl]"
+
 # start a visualization process
 subprocess viz "source [file join $dspath config/vizconf.tcl]"
 
