@@ -773,6 +773,7 @@ namespace eval scripts {
         }
         _manifest_invalidate
         _set_state idle pull_all
+        catch { dirty }
         catch { dservSet scripts/last_sync [clock seconds] }
         return [_publish_result sync_result [dict create op pull_all \
             pulled [dict get $result pulled] \
@@ -801,6 +802,7 @@ namespace eval scripts {
         }
         _manifest_invalidate
         _set_state idle pull
+        catch { dirty }
         catch { dservSet scripts/last_sync [clock seconds] }
         return [_publish_result sync_result [dict create op pull system $system \
             pulled [dict get $result pulled] \
@@ -870,6 +872,7 @@ namespace eval scripts {
         }
         _manifest_invalidate
         _set_state idle push
+        catch { dirty }
         return [_publish_result push_result $result]
     }
 
@@ -979,6 +982,228 @@ namespace eval scripts {
         catch { set new_cs [json_get $response checksum] }
         if {$new_cs eq ""} { set new_cs [sha256 $content] }
         return $new_cs
+    }
+
+    # ── Per-file status / push (divergence mitigation) ──────────────
+    #
+    # file_status: the 3-way decision for ONE script — what a preview
+    # computes per file, served from the manifest cache. The variant
+    # editor uses it to warn before editing a stale/diverged file and
+    # to decide whether auto-push is safe (only when "unchanged").
+    #
+    # push_file: push ONE script with expectedChecksum concurrency, for
+    # the dialog's push-after-save. Never scaffolds, never touches
+    # other files or libs — the whole point is a minimal, safe push.
+    #
+
+    proc file_status {system protocol type args} {
+        set force 0
+        foreach a $args { if {$a in {-fresh -force}} { set force 1 } }
+        _require_registry
+        set data [_manifest_fetch main $force]
+
+        set filename [ess::_script_filename $system $protocol $type]
+        set relkey [_relkey $protocol $filename]
+        set project $::ess::current(project)
+        set local_file [file join $::ess::system_path $project $system $relkey]
+
+        lassign [_manifest_find_system $data $system] sys_exists sys_entry
+        set reg_cs ""
+        if {$sys_exists} {
+            set server_scripts [_manifest_scripts_of $sys_entry]
+            if {[dict exists $server_scripts $relkey]} {
+                set reg_cs [dict get $server_scripts $relkey checksum]
+            }
+        }
+
+        set local_cs ""
+        if {[file exists $local_file]} { set local_cs [sha256 -file $local_file] }
+
+        if {$reg_cs eq ""} {
+            set decision [expr {$local_cs eq "" ? "missing" : "local_only"}]
+        } elseif {$local_cs eq ""} {
+            set decision pull
+        } elseif {$local_cs eq $reg_cs} {
+            set decision unchanged
+        } else {
+            set manifest [ess::_base_manifest_read \
+                [ess::_base_manifest_path $project $system]]
+            set decision [ess::_base_decide \
+                [ess::_base_entry_get $manifest $relkey] $local_cs $reg_cs]
+        }
+
+        set obj [yajl create #auto]
+        $obj map_open
+        $obj string system string $system
+        $obj string protocol string $protocol
+        $obj string type string $type
+        $obj string relkey string $relkey
+        $obj string decision string $decision
+        $obj string registryExists bool [expr {$reg_cs ne ""}]
+        $obj string localExists bool [expr {$local_cs ne ""}]
+        $obj string ts number [clock seconds]
+        $obj map_close
+        set json [$obj get]
+        $obj delete
+        return $json
+    }
+
+    proc push_file {system protocol type args} {
+        _require_registry
+        set user ""
+        set comment ""
+        foreach {k v} $args {
+            switch -- $k {
+                -user    { set user $v }
+                -comment { set comment $v }
+                default  { error "push_file: unknown option $k" }
+            }
+        }
+        if {$user eq ""} {
+            catch {
+                if {[dservExists ess/registry/user]} {
+                    set user [dservGet ess/registry/user]
+                }
+            }
+        }
+        if {$user eq "" && [info exists ::env(USER)]} { set user $::env(USER) }
+        if {$user ne ""} {
+            set role [ess::_get_user_role $user]
+            if {$role eq "viewer"} {
+                error "User '$user' has role 'viewer' and cannot push"
+            }
+        }
+        if {$comment eq ""} { set comment "pushed from dserv" }
+
+        set data [_manifest_fetch main 1]
+        lassign [_manifest_find_system $data $system] sys_exists sys_entry
+        if {!$sys_exists} {
+            error "system '$system' not on the registry — push it from Sync Tasks first"
+        }
+
+        set filename [ess::_script_filename $system $protocol $type]
+        set relkey [_relkey $protocol $filename]
+        set project $::ess::current(project)
+        set local_file [file join $::ess::system_path $project $system $relkey]
+        if {![file exists $local_file]} { error "local file missing: $relkey" }
+
+        set server_scripts [_manifest_scripts_of $sys_entry]
+        set reg_cs ""
+        if {[dict exists $server_scripts $relkey]} {
+            set reg_cs [dict get $server_scripts $relkey checksum]
+        }
+        if {$reg_cs ne "" && [sha256 -file $local_file] eq $reg_cs} {
+            return [_publish_result push_result [dict create op push_file \
+                system $system relkey $relkey pushed 0 unchanged 1 errors {}]]
+        }
+
+        set entry [dict create relkey $relkey protocol $protocol type $type \
+            filename $filename checksum $reg_cs]
+        set mpath [ess::_base_manifest_path $project $system]
+        set manifest [ess::_base_manifest_read $mpath]
+        set cs [_put_script $system $project $entry $user $comment $manifest]
+        ess::_base_entry_set manifest $relkey $cs main $user
+        ess::_base_manifest_write $mpath $manifest
+
+        _manifest_invalidate
+        dirty
+        ess::ess_info "Pushed $system/$relkey to registry" "sync"
+        return [_publish_result push_result [dict create op push_file \
+            system $system relkey $relkey pushed 1 unchanged 0 errors {}]]
+    }
+
+    # ── Unpushed-changes scan (the Sync badge) ──────────────────────
+    #
+    # Purely LOCAL: compares tracked files against their .sync_base
+    # entries (modified/deleted since last sync or push) and counts
+    # canonical local-new files (the pushable ones — utility scripts
+    # and backups are excluded so the badge can reach zero). No
+    # network. Publishes scripts/dirty; _dirty_periodic re-arms itself
+    # so out-of-band edits (an LLM writing files) surface within a few
+    # minutes.
+    #
+
+    proc _dirty_scan_system {system files_var} {
+        upvar 1 $files_var files
+        set project $::ess::current(project)
+        set sys_dir [file join $::ess::system_path $project $system]
+        set manifest [ess::_base_manifest_read \
+            [ess::_base_manifest_path $project $system]]
+        set entries [dict get $manifest entries]
+        set local [_scan_local $sys_dir]
+
+        dict for {relkey e} $entries {
+            if {![dict exists $local $relkey]} {
+                lappend files "$system/$relkey (deleted)"
+            } elseif {[sha256 -file [dict get $local $relkey]] ne \
+                          [dict get $e checksum]} {
+                lappend files "$system/$relkey"
+            }
+        }
+        dict for {relkey path} $local {
+            if {[dict exists $entries $relkey]} continue
+            lassign [_derive_proto_type $system $relkey] proto stype
+            if {[ess::_script_filename $system $proto $stype] eq \
+                    [file tail $relkey]} {
+                lappend files "$system/$relkey (new)"
+            }
+        }
+    }
+
+    proc dirty {} {
+        set project $::ess::current(project)
+        set root [file join $::ess::system_path $project]
+        set files {}
+
+        foreach d [glob -nocomplain -type d [file join $root *]] {
+            set name [file tail $d]
+            if {[string match .* $name] || $name eq "lib"} continue
+            catch { _dirty_scan_system $name files }
+        }
+
+        # shared libs vs their base manifest + canonical local-new libs
+        catch {
+            set lib_dir [file join $root lib]
+            set manifest [ess::_base_manifest_read \
+                [ess::_base_lib_manifest_path $project]]
+            set entries [dict get $manifest entries]
+            dict for {fname e} $entries {
+                set f [file join $lib_dir $fname]
+                if {![file exists $f]} {
+                    lappend files "lib/$fname (deleted)"
+                } elseif {[sha256 -file $f] ne [dict get $e checksum]} {
+                    lappend files "lib/$fname"
+                }
+            }
+            foreach f [glob -nocomplain -directory $lib_dir *.tm] {
+                set fname [file tail $f]
+                if {![dict exists $entries $fname] &&
+                    [regexp {^(.+)-(\d[\d.]*)\.tm$} $fname]} {
+                    lappend files "lib/$fname (new)"
+                }
+            }
+        }
+
+        set files [lsort $files]
+        set obj [yajl create #auto]
+        $obj map_open
+        $obj string count number [llength $files]
+        $obj string files
+        _str_array $obj [lrange $files 0 49]
+        $obj string ts number [clock seconds]
+        $obj map_close
+        set json [$obj get]
+        $obj delete
+        catch { dservSet scripts/dirty $json }
+        return $json
+    }
+
+    # Self-re-arming periodic dirty scan. Armed ONCE at boot (see
+    # scriptsconf); scripts::dirty itself never re-arms, so on-demand
+    # calls don't stack timers.
+    proc _dirty_periodic {} {
+        catch { dirty }
+        catch { dservAfter 300000 scripts::_dirty_periodic }
     }
 
     # ── Local-first cloning (new protocol / new system) ─────────────
