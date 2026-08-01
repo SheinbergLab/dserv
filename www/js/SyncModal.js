@@ -486,7 +486,10 @@ class SyncModal {
                 title: 'New local file, not on the cloud yet.',
                 kind: isLibs ? 'lib' : 'script',
                 system,
-                diffable: false
+                diffable: false,
+                // local-only files can be stashed to <project>/.trash
+                stashable: true,
+                stashPath: isLibs ? `lib/${relkey}` : `${system}/${relkey}`
             });
         }
 
@@ -506,15 +509,18 @@ class SyncModal {
     _renderChangedFileList(files, rowKey) {
         const items = files.map((f, idx) => {
             const arrow = f.where === 'cloud' ? '↓' : (f.where === 'conflict' ? '⚠' : '↑');
-            let actions = '';
+            const links = [];
             if (f.diffable) {
-                actions = `<span class="ess-sync-file-actions">` +
-                    `<a href="#" class="ess-sync-action" data-action="diff" data-row="${this._escapeHtml(rowKey)}" data-idx="${idx}">diff</a>`;
+                links.push(`<a href="#" class="ess-sync-action" data-action="diff" data-row="${this._escapeHtml(rowKey)}" data-idx="${idx}">diff</a>`);
                 if (f.kind === 'script') {
-                    actions += ` <a href="#" class="ess-sync-action" data-action="history" data-row="${this._escapeHtml(rowKey)}" data-idx="${idx}">history</a>`;
+                    links.push(`<a href="#" class="ess-sync-action" data-action="history" data-row="${this._escapeHtml(rowKey)}" data-idx="${idx}">history</a>`);
                 }
-                actions += `</span>`;
             }
+            if (f.stashable) {
+                links.push(`<a href="#" class="ess-sync-action ess-sync-action-stash" data-action="stash" data-row="${this._escapeHtml(rowKey)}" data-idx="${idx}" title="Move to .trash (kept ~30 days) — removes it from the tree and the badge">stash</a>`);
+            }
+            const actions = links.length
+                ? `<span class="ess-sync-file-actions">${links.join(' ')}</span>` : '';
             return `<li class="ess-sync-file-item ess-sync-where-${f.where}" title="${this._escapeHtml(f.title)}">`
                 + `${arrow} ${this._escapeHtml(f.label)} `
                 + `<span class="ess-sync-badge ess-sync-badge-${f.where}">${this._escapeHtml(f.badge)}</span>`
@@ -710,6 +716,23 @@ class SyncModal {
         const f = (this._rowFiles[rowKey] || [])[idx];
         const el = this._fileDetailEl(rowKey, idx);
         if (!f || !el) return;
+
+        if (action === 'stash') {
+            if (!confirm(`Move ${f.label} to the trash?\n\nIt leaves the tree (and the badge) now and stays recoverable in .trash/ for ~30 days.`)) {
+                return;
+            }
+            el.hidden = false;
+            el.innerHTML = '<div class="ess-modal-loading">Stashing...</div>';
+            try {
+                await this._exec(`scripts::stash {${this._tclSafe(f.stashPath)}}`);
+                this.log(`Stashed ${f.stashPath} — recoverable in .trash/ for ~30 days`, 'info');
+                delete this.pushPreviews[rowKey];
+                await this._loadPullPreview();
+            } catch (err) {
+                el.innerHTML = `<div class="ess-modal-error">${this._escapeHtml(err.message)}</div>`;
+            }
+            return;
+        }
 
         // Toggle off if the same view is already open.
         if (!el.hidden && el.dataset.view === action) {

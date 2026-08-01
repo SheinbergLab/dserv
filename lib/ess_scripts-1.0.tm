@@ -1226,7 +1226,115 @@ namespace eval scripts {
     # calls don't stack timers.
     proc _dirty_periodic {} {
         catch { dirty }
+        catch { _trash_expire }
         catch { dservAfter 300000 scripts::_dirty_periodic }
+    }
+
+    # ── Stash (trash can for local-only files) ──────────────────────
+    #
+    # Moves an untracked file out of the tree into <project>/.trash/
+    # (dotdir — invisible to every scan and to ess), named
+    # <timestamp>_<flattened-relpath> like .sync_displaced entries.
+    # Files synced with the registry are refused: stash is for local
+    # leftovers (old _settings files, abandoned fragments), not for
+    # deleting tracked scripts. The periodic scan empties trash entries
+    # older than ~30 days; scripts::trash_list shows what's waiting.
+    # Restore by hand: mv the file back and rename.
+    #
+
+    proc stash {relpath} {
+        set project $::ess::current(project)
+        set root [file join $::ess::system_path $project]
+
+        if {[file pathtype $relpath] ne "relative" ||
+            [lsearch -exact [file split $relpath] ".."] >= 0} {
+            error "invalid path '$relpath'"
+        }
+        set src [file join $root $relpath]
+        if {![file isfile $src]} { error "not a file: $relpath" }
+
+        # Refuse anything the registry knows about (tracked in a base
+        # manifest) — those are managed by sync, not the trash can.
+        set parts [file split $relpath]
+        if {[lindex $parts 0] eq "lib"} {
+            set manifest [ess::_base_manifest_read \
+                [ess::_base_lib_manifest_path $project]]
+            set key [file tail $relpath]
+        } else {
+            set manifest [ess::_base_manifest_read \
+                [ess::_base_manifest_path $project [lindex $parts 0]]]
+            set key [join [lrange $parts 1 end] /]
+        }
+        if {[ess::_base_entry_get $manifest $key] ne ""} {
+            error "$relpath is synced with the registry — delete it through\
+                sync tools, not the trash"
+        }
+
+        set trash_dir [file join $root .trash]
+        if {![file exists $trash_dir]} {
+            ess::paths::mkdir_matching_owner $trash_dir
+        }
+        set stamp [clock format [clock seconds] -format "%Y%m%d_%H%M%S"]
+        set flat [string map {/ _} $relpath]
+        set dst [file join $trash_dir "${stamp}_${flat}"]
+        file rename $src $dst
+
+        catch { dirty }
+        ess::ess_info "Stashed $relpath -> .trash/[file tail $dst]" "scripts"
+
+        set obj [yajl create #auto]
+        $obj map_open
+        $obj string op string stash
+        $obj string path string $relpath
+        $obj string trash string [file tail $dst]
+        $obj string ts number [clock seconds]
+        $obj map_close
+        set json [$obj get]
+        $obj delete
+        return $json
+    }
+
+    proc trash_list {} {
+        set root [file join $::ess::system_path $::ess::current(project) .trash]
+        set now [clock seconds]
+        set obj [yajl create #auto]
+        $obj map_open
+        $obj string files array_open
+        foreach f [lsort [glob -nocomplain -directory $root *]] {
+            if {![file isfile $f]} continue
+            $obj map_open
+            $obj string name string [file tail $f]
+            $obj string ageDays number [expr {($now - [file mtime $f]) / 86400}]
+            $obj string size number [file size $f]
+            $obj map_close
+        }
+        $obj array_close
+        $obj string ts number $now
+        $obj map_close
+        set json [$obj get]
+        $obj delete
+        return $json
+    }
+
+    proc _trash_expire {{max_age_days 30}} {
+        set root [file join $::ess::system_path $::ess::current(project) .trash]
+        set cutoff [expr {[clock seconds] - $max_age_days * 86400}]
+        foreach f [glob -nocomplain -directory $root *] {
+            if {![file isfile $f]} continue
+            # Age from the STASH timestamp in the filename — never the
+            # file's own mtime, which rename preserves: an old leftover
+            # would otherwise expire at the first sweep instead of 30
+            # days after stashing. (Learned the hard way.)
+            set t 0
+            if {[regexp {^(\d{8})_(\d{6})_} [file tail $f] -> d hms]} {
+                catch { set t [clock scan "${d}${hms}" -format %Y%m%d%H%M%S] }
+            }
+            if {$t == 0} { set t [file mtime $f] }
+            if {$t < $cutoff} {
+                catch { file delete $f }
+                ess::ess_info "Trash expired: [file tail $f]" "scripts"
+            }
+        }
     }
 
     # ── Local-first cloning (new protocol / new system) ─────────────

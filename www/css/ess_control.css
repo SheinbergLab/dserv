@@ -5017,3 +5017,11 @@ select.ess-param-select {
     color: var(--ess-text-muted);
     cursor: default;
 }
+
+.ess-sync-action-stash {
+    color: var(--ess-text-muted);
+}
+
+.ess-sync-action-stash:hover {
+    color: var(--ess-error, #f87171);
+}
