@@ -209,12 +209,21 @@ proc detect_board_type {} {
         return "orangepi5"
     } elseif { [string match "*Orange Pi*" $model] || [string match "*OrangePi*" $model] } {
         return "orangepi"
+    } elseif { [string match "*FRDM-IMX93*" $model] } {
+        return "imx93"
     }
 
     return "unknown"
 }
 
 # GPIO chip mapping by board type
+#
+# imx93 -> gpiochip0 is a native SoC GPIO bank (not the onboard PCAL6524 I2C
+# expander -- that has USER_BTN1/USER_BTN2 on lines 5/6, but this rig gets its
+# buttons from extio boxes instead, so they're unused here). Confirmed
+# empirically with an LED HAT (no schematic was available) that gpiochip0
+# offset N drives 40-pin header net GPIO_IOn directly -- see
+# local/post-pins.tcl for the obs-sync line this is actually used for.
 set gpio_chip_map {
     x86_64       /dev/gpiochip1
     rpi5         /dev/gpiochip4
@@ -227,6 +236,7 @@ set gpio_chip_map {
     orangepi5    /dev/gpiochip3
     orangepi5plus /dev/gpiochip3
     orangepi     /dev/gpiochip0
+    imx93        /dev/gpiochip0
     unknown      /dev/gpiochip0
 }
 

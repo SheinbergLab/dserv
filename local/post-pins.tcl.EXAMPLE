@@ -33,6 +33,20 @@ switch $board_type {
         gpioLineRequestOutput 46  ;# P2.04 - obs sync output
 	::ess::set_obs_pin 46
     }
+    "imx93" {
+        # FRDM-IMX93 defaults. No buttons here -- this rig gets buttons from
+        # extio boxes instead, so we only wire the obs-sync output.
+        #
+        # 40-pin header (P11) obs-sync output, on the NATIVE SoC GPIO bank
+        # (essconf opens /dev/gpiochip0 for this board) -- confirmed
+        # empirically with an LED HAT (no schematic was available): gpiochip0
+        # offset N drives header net GPIO_IOn directly. That numbering mirrors
+        # a real Raspberry Pi's BCM GPIO-by-position layout, so header pin 37
+        # here is the same physical position as BCM26 on an RPi -- the pin the
+        # rpi/rpi4/rpi5/beagley-ai case above already uses for obs sync.
+        gpioLineRequestOutput 26  ;# header pin 37 / GPIO_IO26 - obs sync output
+	::ess::set_obs_pin 26
+    }
     default {
         # Safe defaults for unknown boards
         # Don't configure any pins by default
