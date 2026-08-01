@@ -1379,9 +1379,21 @@ updateConfigRunButtons() {
             select.addEventListener('change', (e) => {
                 this.onVariantOptionChange(argName, e.target.value);
             });
-            
+
+            const editBtn = document.createElement('button');
+            editBtn.className = 'ess-option-edit-btn';
+            editBtn.type = 'button';
+            editBtn.title = `Edit the option list for ${argName}`;
+            editBtn.textContent = '✎';
+            editBtn.addEventListener('click', () => {
+                if (typeof editVariantOptions === 'function') {
+                    editVariantOptions(argName);
+                }
+            });
+
             row.appendChild(label);
             row.appendChild(select);
+            row.appendChild(editBtn);
             container.appendChild(row);
         });
     }

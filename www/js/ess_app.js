@@ -813,6 +813,23 @@ function reconnect() {
 }
 
 /**
+ * Open the option-list editor for one loader parameter (the ✎ next to
+ * each dropdown in the Variant Options panel). Edits the variants file
+ * surgically, tests via ess::test_loader, and reloads on save.
+ */
+let variantOptionsModal = null;
+function editVariantOptions(argName) {
+    if (!connection || !connection.connected) {
+        log('Cannot edit options: not connected to dserv', 'error');
+        return;
+    }
+    if (!variantOptionsModal) {
+        variantOptionsModal = new VariantOptionsModal({ connection, dpManager, essControl, log });
+    }
+    variantOptionsModal.open(argName);
+}
+
+/**
  * Open the Cloud Sync dialog (SyncModal.js), backed by the `scripts`
  * subprocess: workgroup-wide pull/push previews with 3-way status,
  * per-file diffs, version history, and pull/push actions.

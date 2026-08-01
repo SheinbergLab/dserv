@@ -278,13 +278,19 @@ class DservConnection {
         }
 
         // requestId-matched responses (evalAsync): resolve exactly the
-        // request that asked, never FIFO. Errors reject the promise.
+        // request that asked, never FIFO. Errors reject the promise —
+        // including cross-interp errors, which `send` reports as a
+        // *successful* result string prefixed "!TCL_ERROR " (the send
+        // command itself always returns TCL_OK).
         if (typeof data === 'object' && data.requestId &&
             this.pendingRequests.has(data.requestId)) {
             const req = this.pendingRequests.get(data.requestId);
             this.pendingRequests.delete(data.requestId);
             if (data.status === 'error') {
                 req.reject(new Error(data.error || 'Tcl error'));
+            } else if (typeof data.result === 'string' &&
+                       data.result.startsWith('!TCL_ERROR ')) {
+                req.reject(new Error(data.result.slice(11).trim()));
             } else {
                 req.resolve(data.result !== undefined ? data.result : '');
             }

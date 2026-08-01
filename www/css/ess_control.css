@@ -4855,3 +4855,114 @@ select.ess-param-select {
 .ess-sync-hist-back {
     margin: 4px 0;
 }
+
+/* Variant option-list editor */
+.ess-option-edit-btn {
+    background: transparent;
+    border: none;
+    color: var(--ess-text-muted);
+    cursor: pointer;
+    font-size: 12px;
+    padding: 2px 4px;
+    line-height: 1;
+}
+
+.ess-option-edit-btn:hover {
+    color: var(--ess-accent);
+}
+
+.ess-varopt-modal {
+    width: min(560px, 94vw);
+    max-height: 85vh;
+}
+
+.ess-varopt-modal .ess-modal-body {
+    overflow-y: auto;
+    max-height: 60vh;
+}
+
+.ess-varopt-hint {
+    font-size: 11px;
+    color: var(--ess-text-muted);
+    margin-bottom: 10px;
+}
+
+.ess-varopt-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    margin-bottom: 6px;
+}
+
+.ess-varopt-default {
+    width: 46px;
+    flex-shrink: 0;
+    font-size: 10px;
+    color: var(--ess-accent);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    padding-top: 6px;
+    text-align: right;
+}
+
+.ess-varopt-label {
+    width: 110px;
+    flex-shrink: 0;
+    background: var(--ess-bg-primary);
+    border: 1px solid var(--ess-border);
+    border-radius: 4px;
+    color: var(--ess-text-primary);
+    padding: 4px 6px;
+    font-size: 12px;
+    font-family: var(--ess-font-mono, monospace);
+}
+
+.ess-varopt-value {
+    flex: 1;
+    background: var(--ess-bg-primary);
+    border: 1px solid var(--ess-border);
+    border-radius: 4px;
+    color: var(--ess-text-primary);
+    padding: 4px 6px;
+    font-size: 12px;
+    font-family: var(--ess-font-mono, monospace);
+    resize: vertical;
+    min-height: 26px;
+}
+
+.ess-varopt-row button {
+    background: var(--ess-bg-secondary);
+    border: 1px solid var(--ess-border);
+    border-radius: 4px;
+    color: var(--ess-text-muted);
+    cursor: pointer;
+    font-size: 10px;
+    padding: 4px 6px;
+    margin-top: 1px;
+}
+
+.ess-varopt-row button:hover {
+    color: var(--ess-text-primary);
+    border-color: var(--ess-accent);
+}
+
+.ess-varopt-row button[data-op="test"]:hover {
+    color: var(--ess-success, #4ade80);
+}
+
+.ess-varopt-add {
+    margin-top: 4px;
+    font-size: 12px;
+}
+
+.ess-varopt-status {
+    margin-top: 10px;
+    font-size: 12px;
+    min-height: 16px;
+    color: var(--ess-text-secondary);
+    font-family: var(--ess-font-mono, monospace);
+}
+
+.ess-varopt-status.error {
+    color: var(--ess-error, #f87171);
+}
