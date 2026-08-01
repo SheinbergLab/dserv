@@ -813,6 +813,23 @@ function reconnect() {
 }
 
 /**
+ * Open the clone dialog (the + next to the System / Protocol selectors):
+ * local-first creation of a new protocol or system by cloning an
+ * existing one with the identifier renamed.
+ */
+let cloneModal = null;
+function cloneScriptDialog(mode) {
+    if (!connection || !connection.connected) {
+        log('Cannot clone: not connected to dserv', 'error');
+        return;
+    }
+    if (!cloneModal) {
+        cloneModal = new CloneModal({ connection, essControl, log });
+    }
+    cloneModal.open(mode);
+}
+
+/**
  * Open the option-list editor for one loader parameter (the ✎ next to
  * each dropdown in the Variant Options panel). Edits the variants file
  * surgically, tests via ess::test_loader, and reloads on save.

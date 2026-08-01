@@ -4966,3 +4966,8 @@ select.ess-param-select {
 .ess-varopt-status.error {
     color: var(--ess-error, #f87171);
 }
+
+/* Clone (new protocol/system) modal */
+.ess-clone-modal {
+    width: min(420px, 94vw);
+}

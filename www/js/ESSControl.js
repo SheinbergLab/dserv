@@ -248,8 +248,9 @@ class ESSControl {
                             </select>
                         </div>
                         <button id="ess-reload-system" class="ess-reload-btn" title="Reload System">↻</button>
+                        <button id="ess-clone-system" class="ess-reload-btn" title="New system (clone an existing one)">+</button>
                     </div>
-                    
+
                     <!-- Protocol -->
                     <div class="ess-setup-row">
                         <span class="ess-control-label">Protocol</span>
@@ -259,6 +260,7 @@ class ESSControl {
                             </select>
                         </div>
                         <button id="ess-reload-protocol" class="ess-reload-btn" title="Reload Protocol">↻</button>
+                        <button id="ess-clone-protocol" class="ess-reload-btn" title="New protocol (clone an existing one)">+</button>
                     </div>
                     
                     <!-- Variant -->
@@ -660,6 +662,13 @@ class ESSControl {
         this.elements.reloadSystem.addEventListener('click', () => this.reloadSystem());
         this.elements.reloadProtocol.addEventListener('click', () => this.reloadProtocol());
         this.elements.reloadVariant.addEventListener('click', () => this.reloadVariant());
+
+        this.container.querySelector('#ess-clone-system')?.addEventListener('click', () => {
+            if (typeof cloneScriptDialog === 'function') cloneScriptDialog('system');
+        });
+        this.container.querySelector('#ess-clone-protocol')?.addEventListener('click', () => {
+            if (typeof cloneScriptDialog === 'function') cloneScriptDialog('protocol');
+        });
         
         // Auto-reload checkbox
         this.elements.autoReloadCheckbox.addEventListener('change', (e) => {

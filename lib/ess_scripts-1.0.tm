@@ -903,12 +903,15 @@ namespace eval scripts {
             }
         }
 
+        # Non-canonical filenames (utility scripts, backups) can't round-trip
+        # through the registry's (protocol, type) naming — they are skipped,
+        # not errors: the push preview already lists them as not pushable.
+        set skipped {}
         set to_push $changed
         if {$add_new} {
             foreach e $new {
                 if {![dict get $e canonical]} {
-                    lappend errors "[dict get $e relkey]: filename doesn't match the\
-                        registry convention for its type — not pushed"
+                    lappend skipped [dict get $e relkey]
                     continue
                 }
                 lappend to_push $e
@@ -945,7 +948,7 @@ namespace eval scripts {
         }
 
         return [dict create op push system $system pushed $pushed added $added \
-            lib_pushed $lib_pushed errors $errors]
+            lib_pushed $lib_pushed skipped [llength $skipped] errors $errors]
     }
 
     proc _put_script {system project entry user comment manifest} {
@@ -976,6 +979,171 @@ namespace eval scripts {
         catch { set new_cs [json_get $response checksum] }
         if {$new_cs eq ""} { set new_cs [sha256 $content] }
         return $new_cs
+    }
+
+    # ── Local-first cloning (new protocol / new system) ─────────────
+    #
+    # Creation is LOCAL: clone an existing protocol or system directory
+    # with the identifier renamed throughout (plain global substring
+    # replace — the same transform used when hand-copying a protocol).
+    # Only canonical files are cloned; utility scripts and backups in
+    # the source are reported as skipped. Nothing touches the registry:
+    # the clone appears as local-new files in the sync preview and is
+    # pushed (with -add) once tested. The GUI follows a successful
+    # clone with a guarded ess::load_system to land on the new copy.
+    #
+
+    proc _valid_script_name {name} {
+        # existing corpus includes digit-first names (9point)
+        return [regexp {^[A-Za-z0-9][A-Za-z0-9_-]*$} $name]
+    }
+
+    proc _clone_read_transform_write {src dst from to} {
+        set f [open $src r]
+        set content [read $f]
+        close $f
+        set f [open $dst w]
+        puts -nonewline $f [string map [list $from $to] $content]
+        close $f
+        ess::paths::fix_file_ownership $dst
+    }
+
+    proc _clone_result_json {op fields files skipped} {
+        set obj [yajl create #auto]
+        $obj map_open
+        $obj string op string $op
+        foreach {k v} $fields { $obj string $k string $v }
+        $obj string files
+        _str_array $obj $files
+        $obj string skipped
+        _str_array $obj $skipped
+        $obj string ts number [clock seconds]
+        $obj map_close
+        set json [$obj get]
+        $obj delete
+        catch { dservSet scripts/clone_result $json }
+        return $json
+    }
+
+    proc clone_protocol {system from_proto new_proto} {
+        set project $::ess::current(project)
+        set sys_dir [file join $::ess::system_path $project $system]
+        if {![file isdirectory $sys_dir]} { error "system '$system' not found" }
+        set src [file join $sys_dir $from_proto]
+        if {![file isdirectory $src]} {
+            error "protocol '$from_proto' not found in $system"
+        }
+        if {![_valid_script_name $new_proto]} {
+            error "invalid protocol name '$new_proto' (letters, digits, _ and - only)"
+        }
+        if {$new_proto eq $from_proto} { error "new name equals source name" }
+        set dst [file join $sys_dir $new_proto]
+        if {[file exists $dst]} { error "protocol '$new_proto' already exists" }
+
+        set canonical [dict create]
+        foreach suffix {"" _loaders _variants _stim _extract} {
+            dict set canonical ${from_proto}${suffix}.tcl ${new_proto}${suffix}.tcl
+        }
+        dict set canonical ${from_proto}_viewer.js ${new_proto}_viewer.js
+
+        ess::paths::mkdir_matching_owner $dst
+        set files {}
+        set skipped {}
+        foreach f [glob -nocomplain -directory $src *] {
+            if {[file isdirectory $f]} continue
+            set tail [file tail $f]
+            if {[dict exists $canonical $tail]} {
+                set newname [dict get $canonical $tail]
+                _clone_read_transform_write $f [file join $dst $newname] \
+                    $from_proto $new_proto
+                lappend files $newname
+            } else {
+                lappend skipped $tail
+            }
+        }
+        if {![llength $files]} {
+            file delete -force $dst
+            error "no canonical protocol files ([join [dict keys $canonical] {, }])\
+                found in $from_proto"
+        }
+        ess::ess_info "Cloned protocol $system/$from_proto -> $new_proto\
+            ([llength $files] files)" "scripts"
+        return [_clone_result_json clone_protocol \
+            [list system $system from $from_proto new $new_proto] \
+            [lsort $files] [lsort $skipped]]
+    }
+
+    proc clone_system {from_system new_system {protocols {}}} {
+        set project $::ess::current(project)
+        set src [file join $::ess::system_path $project $from_system]
+        if {![file isdirectory $src]} { error "system '$from_system' not found" }
+        if {![_valid_script_name $new_system]} {
+            error "invalid system name '$new_system' (letters, digits, _ and - only)"
+        }
+        if {$new_system eq $from_system} { error "new name equals source name" }
+        set dst [file join $::ess::system_path $project $new_system]
+        if {[file exists $dst]} { error "system '$new_system' already exists" }
+
+        set sys_canonical [dict create]
+        foreach suffix {"" _extract _analyze} {
+            dict set sys_canonical ${from_system}${suffix}.tcl ${new_system}${suffix}.tcl
+        }
+        dict set sys_canonical ${from_system}_viewer.js ${new_system}_viewer.js
+
+        ess::paths::mkdir_matching_owner $dst
+        set files {}
+        set skipped {}
+
+        foreach f [glob -nocomplain -directory $src *] {
+            set tail [file tail $f]
+            if {[file isdirectory $f]} {
+                # protocol subdir: keep the protocol's own name, transform
+                # the system identifier inside its canonical files
+                if {[llength $protocols] && [lsearch -exact $protocols $tail] < 0} {
+                    lappend skipped "$tail/"
+                    continue
+                }
+                set proto $tail
+                set pdst [file join $dst $proto]
+                foreach pf [glob -nocomplain -directory $f *] {
+                    if {[file isdirectory $pf]} continue
+                    set ptail [file tail $pf]
+                    set ok 0
+                    foreach suffix {"" _loaders _variants _stim _extract} {
+                        if {$ptail eq "${proto}${suffix}.tcl"} { set ok 1; break }
+                    }
+                    if {$ptail eq "${proto}_viewer.js"} { set ok 1 }
+                    if {$ok} {
+                        if {![file exists $pdst]} {
+                            ess::paths::mkdir_matching_owner $pdst
+                        }
+                        _clone_read_transform_write $pf [file join $pdst $ptail] \
+                            $from_system $new_system
+                        lappend files $proto/$ptail
+                    } else {
+                        lappend skipped $proto/$ptail
+                    }
+                }
+            } else {
+                if {[dict exists $sys_canonical $tail]} {
+                    set newname [dict get $sys_canonical $tail]
+                    _clone_read_transform_write $f [file join $dst $newname] \
+                        $from_system $new_system
+                    lappend files $newname
+                } else {
+                    lappend skipped $tail
+                }
+            }
+        }
+        if {![llength $files]} {
+            file delete -force $dst
+            error "no canonical system files found in $from_system"
+        }
+        ess::ess_info "Cloned system $from_system -> $new_system\
+            ([llength $files] files)" "scripts"
+        return [_clone_result_json clone_system \
+            [list from $from_system new $new_system] \
+            [lsort $files] [lsort $skipped]]
     }
 
     # ── Workgroup user roster (registry passthrough) ────────────────
