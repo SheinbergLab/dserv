@@ -46,8 +46,14 @@ units_present() {
 # Which PHC does this interface own, if any? Straight from sysfs, so it needs no
 # tools and is always available -- unlike ethtool, which is not installed by
 # default on a minimal Debian (office-stim had none).
+#
+# Two sysfs layouts exist. Most PCI NICs (igc/ixgbe/igb) register the clock
+# under .../device/ptp/ptpN. The RP1 southbridge NIC on a Pi 5 (macb driver)
+# registers it directly under the netdev itself, .../net/eth0/ptpN, with no
+# device/ptp path at all -- checking only the first form made a Pi 5 running
+# grandmaster on eth0 right now report itself as having no PHC.
 iface_phc() {
-    for _d in "/sys/class/net/$1/device/ptp"/ptp*; do
+    for _d in "/sys/class/net/$1/device/ptp"/ptp* "/sys/class/net/$1"/ptp*; do
         [ -e "$_d" ] || continue
         basename "$_d"; return 0
     done
