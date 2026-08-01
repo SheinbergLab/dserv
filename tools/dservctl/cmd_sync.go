@@ -161,7 +161,9 @@ func syncLibsToDir(cfg *Config, client *AgentClient, libDir string, dryRun, forc
 
 		// Compare checksums
 		localHash := ""
+		localExists := false
 		if data, err := os.ReadFile(localPath); err == nil {
+			localExists = true
 			localHash = fmt.Sprintf("%x", sha256.Sum256(data))
 			if localHash == serverChecksum {
 				unchanged++
@@ -174,8 +176,10 @@ func syncLibsToDir(cfg *Config, client *AgentClient, libDir string, dryRun, forc
 		}
 
 		// 3-way decision (unless --force, which always takes the registry).
+		// A missing local file is an unambiguous pull (nothing to lose) —
+		// same rule as the script path and ess_sync's sync_libs.
 		decision := "pull"
-		if !force {
+		if !force && localExists {
 			decision = baseDecide(manifest.get(filename), localHash, serverChecksum)
 		}
 		if decision == "keep_local" || decision == "conflict" || decision == "cold" {
