@@ -569,8 +569,19 @@ namespace eval scripts {
             }
         }
 
+        set sys_complete [file exists [file join $sys_dir ${system}.tcl]]
         dict for {relkey path} $local {
             if {[dict exists $server_scripts $relkey]} continue
+            # Fragments of incomplete protocols/systems are not push
+            # candidates (they stay visible as local-only in the sync
+            # preview): the protocol file must exist before its other
+            # scripts can go up.
+            if {!$sys_complete} continue
+            set parts [file split $relkey]
+            if {[llength $parts] == 2} {
+                set p0 [lindex $parts 0]
+                if {![file exists [file join $sys_dir $p0 ${p0}.tcl]]} continue
+            }
             lassign [_derive_proto_type $system $relkey] proto stype
             set fname [file tail $relkey]
             set canonical [expr {[ess::_script_filename $system $proto $stype] eq $fname}]
@@ -1140,8 +1151,20 @@ namespace eval scripts {
                 lappend files "$system/$relkey"
             }
         }
+        # A new file counts only when it belongs to something loadable:
+        # the system file must exist, and for protocol-level files the
+        # protocol file too — a canonically-named fragment in an
+        # incomplete protocol (a stray stim file, say) is clutter to
+        # ignore, not work to push.
+        set sys_complete [file exists [file join $sys_dir ${system}.tcl]]
         dict for {relkey path} $local {
             if {[dict exists $entries $relkey]} continue
+            if {!$sys_complete} continue
+            set parts [file split $relkey]
+            if {[llength $parts] == 2} {
+                set proto [lindex $parts 0]
+                if {![file exists [file join $sys_dir $proto ${proto}.tcl]]} continue
+            }
             lassign [_derive_proto_type $system $relkey] proto stype
             if {[ess::_script_filename $system $proto $stype] eq \
                     [file tail $relkey]} {
