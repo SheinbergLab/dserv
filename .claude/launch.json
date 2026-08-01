@@ -14,40 +14,14 @@
       "port": 8090
     },
     {
-      "name": "www2",
+      "name": "wwwdev",
       "runtimeExecutable": "python3",
       "runtimeArgs": [
-        "-m",
-        "http.server",
-        "8091",
-        "--directory",
+        "tools/devserver.py",
+        "8095",
         "www"
       ],
-      "port": 8091
-    },
-    {
-      "name": "www3",
-      "runtimeExecutable": "python3",
-      "runtimeArgs": [
-        "-m",
-        "http.server",
-        "8092",
-        "--directory",
-        "www"
-      ],
-      "port": 8092
-    },
-    {
-      "name": "www4",
-      "runtimeExecutable": "python3",
-      "runtimeArgs": [
-        "-m",
-        "http.server",
-        "8093",
-        "--directory",
-        "www"
-      ],
-      "port": 8093
+      "port": 8095
     },
     {
       "name": "extio-setup",
