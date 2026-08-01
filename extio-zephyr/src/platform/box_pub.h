@@ -1,8 +1,9 @@
 /*
  * box_pub.h -- the publish queues + the one thread that writes the uplink.
  *
- * Producers (the service loop, and in stage 2 the ISR-adjacent event paths)
- * hand 128-byte dserv frames to one of two classes and return in memcpy time:
+ * Producers -- the service loop today; enqueueing is ISR-safe if a path ever
+ * needs it -- hand 128-byte dserv frames to one of two classes and return in
+ * memcpy time:
  *
  *   EVENT -- things that happened and must not be dropped before the wire has
  *            had its chance: DI edges, chords, scheduled/at_abs fires, obs
@@ -67,8 +68,9 @@ void box_pub_set_gather(int n);
 int  box_pub_gather(void);
 
 /* Block until both queues are empty and nothing is mid-send, or the timeout
- * lapses. For the frames that must be SEEN before the box goes away (ota/arm
- * ack before a trial reboot -- stage 2). 0 = drained, -1 = timed out. */
+ * lapses. For the frames that must be SEEN before the box goes away: the
+ * ota/arm ack and cmd/reboot both flush before their sys_reboot. 0 = drained,
+ * -1 = timed out (an already-dead uplink; waiting longer buys nothing). */
 int box_pub_flush(k_timeout_t timeout);
 
 typedef struct {

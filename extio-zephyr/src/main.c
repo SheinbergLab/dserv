@@ -321,15 +321,11 @@ static const box_ota_flash_t g_ota_flash_ops = {
 };
 #endif
 
-/* Stage-1 shim: everything that used the old telemetry pubq lands in box_pub's
- * BULK class -- same drop-oldest, same last-value-wins contract, drained by the
- * publisher thread instead of budgeted loop passes. Call sites get classified
- * event-vs-bulk individually in stage 2; until then the name stays, so this
- * diff is the mechanism and not two dozen renames. */
-static void pub_enqueue(const uint8_t *f)
-{
-	(void) box_pub_bulk(f);
-}
+/* Publish classes (box_pub.h): box_pub_event for the record and for replies --
+ * things a host is waiting on or that must not be silently lost -- and
+ * box_pub_bulk for re-emittable state (telemetry, announce, OTA status), where
+ * drop-oldest under pressure is the right policy. Every site below names its
+ * class explicitly; the stage-1 pub_enqueue shim is gone. */
 
 /* ---- periodic counters: publish ONLY when they change ----
  *
@@ -399,11 +395,13 @@ static void pub_periodic(const char *leaf, uint32_t v)
 
 		dserv_state_name(&cfg, pn, sizeof pn, leaf);
 		dserv_msg_int(pf, pn, 0, (int32_t) v);
-		pub_enqueue(pf);
+		box_pub_bulk(pf);
 	}
 }
 
 #if defined(BOX_HAVE_OTA_SLOT)
+/* BULK: rolling transfer status (ota/state, ota/bytes, the flashtest
+ * re-announce) -- re-emittable, drop-oldest is fine. */
 static void ota_pub_int(const char *leaf, int32_t v)
 {
 	uint8_t f[DSERV_MSG_LEN];
@@ -411,7 +409,7 @@ static void ota_pub_int(const char *leaf, int32_t v)
 
 	dserv_state_name(&cfg, nm, sizeof nm, leaf);
 	dserv_msg_int(f, nm, 0, v);
-	pub_enqueue(f);
+	box_pub_bulk(f);
 }
 
 static void ota_pub_str(const char *leaf, const char *v)
@@ -421,7 +419,30 @@ static void ota_pub_str(const char *leaf, const char *v)
 
 	dserv_state_name(&cfg, nm, sizeof nm, leaf);
 	dserv_msg_string(f, nm, 0, v);
-	pub_enqueue(f);
+	box_pub_bulk(f);
+}
+
+/* EVENT: command verdicts (ota/arm and its rc). The host's arm wrapper is
+ * polling these to decide its next move, and a refusal displaced by a manifest
+ * burst reads as a box that never answered. */
+static void ota_ack_int(const char *leaf, int32_t v)
+{
+	uint8_t f[DSERV_MSG_LEN];
+	char nm[80];
+
+	dserv_state_name(&cfg, nm, sizeof nm, leaf);
+	dserv_msg_int(f, nm, 0, v);
+	box_pub_event(f);
+}
+
+static void ota_ack_str(const char *leaf, const char *v)
+{
+	uint8_t f[DSERV_MSG_LEN];
+	char nm[80];
+
+	dserv_state_name(&cfg, nm, sizeof nm, leaf);
+	dserv_msg_string(f, nm, 0, v);
+	box_pub_event(f);
 }
 
 /* Push analog aside for the next step of this transfer.
@@ -474,16 +495,16 @@ static void abs_fire(struct k_timer *t)
 	gpio_cmd_t c = { .op = GPIO_OP_SET, .pin = (uint8_t) pin, .value = 1 };
 	box_gpio_exec(&cfg, &c);
 
-	/* DO NOT PUBLISH HERE. publish_do() ends in a BLOCKING box_uplink_send(),
-	 * and this is a k_timer callback: two pins scheduled for the same instant
-	 * run their callbacks back-to-back, so the first one's send delays the
-	 * second one's GPIO write by a whole network round.
-	 *
-	 * Measured on a scope, two pins on ONE box at one T (so PTP and tick
-	 * quantisation contribute exactly zero): 30/30 shots landed 127-254 us
-	 * apart, median 208, with the sign varying -- i.e. whichever callback ran
-	 * second paid for the first one's publish. That matches dbg/send_us
-	 * (median 142 us) almost exactly.
+	/* DO NOT PUBLISH HERE. This is a k_timer callback: two pins scheduled for
+	 * the same instant run their callbacks back-to-back, so ANY work in the
+	 * first delays the second's GPIO write. When publish_do() ended in an
+	 * inline network send this was measured on a scope at 127-254 us between
+	 * two same-T pins (30/30 shots, median 208, sign varying -- whichever
+	 * callback ran second paid for the first one's publish, matching the
+	 * dbg/send_us median of 142 us almost exactly). publish_do() is a memcpy
+	 * into the event queue now, but the discipline stays: a timer callback
+	 * does the pin and nothing else, because "cheap" work in ISR context is
+	 * how the next 127 us creeps back in.
 	 *
 	 * Set the pin, flag it, get out. The main loop publishes. Accuracy is
 	 * untouched: abs_target_us[] already holds the INTENDED time, which is what
@@ -496,9 +517,10 @@ static void abs_fire(struct k_timer *t)
  * reading the source could not settle it, dbg_T = 2147483647 did instantly.
  *
  * OFF by default, and the CALLER must invoke this only AFTER k_timer_start():
- * lead_us is measured from a `now` read before the publishes, so seven uplink
- * frames sitting between the two would delay the fire by exactly that much --
- * the one thing this path must never do.
+ * lead_us is measured from a `now` read before the publishes, and when these
+ * seven frames were inline sends they would have delayed the fire by their
+ * full cost. They are memcpy-cheap enqueues now, but the ordering costs
+ * nothing to keep and guards the one thing this path must never do.
  *
  * Enable live, no reflash:  dservSet <prefix>/cmd/sched/debug 1
  * Deliberately NOT persisted, so a box always boots quiet. */
@@ -523,7 +545,7 @@ static void sched_dbg_publish(uint64_t T, uint64_t now, uint64_t target_box,
 	for (unsigned i = 0; i < ARRAY_SIZE(val); i++) {
 		dserv_state_name(&cfg, nm, sizeof nm, leaf[i]);
 		dserv_msg_int64(f, nm, 0, val[i]);
-		pub_enqueue(f);
+		box_pub_bulk(f);
 	}
 }
 #endif /* CONFIG_PTP_CLOCK */
@@ -562,7 +584,7 @@ static void publish_group(int g, uint8_t bits, uint64_t t_us)
 	snprintf(leaf, sizeof leaf, "group/%s", gn);
 	dserv_state_name(&cfg, nm, sizeof nm, leaf);
 	dserv_msg_int(f, nm, t_us ? event_stamp(t_us) : 0, bits);
-	box_uplink_send(f, DSERV_MSG_LEN);
+	box_pub_event(f);
 }
 
 /* Publish a DO level: extio/<name>/state/do/<pin>, stamped at the instant the
@@ -578,7 +600,7 @@ static void publish_do(uint8_t pin, uint8_t level, uint64_t stamp)
 	snprintf(leaf, sizeof leaf, "do/%u", pin);
 	dserv_state_name(&cfg, nm, sizeof nm, leaf);
 	dserv_msg_int(f, nm, stamp, level);
-	box_uplink_send(f, DSERV_MSG_LEN);
+	box_pub_event(f);
 }
 
 /* Clock-alignment telemetry, published at every obs anchor. This is how you tell
@@ -595,29 +617,29 @@ static void publish_sync(uint64_t dserv_us, uint64_t box_us, int64_t offset_us,
 
 	dserv_state_name(&cfg, nm, sizeof nm, "sync/dserv_us");
 	dserv_msg_int64(f, nm, dserv_us, (int64_t) dserv_us);
-	box_uplink_send(f, DSERV_MSG_LEN);
+	box_pub_event(f);
 
 	dserv_state_name(&cfg, nm, sizeof nm, "sync/box_us");
 	dserv_msg_int64(f, nm, dserv_us, (int64_t) box_us);
-	box_uplink_send(f, DSERV_MSG_LEN);
+	box_pub_event(f);
 
 	dserv_state_name(&cfg, nm, sizeof nm, "sync/offset_us");
 	dserv_msg_int64(f, nm, dserv_us, offset_us);
-	box_uplink_send(f, DSERV_MSG_LEN);
+	box_pub_event(f);
 
 	dserv_state_name(&cfg, nm, sizeof nm, "sync/source");
 	dserv_msg_string(f, nm, dserv_us, hw ? "hw" : "sw");
-	box_uplink_send(f, DSERV_MSG_LEN);
+	box_pub_event(f);
 
 	if (transport_us >= 0) {
 		dserv_state_name(&cfg, nm, sizeof nm, "sync/transport_us");
 		dserv_msg_int64(f, nm, dserv_us, transport_us);
-		box_uplink_send(f, DSERV_MSG_LEN);
+		box_pub_event(f);
 	}
 	if (boxclk.rate_valid) {          /* learned crystal rate: hw anchors only */
 		dserv_state_name(&cfg, nm, sizeof nm, "sync/rate_ppb");
 		dserv_msg_int(f, nm, dserv_us, boxclk.rate_ppb);
-		box_uplink_send(f, DSERV_MSG_LEN);
+		box_pub_event(f);
 	}
 }
 
@@ -757,10 +779,13 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 			uint8_t  f3[DSERV_MSG_LEN];
 			char     nm3[80];
 
+			/* The abs_err/abs_lead answers are REPLIES -- ess acts on
+			 * armed-vs-refused before the pulse time arrives -- so they ride
+			 * the event class, never behind a manifest drain. */
 			if (!boxclk.synced) {
 				dserv_state_name(&cfg, nm3, sizeof nm3, "sched/abs_err");
 				dserv_msg_string(f3, nm3, 0, "unsynced");
-				pub_enqueue(f3);
+				box_pub_event(f3);
 				return;
 			}
 
@@ -773,10 +798,10 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 			if (lead_us <= 0) {
 				dserv_state_name(&cfg, nm3, sizeof nm3, "sched/abs_late_us");
 				dserv_msg_int64(f3, nm3, 0, -lead_us);
-				pub_enqueue(f3);
+				box_pub_event(f3);
 				dserv_state_name(&cfg, nm3, sizeof nm3, "sched/abs_err");
 				dserv_msg_string(f3, nm3, 0, "late");
-				pub_enqueue(f3);
+				box_pub_event(f3);
 				if (sched_dbg) {
 					sched_dbg_publish(T, now, target_box, lead_us);
 				}
@@ -792,10 +817,10 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 			 * -- shrinking lead is the early warning before anything is late. */
 			dserv_state_name(&cfg, nm3, sizeof nm3, "sched/abs_lead_us");
 			dserv_msg_int64(f3, nm3, 0, lead_us);
-			pub_enqueue(f3);
+			box_pub_event(f3);
 			dserv_state_name(&cfg, nm3, sizeof nm3, "sched/abs_err");
 			dserv_msg_string(f3, nm3, 0, "armed");
-			pub_enqueue(f3);
+			box_pub_event(f3);
 			if (sched_dbg) {
 				sched_dbg_publish(T, now, target_box, lead_us);
 			}
@@ -803,45 +828,6 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 		}
 	}
 
-	/* ---- publisher knobs (box_pub.c; the measurement method is documented
-	 * there with the SETTLED result the old per_pass arm produced) ---- */
-	{
-		if (leaf && strcmp(leaf, "cmd/pubq/bypass") == 0) {
-			box_pub_set_bypass(dserv_msg_as_long(&m) ? 1 : 0);
-
-			uint8_t f4[DSERV_MSG_LEN];
-			char nm4[80];
-			dserv_state_name(&cfg, nm4, sizeof nm4, "pubq/bypass");
-			dserv_msg_int(f4, nm4, 0, (int32_t) box_pub_bypass());
-			pub_enqueue(f4);
-			return;
-		}
-
-		if (leaf && strcmp(leaf, "cmd/pubq/gather") == 0) {
-			box_pub_set_gather((int) dserv_msg_as_long(&m));
-
-			uint8_t f6[DSERV_MSG_LEN];
-			char nm6[80];
-			dserv_state_name(&cfg, nm6, sizeof nm6, "pubq/gather");
-			dserv_msg_int(f6, nm6, 0, (int32_t) box_pub_gather());
-			pub_enqueue(f6);
-			return;
-		}
-
-		/* INERT since the publisher thread: there is no per-pass drain budget
-		 * to set any more. Kept because the interleaved-A/B scripts set it and
-		 * read the echo; answering keeps them runnable against any firmware. */
-		if (leaf && strcmp(leaf, "cmd/pubq/per_pass") == 0) {
-			uint8_t f5[DSERV_MSG_LEN];
-			char nm5[80];
-			dserv_state_name(&cfg, nm5, sizeof nm5, "pubq/per_pass");
-			dserv_msg_int(f5, nm5, 0, (int32_t) dserv_msg_as_long(&m));
-			pub_enqueue(f5);
-			return;
-		}
-	}
-
-#if defined(CONFIG_PTP_CLOCK)
 	/* <prefix>/cmd/sched/debug 0|1 -- arm the at_abs diagnostics. Runtime, not
 	 * persisted: turn it on against a live box, read sched/dbg_*, turn it off.
 	 * See sched_dbg_publish() for why it may only run after the timer is armed. */
@@ -853,11 +839,10 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 			char nm[80];
 			dserv_state_name(&cfg, nm, sizeof nm, "sched/debug");
 			dserv_msg_int(f2, nm, 0, (int32_t) sched_dbg);
-			pub_enqueue(f2);
+			box_pub_event(f2);
 			return;
 		}
 	}
-#endif /* CONFIG_PTP_CLOCK */
 
 	{
 		if (leaf && strcmp(leaf, "cmd/ptp/offset") == 0) {
@@ -867,31 +852,75 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 			uint32_t win = 0;
 			int ok = box_obs_active() ? -1 : ptp_reanchor(&win);
 
+			/* Event class: sync/* is the RECORD of which mechanism stamped a
+			 * datafile's timestamps -- a dropped frame here is a datafile
+			 * that cannot explain itself. */
 			uint8_t f2[DSERV_MSG_LEN];
 			char nm[80];
 			dserv_state_name(&cfg, nm, sizeof nm, "ptp/offset_us");
 			dserv_msg_int64(f2, nm, 0, ptp_offset_us);
-			pub_enqueue(f2);
+			box_pub_event(f2);
 
 			if (ok == 0) {
 				/* A FOURTH sync source beside hw / swc / sw, so a datafile
 				 * records which mechanism produced its timestamps. */
 				dserv_state_name(&cfg, nm, sizeof nm, "sync/source");
 				dserv_msg_string(f2, nm, 0, "ptp");
-				pub_enqueue(f2);
+				box_pub_event(f2);
 
 				dserv_state_name(&cfg, nm, sizeof nm, "sync/ptp_window_us");
 				dserv_msg_int(f2, nm, 0, (int32_t) win);
-				pub_enqueue(f2);
+				box_pub_event(f2);
 
 				dserv_state_name(&cfg, nm, sizeof nm, "sync/offset_us");
 				dserv_msg_int64(f2, nm, 0, boxclk.offset_us);
-				pub_enqueue(f2);
+				box_pub_event(f2);
 			}
 			return;
 		}
 	}
 #endif
+
+	/* ---- publisher knobs (box_pub.c; the measurement method is documented
+	 * there with the SETTLED result the old per_pass arm produced) ----
+	 * OUTSIDE every feature guard: box_pub runs on all boards, so a USB-only
+	 * box answers these too (the stage-1 placement left them PTP-gated, which
+	 * a teensy40 build flagged as `leaf` going entirely unused). */
+	{
+		if (leaf && strcmp(leaf, "cmd/pubq/bypass") == 0) {
+			box_pub_set_bypass(dserv_msg_as_long(&m) ? 1 : 0);
+
+			uint8_t f4[DSERV_MSG_LEN];
+			char nm4[80];
+			dserv_state_name(&cfg, nm4, sizeof nm4, "pubq/bypass");
+			dserv_msg_int(f4, nm4, 0, (int32_t) box_pub_bypass());
+			box_pub_event(f4);       /* knob echoes are replies: event class */
+			return;
+		}
+
+		if (leaf && strcmp(leaf, "cmd/pubq/gather") == 0) {
+			box_pub_set_gather((int) dserv_msg_as_long(&m));
+
+			uint8_t f6[DSERV_MSG_LEN];
+			char nm6[80];
+			dserv_state_name(&cfg, nm6, sizeof nm6, "pubq/gather");
+			dserv_msg_int(f6, nm6, 0, (int32_t) box_pub_gather());
+			box_pub_event(f6);
+			return;
+		}
+
+		/* INERT since the publisher thread: there is no per-pass drain budget
+		 * to set any more. Kept because the interleaved-A/B scripts set it and
+		 * read the echo; answering keeps them runnable against any firmware. */
+		if (leaf && strcmp(leaf, "cmd/pubq/per_pass") == 0) {
+			uint8_t f5[DSERV_MSG_LEN];
+			char nm5[80];
+			dserv_state_name(&cfg, nm5, sizeof nm5, "pubq/per_pass");
+			dserv_msg_int(f5, nm5, 0, (int32_t) dserv_msg_as_long(&m));
+			box_pub_event(f5);
+			return;
+		}
+	}
 
 #if defined(BOX_HAVE_OTA_SLOT)
 	/* <prefix>/cmd/ota/flashtest <kb> -- OTA step 2's execute-while-write probe.
@@ -1239,11 +1268,11 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 	 * wrote, and a trial that bricks into a reboot loop is a rig visit. */
 	if (leaf && strcmp(leaf, "cmd/ota/arm") == 0) {
 		if (box_obs_active()) {
-			ota_pub_str("ota/arm", "refused_in_obs");
+			ota_ack_str("ota/arm", "refused_in_obs");
 			return;
 		}
 		if (g_ota.state != BOX_OTA_DONE_OK) {
-			ota_pub_str("ota/arm", "refused_no_verified_image");
+			ota_ack_str("ota/arm", "refused_no_verified_image");
 			box_console_printf("cmd/ota/arm -> refused: no verified image staged\n");
 			return;
 		}
@@ -1262,8 +1291,8 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 		int hrc = box_boot_image_ver(1, sver, sizeof sver);
 
 		if (hrc != 0) {
-			ota_pub_str("ota/arm", "refused_no_image_header");
-			ota_pub_int("ota/arm_rc", hrc);
+			ota_ack_str("ota/arm", "refused_no_image_header");
+			ota_ack_int("ota/arm_rc", hrc);
 			box_console_printf("cmd/ota/arm -> refused: no MCUboot header in slot1 (%d) "
 					   "-- image staged at the wrong offset?\n", hrc);
 			return;
@@ -1272,29 +1301,29 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 		int rc = boot_request_upgrade(BOOT_UPGRADE_TEST);
 
 		if (rc != 0) {
-			ota_pub_str("ota/arm", "failed");
-			ota_pub_int("ota/arm_rc", rc);
+			ota_ack_str("ota/arm", "failed");
+			ota_ack_int("ota/arm_rc", rc);
 			box_console_printf("cmd/ota/arm -> boot_request_upgrade failed (%d)\n", rc);
 			return;
 		}
-		/* Send this DIRECTLY, not via pub_enqueue. The queue is drained by the
-		 * service loop, and the k_msleep below blocks that very loop -- so a
-		 * queued "armed" is still sitting there when the reset lands and the
-		 * host never sees the acknowledgement for the one command that makes
-		 * the box disappear. Observed exactly that: dserv kept showing a stale
-		 * "refused_no_verified_image" from an earlier attempt while the box was
-		 * demonstrably armed and swapping. */
+		/* The "armed" ack must be ON THE WIRE before the reset lands -- this is
+		 * the one command that makes the box disappear, and an ack dying in a
+		 * queue at reboot leaves dserv showing a stale earlier verdict
+		 * (observed: "refused_no_verified_image" standing while the box was
+		 * demonstrably armed and swapping). The pre-box_pub fix sent these two
+		 * frames directly from the loop; now they ride the event class and the
+		 * box_pub_flush() below refuses to reboot past them. */
 		{
 			uint8_t fa2[DSERV_MSG_LEN];
 			char nma[80];
 
 			dserv_state_name(&cfg, nma, sizeof nma, "ota/arm");
 			dserv_msg_string(fa2, nma, 0, "armed");
-			box_uplink_send(fa2, DSERV_MSG_LEN);
+			box_pub_event(fa2);
 
 			dserv_state_name(&cfg, nma, sizeof nma, "ota/arm_rc");
 			dserv_msg_int(fa2, nma, 0, 0);
-			box_uplink_send(fa2, DSERV_MSG_LEN);
+			box_pub_event(fa2);
 		}
 
 		/* Drop the breadcrumb LAST, so it records an arm that actually
@@ -1312,7 +1341,14 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 		}
 		box_console_printf("cmd/ota/arm -> armed for ONE trial boot (slot1 v%s); rebooting\n",
 				   sver);
-		k_msleep(600);                 /* let the wire settle before the reset */
+		/* Drain the publish queues INTO the socket before resetting -- the
+		 * deterministic version of the blind 600 ms "let the wire settle"
+		 * sleep this replaces (typically done in ~2 ms; the cap only binds
+		 * when the uplink is already dead, where waiting longer buys
+		 * nothing). The short sleep after covers the console ring and the
+		 * frames' flight time. */
+		box_pub_flush(K_MSEC(600));
+		k_msleep(100);
 		sys_reboot(SYS_REBOOT_WARM);
 		return;
 	}
@@ -1397,7 +1433,7 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 		char onm[80];
 		dserv_state_name(&cfg, onm, sizeof onm, "in_obs");
 		dserv_msg_int(of, onm, m.timestamp, obs);
-		box_uplink_send(of, DSERV_MSG_LEN);
+		box_pub_event(of);
 
 		publish_sync(m.timestamp, anchor_box, boxclk.offset_us, hw,
 			     hw ? (int64_t)(now_box - anchor_box) : -1);
@@ -1502,6 +1538,7 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 		/* Warm reset: the firmware restarts. Portable on every board. NOTE this
 		 * does NOT enter the bootloader -- see CFG_BOOTSEL below. */
 		box_console_printf("cmd/reboot -> warm reset\n");
+		box_pub_flush(K_MSEC(300));           /* queued frames out before we vanish */
 		k_msleep(100);                        /* let the console drain */
 		sys_reboot(SYS_REBOOT_WARM);
 	} else if (r == CFG_BOOTSEL) {
@@ -1808,12 +1845,12 @@ int main(void)
 		ain_boot_gate();
 
 		/* Analog blocks, built on the sampling thread, stamped and ENQUEUED
-		 * here. The uplink's single-writer invariant now lives one level down:
-		 * exactly one thread -- box_pub's -- ever writes the transport, and
-		 * the loop's remaining direct sends share it safely through
-		 * box_uplink's lock until stage 2 reclassifies them. Draining ALL
-		 * queued blocks per pass is fine now that a block costs a memcpy, not
-		 * a 275-864 us send: the old 2-per-pass budget was send-cost math. */
+		 * here. The uplink's single-writer invariant lives one level down:
+		 * exactly one thread -- box_pub's -- ever writes the transport (in
+		 * bypass mode, producers send inline under box_uplink's lock).
+		 * Draining ALL queued blocks per pass is fine now that a block costs
+		 * a memcpy, not a 275-864 us send: the old 2-per-pass budget was
+		 * send-cost math. */
 		for (;;) {
 			ain_block_t blk;
 			uint8_t payload[12 + AIN_BLOCK_MAX * 2];
@@ -1855,7 +1892,7 @@ int main(void)
 			 * imprecise instead of decades adrift. */
 			if (dserv_msg_bytes(f, nm, event_stamp(blk.t0_us), payload,
 					    (uint32_t) plen) > 0) {
-				pub_enqueue(f);
+				box_pub_bulk(f);
 			}
 		}
 #endif
@@ -1895,7 +1932,11 @@ int main(void)
 				dserv_state_name(&cfg, nm0, sizeof nm0, "sync/source");
 				dserv_msg_string(f0, nm0, 0,
 						 ptp_offset_valid ? "ptp" : "none");
-				pub_enqueue(f0);
+				/* Event class: this is the truth-correction that keeps a
+				 * rebooted box from reading as synced (see above). The
+				 * announce burst that precedes it is filling the BULK queue
+				 * right now -- this frame must not be displaced by it. */
+				box_pub_event(f0);
 			}
 #endif
 		} else if (n > 0) {
@@ -1952,7 +1993,7 @@ int main(void)
 			snprintf(leaf, sizeof leaf, "di/%u", ev.pin);
 			dserv_state_name(&cfg, name, sizeof name, leaf);   /* extio/<name>/state/di/<pin> */
 			dserv_msg_int(f, name, event_stamp(ev.t_us), lvl);
-			box_uplink_send(f, DSERV_MSG_LEN);
+			box_pub_event(f);
 		}
 
 		/* Settle windows expire between edges, so poll them every pass --
@@ -1987,7 +2028,7 @@ int main(void)
 				snprintf(leaf, sizeof leaf, "timer/%u", sf.tid);
 				dserv_state_name(&cfg, name, sizeof name, leaf);
 				dserv_msg_int(f, name, event_stamp(sf.fire_us), 1);
-				box_uplink_send(f, DSERV_MSG_LEN);
+				box_pub_event(f);
 			}
 		}
 
@@ -1996,7 +2037,7 @@ int main(void)
 		 * (extio/<client>/...); relay it out the active uplink verbatim. */
 		uint8_t bframe[DSERV_MSG_LEN];
 		while (box_ble_poll(bframe)) {
-			box_uplink_send(bframe, DSERV_MSG_LEN);
+			box_pub_event(bframe);   /* remote boxes' events: same class as ours */
 		}
 #endif
 
@@ -2044,7 +2085,7 @@ int main(void)
 			/* WATCHDOG GETS ITS OWN BUFFER, AND IS ENQUEUED EXACTLY ONCE.
 			 *
 			 * It used to be built into the shared scratch `f` and rely on a
-			 * trailing pub_enqueue(f) far below to actually send it -- with each
+			 * trailing box_pub_bulk(f) far below to actually send it -- with each
 			 * intervening sub-block "borrowing" f and then RESTORING the watchdog
 			 * frame into it on the way out. That idiom published state/watchdog
 			 * TWICE PER TICK, with the same value, ~20-40 ms apart (observed on a
@@ -2053,7 +2094,7 @@ int main(void)
 			 * restores was also dead code -- cmds_rx overwrote f before any
 			 * enqueue could see it.
 			 *
-			 * Worse, the trailing pub_enqueue(f) sat AFTER an #endif, so on a board
+			 * Worse, the trailing box_pub_bulk(f) sat AFTER an #endif, so on a board
 			 * where that block compiles out it published whatever happened to be
 			 * in f -- a duplicate of some unrelated datapoint. That is the whole
 			 * problem with a shared scratch buffer: correctness depends on the
@@ -2078,7 +2119,7 @@ int main(void)
 
 				dserv_state_name(&cfg, wn, sizeof wn, "watchdog");
 				dserv_msg_int(wf, wn, 0, watchdog++);
-				pub_enqueue(wf);
+				box_pub_bulk(wf);
 			}
 			{
 				/* USB caller cost + TX-ring drops. Published on EVERY
@@ -2173,7 +2214,7 @@ int main(void)
 			 * legitimately; anything else wants explaining. */
 			dserv_state_name(&cfg, name, sizeof name, "dbg/wd_skipped");
 			dserv_msg_int(f, name, 0, (int32_t) wd_skipped);
-			pub_enqueue(f);
+			box_pub_bulk(f);
 
 #if defined(BOX_HAVE_OTA_SLOT)
 			/* Re-announce the last flashtest result for a few ticks --
@@ -2200,14 +2241,14 @@ int main(void)
 				for (unsigned i = 0; i < ARRAY_SIZE(ota_kv); i++) {
 					dserv_state_name(&cfg, name, sizeof name, ota_kv[i].k);
 					dserv_msg_int(f, name, 0, (int32_t) *ota_kv[i].v);
-					pub_enqueue(f);
+					box_pub_bulk(f);
 				}
 				dserv_state_name(&cfg, name, sizeof name, "ota/dbg/verify");
 				dserv_msg_int(f, name, 0, ota_dbg_verify);
-				pub_enqueue(f);
+				box_pub_bulk(f);
 				dserv_state_name(&cfg, name, sizeof name, "ota/dbg/rc");
 				dserv_msg_int(f, name, 0, ota_dbg_rc);
-				pub_enqueue(f);
+				box_pub_bulk(f);
 			}
 #endif
 
@@ -2224,13 +2265,13 @@ int main(void)
 				box_net_eth_send_stats(&sl, &sm);
 				dserv_state_name(&cfg, name, sizeof name, "dbg/send_us");
 				dserv_msg_int(f, name, 0, (int32_t) sl);
-				pub_enqueue(f);
+				box_pub_bulk(f);
 				dserv_state_name(&cfg, name, sizeof name, "dbg/send_max_us");
 				dserv_msg_int(f, name, 0, (int32_t) sm);
-				pub_enqueue(f);
+				box_pub_bulk(f);
 				dserv_state_name(&cfg, name, sizeof name, "dbg/loop_us");
 				dserv_msg_int(f, name, 0, (int32_t) loop_last_us);
-				pub_enqueue(f);
+				box_pub_bulk(f);
 				dserv_state_name(&cfg, name, sizeof name, "dbg/loop_max_us");
 				dserv_msg_int(f, name, 0, (int32_t) loop_max_us);
 				/* WINDOWED: reset after publishing, so this reads "worst pass
@@ -2239,23 +2280,23 @@ int main(void)
 				 * recurring stall, and reading recurrence into it produced a
 				 * confidently wrong diagnosis on 2026-07-26. */
 				loop_max_us = 0;
-				pub_enqueue(f);
+				box_pub_bulk(f);
 				{
 					uint32_t wu = 0, wm = 0, ru = 0, rm = 0;
 					box_net_eth_rx_stats(&wu, &wm, &ru, &rm);
 					dserv_state_name(&cfg, name, sizeof name, "dbg/wake_us");
 					dserv_msg_int(f, name, 0, (int32_t) wu);
-					pub_enqueue(f);
+					box_pub_bulk(f);
 					dserv_state_name(&cfg, name, sizeof name, "dbg/recv_us");
 					dserv_msg_int(f, name, 0, (int32_t) ru);
-					pub_enqueue(f);
+					box_pub_bulk(f);
 					dserv_state_name(&cfg, name, sizeof name, "dbg/disp_us");
 					dserv_msg_int(f, name, 0, (int32_t) disp_last_us);
-					pub_enqueue(f);
+					box_pub_bulk(f);
 					dserv_state_name(&cfg, name, sizeof name, "dbg/disp_max_us");
 					dserv_msg_int(f, name, 0, (int32_t) disp_max_us);
 					disp_max_us = 0;          /* windowed, see loop_max_us */
-					pub_enqueue(f);
+					box_pub_bulk(f);
 				}
 				{
 					/* The previously-dark segment: the stack's own
@@ -2269,10 +2310,10 @@ int main(void)
 						if (ss.rx_count) {
 							dserv_state_name(&cfg, name, sizeof name, "dbg/rxstack_us");
 							dserv_msg_int(f, name, 0, (int32_t) ss.rx_avg_us);
-							pub_enqueue(f);
+							box_pub_bulk(f);
 							dserv_state_name(&cfg, name, sizeof name, "dbg/rxstack_n");
 							dserv_msg_int(f, name, 0, (int32_t) ss.rx_count);
-							pub_enqueue(f);
+							box_pub_bulk(f);
 						}
 						if (ss.rx_count && ss.rx_detail_n) {
 							off = 0;
@@ -2283,15 +2324,15 @@ int main(void)
 							}
 							dserv_state_name(&cfg, name, sizeof name, "dbg/rxstack_detail");
 							dserv_msg_string(f, name, 0, d);
-							pub_enqueue(f);
+							box_pub_bulk(f);
 						}
 						if (ss.tx_count) {
 							dserv_state_name(&cfg, name, sizeof name, "dbg/txstack_us");
 							dserv_msg_int(f, name, 0, (int32_t) ss.tx_avg_us);
-							pub_enqueue(f);
+							box_pub_bulk(f);
 							dserv_state_name(&cfg, name, sizeof name, "dbg/txstack_n");
 							dserv_msg_int(f, name, 0, (int32_t) ss.tx_count);
-							pub_enqueue(f);
+							box_pub_bulk(f);
 						}
 						if (ss.tx_count && ss.tx_detail_n) {
 							off = 0;
@@ -2302,7 +2343,7 @@ int main(void)
 							}
 							dserv_state_name(&cfg, name, sizeof name, "dbg/txstack_detail");
 							dserv_msg_string(f, name, 0, d);
-							pub_enqueue(f);
+							box_pub_bulk(f);
 						}
 					}
 				}
@@ -2321,7 +2362,7 @@ int main(void)
 						 (unsigned long) box_gpio_di_isr_count());
 					dserv_state_name(&cfg, name, sizeof name, "dbg/gpio");
 					dserv_msg_string(f, name, 0, g);
-					pub_enqueue(f);
+					box_pub_bulk(f);
 				}
 #endif
 			}
@@ -2332,11 +2373,11 @@ int main(void)
 			 * the Ethernet link/lease and the PTP hardware clock. */
 			dserv_state_name(&cfg, name, sizeof name, "uplink");
 			dserv_msg_string(f, name, 0, box_uplink_active_name());
-			pub_enqueue(f);
+			box_pub_bulk(f);
 #if defined(CONFIG_NETWORKING)
 			dserv_state_name(&cfg, name, sizeof name, "net/link");
 			dserv_msg_int(f, name, 0, box_net_eth_link());
-			pub_enqueue(f);
+			box_pub_bulk(f);
 
 			uint8_t ip[4];
 			if (box_net_eth_get_ip(ip)) {
@@ -2344,11 +2385,11 @@ int main(void)
 				snprintf(ips, sizeof ips, "%u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]);
 				dserv_state_name(&cfg, name, sizeof name, "net/ip");
 				dserv_msg_string(f, name, 0, ips);
-				pub_enqueue(f);
+				box_pub_bulk(f);
 			}
 			dserv_state_name(&cfg, name, sizeof name, "ptp/ns");
 			dserv_msg_int64(f, name, 0, (int64_t) box_ptp_now_ns());
-			pub_enqueue(f);
+			box_pub_bulk(f);
 
 #if defined(CONFIG_PTP_CLOCK)
 			/* Re-anchor from PTP once a second. Costs NO packets -- the
@@ -2367,12 +2408,12 @@ int main(void)
 					dserv_state_name(&cfg, name, sizeof name,
 							 "sync/ptp_window_us");
 					dserv_msg_int(f, name, 0, (int32_t) win);
-					pub_enqueue(f);
+					box_pub_bulk(f);
 
 					dserv_state_name(&cfg, name, sizeof name,
 							 "sync/offset_us");
 					dserv_msg_int64(f, name, 0, boxclk.offset_us);
-					pub_enqueue(f);
+					box_pub_bulk(f);
 				}
 			}
 #endif

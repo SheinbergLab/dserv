@@ -5,9 +5,11 @@
  *   - a physical mode strap (if wired) forces a transport, else
  *   - the persisted transport_mode: XMODE_ETH / XMODE_USB pin one, XMODE_AUTO
  *     picks Ethernet when the PHY reports carrier (debounced) else USB.
- * All producers -- local GPIO/analog and BLE ingress (block #6) -- publish
- * through box_uplink_send(), which routes to whichever uplink is active. This is
- * the RW612 health-arbitrated descendant of the Pico's boot-selected box_net_iface.
+ * Producers publish through box_pub (box_pub.h), whose thread is the one
+ * writer of box_uplink_send/send_stream; the arbiter routes each call to
+ * whichever uplink is active, under a lock that also covers poll and the
+ * service pass that can swap transports. This is the RW612 health-arbitrated
+ * descendant of the Pico's boot-selected box_net_iface.
  */
 #ifndef BOX_UPLINK_H
 #define BOX_UPLINK_H

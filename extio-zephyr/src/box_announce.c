@@ -4,7 +4,8 @@
 #include "box_announce.h"
 #include "box_boot.h"
 #include "box_gpio.h"
-#include "box_uplink.h"
+#include "box_uplink.h"                 /* box_uplink_active_name for "transport" */
+#include "box_pub.h"
 
 #include <zephyr/kernel.h>
 #include <stdio.h>
@@ -58,7 +59,12 @@ static const char *box_build_key(void)
 	return key;
 }
 
-/* ---- small helpers: one datapoint per item ---- */
+/* ---- small helpers: one datapoint per item ----
+ *
+ * BULK class, deliberately: a manifest burst is dozens of frames of
+ * re-emittable state (the announce can always be asked for again --
+ * cmd/announce), and it must never occupy the event queue ahead of a DI edge.
+ * Dropped-oldest under pressure is visible in dbg/pub_bulk_drop. */
 
 /* A frame carries name + payload in ~109 bytes, and dserv_msg_build REFUSES
  * (returns -1) rather than truncating when they do not fit. Ignoring that -- as
@@ -78,7 +84,7 @@ static void pub_str(const box_config_t *c, const char *leaf, const char *val)
 	if (dserv_msg_string(f, nm, 0, val) <= 0) {
 		dserv_msg_string(f, nm, 0, "!toolong");
 	}
-	box_uplink_send(f, DSERV_MSG_LEN);
+	(void) box_pub_bulk(f);
 }
 
 static void pub_int(const box_config_t *c, const char *leaf, int64_t val)
@@ -88,7 +94,7 @@ static void pub_int(const box_config_t *c, const char *leaf, int64_t val)
 
 	dserv_state_name(c, nm, sizeof nm, leaf);
 	dserv_msg_int(f, nm, 0, (int) val);
-	box_uplink_send(f, DSERV_MSG_LEN);
+	(void) box_pub_bulk(f);
 }
 
 /* ---- identity ---- */
