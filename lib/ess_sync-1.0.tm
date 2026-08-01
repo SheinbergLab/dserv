@@ -1252,7 +1252,7 @@ namespace eval ess {
     # Reads the base lib file and PUTs it to the registry.
     # Requires the lib to be promoted (in base) first if overlay was active.
     #
-    proc commit_lib {filename {comment ""}} {
+    proc commit_lib {filename {comment ""} {user_override ""}} {
         variable system_path
         variable overlay_path
         variable registry_url
@@ -1287,11 +1287,13 @@ namespace eval ess {
         }
 
         # Identify user
-        set user ""
-        if {$overlay_path ne ""} {
-            set user [file tail $overlay_path]
-        } elseif {[info exists ::env(USER)]} {
-            set user $::env(USER)
+        set user $user_override
+        if {$user eq ""} {
+            if {$overlay_path ne ""} {
+                set user [file tail $overlay_path]
+            } elseif {[info exists ::env(USER)]} {
+                set user $::env(USER)
+            }
         }
 
         # Check role
