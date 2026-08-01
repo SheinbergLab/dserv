@@ -5507,6 +5507,11 @@ namespace eval ess {
         if {$current(system) eq ""} {
             error "No system loaded"
         }
+        # test_loader replaces the live stimdg — refuse mid-run (the
+        # caller restores it afterward with reload_variant).
+        if {[catch {dservGet ess/status} st] == 0 && $st eq "running"} {
+            error "Cannot test a loader while an experiment is running"
+        }
         set s [::ess::find_system $current(system)]
 
         # Get the loader's argument names in order
@@ -5596,6 +5601,391 @@ namespace eval ess {
         set loader_args_dict \
             [dict merge $loader_variant_defaults [$s get_variant_args]]
         return $loader_args_dict
+    }
+
+    # ── Variant option-list editor ──────────────────────────────────
+    #
+    # Surgical editing of one loader arg's option list inside the
+    # <protocol>_variants.tcl file. Only the target option's braced
+    # value is replaced — every other byte (comments, formatting,
+    # other variants) is preserved. The scanner follows Tcl's own
+    # bracing rules (depth counting, backslash escapes, quoted words),
+    # so any file Tcl can source, it can navigate.
+    #
+    # Read side:   variant_options_json ?variant?   → JSON for the GUI
+    # Write side:  set_variant_options variant arg {label value ...}
+    #              (validates, backs up, writes the same file the
+    #               loader resolves, republishes ess/variants_script)
+    #
+
+    # Scan one list/dict element of $text at/after $pos.
+    # Returns dict: type (word|brace|comment|eof), start, end
+    # (inclusive indexes of the element, braces included), cstart/cend
+    # (content bounds inside braces, brace type only), next (position
+    # after the element).
+    proc _scan_element {text pos} {
+        set n [string length $text]
+        while {$pos < $n && [string is space [string index $text $pos]]} { incr pos }
+        if {$pos >= $n} { return [dict create type eof next $pos] }
+        set c [string index $text $pos]
+        if {$c eq "#"} {
+            set eol [string first "\n" $text $pos]
+            if {$eol < 0} { set eol [expr {$n - 1}] }
+            return [dict create type comment start $pos end $eol next [expr {$eol + 1}]]
+        }
+        if {$c eq "\{"} {
+            set depth 0
+            for {set i $pos} {$i < $n} {incr i} {
+                set ch [string index $text $i]
+                if {$ch eq "\\"} { incr i; continue }
+                if {$ch eq "\{"} {
+                    incr depth
+                } elseif {$ch eq "\}"} {
+                    incr depth -1
+                    if {$depth == 0} {
+                        return [dict create type brace start $pos end $i \
+                            cstart [expr {$pos + 1}] cend [expr {$i - 1}] \
+                            next [expr {$i + 1}]]
+                    }
+                }
+            }
+            error "unbalanced braces starting at char $pos"
+        }
+        if {$c eq "\""} {
+            for {set i [expr {$pos + 1}]} {$i < $n} {incr i} {
+                set ch [string index $text $i]
+                if {$ch eq "\\"} { incr i; continue }
+                if {$ch eq "\""} {
+                    return [dict create type word start $pos end $i next [expr {$i + 1}]]
+                }
+            }
+            error "unterminated quote at char $pos"
+        }
+        set i $pos
+        while {$i < $n && ![string is space [string index $text $i]]} { incr i }
+        return [dict create type word start $pos end [expr {$i - 1}] next $i]
+    }
+
+    # Walk key/value pairs within text[cstart..cend]; return the value
+    # element dict for $key ("" if absent). Comment lines between pairs
+    # are skipped the same way strip_comments drops them at parse time.
+    # Last occurrence wins, matching dict semantics.
+    proc _find_dict_value {text cstart cend key} {
+        set pos $cstart
+        set found {}
+        while {1} {
+            set k [_scan_element $text $pos]
+            if {[dict get $k type] eq "eof" || [dict get $k start] > $cend} break
+            if {[dict get $k type] eq "comment"} {
+                set pos [dict get $k next]
+                continue
+            }
+            set v [_scan_element $text [dict get $k next]]
+            if {[dict get $v type] eq "eof" || [dict get $v start] > $cend} break
+            if {[dict get $v type] eq "comment"} {
+                error "comment found in value position after key\
+                    '[string range $text [dict get $k start] [dict get $k end]]'"
+            }
+            if {[string range $text [dict get $k start] [dict get $k end]] eq $key} {
+                set found $v
+            }
+            set pos [dict get $v next]
+        }
+        return $found
+    }
+
+    # Locate the value element of one loader arg's options inside the
+    # variants file text: variants dict → variant → loader_options → arg.
+    # Returns the element dict from _scan_element (or errors).
+    proc _locate_variant_option {text variant arg} {
+        if {![regexp -indices {variable\s+variants\s+\{} $text m]} {
+            error "no 'variable variants' block found in variants file"
+        }
+        set vdict [_scan_element $text [lindex $m 1]]
+        if {[dict get $vdict type] ne "brace"} {
+            error "variants block is not a braced dict"
+        }
+        set vspan [_find_dict_value $text \
+            [dict get $vdict cstart] [dict get $vdict cend] $variant]
+        if {$vspan eq "" || [dict get $vspan type] ne "brace"} {
+            error "variant '$variant' not found in variants file"
+        }
+        set lospan [_find_dict_value $text \
+            [dict get $vspan cstart] [dict get $vspan cend] loader_options]
+        if {$lospan eq "" || [dict get $lospan type] ne "brace"} {
+            error "variant '$variant' has no loader_options block"
+        }
+        set aspan [_find_dict_value $text \
+            [dict get $lospan cstart] [dict get $lospan cend] $arg]
+        if {$aspan eq "" || [dict get $aspan type] ne "brace"} {
+            error "loader option '$arg' not found in variant '$variant'\
+                (only existing options can be edited)"
+        }
+        return $aspan
+    }
+
+    # An option is emitted bare (single token) when its label equals its
+    # value and the value is one simple word — round-tripping the common
+    # { 2 1 3 } style exactly.
+    proc _option_is_bare {label value} {
+        return [expr {$label eq $value && [llength $value] == 1 &&
+                      [lindex $value 0] eq $value}]
+    }
+
+    # Validate a flat {label value ...} option spec. Returns dict
+    # {errors {...} warnings {...}} — empty errors means acceptable.
+    proc _validate_variant_options {pairs} {
+        set errors {}
+        set warnings {}
+        if {[catch {llength $pairs} n] || $n % 2 != 0} {
+            return [dict create errors [list "option spec is not a label/value list"] warnings {}]
+        }
+        if {$n == 0} {
+            return [dict create errors [list "at least one option is required"] warnings {}]
+        }
+        set seen [dict create]
+        foreach {label value} $pairs {
+            if {$label eq ""} { set label $value }
+            if {$value eq ""} {
+                lappend errors "option '$label' has an empty value"
+                continue
+            }
+            if {[string index [string trimleft $label] 0] eq "#" ||
+                [string index [string trimleft $value] 0] eq "#"} {
+                lappend errors "option '$label': comments are not allowed inside option lists"
+            }
+            if {[string first "\[" $value] >= 0 || [string first "\[" $label] >= 0} {
+                lappend errors "option '$label': '\[' is not allowed — the variants\
+                    file is subst'd at load, so brackets would execute as commands"
+            }
+            if {[string first "\$" $value] >= 0} {
+                lappend warnings "option '$label' references a variable (\$) —\
+                    it must resolve when the variants file loads"
+            }
+            if {[dict exists $seen $label]} {
+                lappend errors "duplicate option label '$label'"
+            }
+            dict set seen $label 1
+        }
+        return [dict create errors $errors warnings $warnings]
+    }
+
+    # Serialize a flat {label value ...} spec to option-list text.
+    # Single-line when short, one option per line otherwise. $indent is
+    # the leading whitespace of the line the option sits on.
+    proc _format_variant_options {pairs indent} {
+        set elems {}
+        foreach {label value} $pairs {
+            if {$label eq ""} { set label $value }
+            if {[_option_is_bare $label $value]} {
+                lappend elems $value
+            } else {
+                lappend elems "\{[list $label $value]\}"
+            }
+        }
+        set oneline "\{ [join $elems { }] \}"
+        if {[string length $oneline] + [string length $indent] <= 78} {
+            return $oneline
+        }
+        set inner_indent "${indent}    "
+        set out "\{\n"
+        foreach e $elems {
+            append out "${inner_indent}${e}\n"
+        }
+        append out "${indent}\}"
+        return $out
+    }
+
+    # Read side: raw + parsed option lists for every loader arg of a
+    # variant, straight from the variants file. JSON shape:
+    # { system, protocol, variant, file,
+    #   args: { <arg>: { raw, options: [ {label, value, bare} ... ] } } }
+    proc variant_options_json {{variant ""}} {
+        variable current
+        if {$current(system) eq ""} { error "No system loaded" }
+        if {$variant eq ""} { set variant $current(variant) }
+        if {$variant eq ""} { error "No variant loaded" }
+
+        set text [variants_script]
+        if {$text eq ""} { error "variants file not found" }
+
+        if {![regexp -indices {variable\s+variants\s+\{} $text m]} {
+            error "no 'variable variants' block found in variants file"
+        }
+        set vdict [_scan_element $text [lindex $m 1]]
+        set vspan [_find_dict_value $text \
+            [dict get $vdict cstart] [dict get $vdict cend] $variant]
+        if {$vspan eq "" || [dict get $vspan type] ne "brace"} {
+            error "variant '$variant' not found in variants file"
+        }
+        set lospan [_find_dict_value $text \
+            [dict get $vspan cstart] [dict get $vspan cend] loader_options]
+        if {$lospan eq "" || [dict get $lospan type] ne "brace"} {
+            error "variant '$variant' has no loader_options block"
+        }
+
+        set obj [yajl create #auto]
+        $obj map_open
+        $obj string system string $current(system)
+        $obj string protocol string $current(protocol)
+        $obj string variant string $variant
+        $obj string file string [get_original_file_path variants]
+        $obj string args map_open
+
+        set pos [dict get $lospan cstart]
+        set cend [dict get $lospan cend]
+        while {1} {
+            set k [_scan_element $text $pos]
+            if {[dict get $k type] eq "eof" || [dict get $k start] > $cend} break
+            if {[dict get $k type] eq "comment"} {
+                set pos [dict get $k next]
+                continue
+            }
+            set v [_scan_element $text [dict get $k next]]
+            if {[dict get $v type] eq "eof" || [dict get $v start] > $cend} break
+            set aname [string range $text [dict get $k start] [dict get $k end]]
+            if {[dict get $v type] eq "brace"} {
+                set raw [string range $text [dict get $v cstart] [dict get $v cend]]
+            } else {
+                set raw [string range $text [dict get $v start] [dict get $v end]]
+            }
+            $obj string $aname map_open
+            $obj string raw string $raw
+            $obj string options array_open
+            if {![catch {llength $raw}]} {
+                foreach o $raw {
+                    set label $o
+                    set value $o
+                    if {[llength $o] == 2} {
+                        lassign $o label value
+                    }
+                    $obj map_open
+                    $obj string label string $label
+                    $obj string value string $value
+                    $obj string bare bool [_option_is_bare $label $value]
+                    $obj map_close
+                }
+            }
+            $obj array_close
+            $obj map_close
+            set pos [dict get $v next]
+        }
+
+        $obj map_close
+        $obj map_close
+        set json [$obj get]
+        $obj delete
+        return $json
+    }
+
+    # Write side: replace one loader arg's option list in the variants
+    # file. pairs is a flat {label value ...} list (label may be ""
+    # or equal to value for bare options). Validates first, dry-run
+    # parses the edited file, backs up, writes the same file path the
+    # loader resolves, republishes ess/variants_script.
+    proc set_variant_options {variant arg pairs} {
+        variable current
+        if {$current(system) eq ""} { error "No system loaded" }
+        if {$variant eq ""} { error "variant required" }
+
+        set v [_validate_variant_options $pairs]
+        if {[llength [dict get $v errors]]} {
+            error "invalid options: [join [dict get $v errors] {; }]"
+        }
+
+        set path [get_original_file_path variants]
+        if {$path eq "" || ![file exists $path]} {
+            error "variants file not found"
+        }
+        set f [open $path r]
+        set text [read $f]
+        close $f
+
+        set span [_locate_variant_option $text $variant $arg]
+
+        # indentation of the line the option starts on
+        set ls [string last "\n" $text [dict get $span start]]
+        incr ls
+        set indent ""
+        regexp -start $ls {\A[ \t]*} [string range $text $ls end] indent
+
+        set newval [_format_variant_options $pairs $indent]
+        set newtext [string replace $text \
+            [dict get $span start] [dict get $span end] $newval]
+
+        if {![info complete $newtext]} {
+            error "internal error: edited variants file is not complete Tcl"
+        }
+
+        # Dry-run: re-locate and re-parse the edited option list through
+        # the same normalization the loader applies.
+        set check [_locate_variant_option $newtext $variant $arg]
+        set parsed [string range $newtext \
+            [dict get $check cstart] [dict get $check cend]]
+        set nopts 0
+        foreach o [strip_comments $parsed] {
+            if {[llength $o] > 2} {
+                error "option element '$o' has more than two words — wrap\
+                    list values as {label {the list}}"
+            }
+            incr nopts
+        }
+        if {$nopts == 0} { error "edited option list is empty" }
+
+        backup_script variants
+
+        if {[catch {
+            set f [open $path w]
+            puts -nonewline $f $newtext
+            close $f
+            fix_file_ownership $path
+        } werr]} {
+            error "failed to write variants file: $werr"
+        }
+
+        dservSet ess/variants_script $newtext
+        catch { publish_snapshot }
+        ess_info "Updated options for '$arg' in variant '$variant' ($nopts options)" "variant"
+
+        set result "success: $nopts options"
+        if {[llength [dict get $v warnings]]} {
+            append result " (warnings: [join [dict get $v warnings] {; }])"
+        }
+        return $result
+    }
+
+    # Re-source the variants file for the loaded system/protocol and
+    # refresh the system object's variants dict — the light alternative
+    # to reload_protocol after an on-disk variants edit. reload_variant
+    # afterward re-runs the loader with the fresh option lists.
+    proc resource_variants {} {
+        variable current
+        if {$current(system) eq "" || $current(protocol) eq ""} {
+            error "No system/protocol loaded"
+        }
+        if {[catch {dservGet ess/status} st] == 0 && $st eq "running"} {
+            error "Cannot re-source variants while an experiment is running"
+        }
+        set s [find_system $current(system)]
+        set variant_file [ess::paths::resolve \
+            [ess::paths::relpath $current(system) $current(protocol) variants]]
+        if {$variant_file eq "" || ![file exists $variant_file]} {
+            error "variants file not found"
+        }
+        source $variant_file
+        set vinfo [set ::ess::$current(system)::$current(protocol)::variants]
+        $s set_variants $vinfo
+        # re-register per-variant init/deinit bodies (they may have changed)
+        dict for {k v} $vinfo {
+            foreach m "init deinit" {
+                if {[dict exists $v $m]} {
+                    $s add_method ${k}_${m} {} [dict get $v $m]
+                }
+            }
+        }
+        dservSet ess/variants [dict keys $vinfo]
+        dservSet ess/variants_script [variants_script]
+        return [dict keys $vinfo]
     }
 
     proc variant_init {system protocol variant} {
