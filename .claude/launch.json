@@ -14,6 +14,12 @@
       "port": 8091
     },
     {
+      "name": "www3",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "8092", "--directory", "www"],
+      "port": 8092
+    },
+    {
       "name": "extio-setup",
       "runtimeExecutable": "go",
       "runtimeArgs": ["-C", "tools/extio-setup", "run", ".", "-open=false", "-dev"],
