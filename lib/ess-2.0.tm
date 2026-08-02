@@ -999,10 +999,13 @@ namespace eval ess {
     # if this is set, there is a callback associated with errorInfo to set the ess/errorInfo dpoint
     variable error_trace 0
 
-    # to help manage system loading
-    variable loading_progress
-    variable loading_operation_id  
-    variable loading_start_time
+    # to help manage system loading. Initialized (not merely declared) so
+    # that set_loading_progress works even if it is reached before any
+    # start_loading_operation -- it is called from the failure reporter,
+    # which must never throw and mask the error it is reporting.
+    variable loading_progress   {}
+    variable loading_operation_id  {}
+    variable loading_start_time [clock seconds]
     
     proc version_string {} {
         if {[dservExists ess/git/branch] && [dservExists ess/git/tag]} {
@@ -1118,12 +1121,231 @@ namespace eval ess {
         }
         dservSet ess/last_load_time $loading_start_time
     }
-    
+
+    # ──────────────────────────────────────────────────────────────
+    # Load failure reporting
+    #
+    # A load that throws used to unwind out of load_system with
+    # ess/status still set to "loading", which disables every control
+    # in ess_control.html and leaves no way to pick another system.
+    # Every failure now ends in a terminal, reported state:
+    #
+    #   ess/status      restored to "stopped" (controls usable again)
+    #   ess/load_error  JSON describing the failure, or {} when clear
+    #
+    # ess/load_error carries a last_good {system protocol variant} so a
+    # client can offer one-click recovery to the last system that
+    # loaded cleanly. It is cleared at the start of every load attempt.
+    # ──────────────────────────────────────────────────────────────
+
+    variable last_good {}
+
+    # Reason the most recent loader gave for handing back no trials, set
+    # via loader_no_trials. Cleared before every loader run.
+    variable loader_degraded {}
+
+    # set by publish_load_report, cleared at the start of every load: did
+    # THIS load attempt report anything (of any severity)?
+    variable load_reported 0
+
+    proc clear_load_error {} {
+        variable load_reported
+        set load_reported 0
+        dservSet ess/load_error {}
+    }
+
+    proc load_was_clean {} { variable load_reported; return [expr {!$load_reported}] }
+
+    proc clear_loader_degraded {} {
+        variable loader_degraded
+        set loader_degraded {}
+    }
+
+    proc get_loader_degraded {} {
+        variable loader_degraded
+        return $loader_degraded
+    }
+
+    # THE LOADER CONTRACT
+    #
+    # A loader must not throw because optional external data is missing --
+    # that aborts the load and costs the user their whole GUI (see
+    # report_load_failure). Instead: declare the full stimdg column set,
+    # call this with the reason, and return the empty group.
+    #
+    #   dl_set stimdg:stimtype [dl_ilist]   ;# ... all columns ...
+    #   set problem [::ess::data_file_problem $dbfile "shape database"]
+    #   if {$problem ne ""} {
+    #       ::ess::loader_no_trials $problem
+    #       return $g
+    #   }
+    #
+    # The reason is carried into ess/load_error as a warning by
+    # variant_init, so "loaded 0 trials" is never silent.
+    proc loader_no_trials {reason} {
+        variable loader_degraded
+        set loader_degraded $reason
+        ess_warning "loader produced no trials: $reason" "loader"
+        return
+    }
+
+    # Record the currently loaded system as the fallback to recover to.
+    # Called only after a load has completed all the way through.
+    proc record_last_good {} {
+        variable current
+        variable last_good
+        if {$current(system) eq {} || $current(variant) eq {}} { return }
+        set last_good [dict create \
+                           system   $current(system) \
+                           protocol $current(protocol) \
+                           variant  $current(variant)]
+        dservSet ess/last_good_system $last_good
+        return $last_good
+    }
+
+    proc get_last_good {} { variable last_good; return $last_good }
+
+    # Reload the last cleanly loaded system. The recovery action offered
+    # by the GUI after a failed load.
+    proc load_last_good {} {
+        variable last_good
+        if {$last_good eq {}} { error "no known good system to fall back to" }
+        load_system [dict get $last_good system] \
+            [dict get $last_good protocol] [dict get $last_good variant]
+    }
+
+    # Publish a failure and put the system back in a usable state.
+    # `operation` is what was attempted (system_load, variant_reload, ...);
+    # the stage comes from the last set_loading_progress call, which tells
+    # the user *where* it broke (protocol_init, variant_execution, ...).
+    proc report_load_failure {operation system protocol variant message {details {}}} {
+        variable current
+
+        # Restore a usable status: "loading" is a transient the GUI treats
+        # as "everything disabled", and nothing else will clear it now.
+        # Go through the system object when there is a live one so its
+        # internal _status stays in sync, but publish unconditionally --
+        # after a failed load the object may be half-built or gone.
+        if {$current(state_system) ne {}} {
+            catch {$current(state_system) set_status stopped}
+        }
+        dservSet ess/status stopped
+
+        return [publish_load_report error $operation $system $protocol \
+                    $variant $message $details]
+    }
+
+    # Publish a DEGRADED load: the system came up, but with no trials, so
+    # it cannot actually run. Same datapoint and same client rendering as
+    # a failure, distinguished by severity -- the status is left alone
+    # because nothing threw.
+    proc report_no_trials {operation system protocol variant} {
+        variable loader_degraded
+        if {$loader_degraded ne {}} {
+            set message "loaded 0 trials: $loader_degraded"
+        } else {
+            set message "the loader produced no trials"
+        }
+        return [publish_load_report warning $operation $system $protocol \
+                    $variant $message {}]
+    }
+
+    # Columns of stimdg whose length is not the trial count, as a list of
+    # {name length} pairs ({} when the table is well formed).
+    #
+    # stimdg is a TABLE: nexttrial indexes every column by cur_id, so a
+    # column of the wrong length is not a cosmetic problem. A SHORT column
+    # throws "index out of range" only once the run reaches that trial --
+    # i.e. partway through a session, after the subject is committed -- and
+    # a reset callback that sizes `remaining` off a short column silently
+    # truncates the session instead. Both are worth an up-front warning.
+    proc stimdg_ragged_columns {} {
+        if {![dg_exists stimdg]} { return {} }
+        if {[catch {set n [dl_length stimdg:stimtype]}]} { return {} }
+        set out {}
+        foreach c [dg_tclListnames stimdg] {
+            if {[catch {set len [dl_length stimdg:$c]}]} continue
+            if {$len != $n} { lappend out [list $c $len] }
+        }
+        return $out
+    }
+
+    # Report a structurally broken stimdg. Severity warning, same channel
+    # and same client rendering as a 0-trial load: in both cases the system
+    # is loaded but must not be run.
+    proc report_bad_stimdg {operation system protocol variant ragged} {
+        set n 0
+        catch {set n [dl_length stimdg:stimtype]}
+        set detail {}
+        foreach pair $ragged {
+            lassign $pair col len
+            lappend detail "$col has $len rows"
+        }
+        set message "stimdg is not a valid trial table ($n trials, but\
+ [join $detail {, }]) -- running this will fail partway through the session"
+        return [publish_load_report warning $operation $system $protocol \
+                    $variant $message {}]
+    }
+
+    proc publish_load_report {severity operation system protocol variant message details} {
+        variable last_good
+        variable loading_progress
+        variable load_reported
+
+        set load_reported 1
+
+        set stage "unknown"
+        if {[info exists loading_progress] && [dict exists $loading_progress stage]} {
+            set stage [dict get $loading_progress stage]
+        }
+
+        # errorInfo is useful but unbounded; keep the head of it
+        if {[string length $details] > 2000} {
+            set details "[string range $details 0 1999]..."
+        }
+
+        set obj [yajl create #auto]
+        $obj map_open
+        $obj string severity  string $severity
+        $obj string operation string $operation
+        $obj string stage     string $stage
+        $obj string message   string $message
+        $obj string details   string $details
+        $obj string system    string $system
+        $obj string protocol  string $protocol
+        $obj string variant   string $variant
+        $obj string timestamp number [clock seconds]
+        $obj string last_good map_open
+        if {$last_good ne {}} {
+            $obj string system   string [dict get $last_good system]
+            $obj string protocol string [dict get $last_good protocol]
+            $obj string variant  string [dict get $last_good variant]
+        }
+        $obj map_close
+        $obj map_close
+        set json [$obj get]
+        $obj delete
+
+        # publish first: everything below is best-effort, and the client
+        # needs this datapoint even if the logging path is itself unhappy
+        dservSet ess/load_error $json
+        if {$severity eq "error"} {
+            catch {finish_loading_operation false $message}
+            catch {ess_error "$operation failed at stage \"$stage\": $message" "system"}
+        } else {
+            catch {ess_warning "$operation: $message" "system"}
+        }
+        return $json
+    }
+
     proc loading_dict_to_json {dict_data} {
         set obj [yajl create #auto]
         $obj map_open
         dict for {key value} $dict_data {
-            if {[string is double $value]} {
+            # NB: [string is double ""] is TRUE, and yajl rejects an empty
+            # number -- an unset stage/operation_id would abort the whole
+            # progress publish. Empty always goes out as a string.
+            if {$value ne {} && [string is double $value]} {
                 $obj string $key number $value
             } else {
                 $obj string $key string $value
@@ -1169,9 +1391,31 @@ namespace eval ess {
     }
     
     # load_system with feedback and completion info
+    #
+    # Thin wrapper over load_system_body so that EVERY failure path --
+    # not just the handful with explicit checks -- ends in a reported,
+    # recoverable state. protocol_init, variant_init (and the loader it
+    # calls) and final_init can all throw; without this the exception
+    # unwinds with ess/status stuck at "loading" and the GUI wedged.
     proc load_system {{system {}} {protocol {}} {variant {}}} {
+        clear_load_error
+        try {
+            load_system_body $system $protocol $variant
+        } on error {err opts} {
+            report_load_failure "system_load" $system $protocol $variant \
+                $err [dict get $opts -errorinfo]
+            return -options $opts $err
+        }
+        # Only remember a CLEAN load. A system that came up with no trials or
+        # a ragged stimdg loaded without throwing, but it is not something to
+        # fall back TO -- recovering onto it would just re-raise the warning.
+        if {[load_was_clean]} { record_last_good }
+        return
+    }
+
+    proc load_system_body {{system {}} {protocol {}} {variant {}}} {
         variable current
-        
+
         # start progress tracking right away
         set operation_id [start_loading_operation "system_load"]
         ess_info "Starting system load: $system/$protocol/$variant" "system"
@@ -1360,9 +1604,10 @@ namespace eval ess {
 	    return
 	}
 	
-	set operation_id [start_loading_operation "variant_reload"] 
+	set operation_id [start_loading_operation "variant_reload"]
 	set_loading_progress "variant_init" "Reloading variant: $current(variant)" 50
-	
+	clear_load_error
+
 	if {[catch {
 	    # initialize the variant by calling the appropriate loader
 	    variant_init $current(system) $current(protocol) $current(variant)
@@ -1375,12 +1620,15 @@ namespace eval ess {
 	    ess::reset
 
 	    finish_loading_operation true
-	    
+
 	} error]} {
-	    finish_loading_operation false "Variant reload failed: $error"
+	    # variant_init has already restored ess/status; publish the
+	    # failure so the GUI can surface it and offer a way back
+	    report_load_failure "variant_reload" $current(system) \
+		$current(protocol) $current(variant) $error $::errorInfo
 	    error $error
 	}
-	
+
     }
     
     proc set_system {system} {
@@ -5257,7 +5505,12 @@ namespace eval ess {
     }
 
     # publish so other processes can access
-    dservSet ess/system_path $system_path    
+    dservSet ess/system_path $system_path
+
+    # load failure reporting: exist from startup so clients can subscribe
+    # before anything has been loaded (empty = no outstanding failure)
+    dservSet ess/load_error {}
+    dservSet ess/last_good_system {}
 
     # Data directory: set from environment, publish as datapoint.
     # The ess/data_dir datapoint is the single source of truth at runtime;
@@ -5302,6 +5555,82 @@ namespace eval ess {
     proc resolve_file {relpath} { return [ess::paths::resolve $relpath] }
     proc resolve_glob {relpattern} { return [ess::paths::resolve_glob $relpattern] }
     proc resolve_source {relpath} { return [ess::paths::source $relpath] }
+
+    # ──────────────────────────────────────────────────────────────
+    # Data files
+    #
+    # Scripts are found by ess::paths; DATA (sqlite databases, stimulus
+    # image sets, pregenerated dgs) is different: it is often big, often
+    # lives on a shared mount that may not be up, and is sometimes absent
+    # entirely on a dev box. These helpers give every system one way to
+    # look for it and one way to describe why it isn't usable, so that a
+    # loader can degrade instead of throwing. See loader_no_trials.
+    # ──────────────────────────────────────────────────────────────
+
+    # Standard search order for a protocol's data file, most specific
+    # first. Both the protocol- and system-level data dirs go through
+    # resolve_file, so a user's overlay copy wins over the base tree.
+    proc data_search_paths {name {system {}} {protocol {}}} {
+        variable current
+        if {$system eq {}}   { set system   $current(system) }
+        if {$protocol eq {}} { set protocol $current(protocol) }
+
+        set paths {}
+        if {$system ne {}} {
+            if {$protocol ne {}} {
+                lappend paths [resolve_file \
+                    [file join $current(project) $system $protocol data $name]]
+            }
+            lappend paths [resolve_file \
+                [file join $current(project) $system data $name]]
+        }
+        lappend paths [resolve_file [file join $current(project) data $name]]
+        return $paths
+    }
+
+    # First readable candidate, or "" if there is none. `-paths` supplies
+    # extra locations to try FIRST -- typically a shared mount:
+    #
+    #   set db [::ess::find_data_file Grasp3Shapes.db \
+    #               -paths /shared/qpcs/stimuli/graspomatic/Grasp3Shapes.db]
+    #
+    # Returning "" rather than erroring is deliberate: a variants file runs
+    # at load time, where a throw is expensive (see report_load_failure).
+    proc find_data_file {name args} {
+        set extra {}
+        set system {}
+        set protocol {}
+        foreach {opt val} $args {
+            switch -- $opt {
+                -paths    { set extra $val }
+                -system   { set system $val }
+                -protocol { set protocol $val }
+                default   { error "find_data_file: unknown option '$opt'" }
+            }
+        }
+        foreach p [concat $extra [data_search_paths $name $system $protocol]] {
+            if {$p ne {} && [file readable $p] && ![file isdirectory $p]} {
+                return $p
+            }
+        }
+        return {}
+    }
+
+    # "" when the file is usable, otherwise a reason phrased for a human
+    # ("shape database is missing or unreadable: /path"). `label` names
+    # the thing in that message.
+    proc data_file_problem {path {label "data file"}} {
+        if {$path eq {}} {
+            return "no $label found on this host"
+        }
+        if {![file readable $path] || [file isdirectory $path]} {
+            return "$label is missing or unreadable: $path"
+        }
+        if {[file size $path] == 0} {
+            return "$label is empty: $path"
+        }
+        return {}
+    }
 
     # Set the active overlay user; empty string disables overlay
     proc set_overlay_user {username} {
@@ -5997,16 +6326,31 @@ namespace eval ess {
 
         # let clients know we are loading a new set of trials
         $current(state_system) set_status loading
+
+        # "loading" disables the whole GUI, so it must never outlive this
+        # proc: any throw from here on restores "stopped" on the way out.
+        try {
+            variant_init_body $s $system $protocol $variant
+        } on error {err opts} {
+            catch {$current(state_system) set_status stopped}
+            return -options $opts $err
+        }
+    }
+
+    proc variant_init_body {s system protocol variant} {
+        variable current
+
         set_loading_progress "variant_loading" "Loading variant: $variant" 50
-        
+
         # get loader info for this variant and call
         set_loading_progress "variant_execution" "Executing variant loader" 60
+        clear_loader_degraded
         $s {*}[variant_loader_command $system $protocol $variant]
-        
+
         # push new stimdg to dataserver
         set_loading_progress "stimdg_update" "Updating stimulus data" 70
         $s update_stimdg
-        
+
         # count trials after stimdg update
         set trial_count 0
         if {[dg_exists stimdg]} {
@@ -6017,7 +6361,21 @@ namespace eval ess {
                 ess_info "Variant loaded with $trial_count trials" "variant"
             }
         }
-        
+
+        # A system with no trials loads fine and then cannot run. Report it
+        # the same way a hard failure is reported (severity warning), using
+        # the reason the loader gave via loader_no_trials if it gave one --
+        # otherwise "0 trials" is visible nowhere but the log.
+        if {$trial_count == 0} {
+            report_no_trials "variant_load" $system $protocol $variant
+        } else {
+            # loaded trials, but is the table actually well formed?
+            set ragged [stimdg_ragged_columns]
+            if {[llength $ragged]} {
+                report_bad_stimdg "variant_load" $system $protocol $variant $ragged
+            }
+        }
+
         set_loading_progress "variant_options" "Configuring variant options" 80
         # get new variant options to dataserver and other programs
         set vli [variant_loader_info $system $protocol $variant]
@@ -6129,14 +6487,24 @@ namespace eval ess {
     proc find_variants {s p} {
         variable current
         set loader_file [ess::paths::resolve [ess::paths::relpath $s $p loaders]]
-        if {[catch {source $loader_file} err]} {
+        # NB: re-raise with `return -options`, NOT a bare `error`. A bare
+        # error starts a fresh errorInfo, which throws away the one piece
+        # of information you actually want for a script error -- Tcl's
+        # own (file "..." line N). That trace is what reaches the client
+        # in ess/load_error, so losing it here means a syntax error in a
+        # loaders/variants file reports the file but not the line.
+        if {[catch {source $loader_file} err opts]} {
             ess_error "Failed to load loaders for $s/$p: $err" "system"
-            error "Failed to load loaders for $s/$p: $err"
+            dict set opts -errorinfo \
+                "Failed to load loaders for $s/$p:\n[dict get $opts -errorinfo]"
+            return -options $opts "Failed to load loaders for $s/$p: $err"
         }
         set variant_file [ess::paths::resolve [ess::paths::relpath $s $p variants]]
-        if {[catch {source $variant_file} err]} {
+        if {[catch {source $variant_file} err opts]} {
             ess_error "Failed to load variants for $s/$p: $err" "system"
-            error "Failed to load variants for $s/$p: $err"
+            dict set opts -errorinfo \
+                "Failed to load variants for $s/$p:\n[dict get $opts -errorinfo]"
+            return -options $opts "Failed to load variants for $s/$p: $err"
         }
         return [dict keys [set ::ess::${s}::${p}::variants]]
     }
