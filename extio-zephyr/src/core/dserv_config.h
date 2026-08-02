@@ -297,6 +297,14 @@ static inline void dserv_ain_group_leaf(const box_config_t *c, int g, char *buf,
 { if (c->ain_group_label[g][0]) snprintf(buf, sz, "ain/%s", c->ain_group_label[g]);
   else                          snprintf(buf, sz, "ain/a%d", g); }
 
+/* bare name segment of analog group g: label, or "a<g>" while unlabeled --
+ * the <label> in BOTH ain/<label> (data blocks, above) and the manifest's
+ * ain/group/<label>/* leaves (box_announce.c). One helper so the two can
+ * never disagree about what a group is called. */
+static inline void dserv_ain_group_name(const box_config_t *c, int g, char *buf, int sz)
+{ if (c->ain_group_label[g][0]) snprintf(buf, sz, "%s", c->ain_group_label[g]);
+  else                          snprintf(buf, sz, "a%d", g); }
+
 /* If the ADC is enabled but no group is configured, synthesize group 0 as the
  * 2-axis joystick ({0,1}, on-change, deadband 8) so the stick works out of the
  * box. RAM-only default (a later `save` persists it, which is fine); a box that
