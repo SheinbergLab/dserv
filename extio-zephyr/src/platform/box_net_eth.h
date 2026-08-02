@@ -81,9 +81,24 @@ unsigned box_net_eth_uplink_drops(void);
  * the publish-latency investigation; see box_net_eth.c. */
 void box_net_eth_send_stats(uint32_t *last_us, uint32_t *max_us);
 
-/* Inbound split: RX-thread-signal -> loop-reached-recv, and the recv cost. */
+/* Inbound split: RX-thread-signal -> loop-reached-recv, and the recv cost.
+ * wake_us is WINDOWED and one-shot: it is the last wake measured since the
+ * previous call, or UINT32_MAX (-1 as an int32 datapoint) when no wake was
+ * consumed in the window -- which is the honest reading both for an idle link
+ * and for a dead wake thread. It can no longer echo a stale stamp (the failure
+ * that cost diagnosis time on 2026-08-01; see the .c). */
 void box_net_eth_rx_stats(uint32_t *wake_us, uint32_t *wake_max,
 			  uint32_t *recv_us, uint32_t *recv_max);
+
+/* RX-wake thread liveness, published 1 Hz as dbg/ethrx_*:
+ *   age_ms      ms since the thread's heartbeat last advanced (healthy: the
+ *               watchdog's 1 s sampling grain; a wedged thread makes it grow
+ *               without bound)
+ *   respawns    0 normally, 1 once the self-heal spare was started
+ *   stack_free  measured unused stack of the live incarnation (CONFIG_INIT_STACKS)
+ * The full death-mode story lives with eth_rx_thread_fn in the .c. */
+void box_net_eth_rx_health(uint32_t *age_ms, uint32_t *respawns,
+			   uint32_t *stack_free);
 
 /* ---- in-stack residence time (CONFIG_NET_PKT_RXTIME/TXTIME_STATS) ----
  *

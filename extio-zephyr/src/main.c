@@ -2282,6 +2282,9 @@ int main(void)
 				loop_max_us = 0;
 				box_pub_bulk(f);
 				{
+					/* wake_us is -1 for a window with NO consumed wake --
+					 * idle link OR dead wake thread; dbg/ethrx_age_ms below
+					 * is what separates those two (grows only for dead). */
 					uint32_t wu = 0, wm = 0, ru = 0, rm = 0;
 					box_net_eth_rx_stats(&wu, &wm, &ru, &rm);
 					dserv_state_name(&cfg, name, sizeof name, "dbg/wake_us");
@@ -2289,6 +2292,24 @@ int main(void)
 					box_pub_bulk(f);
 					dserv_state_name(&cfg, name, sizeof name, "dbg/recv_us");
 					dserv_msg_int(f, name, 0, (int32_t) ru);
+					box_pub_bulk(f);
+
+					/* RX-wake thread liveness -- the numbers that were
+					 * missing while it died silently (2/4 boots, box02,
+					 * 2026-08-01): age growing past ~6 s = wedged (the
+					 * self-heal respawns at 5 s and that shows in
+					 * respawns=1); stack_free is the measured headroom
+					 * behind the 2048 sizing. */
+					uint32_t ea = 0, er = 0, es = 0;
+					box_net_eth_rx_health(&ea, &er, &es);
+					dserv_state_name(&cfg, name, sizeof name, "dbg/ethrx_age_ms");
+					dserv_msg_int(f, name, 0, (int32_t) ea);
+					box_pub_bulk(f);
+					dserv_state_name(&cfg, name, sizeof name, "dbg/ethrx_respawns");
+					dserv_msg_int(f, name, 0, (int32_t) er);
+					box_pub_bulk(f);
+					dserv_state_name(&cfg, name, sizeof name, "dbg/ethrx_stack_free");
+					dserv_msg_int(f, name, 0, (int32_t) es);
 					box_pub_bulk(f);
 					dserv_state_name(&cfg, name, sizeof name, "dbg/disp_us");
 					dserv_msg_int(f, name, 0, (int32_t) disp_last_us);
