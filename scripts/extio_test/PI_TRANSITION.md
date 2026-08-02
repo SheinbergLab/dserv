@@ -13,7 +13,19 @@ production host; this runbook makes the hop mechanical.
 | firmware v0.4.0+24 | already on the box (confirmed permanent); travels with it |
 | `extio_test` system (systems tree is NOT git) | rsync (below) or registry push |
 | configs.db project/configs/queues | recreated on the Pi: `scripts/extio_test/setup_configs.sh <boxname>` (idempotent) |
-| loopback jumpers | move with the board (map in the system README) |
+| loopback jumpers | move with the board (map below -- the system README is not a registry-tracked type and does not travel) |
+
+## Wiring map (FRDM-MCXN947, all 3.3 V; pins are protocol params)
+
+| loop | from (out) | to (in) |
+|------|-----------|---------|
+| a    | D8  | D12 |
+| b    | D7  | D13 |
+| i    | D11 | D3 **and** A0 (ain ch0) |
+| d    | D1 (DAC0) | A1 (ain ch1) |
+| obs  | D10 (obs mirror, green LED) | -- |
+
+Avoid D5 (ENET MDIO, refused), A4 (solder jumper SJ8), A5 (shorted by SW2).
 
 ## Steps
 
