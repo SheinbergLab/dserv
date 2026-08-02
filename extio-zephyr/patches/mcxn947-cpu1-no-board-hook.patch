@@ -1,0 +1,10 @@
+diff --git a/boards/nxp/frdm_mcxn947/Kconfig b/boards/nxp/frdm_mcxn947/Kconfig
+index 2e1614f868b..a3a975f0798 100644
+--- a/boards/nxp/frdm_mcxn947/Kconfig
++++ b/boards/nxp/frdm_mcxn947/Kconfig
+@@ -2,4 +2,4 @@
+ # SPDX-License-Identifier: Apache-2.0
+ 
+ config BOARD_FRDM_MCXN947
+-	select BOARD_EARLY_INIT_HOOK
++	select BOARD_EARLY_INIT_HOOK if !SOC_MCXN947_CPU1

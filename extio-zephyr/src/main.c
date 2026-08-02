@@ -39,6 +39,9 @@
 #include "box_uplink.h"
 #include "box_pub.h"
 #include "box_event.h"
+#if defined(BOX_HAVE_CPU1)
+#include "box_cpu1.h"
+#endif
 #if defined(CONFIG_NETWORKING)
 #include "box_net_eth.h"
 #include "box_ptp.h"
@@ -1683,6 +1686,9 @@ int main(void)
 #endif
 	box_uplink_init(&cfg);       /* USB (and Ethernet where present) up */
 	box_pub_init();              /* ...then the thread that writes it */
+#if defined(BOX_HAVE_CPU1)
+	box_cpu1_start();            /* copy the embedded image to SRAMG, release */
+#endif
 
 	box_console_init(&cfg);      /* binds CDC or console UART per console_mode */
 	dserv_framer_reset(&rx_framer);
@@ -2223,6 +2229,21 @@ int main(void)
 				pub_periodic("dbg/pub_gathers",     ps.gathers);
 				pub_periodic("dbg/pub_frames",      ps.gather_frames);
 			}
+
+#if defined(BOX_HAVE_CPU1)
+			/* The second core's pulse. hb frozen with alive=0 is "cpu1
+			 * wedged or never booted"; both leaves changed-only, so a
+			 * healthy core costs one frame a second (the counter moves)
+			 * and a dead one costs nothing after the first report. */
+			{
+				uint32_t c1;
+				int c1_alive;
+
+				box_cpu1_stats(&c1, &c1_alive);
+				pub_periodic("dbg/cpu1_hb",    c1);
+				pub_periodic("dbg/cpu1_alive", (uint32_t) c1_alive);
+			}
+#endif
 
 			/* Cumulative 1 Hz beats the loop was too stalled to emit. Nonzero
 			 * means something held the loop for >1 s -- an OTA burst does this

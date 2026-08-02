@@ -49,7 +49,12 @@ git apply ~/src/dserv/extio-zephyr/patches/*.patch
 
 Current set: `enet-qos-rx-fixes` (OTA fatal-bus-error + RX timestamp race —
 without it OTA and PTP both regress), `ksz8081-retry-mdio`,
-`ptp-mgmt-ds-packing`, `ptp-transport-send-errno` (boot-log noise).
+`ptp-mgmt-ds-packing`, `ptp-transport-send-errno` (boot-log noise),
+`mcxn947-cpu1-no-board-hook` (cpu1 must not re-run board clock init — the
+board Kconfig `select`s the hook for both cores, and a late-released cpu1
+re-running it switches MAIN_CLK to FRO12M over a LIVE cpu0, killing
+Ethernet + the 1588 clock; without this patch the dual-core image bricks
+networking at cpu1 release).
 `patches/superseded/` is history — never apply it.
 
 ## SWD flash (first install / recovery — OTA is the normal path)
