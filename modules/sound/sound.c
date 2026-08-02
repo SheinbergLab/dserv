@@ -845,6 +845,44 @@ static int wav_drain(sound_info_t *info, int wav_index, int timeout_ms)
   return 0;
 }
 
+/* drain an initialized decoder to interleaved stereo f32 at
+ * AO_SAMPLE_RATE; uninits the decoder */
+static float *wav_decode_frames(ma_decoder *dec, ma_uint64 *out_frames,
+                                const char *what, char *err, size_t errsz)
+{
+  ma_uint64 cap = AO_SAMPLE_RATE;   /* start with 1s, grow as needed */
+  float *pcm = (float *) malloc(cap * AO_CHANNELS * sizeof(float));
+  ma_uint64 total = 0;
+
+  while (pcm) {
+    if (total + 4096 > cap) {
+      cap *= 2;
+      float *bigger = (float *) realloc(pcm, cap * AO_CHANNELS * sizeof(float));
+      if (!bigger) { free(pcm); pcm = NULL; break; }
+      pcm = bigger;
+    }
+    ma_uint64 got = 0;
+    ma_result r = ma_decoder_read_pcm_frames(dec,
+                                             pcm + total * AO_CHANNELS,
+                                             4096, &got);
+    total += got;
+    if (r != MA_SUCCESS || got == 0) break;
+  }
+  ma_decoder_uninit(dec);
+
+  if (!pcm) {
+    if (err) snprintf(err, errsz, "out of memory decoding %s", what);
+    return NULL;
+  }
+  if (total == 0) {
+    free(pcm);
+    if (err) snprintf(err, errsz, "no audio frames in %s", what);
+    return NULL;
+  }
+  *out_frames = total;
+  return pcm;
+}
+
 /* decode any miniaudio-supported file (wav/flac/mp3) to interleaved
  * stereo f32 at AO_SAMPLE_RATE */
 static float *wav_decode_file(const char *path, ma_uint64 *out_frames,
@@ -858,38 +896,26 @@ static float *wav_decode_file(const char *path, ma_uint64 *out_frames,
     if (err) snprintf(err, errsz, "could not open/decode \"%s\"", path);
     return NULL;
   }
+  return wav_decode_frames(&dec, out_frames, path, err, errsz);
+}
 
-  ma_uint64 cap = AO_SAMPLE_RATE;   /* start with 1s, grow as needed */
-  float *pcm = (float *) malloc(cap * AO_CHANNELS * sizeof(float));
-  ma_uint64 total = 0;
+/* decode an in-memory sound file image (same formats as wav_decode_file);
+ * the caller's buffer only needs to stay valid for the duration of the
+ * call -- decoded PCM is our own allocation */
+static float *wav_decode_memory(const void *data, size_t nbytes,
+                                ma_uint64 *out_frames,
+                                char *err, size_t errsz)
+{
+  ma_decoder_config dcfg =
+    ma_decoder_config_init(ma_format_f32, AO_CHANNELS, AO_SAMPLE_RATE);
+  ma_decoder dec;
 
-  while (pcm) {
-    if (total + 4096 > cap) {
-      cap *= 2;
-      float *bigger = (float *) realloc(pcm, cap * AO_CHANNELS * sizeof(float));
-      if (!bigger) { free(pcm); pcm = NULL; break; }
-      pcm = bigger;
-    }
-    ma_uint64 got = 0;
-    ma_result r = ma_decoder_read_pcm_frames(&dec,
-                                             pcm + total * AO_CHANNELS,
-                                             4096, &got);
-    total += got;
-    if (r != MA_SUCCESS || got == 0) break;
-  }
-  ma_decoder_uninit(&dec);
-
-  if (!pcm) {
-    if (err) snprintf(err, errsz, "out of memory decoding \"%s\"", path);
+  if (ma_decoder_init_memory(data, nbytes, &dcfg, &dec) != MA_SUCCESS) {
+    if (err) snprintf(err, errsz,
+                      "could not decode %zu-byte sound data", nbytes);
     return NULL;
   }
-  if (total == 0) {
-    free(pcm);
-    if (err) snprintf(err, errsz, "no audio frames in \"%s\"", path);
-    return NULL;
-  }
-  *out_frames = total;
-  return pcm;
+  return wav_decode_frames(&dec, out_frames, "sound data", err, errsz);
 }
 
 /*************************************************************************/
@@ -1270,29 +1296,16 @@ static int sound_init_fluidsynth_command(ClientData data, Tcl_Interp *interp,
 
 /*************************  wav commands  ********************************/
 
-static int wav_load_command(ClientData data, Tcl_Interp *interp,
-                            int objc, Tcl_Obj *objv[])
+/* install decoded PCM into the wav table under `name` (replacing any
+ * same-named entry), publish sound/wav/loaded, and leave the duration in
+ * ms as the interp result. Takes ownership of pcm (freed on error). */
+static int wav_install(sound_info_t *info, Tcl_Interp *interp,
+                       const char *cmdname, const char *name,
+                       float *pcm, ma_uint64 nframes)
 {
-  sound_info_t *info = (sound_info_t *) data;
-  char err[512];
-
-  if (objc != 3) {
-    Tcl_WrongNumArgs(interp, 1, objv, "name path");
-    return TCL_ERROR;
-  }
-  const char *name = Tcl_GetString(objv[1]);
-  const char *path = Tcl_GetString(objv[2]);
-
   if (strlen(name) >= WAV_NAME_MAX) {
-    Tcl_AppendResult(interp, Tcl_GetString(objv[0]),
-                     ": name too long", NULL);
-    return TCL_ERROR;
-  }
-
-  ma_uint64 nframes = 0;
-  float *pcm = wav_decode_file(path, &nframes, err, sizeof(err));
-  if (!pcm) {
-    Tcl_AppendResult(interp, Tcl_GetString(objv[0]), ": ", err, NULL);
+    free(pcm);
+    Tcl_AppendResult(interp, cmdname, ": name too long", NULL);
     return TCL_ERROR;
   }
 
@@ -1302,7 +1315,7 @@ static int wav_load_command(ClientData data, Tcl_Interp *interp,
     wav_stop_voices(info, idx);
     if (wav_drain(info, idx, 250) != 0) {
       free(pcm);
-      Tcl_AppendResult(interp, Tcl_GetString(objv[0]),
+      Tcl_AppendResult(interp, cmdname,
                        ": voices still active on \"", name, "\"", NULL);
       return TCL_ERROR;
     }
@@ -1312,8 +1325,7 @@ static int wav_load_command(ClientData data, Tcl_Interp *interp,
       if (!info->wavs[i].used) { idx = i; break; }
     if (idx < 0) {
       free(pcm);
-      Tcl_AppendResult(interp, Tcl_GetString(objv[0]),
-                       ": wav table full", NULL);
+      Tcl_AppendResult(interp, cmdname, ": wav table full", NULL);
       return TCL_ERROR;
     }
   }
@@ -1333,6 +1345,66 @@ static int wav_load_command(ClientData data, Tcl_Interp *interp,
 
   Tcl_SetObjResult(interp, Tcl_NewIntObj(duration_ms));
   return TCL_OK;
+}
+
+static int wav_load_command(ClientData data, Tcl_Interp *interp,
+                            int objc, Tcl_Obj *objv[])
+{
+  sound_info_t *info = (sound_info_t *) data;
+  char err[512];
+
+  if (objc != 3) {
+    Tcl_WrongNumArgs(interp, 1, objv, "name path");
+    return TCL_ERROR;
+  }
+  const char *name = Tcl_GetString(objv[1]);
+  const char *path = Tcl_GetString(objv[2]);
+
+  ma_uint64 nframes = 0;
+  float *pcm = wav_decode_file(path, &nframes, err, sizeof(err));
+  if (!pcm) {
+    Tcl_AppendResult(interp, Tcl_GetString(objv[0]), ": ", err, NULL);
+    return TCL_ERROR;
+  }
+
+  return wav_install(info, interp, Tcl_GetString(objv[0]), name,
+                     pcm, nframes);
+}
+
+/* wavLoadData name bytes -- like wavLoad, but the sound file image
+ * (wav/flac/mp3 bytes, e.g. from the dlsh wav package's wav::render or a
+ * [read] of a file) arrives as a Tcl byte array instead of a path, so
+ * procedurally generated stimuli never touch the filesystem. */
+static int wav_load_data_command(ClientData data, Tcl_Interp *interp,
+                                 int objc, Tcl_Obj *objv[])
+{
+  sound_info_t *info = (sound_info_t *) data;
+  char err[512];
+
+  if (objc != 3) {
+    Tcl_WrongNumArgs(interp, 1, objv, "name sound_file_bytes");
+    return TCL_ERROR;
+  }
+  const char *name = Tcl_GetString(objv[1]);
+
+  Tcl_Size nbytes = 0;
+  unsigned char *bytes = Tcl_GetByteArrayFromObj(objv[2], &nbytes);
+  if (!bytes || nbytes == 0) {
+    Tcl_AppendResult(interp, Tcl_GetString(objv[0]),
+                     ": empty sound data", NULL);
+    return TCL_ERROR;
+  }
+
+  ma_uint64 nframes = 0;
+  float *pcm = wav_decode_memory(bytes, (size_t) nbytes, &nframes,
+                                 err, sizeof(err));
+  if (!pcm) {
+    Tcl_AppendResult(interp, Tcl_GetString(objv[0]), ": ", err, NULL);
+    return TCL_ERROR;
+  }
+
+  return wav_install(info, interp, Tcl_GetString(objv[0]), name,
+                     pcm, nframes);
 }
 
 static int wav_play_command(ClientData data, Tcl_Interp *interp,
@@ -1669,6 +1741,9 @@ EXPORT(int,Dserv_sound_Init) (Tcl_Interp *interp)
   /* Wav stimulus commands */
   Tcl_CreateObjCommand(interp, "wavLoad",
                        (Tcl_ObjCmdProc *) wav_load_command,
+                       (ClientData) info, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateObjCommand(interp, "wavLoadData",
+                       (Tcl_ObjCmdProc *) wav_load_data_command,
                        (ClientData) info, (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateObjCommand(interp, "wavPlay",
                        (Tcl_ObjCmdProc *) wav_play_command,
