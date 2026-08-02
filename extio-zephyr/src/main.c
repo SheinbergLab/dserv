@@ -785,6 +785,17 @@ static int dac_apply(uint16_t code)
  * output/input path. Knowing exactly what happened is this box's job. */
 static uint32_t sched_acc, sched_fired_n, sched_ref;
 
+/* +25: is the box clock currently PTP-disciplined? Set by every successful
+ * PTP re-anchor, cleared when a hardware TTL edge takes over. While held,
+ * the beginobs frame-arrival anchor must NOT touch the clock: box_clock
+ * snaps its offset at EVERY anchor "trusted or not", so each obs was
+ * demoting a sub-us disciplined clock to transport jitter (100s of us) --
+ * caught 2026-08-02 watching sync/source flip ptp->sw per obs in the fleet
+ * viewer, and measured as `at` med 406 us vs `at_abs` med 24 us on the
+ * same PTP-locked Pi rig (the at epoch was frame ARRIVAL; at_abs cancels
+ * the offset error by construction). */
+static int clock_ptp_held;
+
 static void sched_refuse_reply(const char *why)
 {
 	uint8_t f[DSERV_MSG_LEN];
@@ -909,6 +920,10 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 
 			uint32_t win = 0;
 			int ok = box_obs_active() ? -1 : ptp_reanchor(&win);
+
+			if (ok == 0) {
+				clock_ptp_held = 1;
+			}
 
 			/* Event class: sync/* is the RECORD of which mechanism stamped a
 			 * datafile's timestamps -- a dropped frame here is a datafile
@@ -1543,10 +1558,31 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 				hw = 1;
 			}
 		}
-		box_clock_sync(&boxclk, m.timestamp, anchor_box, hw);
+		/* +25: a PTP-held clock is never demoted by frame arrival. A
+		 * hardware TTL edge still outranks everything (it also directly
+		 * measures the obs instant); otherwise, while PTP holds, keep
+		 * the disciplined clock untouched and derive the obs epoch from
+		 * the frame's DSERV timestamp mapped through it -- transport
+		 * leaves the at-epoch error budget entirely. */
+		int ptp_held = 0;
+#if defined(CONFIG_PTP_CLOCK)
+		ptp_held = clock_ptp_held && !hw;
+#endif
+		if (!ptp_held) {
+			box_clock_sync(&boxclk, m.timestamp, anchor_box, hw);
+			if (hw) {
+				clock_ptp_held = 0;   /* hw anchors own the clock now */
+			}
+		}
 		box_obs_set(obs);            /* keep the LEVEL, not just the edge */
 		if (obs) {
+#if defined(CONFIG_PTP_CLOCK)
+			obs_begin_us = ptp_held
+				? dserv_to_box_us(&boxclk, m.timestamp)
+				: anchor_box;
+#else
 			obs_begin_us = anchor_box;   /* epoch for box-scheduled events */
+#endif
 		}
 
 		/* drive the obs-mirror output (LED / scope trace) */
@@ -1561,8 +1597,22 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 		dserv_msg_int(of, onm, m.timestamp, obs);
 		box_pub_event(of);
 
-		publish_sync(m.timestamp, anchor_box, boxclk.offset_us, hw,
-			     hw ? (int64_t)(now_box - anchor_box) : -1);
+		if (ptp_held) {
+			/* no anchor happened; re-affirm the held source so the
+			 * fleet viewer shows the truth at each obs boundary */
+			uint8_t sf[DSERV_MSG_LEN];
+			char snm[80];
+
+			dserv_state_name(&cfg, snm, sizeof snm, "sync/source");
+			dserv_msg_string(sf, snm, 0, "ptp");
+			box_pub_event(sf);
+			dserv_state_name(&cfg, snm, sizeof snm, "sync/offset_us");
+			dserv_msg_int64(sf, snm, 0, boxclk.offset_us);
+			box_pub_event(sf);
+		} else {
+			publish_sync(m.timestamp, anchor_box, boxclk.offset_us, hw,
+				     hw ? (int64_t)(now_box - anchor_box) : -1);
+		}
 		return;
 	}
 
@@ -2586,6 +2636,7 @@ int main(void)
 				uint32_t win = 0;
 
 				if (ptp_reanchor(&win) == 0) {
+					clock_ptp_held = 1;
 					dserv_state_name(&cfg, name, sizeof name,
 							 "sync/ptp_window_us");
 					dserv_msg_int(f, name, 0, (int32_t) win);
