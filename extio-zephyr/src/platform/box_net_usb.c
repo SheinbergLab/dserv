@@ -13,9 +13,20 @@
 static const struct device *data_dev;      /* cdc_acm_data: the 128-byte frame pipe */
 static const struct device *console_dev;   /* cdc_acm_console: human CLI            */
 
-/* 8 frames each way of slack; a stalled host costs at most this before drops. */
-RING_BUF_DECLARE(rx_rb, 8 * 128);
-RING_BUF_DECLARE(tx_rb, 8 * 128);
+/* 64 frames each way. The original 8*128 was THE USB burst cliff the
+ * extio_test campaign measured (2026-08-02): exactly ~8 back-to-back host
+ * frames survived a burst -- OTA chunks, then config pushes, then schedule
+ * commands, all clipped at this ring while the UDC pool and event slab took
+ * the blame (both were bumped first; the cliff moved not one frame). The
+ * matching 8-frame TX ring was the 45 ms usb_send_max_us stall under analog
+ * streaming: the publisher blocks the service loop whenever a kilobyte of
+ * blocks is in flight. 8 KB each way costs 14 KB of RAM on boards sitting
+ * at ~58%, and turns a stalled host into bounded, visible drops instead of
+ * an invisible per-burst tail loss. The CDC class fifos (DT rx-fifo-size /
+ * tx-fifo-size on cdc_acm_data) are widened in the board overlays to match
+ * -- both stages must clear a burst or the narrower one clamps it. */
+RING_BUF_DECLARE(rx_rb, 64 * 128);
+RING_BUF_DECLARE(tx_rb, 64 * 128);
 
 /* CDC-ACM data ISR: pump RX into rx_rb, drain tx_rb into the TX FIFO. */
 static void data_isr(const struct device *dev, void *user)

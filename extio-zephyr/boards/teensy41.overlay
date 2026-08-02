@@ -92,5 +92,10 @@
 	};
 	cdc_acm_data: cdc_acm_uart1 {
 		compatible = "zephyr,cdc-acm-uart";
+		/* the frame pipe's class-level fifos, widened to match the app
+		 * rings in box_net_usb.c (8 KB): the 1024 B defaults were one
+		 * of the two stages behind the ~8-frame burst cliff */
+		rx-fifo-size = <8192>;
+		tx-fifo-size = <8192>;
 	};
 };
