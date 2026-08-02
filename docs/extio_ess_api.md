@@ -86,6 +86,14 @@ Design principles (agreed up front):
 11. **Scheduler capacity is a silent contract** (8 `at` slots per box,
     one in-flight `at_abs` per pin). Loaders must "just know" (≤ 6 rule).
     → wrappers should error loudly when a schedule would exceed capacity.
+    OBSERVED FOR REAL 2026-08-02: an np=10 analog train had 2 pulses per
+    trial refused with a console-only "sched: table full" — nothing on
+    the wire — and the loss was invisible until the +21 transport fix
+    unmasked it (before that, the burst cliff ate the excess commands
+    first). extio_test's loader now hard-errors past 6; the firmware
+    follow-on is an `at` refusal reply datapoint (`state/sched/err`,
+    mirroring how `at_abs` answers armed|late|unsynced) so hosts can see
+    a refused schedule without a console cable.
 
 12. **In-obs STRING event params surface as CHAR lists** in the obs dg
     (`STIM_DATA` summaries came back as 71-element char rows; the pre-obs
