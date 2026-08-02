@@ -10,13 +10,17 @@
 
 #if defined(BOX_HAVE_ADC)
 
-/* Priority 2: ABOVE the service loop (MAIN_THREAD_PRIORITY=3 since the
- * 2026-08-02 data-preservation lattice, see prj.conf) -- a sweep is where a
- * sample comes into existence, and it must not miss its period because the
- * loop is busy shipping; DI capture is ISR-level and loses nothing to this.
- * Still below the mcp320x acquisition thread (1, frdm_rw612.conf) so that
- * when we block in adc_read() the driver preempts us immediately. */
-#define AIN_THREAD_PRIO   2
+/* COOPERATIVE -2 (+26): preemptible 2 still lost whole periods to the
+ * cooperative workqueues (system + UDC run at -1 and are unpreemptible by
+ * ANY preemptible thread) -- measured on the PTP Pi rig as occasional
+ * 1-2 ms sweep gaps (`late` 1 per slow trial, 8 at the 2 kHz rung).
+ * Cooperative -2 outranks both workqueues; blocking in adc_read() still
+ * YIELDS (cooperative only bars preemption while runnable, and sweep
+ * bodies are sub-ms), so the suspended-converter wedge safety and the
+ * driver-preempts-on-wake property both survive -- in fact the driver's
+ * completion now resumes us ahead of everything. If `late` persists at
+ * -2, the thief is ISR/irq_lock time: see the gap ledger below. */
+#define AIN_THREAD_PRIO   (-2)
 /* 4096, not 1024. CONFIG_HW_STACK_PROTECTION would catch an overflow as a loud
  * fatal rather than silent corruption, so this is insurance, not a fix -- but
  * this thread calls down through adc_read into the SPI stack and 1 KB was a
@@ -79,6 +83,11 @@ static uint8_t  union_mask;          /* channels any active group wants */
 static uint32_t period_us;
 
 static uint32_t st_sweeps, st_blocks, st_dropped, st_late, st_throttled;
+/* +26 stall ledger: how LONG each starvation was, not just that one
+ * happened -- (fired-1)*period is the floor of the gap. A 1-2 ms gap
+ * indicts thread-level theft; sub-period gaps never count; if gaps
+ * persist at cooperative priority the thief is ISR/irq_lock time. */
+static uint32_t st_late_gap_last_us, st_late_gap_max_us;
 static uint32_t st_holds;
 static int64_t  last_block_ms[BOX_NAGROUPS];
 
@@ -254,6 +263,10 @@ static void ain_thread_fn(void *a, void *b, void *c)
 
 		if (fired > 1) {
 			st_late += (fired - 1);
+			st_late_gap_last_us = (fired - 1) * running_period;
+			if (st_late_gap_last_us > st_late_gap_max_us) {
+				st_late_gap_max_us = st_late_gap_last_us;
+			}
 		}
 
 		/* A hold or a config edit can land while we are parked in
@@ -434,6 +447,12 @@ void box_ain_stats(uint32_t *sweeps, uint32_t *blocks, uint32_t *dropped,
 	if (throttled) *throttled = st_throttled;
 }
 
+void box_ain_late_gaps(uint32_t *last_us, uint32_t *max_us)
+{
+	if (last_us) *last_us = st_late_gap_last_us;
+	if (max_us)  *max_us  = st_late_gap_max_us;
+}
+
 void box_ain_stats_reset(void)
 { st_sweeps = st_blocks = st_dropped = st_late = st_throttled = 0; }
 
@@ -449,6 +468,12 @@ uint32_t box_ain_holds(void) { return 0; }
 int  box_ain_pop(ain_block_t *out) { ARG_UNUSED(out); return 0; }
 void box_ain_stats(uint32_t *s, uint32_t *b, uint32_t *d, uint32_t *l, uint32_t *t)
 { if (s) *s = 0; if (b) *b = 0; if (d) *d = 0; if (l) *l = 0; if (t) *t = 0; }
+void box_ain_late_gaps(uint32_t *last_us, uint32_t *max_us)
+{
+	if (last_us) *last_us = st_late_gap_last_us;
+	if (max_us)  *max_us  = st_late_gap_max_us;
+}
+
 void box_ain_stats_reset(void) { }
 
 #endif

@@ -123,4 +123,7 @@ void box_ain_stats(uint32_t *sweeps, uint32_t *blocks,
 		   uint32_t *dropped, uint32_t *late, uint32_t *throttled);
 void box_ain_stats_reset(void);
 
+/* +26 stall ledger: floor length of the last / worst sweep starvation gap */
+void box_ain_late_gaps(uint32_t *last_us, uint32_t *max_us);
+
 #endif /* BOX_AIN_H */

@@ -2337,10 +2337,14 @@ int main(void)
 					uint32_t asw = 0, abl = 0, adr = 0, alt = 0, ath = 0, amx = 0, an = 0;
 					uint32_t asp = 0, arm = 0;
 					box_ain_stats(&asw, &abl, &adr, &alt, &ath);
+					uint32_t ain_gap_l = 0, ain_gap_m = 0;
+					box_ain_late_gaps(&ain_gap_l, &ain_gap_m);
 					box_adc_stats(&amx, &an);
 					box_adc_pm_stats(&asp, &arm);
 					struct { const char *leaf; uint32_t v; } as[] = {
 						{ "ain/dbg/sweeps",    asw },
+						{ "ain/dbg/late_gap_us",     ain_gap_l },
+						{ "ain/dbg/late_gap_max_us", ain_gap_m },
 						{ "ain/dbg/blocks",    abl },
 						{ "ain/dbg/dropped",   adr },
 						{ "ain/dbg/late",      alt },
