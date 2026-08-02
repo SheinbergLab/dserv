@@ -85,6 +85,7 @@
   .grp .gval { font-family: ui-monospace, Menlo, monospace; font-size: 13px; color: var(--muted);
                padding: 1px 9px; border-radius: 6px; background: var(--off); }
   .grp .gval.on { background: #14351f; color: var(--green); }
+  .grp .gage { color: var(--faint); font-size: 11px; }
 #cfgbar { display:inline-flex; align-items:center; gap:6px; font-size:12px; color:#8d95a8; }
 #cfgbar select, #cfgbar button { background:#141720; color:#dfe3ec; border:1px solid #38405a;
        border-radius:5px; padding:2px 7px; font:inherit; font-size:12px; }
@@ -110,6 +111,7 @@
 <script src="js/DatapointManager.js"></script>
 <script src="js/PageNav.js"></script>
 <script src="js/extio_silk.js"></script>
+<script src="js/extio_ain.js"></script>
 <script>
 'use strict';
 
@@ -124,11 +126,11 @@ function boxModel(name) {
     let b = boxes.get(name);
     if (!b) {
         b = { name, ident: {}, di: new Map(), dout: new Map(), ain: new Map(),
-              labels: new Map(), desc: '', groups: new Map(),
+              labels: new Map(), desc: '', groups: new Map(), aingrp: new Map(),
               pinsIn: null, pinsOut: null,   /* announced active sets; null = old fw -> derive from di/do */
               inObs: null, obsPin: -1, syncPin: -1,           /* obs mirror + TTL sync input */
               syncSource: null, syncTransport: null, syncRate: null, syncAt: 0,
-              battery: null, uptimeUs: null,
+              battery: null, uptimeUs: null, uptimeAt: 0, wd: null, wdAt: 0,
               lastSeen: 0, ready: false };
         boxes.set(name, b);
     }
@@ -175,8 +177,19 @@ function onExtio(msg) {
         b.di.set(pin, cur);
     } else if ((mm = /^do\/(\d+)$/.exec(leaf))) {
         b.dout.set(+mm[1], num);
+    } else if ((mm = /^ain\/group\/([^/]+)\/chans$/.exec(leaf))) {
+        /* manifest tombstone: chans == "" frees the name (the box cannot
+         * delete the retained data block, so it disowns it) -> drop ours */
+        if (String(v) === '') b.aingrp.delete(mm[1]);
+    } else if ((mm = /^ain\/([^/]+)$/.exec(leaf)) && Array.isArray(v)) {
+        /* analog GROUP block (state/ain/<label>, DSERV_BYTE -> byte array):
+         * decode the self-describing header + newest scan. Checked BEFORE the
+         * numeric branch -- a label can be digit-only, but a block is always
+         * an array and a legacy per-channel sample never is. */
+        const blk = ExtioAinBlock.decode(v);
+        if (blk) b.aingrp.set(mm[1], { ...blk, at: Date.now() });
     } else if ((mm = /^ain\/(\d+)$/.exec(leaf))) {
-        b.ain.set(+mm[1], num);
+        b.ain.set(+mm[1], num);   /* legacy per-channel samples (RP2350 fw) */
     } else if ((mm = /^label\/(\d+)$/.exec(leaf))) {
         const s = String(v);
         if (s) b.labels.set(+mm[1], s); else b.labels.delete(+mm[1]);   /* "" clears */
@@ -193,9 +206,12 @@ function onExtio(msg) {
     } else if (leaf === 'in_obs') {
         b.inObs = num;
     } else if (leaf === 'obs_pin') {
-        b.obsPin = num;
+        /* dserv serializes DSERV_INT unsigned: the firmware's -1 "off"
+         * sentinel arrives as 4294967295, which would otherwise pass the
+         * `>= 0` checks below and caption a nonexistent pin */
+        b.obsPin = num >= 0x80000000 ? num - 0x100000000 : num;
     } else if (leaf === 'sync_pin') {
-        b.syncPin = num;
+        b.syncPin = num >= 0x80000000 ? num - 0x100000000 : num;
     } else if (leaf === 'sync/source') {
         b.syncSource = String(v); b.syncAt = Date.now();   /* raw offset_us is epoch-huge: useless to show */
     } else if (leaf === 'sync/transport_us') {
@@ -203,7 +219,11 @@ function onExtio(msg) {
     } else if (leaf === 'sync/rate_ppb') {
         b.syncRate = num;
     } else if (leaf === 'uptime_us') {
-        b.uptimeUs = num;
+        b.uptimeUs = num; b.uptimeAt = Date.now();
+    } else if (leaf === 'watchdog') {
+        /* VALUE = seconds since boot (firmware adds missed beats back in);
+         * with its arrival time this anchors "up since" -- see upParts(). */
+        b.wd = num; b.wdAt = Date.now();
     } else if (leaf === 'battery') {
         b.battery = num;
     } else if (leaf === 'transport' || leaf === 'boot' || leaf === 'fw' ||
@@ -247,6 +267,29 @@ function fmtUptime(us) {
     return h < 48 ? h + 'h' : Math.floor(h / 24) + 'd';
 }
 
+/* "up since" anchor. state/watchdog's VALUE is seconds-since-boot by firmware
+ * contract (extio-zephyr main.c adds missed beats back in, precisely so this
+ * stays true across stalls), published at 1 Hz -- so boot instant = arrival
+ * time minus value, and a live box's displayed uptime advances between
+ * messages. uptime_us (pico/BLE firmware) is the fallback anchor: published
+ * once at announce, extrapolated the same way from when it arrived.
+ *
+ * This is the fix for "up" reading like a perpetual fresh reboot: the page
+ * used to display uptime_us alone, which the Zephyr boxes never publish at
+ * all and the pico boxes freeze at announce time. A silent box now freezes
+ * at its last report -- that number means "was up", and the card already
+ * dims and shows `seen` for exactly that case. */
+function upParts(b, alive) {
+    let usAt, at;
+    if (b.wd != null)            { usAt = b.wd * 1e6;  at = b.wdAt; }
+    else if (b.uptimeUs != null) { usAt = b.uptimeUs;  at = b.uptimeAt || b.lastSeen; }
+    else return null;
+    const us = usAt + (alive ? (Date.now() - at) * 1000 : 0);
+    const boot = new Date(at - usAt / 1000);
+    return { us, bootStr: boot.toLocaleString([], { month: 'short', day: 'numeric',
+                                                    hour: '2-digit', minute: '2-digit' }) };
+}
+
 /* Link into the configurator for THIS box, carrying ?host / ?ssl through.
  * Without forwarding them a fleet page pointed at a remote rig would open a
  * configurator pointed at the local one -- and it would look like it worked,
@@ -270,6 +313,10 @@ function cardHtml(b) {
     const age = Date.now() - b.lastSeen;
     const alive = age < 4000;
     const id = b.ident;
+    const up = upParts(b, alive);
+    const upStr = up
+        ? `<span title="since ${up.bootStr}${alive ? '' : ' — box silent, this is its last report'}">${fmtUptime(up.us)}</span>`
+        : '?';
     /* Silkscreen names (Arduino Dn/Ak) for this board, or null. Caption for an
      * UNLABELLED pin prefers the silkscreen -- that is the string printed next
      * to the physical pin someone is probing -- and the tooltip always carries
@@ -320,13 +367,42 @@ function cardHtml(b) {
             }).join('') + '</div></div>';
     }
     let groups = '';
-    if (b.groups.size) {
+    /* skip tombstoned groups (newer firmware frees a name by announcing
+     * pins == "" once, because dserv retains the old keys forever) */
+    const liveGroups = [...b.groups.keys()].filter(gn => b.groups.get(gn).pins.length).sort();
+    if (liveGroups.length) {
         groups = '<div class="sect"><div class="lbl">groups</div>' +
-            [...b.groups.keys()].sort().map(gn => {
+            liveGroups.map(gn => {
                 const dec = decodeGroup(b.groups.get(gn), b.labels);
                 const active = dec && dec !== 'center';
                 return `<div class="grp"><span class="gname">${esc(gn)}</span>` +
                        `<span class="gval${active ? ' on' : ''}">${esc(dec || '—')}</span></div>`;
+            }).join('') + '</div>';
+    }
+    /* analog groups: newest scan per channel from the self-describing blocks
+     * (state/ain/<label>) -- the ONLY way analog leaves a Zephyr box, so
+     * without this section analog activity was simply invisible here. The
+     * age is the last BLOCK's age: for an on-change group that is time since
+     * the value last moved past its deadband, not staleness. */
+    let aingrps = '';
+    if (b.aingrp.size) {
+        aingrps = '<div class="sect"><div class="lbl">analog groups</div>' +
+            [...b.aingrp.keys()].sort().map(gn => {
+                const g = b.aingrp.get(gn);
+                const rate = g.count > 1 && g.interval_us
+                    ? `${Math.round(1e6 / g.interval_us)} Hz ×${g.count}${g.avg ? ' avg' : ''}`
+                    : 'on-change';
+                const rows = g.chans.map((ch, i) => {
+                    const val = g.last[i];
+                    const cap = (sk && sk.ain && sk.ain(ch)) || ('ch ' + ch);
+                    const pct = Math.max(0, Math.min(100, ((val + 32768) / 65535) * 100));
+                    return `<div class="ain"><span class="ch" title="ain ch ${ch}">${cap}</span>` +
+                           `<div class="bar"><div class="fill" style="width:${pct.toFixed(1)}%"></div></div>` +
+                           `<span class="val">${val}</span></div>`;
+                }).join('');
+                return `<div class="grp"><span class="gname">${esc(gn)}</span>` +
+                       `<span class="gval">${rate}</span>` +
+                       `<span class="gage">${fmtAge(Date.now() - g.at)}</span></div>` + rows;
             }).join('') + '</div>';
     }
     let ain = '';
@@ -369,8 +445,8 @@ function cardHtml(b) {
     return `<div class="title"><span class="live ${alive ? 'on' : ''}"></span>` +
            `<span class="name">${esc(b.name)}</span>${obs}${xchip}${fw}${bchip}${ip}` +
            `</div>` + desc +
-           `<div class="meta"><b>up</b> ${fmtUptime(b.uptimeUs)} · <b>seen</b> ${fmtAge(age)}${target}${sync}${bat}</div>` +
-           di + groups + dout + ain;
+           `<div class="meta"><b>up</b> ${upStr} · <b>seen</b> ${fmtAge(age)}${target}${sync}${bat}</div>` +
+           di + groups + dout + aingrps + ain;
 }
 
 function render() {

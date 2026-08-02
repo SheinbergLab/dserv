@@ -66,6 +66,12 @@ button.danger  { background:#5b2c29; border-color:#7a3a36; }
 input.wo { border-style:dashed; color:var(--warn); }
 input.wo::placeholder { color:#6b6350; font-style:italic; }
 code { background:#141720; padding:1px 5px; border-radius:3px; font-size:12px; }
+/* Save/Reboot ride the bottom of the viewport: the dirty banner lives at the
+   top of a panel that got LONG (pins + two group tables), and a Save you have
+   to scroll to find is a Save that does not happen before the next reboot. */
+#actionbar { position:sticky; bottom:0; margin-top:22px; padding:12px 0 14px;
+             display:flex; gap:10px; align-items:center;
+             background:linear-gradient(to bottom, transparent, var(--bg) 26%); }
 </style>
 </head>
 <body>
@@ -85,6 +91,7 @@ code { background:#141720; padding:1px 5px; border-radius:3px; font-size:12px; }
 <script src="js/DatapointManager.js"></script>
 <script src="js/PageNav.js"></script>
 <script src="js/extio_silk.js"></script>
+<script src="js/extio_ain.js"></script>
 <script>
 /* extio setup page -- fleet list + per-box configuration, over datapoints.
  *
@@ -157,8 +164,8 @@ const ageOf = (box, leaf) => {
 function liveness(box) {
   const a = ageOf(box, 'watchdog');
   if (a === null) return { cls: 'bad', txt: 'no watchdog' };
-  if (a > 10) return { cls: 'bad',  txt: 'offline ' + fmtAge(a) };
-  if (a > 3)  return { cls: 'warn', txt: 'slow ' + fmtAge(a) };
+  if (a > 10) return { cls: 'bad',  txt: 'offline ' + agePlain(box, 'watchdog') };
+  if (a > 3)  return { cls: 'warn', txt: 'slow ' + agePlain(box, 'watchdog') };
   return { cls: 'ok', txt: 'live' };
 }
 function fmtAge(s) {
@@ -167,11 +174,65 @@ function fmtAge(s) {
   if (s < 5400) return Math.round(s / 60) + 'm';
   return Math.round(s / 3600) + 'h';
 }
+const esc = s => String(s).replace(/[&<>"']/g,
+  c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+/* AGES ARE EMPTY SPANS IN THE MARKUP, filled in place by tickAges().
+ *
+ * The old ageSpan() baked the text ("3s") into the HTML string, so the 1 Hz
+ * tick produced a DIFFERENT string every second, the innerHTML memo never
+ * matched, and the panel was replaced wholesale once a second. That is what
+ * made checkboxes "hard to click": a click needs mousedown and mouseup on the
+ * SAME element, and on Safari clicking a checkbox never moves focus, so the
+ * focus guard below never deferred the redraw -- the node was simply swapped
+ * out mid-press. With the age TEXT out of the markup, the memo is stable
+ * between REAL value changes, and updating a span's textContent in place
+ * destroys nothing a pointer could be aiming at.
+ *
+ * data-age-plain marks spans inside styled parents (the liveness pill) whose
+ * class must not be overwritten by the age bucket. */
 function ageSpan(box, leaf) {
-  const a = ageOf(box, leaf);
-  if (a === null) return '';
-  const cls = a > 60 ? 'dead' : a > 10 ? 'old' : '';
-  return `<span class="age ${cls}">${fmtAge(a)}</span>`;
+  if (ageOf(box, leaf) === null) return '';
+  return `<span class="age" data-age-box="${esc(box)}" data-age-leaf="${esc(leaf)}"></span>`;
+}
+function agePlain(box, leaf) {
+  return `<span data-age-box="${esc(box)}" data-age-leaf="${esc(leaf)}" data-age-plain="1"></span>`;
+}
+function tickAges(root) {
+  for (const el of root.querySelectorAll('[data-age-leaf]')) {
+    const a = ageOf(el.dataset.ageBox, el.dataset.ageLeaf);
+    if (a === null) continue;
+    el.textContent = fmtAge(a);
+    if (!('agePlain' in el.dataset)) {
+      el.className = 'age ' + (a > 60 ? 'dead' : a > 10 ? 'old' : '');
+    }
+  }
+  /* Live VALUES get the same in-place treatment as ages, for the same reason:
+   * anything that moves on its own (the ain/dbg counters advance every second,
+   * a chatty on-change analog group streams blocks) would re-defeat the
+   * innerHTML memo and put the panel right back to churning under the
+   * pointer. Rendered as empty spans, filled here at 1 Hz -- a second of
+   * display latency on diagnostic counters, in exchange for a DOM that only
+   * moves when its STRUCTURE changes. */
+  for (const el of root.querySelectorAll('[data-val-leaf]')) {
+    const v = get(el.dataset.valBox, el.dataset.valLeaf, null);
+    el.textContent = v === null ? '—' : v;
+  }
+  for (const el of root.querySelectorAll('[data-ain-grp]')) {
+    const bb = boxes.get(el.dataset.ainBox) || {};
+    const raw = bb['ain/' + el.dataset.ainGrp];
+    const blk = raw && Array.isArray(raw.v) ? ExtioAinBlock.decode(raw.v) : null;
+    el.textContent = !blk ? '—'
+      : blk.last.join(' ') + ' · ' + (blk.count > 1 && blk.interval_us
+          ? Math.round(1e6 / blk.interval_us) + ' Hz ×' + blk.count + (blk.avg ? ' avg' : '')
+          : 'on-change');
+  }
+  for (const el of root.querySelectorAll('[data-grp]')) {
+    const gb = el.dataset.grpBox, gg = el.dataset.grp;
+    const val = get(gb, `group/${gg}`, null);
+    const dec = decodeChord(gb, csvNums(get(gb, `group/${gg}/pins`)), val);
+    el.innerHTML = (val === null ? '—' : esc(val)) + (dec ? ` <b>${esc(dec)}</b>` : '');
+  }
 }
 
 /* ---- writes: named procs in the extio interp, never raw datapoint pokes ---- */
@@ -289,7 +350,7 @@ function renderFleet() {
       <div class="sub">v${get(n, 'fw_ver', get(n, 'fw', '?'))} · ain ${get(n, 'ain_en') == 1 ? 'on' : 'off'}</div>
     </div>`;
   }).join('');
-  if (html !== fleetHtml) { el.innerHTML = fleetHtml = html; }
+  if (html !== fleetHtml) { el.innerHTML = fleetHtml = html; tickAges(el); }
 }
 function selectBox(n) {
   sel = n; dirty = new Set(); panelHtml = null; renderFleet(); renderPanel(); refreshDirty(n);
@@ -315,8 +376,13 @@ async function refreshDirty(box) {
 function field(box, leaf, cfgLeaf, opts = {}) {
   let v = get(box, leaf, null);
   if (v === null && opts.fallback !== undefined) v = opts.fallback;
+  /* dserv serializes DSERV_INT unsigned, so the firmware's -1 "off" sentinel
+   * (obs/sync pin) arrives as 4294967295 -- show what the grammar takes back */
+  if (opts.i32 && v !== null && +v >= 0x80000000) v = +v - 0x100000000;
   const cls = opts.wide ? 'w8' : 'w4';
-  return `<input class="${cls}" value="${v === null ? '' : v}"
+  /* esc(): labels/desc allow every printable except '/', so a quote in a
+   * value would otherwise end the attribute and truncate the form */
+  return `<input class="${cls}" value="${v === null ? '' : esc(v)}"
             onchange="cfgSet('${box}','${cfgLeaf}',this.value)">`;
 }
 
@@ -351,6 +417,84 @@ function silkPin(sk, v) {
   return s ? ` <span class="age">${s}</span>` : '';
 }
 
+/* ---- "up since": anchored on state/watchdog ----
+ *
+ * The watchdog VALUE is seconds-since-boot by firmware contract (extio-zephyr
+ * main.c adds missed beats back in, precisely so this stays true across
+ * stalls), so boot instant = the datapoint's own timestamp minus its value.
+ * Older pico/BLE boxes publish uptime_us instead -- once, at announce -- so it
+ * anchors the same way, just from an older instant. Neither page had this
+ * right before: the fleet page read uptime_us (which the Zephyr boxes never
+ * publish, and the pico ones freeze at announce), so "up" was either ? or a
+ * small number that looked like a fresh reboot.
+ *
+ * A DEAD box freezes: we report what it last told us ("was up 3d"), because a
+ * silent box's present uptime is unknowable from here. */
+function upInfo(box) {
+  const b = boxes.get(box);
+  let anchorT = null, upUsAtAnchor = 0;
+  if (b && 'watchdog' in b && b.watchdog.v !== '' && !isNaN(+b.watchdog.v)) {
+    anchorT = b.watchdog.t; upUsAtAnchor = (+b.watchdog.v) * 1e6;
+  } else if (b && 'uptime_us' in b && !isNaN(+b.uptime_us.v)) {
+    anchorT = b.uptime_us.t; upUsAtAnchor = +b.uptime_us.v;
+  } else {
+    return null;
+  }
+  const live = liveness(box).cls !== 'bad';
+  const upUs = upUsAtAnchor + (live ? (now() - anchorT) : 0);
+  return { boot: new Date((anchorT - upUsAtAnchor) / 1000), upUs, live };
+}
+function fmtDur(us) {
+  const s = Math.floor(us / 1e6);
+  if (s < 90) return s + 's';
+  const m = Math.floor(s / 60);
+  if (m < 120) return m + 'm';
+  const h = Math.floor(m / 60);
+  return h < 48 ? h + 'h' : Math.floor(h / 24) + 'd ' + (h % 24) + 'h';
+}
+function fmtBoot(d) {
+  return d.toLocaleString([], { month: 'short', day: 'numeric',
+                                hour: '2-digit', minute: '2-digit' });
+}
+
+/* ---- group helpers ----
+ *
+ * Chord decode, same label algebra as extio.html / extioconf.tcl
+ * extio_group_decode: announced pins ascending IS the bit order. */
+function decodeChord(box, pins, val) {
+  if (!pins.length || val === null || val === '' || isNaN(+val)) return null;
+  const on = [];
+  pins.forEach((p, i) => {
+    if ((+val >> i) & 1) on.push(get(box, `label/${p}`) || ('p' + p));
+  });
+  return on.length ? on.join('_') : 'center';
+}
+
+/* Free a group slot. The write is the box contract (`pins`/`off` -> mask 0);
+ * the LOCAL forget is for firmware that does not yet tombstone freed names:
+ * dserv retains the old group/<name>/* keys forever, so without dropping them
+ * from our model the row would re-render as a ghost. On reload the ghost
+ * returns until the box's firmware learns to tombstone (or extio_clear purges
+ * the box) -- this is the honest best available from the page side. */
+function forgetLocal(box, prefixes) {
+  const b = boxes.get(box); if (!b) return;
+  for (const k of Object.keys(b)) {
+    if (prefixes.some(p => k === p || k.startsWith(p + '/'))) delete b[k];
+  }
+}
+async function clearGroup(box, idx, gname) {
+  if (!confirm(`Free digital group slot ${idx}${gname ? ` (“${gname}”)` : ''}?`)) return;
+  await cfgSet(box, `group/${idx}/pins`, 'off');
+  forgetLocal(box, [`group/${gname}`]);
+  panelHtml = null; renderPanel();
+}
+async function clearAinGroup(box, idx, gname) {
+  if (!confirm(`Free analog group slot ${idx}${gname ? ` (“${gname}”)` : ''}?`)) return;
+  await cfgSet(box, `ain/group/${idx}/off`, '1');
+  forgetLocal(box, [`ain/group/${gname}`, `ain/${gname}`]);
+  panelHtml = null; renderPanel();
+}
+
 /* DO NOT REDRAW WHILE THE USER IS IN THE PANEL.
  *
  * renderPanel() replaces #panel wholesale (the house style here -- see
@@ -365,7 +509,16 @@ function silkPin(sk, v) {
  * fleet list keeps ticking. A `pending` flag makes sure the state you missed is
  * drawn as soon as focus leaves, rather than waiting for the next update. */
 let redrawPending = false;
+/* Focus is NOT enough to detect "the user is interacting": Safari never
+ * focuses a checkbox, radio or (sometimes) select on click, so activeElement
+ * stays <body> through the whole press and the focus check alone lets a
+ * datapoint-driven redraw yank the control mid-click. The pointer flag covers
+ * the press itself: down inside the panel defers redraws until the pointer is
+ * released, wherever it is released (window-level up/cancel, so a drag out of
+ * the panel cannot wedge the flag). */
+let panelPtrDown = false;
 function panelBusy() {
+  if (panelPtrDown) return true;
   const a = document.activeElement;
   return a && a !== document.body && document.getElementById('panel')?.contains(a);
 }
@@ -477,7 +630,8 @@ function renderPanel() {
       <td><b>${p}</b>${sk && sk.pin(p) ? ` <span class="age">${sk.pin(p)}</span>` : ''}</td>
       <td>${res ? '<span class="age">reserved</span>'
                 : `<select onchange="cfgSet('${b}','pin/${p}/mode',this.value)">${sel}</select>`}</td>
-      <td>${(mode === 'in' || mode === 'in_pullup') && lvl !== null ? `<b>${lvl}</b> ${ageSpan(b, 'di/' + p)}` : ''}</td>
+      <td>${(mode === 'in' || mode === 'in_pullup') && lvl !== null
+            ? `<b><span data-val-box="${esc(b)}" data-val-leaf="di/${p}"></span></b> ${ageSpan(b, 'di/' + p)}` : ''}</td>
       <td>${res ? '' : field(b, `label/${p}`, `pin/${p}/label`, { wide: 1 })}</td>
       <td>${res ? '' : `<input class="w4" value="${deb.get(p) ?? ''}" placeholder="0"
               onchange="cfgSet('${b}','pin/${p}/debounce_ms',this.value)">`}</td>
@@ -488,23 +642,133 @@ function renderPanel() {
     </tr>`;
   }).join('') || '<tr><td colspan="7" class="age">no pins announced</td></tr>';
 
-  /* GROUPS are announced BY NAME (group/<name>/pins) with group/<name>/idx
-   * carrying the index -- writes are by index (config/group/<i>/pins). So the
-   * name is discovered from the keys and the index comes from the box, rather
-   * than assuming group N is at slot N. */
-  const gnames = Object.keys(boxes.get(b) || {})
-    .map(k => /^group\/([^/]+)\/idx$/.exec(k)).filter(Boolean).map(m => m[1]).sort();
-  const groups = gnames.map(gn => {
-    const gi = get(b, `group/${gn}/idx`);
-    return `<tr class="row"><td><b>${gi}</b></td>
-      <td>${field(b, `group/${gn}/label`, `group/${gi}/label`, { wide: 1, fallback: gn })}</td>
-      <td>${field(b, `group/${gn}/pins`, `group/${gi}/pins`, { wide: 1 })}</td>
-      <td>${field(b, `group/${gn}/settle_ms`, `group/${gi}/settle_ms`)}</td>
-      <td>${get(b, `group/${gn}`, '—')} ${ageSpan(b, `group/${gn}`)}</td></tr>`;
-  }).join('') || '<tr><td colspan="5" class="age">no groups announced</td></tr>';
+  /* GROUPS, one row per SLOT -- the announced ones filled in, the rest
+   * CREATABLE. Only rendering announced groups is what made creation
+   * impossible from this page: an unconfigured slot announces nothing, so
+   * there was nothing to click. The box has a fixed number of slots
+   * (BOX_NGROUPS; announced as groups/max by newer firmware, 4 on everything
+   * current), so render them all and let typing a pin list bring one up.
+   *
+   * Announced groups are keyed BY NAME (group/<name>/pins) with
+   * group/<name>/idx carrying the slot -- writes are by INDEX
+   * (config/group/<i>/pins). A group whose announced pins are EMPTY is a
+   * tombstone (newer firmware frees the name that way, because dserv retains
+   * keys forever): treat it as an empty slot, not a group. */
+  const bx = boxes.get(b) || {};
+  const gmax = Number(get(b, 'groups/max')) || 4;
+  const gslot = new Map();
+  for (const k of Object.keys(bx)) {
+    const m = /^group\/([^/]+)\/idx$/.exec(k);
+    if (!m) continue;
+    if (String(get(b, `group/${m[1]}/pins`, '')) === '') continue;   /* tombstone */
+    gslot.set(+get(b, `group/${m[1]}/idx`), m[1]);
+  }
+  const groups = Array.from({ length: gmax }, (_, i) => {
+    const gn = gslot.get(i);
+    if (gn === undefined) {
+      return `<tr class="row"><td><b>${i}</b></td>
+        <td><input class="w8" placeholder="label (optional)"
+             onchange="cfgSet('${b}','group/${i}/label',this.value)"></td>
+        <td><input class="w8" placeholder="pins e.g. 2,3,4"
+             onchange="if(this.value!=='')cfgSet('${b}','group/${i}/pins',this.value)"></td>
+        <td><input class="w4" placeholder="0"
+             onchange="cfgSet('${b}','group/${i}/settle_ms',this.value)"></td>
+        <td><input type="checkbox"
+             onchange="cfgSet('${b}','group/${i}/quiet',this.checked?1:0)"></td>
+        <td class="age" colspan="2">unused — type a pin list to create</td></tr>`;
+    }
+    return `<tr class="row"><td><b>${i}</b></td>
+      <td>${field(b, `group/${gn}/label`, `group/${i}/label`, { wide: 1, fallback: gn })}</td>
+      <td>${field(b, `group/${gn}/pins`, `group/${i}/pins`, { wide: 1 })}</td>
+      <td>${field(b, `group/${gn}/settle_ms`, `group/${i}/settle_ms`)}</td>
+      <td><input type="checkbox" ${get(b, `group/${gn}/quiet`) == 1 ? 'checked' : ''}
+           title="suppress members' per-pin di publishes"
+           onchange="cfgSet('${b}','group/${i}/quiet',this.checked?1:0)"></td>
+      <td><span data-grp-box="${esc(b)}" data-grp="${esc(gn)}"></span> ${ageSpan(b, `group/${gn}`)}</td>
+      <td><button class="danger" title="free this slot (pins → off)"
+           onclick="clearGroup('${b}',${i},'${esc(gn)}')">✕</button></td></tr>`;
+  }).join('');
+
+  /* ANALOG GROUPS, same slot treatment. Two firmware vintages exist:
+   *   - announcing firmware publishes ain/group/<name>/{chans,mode,deadband,
+   *     decimate,batch,avg,idx} in the manifest (chans == "" is a tombstone),
+   *     so rows are readable exactly like the digital ones;
+   *   - older firmware announces NOTHING about analog groups (only ain/rate +
+   *     ain_en) even though it accepts every config/ain/group/<i>/* write and
+   *     may well be RUNNING groups (the compiled-in default is a "joystick"
+   *     group on ch0/1). For those, the config surface is honest-write-only
+   *     (dashed, the woField idiom) and any group actually PUBLISHING betrays
+   *     itself through its state/ain/<label> data blocks -- shown as
+   *     slot-unknown rows above the writable ones. */
+  const agmax = Number(get(b, 'ain/groups/max')) || 4;
+  const agslot = new Map();
+  let agAnnounced = false;
+  for (const k of Object.keys(bx)) {
+    const m = /^ain\/group\/([^/]+)\/idx$/.exec(k);
+    if (!m) continue;
+    agAnnounced = true;
+    if (String(get(b, `ain/group/${m[1]}/chans`, '')) === '') continue;  /* tombstone */
+    agslot.set(+get(b, `ain/group/${m[1]}/idx`), m[1]);
+  }
+  /* newest block values, tick-filled (a chatty on-change group would
+   * otherwise churn the panel with every publish) */
+  const lastCell = gn =>
+    `<span data-ain-box="${esc(b)}" data-ain-grp="${esc(gn)}"></span> ${ageSpan(b, `ain/${gn}`)}`;
+  const agModeSel = (i, cur) => `<select onchange="cfgSet('${b}','ain/group/${i}/mode',this.value)">` +
+    ['onchange', 'continuous'].map(o =>
+      `<option ${o === String(cur) ? 'selected' : ''}>${o}</option>`).join('') + '</select>';
+  const blobOnly = [];
+  for (const k of Object.keys(bx)) {
+    const m = /^ain\/([^/]+)$/.exec(k);
+    if (!m || !Array.isArray(bx[k].v) || m[1] === 'dbg' || m[1] === 'group') continue;
+    if ([...agslot.values()].includes(m[1])) continue;         /* has a real row */
+    if (String(get(b, `ain/group/${m[1]}/chans`, null)) === '') continue;  /* tombstoned ghost */
+    blobOnly.push(m[1]);
+  }
+  const aingroups =
+    blobOnly.sort().map(gn => `<tr class="row"><td class="age">?</td>
+      <td><b>${esc(gn)}</b></td>
+      <td colspan="6" class="age">publishing, but this firmware does not announce its slot/config</td>
+      <td>${lastCell(gn)}</td><td></td></tr>`).join('') +
+    Array.from({ length: agmax }, (_, i) => {
+      const gn = agslot.get(i);
+      if (gn === undefined) {
+        const wo = agAnnounced ? '' : ' wo';
+        const t = agAnnounced ? ''
+          : ' title="This firmware does not report analog groups, so the current value cannot be shown. Writing still configures the box."';
+        return `<tr class="row"><td><b>${i}</b></td>
+          <td><input class="w8${wo}"${t} placeholder="label (optional)"
+               onchange="cfgSet('${b}','ain/group/${i}/label',this.value)"></td>
+          <td><input class="w4${wo}"${t} placeholder="chans e.g. 0,1"
+               onchange="if(this.value!=='')cfgSet('${b}','ain/group/${i}/channels',this.value)"></td>
+          <td>${agModeSel(i, 'onchange')}</td>
+          <td><input class="w4${wo}"${t} placeholder="8"
+               onchange="cfgSet('${b}','ain/group/${i}/deadband',this.value)"></td>
+          <td><input class="w4${wo}"${t} placeholder="1"
+               onchange="cfgSet('${b}','ain/group/${i}/decimate',this.value)"></td>
+          <td><input class="w4${wo}"${t} placeholder="1"
+               onchange="cfgSet('${b}','ain/group/${i}/batch',this.value)"></td>
+          <td><input type="checkbox"
+               onchange="cfgSet('${b}','ain/group/${i}/average',this.checked?1:0)"></td>
+          <td class="age" colspan="2">unused — type channels to create</td></tr>`;
+      }
+      return `<tr class="row"><td><b>${i}</b></td>
+        <td>${field(b, `ain/group/${gn}/label`, `ain/group/${i}/label`, { wide: 1, fallback: gn })}</td>
+        <td>${field(b, `ain/group/${gn}/chans`, `ain/group/${i}/channels`)}</td>
+        <td>${agModeSel(i, get(b, `ain/group/${gn}/mode`, 'onchange'))}</td>
+        <td>${field(b, `ain/group/${gn}/deadband`, `ain/group/${i}/deadband`)}</td>
+        <td>${field(b, `ain/group/${gn}/decimate`, `ain/group/${i}/decimate`)}</td>
+        <td>${field(b, `ain/group/${gn}/batch`, `ain/group/${i}/batch`)}</td>
+        <td><input type="checkbox" ${get(b, `ain/group/${gn}/avg`) == 1 ? 'checked' : ''}
+             onchange="cfgSet('${b}','ain/group/${i}/average',this.checked?1:0)"></td>
+        <td>${lastCell(gn)}</td>
+        <td><button class="danger" title="free this slot"
+             onclick="clearAinGroup('${b}',${i},'${esc(gn)}')">✕</button></td></tr>`;
+    }).join('');
 
   const ainOn = get(b, 'ain_en') == 1;
-  const dbg = k => `${get(b, 'ain/dbg/' + k, '—')} ${ageSpan(b, 'ain/dbg/' + k)}`;
+  /* tick-filled spans, not inline text: these counters advance every second */
+  const dbg = k => `<span data-val-box="${esc(b)}" data-val-leaf="ain/dbg/${k}"></span> ${ageSpan(b, 'ain/dbg/' + k)}`;
 
   /* ain CHANNEL MAP -- rendered only for boards with silkscreen names. The
    * channel COUNT comes from the box (ain/dbg/chans) when it has said; the
@@ -552,6 +816,11 @@ function renderPanel() {
           <th>fw</th><td>${get(b, 'fw', '—')}</td></tr>
       <tr><th>boot</th><td>${get(b, 'boot', '?')}</td>
           <th>channel</th><td>${get(b, 'channel', '—')}</td></tr>
+      <tr><th>up since</th><td colspan="3">${(() => {
+            const u = upInfo(b);
+            if (!u) return '<span class="age">unknown — no watchdog yet</span>';
+            return `${fmtBoot(u.boot)} · ${u.live ? 'up' : '<span class="age dead">was up</span>'} ${fmtDur(u.upUs)}`;
+          })()}</td></tr>
     </table>
     <p class="note"><code>fw_ver</code> is what MCUboot actually booted — the one to trust after an
        OTA. <code>fw</code> is compiled in and never changes, so it can look correct on a box running
@@ -572,8 +841,8 @@ function renderPanel() {
 
     <h2>obs / sync</h2>
     <table>
-      <tr><th>obs pin</th><td>${field(b, 'obs_pin', 'obs/pin')}${silkPin(sk, get(b, 'obs_pin'))} ${ageSpan(b, 'obs_pin')}</td>
-          <th>sync pin</th><td>${field(b, 'sync_pin', 'sync/pin')}${silkPin(sk, get(b, 'sync_pin'))} ${ageSpan(b, 'sync_pin')}</td></tr>
+      <tr><th>obs pin</th><td>${field(b, 'obs_pin', 'obs/pin', { i32: 1 })}${silkPin(sk, get(b, 'obs_pin'))} ${ageSpan(b, 'obs_pin')}</td>
+          <th>sync pin</th><td>${field(b, 'sync_pin', 'sync/pin', { i32: 1 })}${silkPin(sk, get(b, 'sync_pin'))} ${ageSpan(b, 'sync_pin')}</td></tr>
     </table>
 
     <h2>pins</h2>
@@ -583,8 +852,23 @@ function renderPanel() {
        : 'This box predates <code>pins/all</code>, so only ACTIVE pins appear and a pin set to <code>off</code> cannot be shown or re-enabled. Update its firmware to configure the full map.'}${
        sk ? ' Pin numbers ARE the silkscreen: box pin <i>n</i> is Arduino D<i>n</i>, and pins 14–17 are the A2–A5 positions.' : ''}</p>
 
-    <h2>groups</h2>
-    <table><tr><th>#</th><th>name</th><th>pins</th><th>settle ms</th><th>value</th></tr>${groups}</table>
+    <h2>digital groups</h2>
+    <table><tr><th>#</th><th>label</th><th>pins</th><th>settle ms</th><th>quiet</th><th>value</th><th></th></tr>${groups}</table>
+    <p class="note">A group publishes its member pins as ONE atomic bitmask event
+       (<code>state/group/&lt;label&gt;</code>, bit <i>i</i> = <i>i</i>-th lowest pin), settled over
+       <code>settle ms</code> so a rolling chord (joystick diagonal) arrives as one event stamped at
+       the first edge. <code>quiet</code> suppresses the members' per-pin <code>di/&lt;n&gt;</code>
+       publishes. Type a pin list into a free slot to create a group; ✕ frees the slot.</p>
+
+    <h2>analog groups</h2>
+    <table><tr><th>#</th><th>label</th><th>chans</th><th>mode</th><th>deadband</th><th>decimate</th><th>batch</th><th>avg</th><th>last</th><th></th></tr>${aingroups}</table>
+    <p class="note">An analog group publishes a named set of ADC channels together as
+       self-describing blocks on <code>state/ain/&lt;label&gt;</code>. <code>onchange</code> emits when a
+       member moves more than <code>deadband</code> counts (joystick); <code>continuous</code> takes every
+       <code>decimate</code>-th base scan (boxcar-averaged if <code>avg</code>), batching
+       <code>batch</code> takes per block. The base scan rate is <code>ain/rate</code> below, and
+       sampling runs only while analog is enabled and a member channel is available.${
+       agAnnounced ? '' : ' <b>This firmware does not announce analog group config</b> — dashed fields are write-only (a write still configures the box); update the firmware for full readback.'}</p>
 
     <h2>analog</h2>
     <table>
@@ -605,15 +889,14 @@ function renderPanel() {
 
     ${fwSection(b)}
 
-    <h2>actions</h2>
-    <div style="display:flex;gap:10px">
+    <div id="actionbar">
       <button id="savebtn" class="primary" onclick="doSave('${b}')" ${dirty.size ? '' : 'disabled'}>
         ${saveText()}</button>
       <button class="danger" onclick="doReboot('${b}')">Reboot</button>
       <button onclick="conn.send('extio_cfg_announce ${b}','extio')" title="Ask the box to re-publish everything now">Refresh from box</button>
     </div>
   `;
-  if (html !== panelHtml) { el.innerHTML = panelHtml = html; }
+  if (html !== panelHtml) { el.innerHTML = panelHtml = html; tickAges(el); }
 }
 
 /* ---- boot ---- */
@@ -633,12 +916,27 @@ async function init() {
   document.getElementById('panel').addEventListener('focusout', () => {
     setTimeout(() => { if (redrawPending && !panelBusy()) renderPanel(); }, 0);
   });
+  /* the pointer half of panelBusy() -- see its comment (Safari checkboxes) */
+  document.getElementById('panel').addEventListener('pointerdown',
+    () => { panelPtrDown = true; }, true);
+  const ptrDone = () => {
+    panelPtrDown = false;
+    setTimeout(() => { if (redrawPending && !panelBusy()) renderPanel(); }, 0);
+  };
+  window.addEventListener('pointerup', ptrDone, true);
+  window.addEventListener('pointercancel', ptrDone, true);
 
   /* Re-render on a timer as well as on updates: AGE changes with the clock, not
    * with traffic, so a box going silent must become visibly stale on its own.
    * This is also the GUARANTEE behind the redraw deferral -- focusout only makes
-   * the catch-up snappier; the tick is what makes it certain. */
-  setInterval(() => { renderFleet(); if (sel) renderPanel(); }, 1000);
+   * the catch-up snappier; the tick is what makes it certain.
+   *
+   * tickAges runs FIRST and unconditionally: it fills the age spans in place
+   * (no DOM replacement, so it is safe even mid-click), which keeps ages
+   * honest even while renderPanel() is deferring because the user is in the
+   * panel -- staleness must stay visible exactly then. The render calls after
+   * it only touch the DOM when a VALUE or liveness bucket changed. */
+  setInterval(() => { tickAges(document); renderFleet(); if (sel) renderPanel(); }, 1000);
 
   /* ?host=<host[:port]> and ?ssl=1|0 -- the standard three lines every page here
    * needs (www/CLAUDE.md). ssl matters when the page and dserv disagree on
