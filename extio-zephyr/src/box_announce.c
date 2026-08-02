@@ -282,16 +282,44 @@ void box_announce_manifest(const box_config_t *c)
 		}
 	}
 
+	/* Slot capacity, so a config UI renders exactly the CREATABLE slots
+	 * instead of hardcoding the compiled-in constants -- the same reasoning
+	 * as pins/all: a per-board table in the page is confidently wrong for
+	 * the next board. */
+	pub_int(c, "groups/max",     BOX_NGROUPS);
+	pub_int(c, "ain/groups/max", BOX_NAGROUPS);
+
 	/* DI chord groups. `pins` ascending IS the published bit order, so a host
 	 * decodes state/group/<label> from this string alone; `idx` maps a labeled
-	 * group back to its `group <n>` slot for editing. */
+	 * group back to its `group <n>` slot for editing.
+	 *
+	 * TOMBSTONES, same reason labels track label_pub_mask above: dserv
+	 * retains every key forever, so a freed or renamed group otherwise
+	 * ghosts in every UI with its last pins/value looking current. When a
+	 * slot's published NAME disappears or changes, its old pins leaf is
+	 * re-published EMPTY exactly once -- consumers treat pins=="" as "this
+	 * name is dead", which no live group can collide with (a live group
+	 * always has at least one member pin). */
+	static char group_pub_name[BOX_NGROUPS][BOX_LABEL_MAX + 4];
+
 	for (int g = 0; g < BOX_NGROUPS; g++) {
 		char gn[BOX_LABEL_MAX + 4];
+		int active = c->group_pins[g] != 0;
 
-		if (!c->group_pins[g]) {
+		gn[0] = '\0';
+		if (active) {
+			dserv_group_name(c, g, gn, sizeof gn);
+		}
+		if (group_pub_name[g][0] &&
+		    (!active || strcmp(group_pub_name[g], gn) != 0)) {
+			snprintf(leaf, sizeof leaf, "group/%s/pins", group_pub_name[g]);
+			pub_str(c, leaf, "");
+		}
+		if (!active) {
+			group_pub_name[g][0] = '\0';
 			continue;
 		}
-		dserv_group_name(c, g, gn, sizeof gn);
+		snprintf(group_pub_name[g], sizeof group_pub_name[g], "%s", gn);
 		dserv_pins_str(c->group_pins[g], csv, sizeof csv);
 
 		snprintf(leaf, sizeof leaf, "group/%s/pins", gn);
@@ -301,6 +329,54 @@ void box_announce_manifest(const box_config_t *c)
 		snprintf(leaf, sizeof leaf, "group/%s/quiet", gn);
 		pub_int(c, leaf, c->group_quiet[g]);
 		snprintf(leaf, sizeof leaf, "group/%s/idx", gn);
+		pub_int(c, leaf, g);
+	}
+
+	/* ANALOG groups -- the analog twin of the DI block, and NEW: until this,
+	 * the manifest said nothing about them (only ain_en + ain/rate), so a
+	 * config UI could neither show nor create one and the fleet page had no
+	 * metadata for the ain/<label> data blocks. Announced under
+	 * ain/group/<name>/* to mirror the config write path
+	 * (config/ain/group/<i>/...); `idx` maps name -> slot for those writes.
+	 * chans ascending is the blocks' column order (mask bit c = ch c), same
+	 * decode-from-the-announced-string contract as the DI groups -- though
+	 * the blocks also carry their mask, so they stand alone regardless.
+	 * Same tombstone rule as above, on the chans leaf. */
+	static char aingrp_pub_name[BOX_NAGROUPS][BOX_LABEL_MAX + 4];
+
+	for (int g = 0; g < BOX_NAGROUPS; g++) {
+		char gn[BOX_LABEL_MAX + 4];
+		int active = c->ain_group_chans[g] != 0;
+
+		gn[0] = '\0';
+		if (active) {
+			dserv_ain_group_name(c, g, gn, sizeof gn);
+		}
+		if (aingrp_pub_name[g][0] &&
+		    (!active || strcmp(aingrp_pub_name[g], gn) != 0)) {
+			snprintf(leaf, sizeof leaf, "ain/group/%s/chans", aingrp_pub_name[g]);
+			pub_str(c, leaf, "");
+		}
+		if (!active) {
+			aingrp_pub_name[g][0] = '\0';
+			continue;
+		}
+		snprintf(aingrp_pub_name[g], sizeof aingrp_pub_name[g], "%s", gn);
+		dserv_pins_str(c->ain_group_chans[g], csv, sizeof csv);
+
+		snprintf(leaf, sizeof leaf, "ain/group/%s/chans", gn);
+		pub_str(c, leaf, csv);
+		snprintf(leaf, sizeof leaf, "ain/group/%s/mode", gn);
+		pub_str(c, leaf, c->ain_group_mode[g] ? "continuous" : "onchange");
+		snprintf(leaf, sizeof leaf, "ain/group/%s/deadband", gn);
+		pub_int(c, leaf, c->ain_group_deadband[g]);
+		snprintf(leaf, sizeof leaf, "ain/group/%s/decimate", gn);
+		pub_int(c, leaf, c->ain_group_decimate[g] ? c->ain_group_decimate[g] : 1);
+		snprintf(leaf, sizeof leaf, "ain/group/%s/batch", gn);
+		pub_int(c, leaf, c->ain_group_batch[g] ? c->ain_group_batch[g] : 1);
+		snprintf(leaf, sizeof leaf, "ain/group/%s/avg", gn);
+		pub_int(c, leaf, (c->ain_group_flags[g] & AIN_GROUP_FLAG_AVG) ? 1 : 0);
+		snprintf(leaf, sizeof leaf, "ain/group/%s/idx", gn);
 		pub_int(c, leaf, g);
 	}
 }
