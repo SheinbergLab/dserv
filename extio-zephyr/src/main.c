@@ -2275,6 +2275,7 @@ int main(void)
 				pub_periodic("sched/accepted", sched_acc);
 				pub_periodic("sched/fired",    sched_fired_n);
 				pub_periodic("sched/refused",  sched_ref);
+				pub_periodic("dbg/di_fifo_drop", box_gpio_di_fifo_drops());
 #if defined(BOX_HAVE_ADC)
 				/* Analog health, published because its absence cost a box.
 				 * box3 went silent on 2026-07-28 and there was NOTHING to

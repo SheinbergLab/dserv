@@ -100,6 +100,32 @@ static uint8_t  di_synth_pending[BOX_NPINS];           /* poller-only */
 static uint64_t di_synth_t[BOX_NPINS];
 static uint8_t  di_synth_lvl[BOX_NPINS];
 
+/* ---- the DI edge FIFO (+24): every edge survives any stall ----
+ *
+ * The latch above keeps only first/last stamps per pin, so a service stall
+ * longer than a pulse train folded the train's middle edges into one
+ * reconstructed pair -- measured on 2026-08-02 (a 10.7 ms loop_max_us
+ * stall vs a 10 ms six-pulse train: 2 edges survived of 12; the +23 sched
+ * ledger proved every pulse FIRED). For this box the record outranks the
+ * deadline, so debounce-0 pins now ride a shared edge FIFO: the ISR
+ * appends {pin, level, t_us} per edge, the poller drains in order, and a
+ * stall merely delays delivery of exact records. Pins with debounce_ms > 0
+ * stay on the latch path -- there, collapsing bounces is the intended
+ * behavior, not a defect. Overflow drops NEWEST and counts honestly
+ * (dbg/di_fifo_drop): 128 entries absorb a 10 ms stall at a physically
+ * implausible 12 kHz edge rate. Two edges inside one IRQ latency still
+ * merge at the pad (read-level race); the poller restores count parity by
+ * emitting the pair at the same stamp -- honest to resolution. */
+#define DI_FIFO_DEPTH 128
+typedef struct { uint64_t t_us; uint8_t pin; uint8_t level; } di_edge_t;
+static di_edge_t di_fifo[DI_FIFO_DEPTH];
+static volatile uint16_t di_fifo_head, di_fifo_tail;   /* ISR writes head */
+static volatile uint32_t di_fifo_drops;
+static uint8_t  di_use_fifo[BOX_NPINS];                /* poller-maintained */
+static uint8_t  di_pair_pending[BOX_NPINS];            /* count-parity slot  */
+static uint64_t di_pair_t[BOX_NPINS];
+static uint8_t  di_pair_lvl[BOX_NPINS];
+
 /* ---- hardware obs-sync input: raw edge latch (clock anchor, unpublished) ---- */
 static volatile int      sync_pin = -1;
 static volatile uint64_t sync_edge[2];                 /* [0]=fall(end) [1]=rise(begin) */
@@ -137,6 +163,21 @@ static void di_isr(const struct device *dev, struct gpio_callback *cb,
 		if (i == sync_pin) {                         /* latch, do not report */
 			int lvl = gpio_pin_get_dt(&specs[i]);
 			sync_edge[lvl ? 1 : 0] = t;
+			continue;
+		}
+		if (di_use_fifo[i]) {
+			uint16_t h = di_fifo_head;
+			uint16_t n = (uint16_t) ((h + 1) % DI_FIFO_DEPTH);
+
+			if (n == di_fifo_tail) {
+				di_fifo_drops++;         /* full: drop NEWEST, count */
+			} else {
+				di_fifo[h].t_us  = t;
+				di_fifo[h].pin   = (uint8_t) i;
+				di_fifo[h].level = (uint8_t) gpio_pin_get_dt(&specs[i]);
+				di_fifo_head = n;
+			}
+			woke = true;
 			continue;
 		}
 		if (!di_unsettled[i]) {
@@ -330,19 +371,54 @@ int box_gpio_poll_di(const box_config_t *c, box_di_event_t *out)
 {
 	uint64_t now = now_us();
 
-	/* drain a reconstructed return-edge before scanning for new episodes,
-	 * so the pair always reaches the publisher in order */
+	/* which pins ride the FIFO can change with any debounce edit; the
+	 * poller refreshes the ISR's view each pass (30 loads, single core) */
 	for (int i = 0; i < BOX_NPINS; i++) {
-		if (di_synth_pending[i]) {
-			di_synth_pending[i] = 0;
+		di_use_fifo[i] = (c->debounce_ms[i] == 0) && !box_gpio_reserved(i)
+			&& (i != sync_pin);
+	}
+
+	/* count-parity completion from a merged same-stamp pair (see the FIFO
+	 * comment): emit before anything newer so order is preserved */
+	for (int i = 0; i < BOX_NPINS; i++) {
+		if (di_pair_pending[i]) {
+			di_pair_pending[i] = 0;
+			di_pub_level[i] = di_pair_lvl[i];
 			out->pin = (uint8_t) i;
-			out->level = di_synth_lvl[i];
-			out->t_us = di_synth_t[i];
+			out->level = di_pair_lvl[i];
+			out->t_us = di_pair_t[i];
 			return 1;
 		}
 	}
 
+	/* the FIFO: exact edges, in order, whatever the stall was */
+	while (di_fifo_tail != di_fifo_head) {
+		di_edge_t e = di_fifo[di_fifo_tail];
+
+		di_fifo_tail = (uint16_t) ((di_fifo_tail + 1) % DI_FIFO_DEPTH);
+		if (e.level == di_pub_level[e.pin]) {
+			/* two edges merged inside one IRQ latency: restore count
+			 * parity as a pair at the same (honest) stamp */
+			out->pin = e.pin;
+			out->level = (uint8_t) !e.level;
+			out->t_us = e.t_us;
+			di_pair_pending[e.pin] = 1;
+			di_pair_lvl[e.pin] = e.level;
+			di_pair_t[e.pin] = e.t_us;
+			return 1;
+		}
+		di_pub_level[e.pin] = e.level;
+		out->pin = e.pin;
+		out->level = e.level;
+		out->t_us = e.t_us;
+		return 1;
+	}
+
+	/* legacy latch path: debounced pins only (collapse is the point there) */
 	for (int i = 0; i < BOX_NPINS; i++) {
+		if (di_use_fifo[i]) {
+			continue;
+		}
 		unsigned int k = irq_lock();
 		uint8_t  uns   = di_unsettled[i];
 		uint64_t last  = di_last_edge_us[i];
@@ -384,6 +460,11 @@ int box_gpio_poll_di(const box_config_t *c, box_di_event_t *out)
 uint64_t box_gpio_now_us(void)
 {
 	return now_us();
+}
+
+uint32_t box_gpio_di_fifo_drops(void)
+{
+	return di_fifo_drops;
 }
 
 /* ---- TEMP diagnostics for the one-DI-event-then-silence hunt ----

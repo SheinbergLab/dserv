@@ -62,6 +62,9 @@ void box_gpio_obs_mirror(const box_config_t *c, int obs);
  * chord-settle windows in box_group.h need exactly that). */
 uint64_t box_gpio_now_us(void);
 
+/* DI edge-FIFO overflow count (+24) -- 0 on a healthy box; published 1 Hz */
+uint32_t box_gpio_di_fifo_drops(void);
+
 /* TEMP diagnostics (DI-silence hunt): ISR entry count, and on RT10xx the raw
  * IGPIO interrupt registers for the box port (imr, isr, icr1, edge_sel, psr). */
 uint32_t box_gpio_di_isr_count(void);
