@@ -30,6 +30,14 @@
 #include "box_ain.h"
 #include "box_adc.h"
 #endif
+#if defined(CONFIG_DAC)
+#include <zephyr/devicetree.h>
+#include <zephyr/drivers/dac.h>
+#if DT_NODE_HAS_STATUS(DT_NODELABEL(dac0), okay)
+/* the wire-contract DAC (cmd/dac/<ch>) -- MCXN947's dac0 on box pin 1 (D1) */
+#define BOX_HAVE_DAC0 1
+#endif
+#endif
 #include "box_obs.h"
 #include "box_console.h"
 #if defined(BOX_HAVE_PERSIST)
@@ -741,6 +749,31 @@ static const char *frame_leaf(const dserv_msg_t *m, char *buf, size_t buflen)
 	return buf;
 }
 
+#if defined(BOX_HAVE_DAC0)
+/* One-time channel setup, then immediate writes. Setup is deferred to first
+ * use (not boot) so a board whose DAC is unused never touches the device;
+ * re-setup after the console's `adccal` has run is harmless (idempotent). */
+static int dac_apply(uint16_t code)
+{
+	static const struct device *dac;
+	static int dac_ready;
+
+	if (!dac_ready) {
+		static const struct dac_channel_cfg dcfg = {
+			.channel_id = 0,
+			.resolution = 12,
+			.buffered   = true,
+		};
+		dac = DEVICE_DT_GET(DT_NODELABEL(dac0));
+		if (!device_is_ready(dac) || dac_channel_setup(dac, &dcfg) != 0) {
+			return -1;
+		}
+		dac_ready = 1;
+	}
+	return dac_write_value(dac, 0, code);
+}
+#endif /* BOX_HAVE_DAC0 */
+
 static void on_usb_frame(const uint8_t *frame, void *ud)
 {
 	ARG_UNUSED(ud);
@@ -924,6 +957,59 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 			return;
 		}
 	}
+
+#if defined(BOX_HAVE_DAC0)
+	/* <prefix>/cmd/dac/<ch> <counts> -- immediate DAC set, 12-bit (0..4095).
+	 *
+	 * The wire-contract face of the DAC the console's `adccal` already
+	 * exercises: with DAC0_OUT (box pin 1 / D1) jumpered to an analog input,
+	 * a host can drive KNOWN mid-scale levels through the real acquisition
+	 * path -- the region eye/joystick signals actually live in, which a
+	 * digital rail-to-rail loopback never touches. Immediate-set only, by
+	 * design: amplitude is the axis here; timing certification stays on the
+	 * digital edges (and Zephyr's driver has no buffered waveforms anyway).
+	 *
+	 * Handled HERE, not in dserv_cfg__cmd(): src/core is shared verbatim
+	 * with the DAC-less RP2350 fleet -- the same reasoning that keeps
+	 * `adccal` in the platform console instead of box_cli.h.
+	 *
+	 * Replies ride the event class like every knob echo:
+	 *   state/dac/<ch>   the APPLIED code (clamped to 0..4095)
+	 *   state/dac/err    "no such channel" | "not ready"
+	 * Known silicon caveat (PORTING.md): codes below ~700 clamp at ~517 mV;
+	 * callers should certify the floor, not pretend it isn't there.
+	 */
+	{
+		int dch, pos = -1;
+
+		if (leaf &&
+		    sscanf(leaf, "cmd/dac/%d%n", &dch, &pos) == 1 &&
+		    pos > 0 && leaf[pos] == '\0') {
+			uint8_t fdac[DSERV_MSG_LEN];
+			char    nmd[80];
+
+			if (dch != 0) {  /* dac1 (D0) exists in silicon, disabled in DT */
+				dserv_state_name(&cfg, nmd, sizeof nmd, "dac/err");
+				dserv_msg_string(fdac, nmd, 0, "no such channel");
+				box_pub_event(fdac);
+				return;
+			}
+			long code = dserv_msg_as_long(&m);
+			if (code < 0)    code = 0;
+			if (code > 4095) code = 4095;
+			if (dac_apply((uint16_t) code) != 0) {
+				dserv_state_name(&cfg, nmd, sizeof nmd, "dac/err");
+				dserv_msg_string(fdac, nmd, 0, "not ready");
+				box_pub_event(fdac);
+				return;
+			}
+			dserv_state_name(&cfg, nmd, sizeof nmd, "dac/0");
+			dserv_msg_int(fdac, nmd, 0, (int32_t) code);
+			box_pub_event(fdac);
+			return;
+		}
+	}
+#endif /* BOX_HAVE_DAC0 */
 
 #if defined(BOX_HAVE_OTA_SLOT)
 	/* <prefix>/cmd/ota/flashtest <kb> -- OTA step 2's execute-while-write probe.

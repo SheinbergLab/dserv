@@ -163,3 +163,21 @@ construction and the box reports `revert` in `state/ota/*`.
   MCUboot actually booted, re-announced on every connect. (`state/fw` is a
   build-time constant and can NOT show an OTA taking effect.)
 * Staged-but-not-armed: `state/ota/staged_ver`, published by `cmd/ota/verify`.
+
+## DAC (v0.4.0+18, MCXN947 only)
+
+The wire-contract face of the DAC that `adccal` exercises from the console:
+
+```
+dservctl -c "dservSet extio/box01/cmd/dac/0 2048"    # counts 0..4095 (clamped)
+```
+
+* Echo `state/dac/0` = the APPLIED code; errors on `state/dac/err`
+  ("no such channel" — only ch 0 exists; "not ready").
+* Capability-check `state/dac_en` in the manifest (0 on RP2350/teensy builds)
+  instead of probing a command that would silently no-op.
+* Immediate-set only, by design — amplitude testing, not waveform timing.
+  DAC0_OUT is box pin 1 (D1); jumper it to an analog input (extio_test uses
+  D1 -> A1) for a mid-scale ADC certification path.
+* Silicon caveat: codes below ~700 clamp at ~517 mV (documented in
+  PORTING.md) — certify the floor, don't pretend it isn't there.

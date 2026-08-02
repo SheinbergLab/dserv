@@ -8,6 +8,7 @@
 #include "box_pub.h"
 
 #include <zephyr/kernel.h>
+#include <zephyr/devicetree.h>          /* dac_en capability check below */
 #include <stdio.h>
 #include <string.h>
 
@@ -260,6 +261,16 @@ void box_announce_manifest(const box_config_t *c)
 	 * are announced honestly as configured, not as running. */
 	pub_int(c, "ain_en",  c->ain_en  ? 1 : 0);
 	pub_int(c, "oled_en", c->oled_en ? 1 : 0);
+
+	/* dac_en is COMPILED capability, not config: it says whether this build
+	 * answers cmd/dac/<ch> at all (MCXN947's dac0; the RP2350 fleet and the
+	 * teensy targets have no DT node and announce 0). Consumers capability-
+	 * check this instead of probing a command that would silently no-op. */
+#if defined(CONFIG_DAC) && DT_NODE_HAS_STATUS(DT_NODELABEL(dac0), okay)
+	pub_int(c, "dac_en", 1);
+#else
+	pub_int(c, "dac_en", 0);
+#endif
 
 	/* Per-pin labels. A pin publishes its label if it HAS one or is configured.
 	 * The mask tracks pins we published a non-empty label for, so clearing one
