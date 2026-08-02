@@ -592,15 +592,32 @@ int box_net_eth_poll(uint8_t *buf, int max)
 			if (d > recv_max_us) recv_max_us = d;
 
 			/* wake accounting: consume the RX thread's signal AT MOST
-			 * ONCE (see the instrumentation comment up top). The <1 s
-			 * band is only a cycle-wrap trim now -- the seq gate is
-			 * what makes the number honest -- and a rejected sample
-			 * still consumes, so it cannot resurface later. */
+			 * ONCE (see the instrumentation comment up top), and only
+			 * accept it as a MEASUREMENT if this recv followed it
+			 * within the loop's reaction envelope.
+			 *
+			 * The band was 1 s ("cycle-wrap trim") and that was still
+			 * too loose, found on the v0.4.0+13 trial boot: when this
+			 * loop happens to be awake and drains a frame BEFORE the
+			 * prio-8 wake thread runs, the wake thread's k_poll still
+			 * returns the by-then-stale data-available state and
+			 * stamps AFTER the drain -- so the stamp pairs with the
+			 * NEXT frame's recv and dbg/wake_us reads as the
+			 * inter-command gap (85/296/363 ms observed, tracking the
+			 * sender's spacing exactly) on a perfectly healthy box.
+			 * 10 ms accepts every real wake (signal -> recv is us;
+			 * even the 1 ms-timeout fallback plus a fat pass is low
+			 * single-digit ms, loop_max_us ~3 ms worst observed) and
+			 * rejects every phase artifact, which is gap-sized. A
+			 * rejected sample still consumes the seq, so it cannot
+			 * resurface later -- the window then honestly reads -1,
+			 * "no wake MEASURED", with dbg/ethrx_age_ms carrying the
+			 * alive-or-dead verdict. */
 			uint32_t seq = rx_signal_seq;
 			if (seq != rx_seq_seen) {
 				rx_seq_seen = seq;
 				uint32_t w = k_cyc_to_us_floor32(r0 - rx_signal_cyc);
-				if (w < 1000000) {
+				if (w < 10000) {
 					wake_last_us = w;
 					if (w > wake_max_us) wake_max_us = w;
 					wake_window++;
