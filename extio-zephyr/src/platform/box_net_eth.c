@@ -16,6 +16,14 @@
 static struct net_if *iface;
 static int sock = -1;
 static int connecting;          /* 1 = a non-blocking connect() is in flight */
+/* Doom flag for srv_conn: 0 = live, 1 = dead (EOF/RST seen, awaiting close),
+ * 2 = a reaper has claimed the close and is mid-teardown. atomic_t because the
+ * claim is a CAS -- two reapers exist (the RX-wake thread and, if that thread
+ * is itself declared dead, the watchdog below), and a CAS is what guarantees a
+ * doomed fd is closed EXACTLY once no matter which of them gets there. Why the
+ * service loop no longer closes it directly is the subject of the RX-wake
+ * section's comment. */
+static atomic_t srv_doom;
 /* Unsent tail of a frame the socket half-took -- partial-frame custody; the
  * mechanism and its rationale live with txp_flush() in the send section. */
 static uint8_t txp_buf[DSERV_MSG_LEN];
@@ -25,7 +33,13 @@ static int     txp_len;
  * Two sockets in opposite directions is dserv's subscription model, not a choice:
  * %reg names an ip:port and dserv opens a connection to it. See the header. */
 static int srv_listen = -1;     /* listening socket (BOX_ETH_CFG_PORT)          */
-static int srv_conn   = -1;     /* dserv's accepted connect-back                */
+/* volatile: sampled by the RX-wake thread every loop pass. The compiler almost
+ * certainly cannot hoist the load anyway (exported functions in this file write
+ * it, so any opaque call clobbers it) -- but box_ain.c's `running` shows how
+ * close this codebase already came to that trap, and "almost certainly" is not
+ * a property to build a wake path on. Disassembly of v0.4.0+11 was checked and
+ * the load was NOT hoisted, so this is insurance, not the bug fix. */
+static volatile int srv_conn = -1;   /* dserv's accepted connect-back           */
 static int srv_fresh;           /* one-shot: report BOX_NET_RESET after accept  */
 /* ---- inbound instrumentation ----
  * With the stack in ITCM the OUTBOUND cost collapsed (275 -> 61 us) and the
@@ -33,15 +47,36 @@ static int srv_fresh;           /* one-shot: report BOX_NET_RESET after accept  
  *   wake_us  RX thread saw the socket readable -> service loop reached recv
  *   recv_us  cost of the zsock_recv that returned the frame
  * If both are small, the time is spent BEFORE the socket became readable --
- * dserv's send path, transit, or the box's net RX thread -- and not in our loop. */
+ * dserv's send path, transit, or the box's net RX thread -- and not in our loop.
+ *
+ * ONE-SHOT CONSUME, learned the hard way. The first version computed wake_us on
+ * EVERY recv against whatever rx_signal_cyc happened to hold, with a <1 s guard
+ * as the only sanity check. Two ways that lies:
+ *   - the second frame of a burst recv'd while the RX thread naps its 1 ms
+ *     charges the whole inter-frame gap to "wake";
+ *   - with the RX thread DEAD, an ancient stamp aliases through the 28.6 s
+ *     cycle wrap and lands under the guard, so dbg/wake_us showed plausible
+ *     garbage precisely when it needed to scream. That garbage cost real
+ *     diagnosis time on 2026-08-01 (box02, 2/4 boots).
+ * Now every signal carries a sequence number and each recv consumes it at most
+ * once: a recv with no fresh signal since the last consume records nothing,
+ * and a 1 Hz stats window with no consumed wake reports UINT32_MAX so the
+ * datapoint reads -1 -- "no wake happened", loudly distinct from "wake was
+ * fast". */
 static volatile uint32_t rx_signal_cyc;
+static volatile uint32_t rx_signal_seq;      /* bumped by the RX thread per signal */
+static uint32_t rx_seq_seen;                 /* service loop: last seq consumed    */
+static uint32_t wake_window;                 /* wakes consumed since last stats read */
 static uint32_t wake_last_us, wake_max_us;
 static uint32_t recv_last_us, recv_max_us;
 
 void box_net_eth_rx_stats(uint32_t *wake_us, uint32_t *wake_max,
 			  uint32_t *recv_us, uint32_t *recv_max)
 {
-	if (wake_us)   *wake_us   = wake_last_us;
+	/* Caller (the 1 Hz status block) and the consumer (box_net_eth_poll) are
+	 * the same thread, so read-then-clear needs no lock. */
+	if (wake_us)   *wake_us   = wake_window ? wake_last_us : UINT32_MAX;
+	wake_window = 0;
 	if (wake_max)  *wake_max  = wake_max_us;
 	if (recv_us)   *recv_us   = recv_last_us;
 	if (recv_max)  *recv_max  = recv_max_us;
@@ -60,12 +95,25 @@ static void tcp_nodelay(int fd)
 	(void) zsock_setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
 }
 
-static void srv_drop(void)
+/* Close a DOOMED connect-back, exactly once. The CAS is the claim: whichever
+ * reaper wins moves 1 -> 2, does the teardown, and only then re-arms the flag
+ * to 0. The loser sees 2 (or 0) and walks away. srv_conn goes to -1 BEFORE the
+ * flag clears so the accept gate in server_service() can never see "no doom,
+ * old fd still present" and double-book the slot. */
+static void rx_wake_watchdog(void);     /* defined with the RX-wake section */
+
+static void srv_reap(void)
 {
-	if (srv_conn >= 0) {
-		zsock_close(srv_conn);
-		srv_conn = -1;
+	if (!atomic_cas(&srv_doom, 1, 2)) {
+		return;
 	}
+	int fd = srv_conn;
+
+	srv_conn = -1;
+	if (fd >= 0) {
+		zsock_close(fd);
+	}
+	atomic_set(&srv_doom, 0);
 }
 
 int box_net_eth_init(const box_config_t *cfg)
@@ -215,6 +263,11 @@ int box_net_eth_connect(const uint8_t dserv_ip[4], uint16_t port)
 
 void box_net_eth_server_service(void)
 {
+	/* Liveness first: this runs every service pass on every eth-capable
+	 * board, which is exactly the guarantee the RX-wake self-heal needs
+	 * (it rate-limits itself to 1 Hz inside). */
+	rx_wake_watchdog();
+
 	if (srv_listen < 0) {
 		/* Rate-limit the setup retry. This runs on the service loop, which is
 		 * event-driven and therefore fast, and with no link the socket/bind
@@ -265,7 +318,11 @@ void box_net_eth_server_service(void)
 
 int box_net_eth_server_up(void)
 {
-	return srv_conn >= 0;
+	/* A doomed connect-back is DOWN even though the fd still exists: the reg
+	 * watchdog keys re-registration off this, and "fd present but dead" is
+	 * exactly the lie that kept boxes deaf before (see box_net_eth_send's
+	 * header comment for the uplink-side version of the same lesson). */
+	return srv_conn >= 0 && atomic_get(&srv_doom) == 0;
 }
 
 /* ---- wake the service loop on inbound packets ----
@@ -281,25 +338,99 @@ int box_net_eth_server_up(void)
  * touches the socket data -- the service loop still owns every read, so there is no
  * second consumer and no locking. Priority is below the service loop: this only
  * needs to make the loop runnable, not to run before it. */
-/* 2048: zsock_poll + fdtable machinery overflowed the original 1024 -- the
- * suspected cause of the wake thread dying silently (dbg/wake_us frozen). */
+/* ---- how this thread dies, and why it now can't stay dead ----
+ *
+ * Twice this thread has been found silently dead: dbg/wake_us frozen while
+ * dbg/recv_us kept updating, every dserv->box command +~1 ms (the loop's
+ * box_event_wait(K_MSEC(1)) fallback doing its job). The first time was blamed
+ * on stack overflow and the stack raised 1024 -> 2048. That diagnosis is now
+ * DISPROVEN: every board runs hardware stack protection (PSPLIM on the M33s,
+ * MPU guards on the RT10xx), the fatal handler is the Zephyr default which
+ * HALTS THE WHOLE SYSTEM, and the failed boots kept publishing -- so no fault
+ * of any kind fired, and 2048 was never the cure (v0.4.0+11 died the same way
+ * on 2 of 4 boots of box02, 2026-08-01, with 2048 in place).
+ *
+ * What the evidence leaves: the loop body was checked in the shipped binary
+ * (srv_conn IS reloaded every pass -- no hoisting), k_msleep and k_poll are
+ * timeout-bounded and cannot pend forever, no fault fired, nothing aborts the
+ * thread. The one unbounded wait in its path is zsock_poll's per-fd fdtable
+ * mutex, taken K_FOREVER -- and Zephyr's zvfs_reserve_fd() re-inits that mutex
+ * (k_mutex_init) whenever a freed fd SLOT is recycled. A thread pended on the
+ * old mutex at that instant is orphaned: the wait queue is wiped under it, it
+ * holds no timeout, and nothing will ever ready it again. Silent, permanent,
+ * and invisible to every datapoint except the wake path it was providing.
+ *
+ * Boot is exactly when that window exists: each repeated %reg makes dserv tear
+ * down the old connect-back and open a new one (Dataserver.cpp
+ * add_new_send_client: "shut down any existing registration under this key"),
+ * so the service loop used to close srv_conn -- WHILE THIS THREAD POLLS IT --
+ * and the very next zsock_socket()/accept() recycles the slot. Whether the
+ * kernel-level interleaving lands on the fatal cell is timing; ~50%/boot says
+ * it lands often. After registration settles the churn stops, which is why a
+ * box that boots healthy stays healthy.
+ *
+ * Three layers of fix, because the wedge is a KERNEL property we can only
+ * stay out of, not repair:
+ *   1. DEFERRED CLOSE. The service loop never closes srv_conn any more; it
+ *      sets srv_doom and this thread -- the poller -- does the close between
+ *      its own polls (srv_reap). The fd it watches can no longer be freed and
+ *      recycled under its zsock_poll, which removes the exposure rather than
+ *      shrinking it.
+ *   2. HEARTBEAT + RESPAWN. rx_beat ticks every pass (<= ~221 ms apart by
+ *      construction: 20 ms nap / 200 ms poll / 1 ms yield). The 1 Hz watchdog
+ *      (rx_wake_watchdog, run off server_service like the listener's own
+ *      retry) treats >= 5 s of frozen beat as death and starts the SPARE
+ *      thread on its own stack. The wedged one is left pended forever, NOT
+ *      k_thread_abort()ed: it provably holds nothing (every pend site in its
+ *      loop is lock-free by then), and aborting a thread off a wait queue
+ *      that was re-initialised dlist-unlinks through stale pointers -- the
+ *      cure would be the corruption. One spare, not a pool: this covers the
+ *      boot window; a second death in one uptime means something new and
+ *      should stay visible (dbg/ethrx_age_ms grows, RTT +1 ms, box still
+ *      works).
+ *   3. If BOTH incarnations are dead the watchdog reaps doomed fds itself so
+ *      the box cannot go deaf waiting for a closer that will never come --
+ *      degraded to the 1 ms timeout, never dead.
+ * dbg/ethrx_age_ms / dbg/ethrx_respawns / dbg/ethrx_stack_free are the 1 Hz
+ * proof of which layer is doing work; the stack number is there so the next
+ * "raise it" has a measurement instead of a guess. */
 static K_THREAD_STACK_DEFINE(eth_rx_stack, 2048);
-static struct k_thread eth_rx_thread;
+static K_THREAD_STACK_DEFINE(eth_rx_stack2, 2048);   /* the spare's own stack --
+					* the wedged thread's stack stays its
+					* grave and is never reused */
+static struct k_thread eth_rx_thread, eth_rx_thread2;
+static volatile uint32_t rx_beat;    /* liveness: bumped every loop pass */
+static uint32_t rx_respawns;         /* 0 or 1; published as dbg/ethrx_respawns */
+static uint8_t  rx_started;
+/* Watchdog bookkeeping (rx_wake_watchdog below). last_change doubles as the
+ * basis of dbg/ethrx_age_ms, so it is stamped at spawn, not first check. */
+static uint32_t rx_wd_last_beat;
+static int64_t  rx_wd_last_change;
+static uint8_t  rx_wd_gave_up;
 
 static void eth_rx_thread_fn(void *a, void *b, void *c)
 {
 	ARG_UNUSED(a); ARG_UNUSED(b); ARG_UNUSED(c);
 	for (;;) {
+		rx_beat++;
+		/* Reap first: a doomed fd must never be polled again, and closing
+		 * it HERE -- between this thread's own zsock_poll calls -- is the
+		 * whole deferred-close design. */
+		if (atomic_get(&srv_doom) != 0) {
+			srv_reap();
+			continue;
+		}
 		int fd = srv_conn;               /* sampled; -1 while disconnected */
 		if (fd < 0) {
 			k_msleep(20);            /* nothing to watch yet */
 			continue;
 		}
 		struct zsock_pollfd pfd = { .fd = fd, .events = ZSOCK_POLLIN };
-		/* Bounded wait so a socket swap (reconnect) is picked up promptly and a
-		 * closed fd can never wedge this thread. */
+		/* Bounded wait so a socket swap (reconnect) is picked up promptly.
+		 * The bound is also what makes rx_beat a real liveness signal. */
 		if (zsock_poll(&pfd, 1, 200) > 0) {
 			rx_signal_cyc = k_cycle_get_32();
+			rx_signal_seq++;         /* publish-after-stamp: consumer gates on seq */
 			box_event_signal();
 			/* The loop drains it. Yield so we re-poll after that has happened
 			 * rather than spinning on a still-readable socket. */
@@ -308,11 +439,96 @@ static void eth_rx_thread_fn(void *a, void *b, void *c)
 	}
 }
 
+/* Priority 8: below the service loop -- this only needs to make the loop
+ * runnable, not to run before it (unchanged from the original design). */
+static void rx_wake_spawn(struct k_thread *t, k_thread_stack_t *stk,
+			  size_t sz, const char *name)
+{
+	k_thread_create(t, stk, sz, eth_rx_thread_fn, NULL, NULL, NULL,
+			8, 0, K_NO_WAIT);
+	k_thread_name_set(t, name);
+}
+
 void box_net_eth_rx_wake_start(void)
 {
-	k_thread_create(&eth_rx_thread, eth_rx_stack, K_THREAD_STACK_SIZEOF(eth_rx_stack),
-			eth_rx_thread_fn, NULL, NULL, NULL, 8, 0, K_NO_WAIT);
-	k_thread_name_set(&eth_rx_thread, "extio_ethrx");
+	rx_wd_last_change = k_uptime_get();   /* so ethrx_age_ms starts honest */
+	rx_wake_spawn(&eth_rx_thread, eth_rx_stack,
+		      K_THREAD_STACK_SIZEOF(eth_rx_stack), "extio_ethrx");
+	rx_started = 1;
+}
+
+/* 1 Hz liveness check, called from box_net_eth_server_service() so it runs on
+ * every eth-capable board without main.c plumbing (the reg watchdog precedent:
+ * detection and repair live next to the thing they guard). last_change is
+ * uptime-of-last-observed-beat-CHANGE, so ethrx_age_ms reads 0..~1000 healthy
+ * and simply grows once the thread stops -- the number that was missing on
+ * 2026-08-01 when wake_us's plausible garbage sent the hunt sideways. */
+#define RX_WAKE_STALL_MS 5000    /* >= 22x the worst healthy beat interval; an
+				  * OTA flash blast stalls the WHOLE box (SL
+				  * included, wd_skipped counts it), so a gap
+				  * only this thread can hit means it is gone */
+
+static void rx_wake_watchdog(void)
+{
+	static int64_t next_check;
+	int64_t now = k_uptime_get();
+
+	if (!rx_started || now < next_check) {
+		return;
+	}
+	next_check = now + 1000;
+
+	uint32_t b = rx_beat;
+
+	if (b != rx_wd_last_beat) {
+		rx_wd_last_beat = b;
+		rx_wd_last_change = now;
+		return;
+	}
+	if (now - rx_wd_last_change < RX_WAKE_STALL_MS) {
+		return;
+	}
+	if (rx_respawns == 0) {
+		rx_respawns = 1;
+		rx_wd_last_change = now;         /* give the spare its own 5 s */
+		printk("ethrx: wake thread frozen %d ms -- spawning spare "
+		       "(wedged one left pended; commands ride the 1 ms timeout meanwhile)\n",
+		       RX_WAKE_STALL_MS);
+		rx_wake_spawn(&eth_rx_thread2, eth_rx_stack2,
+			      K_THREAD_STACK_SIZEOF(eth_rx_stack2), "extio_ethrx2");
+		return;
+	}
+	/* Both incarnations dead. Do the one job that cannot wait for them --
+	 * closing doomed fds -- so the box degrades to +1 ms commands instead of
+	 * going deaf. Racing a poller is safe here BECAUSE they are wedged: a
+	 * thread pended forever is, by definition, not inside a poll window. */
+	srv_reap();
+	if (!rx_wd_gave_up) {
+		rx_wd_gave_up = 1;
+		printk("ethrx: spare wake thread ALSO frozen -- no more respawns; "
+		       "running on the 1 ms timeout fallback (dbg/ethrx_age_ms grows)\n");
+	}
+}
+
+void box_net_eth_rx_health(uint32_t *age_ms, uint32_t *respawns, uint32_t *stack_free)
+{
+	if (age_ms) {
+		*age_ms = rx_started ?
+			(uint32_t) (k_uptime_get() - rx_wd_last_change) : 0;
+	}
+	if (respawns) {
+		*respawns = rx_respawns;
+	}
+	if (stack_free) {
+		/* Real headroom, not a guess: needs CONFIG_INIT_STACKS (prj.conf)
+		 * for the watermark fill. Reports the ACTIVE incarnation. */
+		size_t unused = 0;
+		struct k_thread *t = rx_respawns ? &eth_rx_thread2 : &eth_rx_thread;
+
+		*stack_free = (rx_started &&
+			       k_thread_stack_space_get(t, &unused) == 0) ?
+			(uint32_t) unused : 0;
+	}
 }
 
 int box_net_eth_poll(uint8_t *buf, int max)
@@ -345,9 +561,13 @@ int box_net_eth_poll(uint8_t *buf, int max)
 	 * edge reaches dserv -- so per-pass work in here is worth real care. */
 	struct zsock_pollfd pf[2];
 	int nfd = 0, ci = -1, si = -1;
+	/* A doomed connect-back is the RX-wake thread's to close; from here it is
+	 * already gone -- never polled, never recv'd. The doom flag only ever
+	 * goes 0 -> 1 on THIS thread (below), so it cannot flip mid-pass. */
+	int srv_live = (srv_conn >= 0 && atomic_get(&srv_doom) == 0);
 
-	if (sock >= 0)     { ci = nfd; pf[nfd].fd = sock;     pf[nfd].events = ZSOCK_POLLIN; nfd++; }
-	if (srv_conn >= 0) { si = nfd; pf[nfd].fd = srv_conn; pf[nfd].events = ZSOCK_POLLIN; nfd++; }
+	if (sock >= 0) { ci = nfd; pf[nfd].fd = sock;     pf[nfd].events = ZSOCK_POLLIN; nfd++; }
+	if (srv_live)  { si = nfd; pf[nfd].fd = srv_conn; pf[nfd].events = ZSOCK_POLLIN; nfd++; }
 	if (nfd == 0 || zsock_poll(pf, nfd, 0) <= 0) {
 		return 0;
 	}
@@ -371,15 +591,34 @@ int box_net_eth_poll(uint8_t *buf, int max)
 			recv_last_us = d;
 			if (d > recv_max_us) recv_max_us = d;
 
-			uint32_t w = k_cyc_to_us_floor32(r0 - rx_signal_cyc);
-			if (w < 1000000) {          /* ignore a stale/never-signalled stamp */
-				wake_last_us = w;
-				if (w > wake_max_us) wake_max_us = w;
+			/* wake accounting: consume the RX thread's signal AT MOST
+			 * ONCE (see the instrumentation comment up top). The <1 s
+			 * band is only a cycle-wrap trim now -- the seq gate is
+			 * what makes the number honest -- and a rejected sample
+			 * still consumes, so it cannot resurface later. */
+			uint32_t seq = rx_signal_seq;
+			if (seq != rx_seq_seen) {
+				rx_seq_seen = seq;
+				uint32_t w = k_cyc_to_us_floor32(r0 - rx_signal_cyc);
+				if (w < 1000000) {
+					wake_last_us = w;
+					if (w > wake_max_us) wake_max_us = w;
+					wake_window++;
+				}
 			}
 			return n;
 		}
-		if (n == 0) {                    /* dserv closed the config link */
-			srv_drop();
+		if (n == 0 ||
+		    (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
+			/* dserv closed the config link (or RST it -- the n<0 hard
+			 * errors used to fall through and leave the dead fd open
+			 * FOREVER: server_up() stayed true, the watchdog never
+			 * re-registered, and the box was deaf until reboot).
+			 * DOOM it, do not close it: the close belongs to the
+			 * RX-wake thread that may be inside zsock_poll on this
+			 * very fd -- closing under it is how fd-slot recycling
+			 * wedged that thread (see the RX-wake section). */
+			atomic_set(&srv_doom, 1);
 			return BOX_NET_RESET;        /* framer reset; the burst is a no-op */
 		}
 	}
