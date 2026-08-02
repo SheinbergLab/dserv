@@ -505,12 +505,13 @@ proc extio_ota_push_dp {box file sha size} {
 # each window to the box's drain rate, and the ack-driven stall-resend below
 # remains the loss-recovery net (a resend just restarts the drip from the
 # box's true cursor).
-# window 4 / 40 ms: the MCXN947's USB device controller drops frames at the
-# UDC layer once a burst outruns its RX slab pool ("E: Failed to allocate
-# slab" on the box console; ~8 frames of every 32-frame burst survived).
-# Four back-to-back frames sit inside the pool; 40 ms lets the box drain and
-# flash between windows. ~7.6 KB/s -> ~37 s for a 277 KB image.
-set ::extio_ota_dp_window 4
+# window 32 / 40 ms (~60 KB/s, ~5 s per image). Fw < +21 clipped any burst
+# past ~8 frames (the box's own 8-frame CDC rings -- see the +19..+21 hunt
+# in the extio-zephyr log), which forced a 4-frame crawl here (~37 s per
+# image). Against pre-+21 firmware the ack-driven stall-resend still makes
+# transfers complete, just slowly -- drop the window back to 4 if an old
+# box must be updated urgently.
+set ::extio_ota_dp_window 32
 
 proc extio_ota_dp_blast {box from} {
     if { ![info exists ::extio_ota_img($box)] } return
