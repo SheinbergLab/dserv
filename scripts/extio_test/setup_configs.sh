@@ -48,7 +48,7 @@ for box in $BOXES; do
             for variant in wiring_check events timing analog amplitude mixed_soak; do
                 cfg "queue_add_item {$qname} {${box}-${variant}}" >/dev/null
             done
-            echo "  created queue $qname (5 items)"
+            echo "  created queue $qname (6 items)"
             ;;
     esac
 done
