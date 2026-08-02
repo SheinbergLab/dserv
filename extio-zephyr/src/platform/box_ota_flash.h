@@ -69,6 +69,11 @@ uint32_t box_ota_flash_align(void);    /* required program alignment        */
  * boot_erase_img_bank() would be ~46 s of blocking erase here. */
 int box_ota_flash_clear_trailer(void);
 
+/* Erase the slot's first sector (swap-using-offset only; no-op otherwise).
+ * A completed swap parks the outgoing image's header there and MCUboot then
+ * vetoes the NEXT staged update once -- see the .c for the full story. */
+int box_ota_flash_clear_lead(void);
+
 /* Erase the sector containing `off`. Returns 0 or a negative errno. */
 int box_ota_flash_erase(uint32_t off);
 

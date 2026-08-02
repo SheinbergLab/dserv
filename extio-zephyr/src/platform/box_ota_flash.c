@@ -102,6 +102,33 @@ int box_ota_flash_clear_trailer(void)
 #endif
 }
 
+/* Erase the slot's FIRST sector. Under swap-using-offset the update stages
+ * one sector in and MCUboot requires sector 0 of the secondary to read
+ * ERASED -- but a COMPLETED swap relocates the outgoing image down one
+ * sector, parking its header exactly there. The next staged update is then
+ * vetoed at boot ("Secondary header magic detected in first sector, wrong
+ * upload address?"), MCUboot sanitizes the slot, and only a SECOND push
+ * lands. Found 2026-08-01 on box02, the first back-to-back OTA on an
+ * MCXN947: +12->+13 swapped clean (slot1 had never swapped), +13->+14
+ * rejected once and landed on the repush. Every post-swap OTA pays that
+ * wasted reject cycle until begin clears this sector.
+ *
+ * Compiled out for non-offset modes: there the image itself starts at
+ * sector 0 and the chunk path's rolling erase covers it -- a pre-erase
+ * would only double the wear on the busiest sector of the slot. */
+int box_ota_flash_clear_lead(void)
+{
+#if !defined(CONFIG_MCUBOOT_IMG_MANAGER) || \
+	!defined(CONFIG_MCUBOOT_BOOTLOADER_MODE_SWAP_USING_OFFSET)
+	return 0;
+#else
+	if (!fa || !sector_size) {
+		return -ENODEV;
+	}
+	return flash_area_erase(fa, 0, sector_size);
+#endif
+}
+
 int box_ota_flash_erase(uint32_t off)
 {
 	if (!fa) {

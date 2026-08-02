@@ -1092,6 +1092,21 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 						   " arm will fail until it is erased\n", trc);
 			}
 		}
+		/* ...and the LEAD sector, which staging never touches (the update
+		 * starts one sector in under swap-using-offset) but a completed
+		 * swap leaves holding the outgoing image's header. Skipping this
+		 * cost every post-swap OTA one rejected boot -- MCUboot: "Secondary
+		 * header magic detected in first sector, wrong upload address?" --
+		 * with only the repush landing (box02, 2026-08-01). */
+		{
+			int lrc = box_ota_flash_clear_lead();
+
+			if (lrc != 0) {
+				ota_pub_int("ota/lead_rc", lrc);
+				box_console_printf("cmd/ota/begin -> WARNING lead-sector clear failed (%d);"
+						   " MCUboot will reject this stage once\n", lrc);
+			}
+		}
 
 		box_ota_flash_stats_reset();
 		g_ota_size    = size;
