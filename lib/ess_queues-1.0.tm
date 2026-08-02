@@ -15,7 +15,10 @@ package provide ess_queues 1.0
 
 namespace eval ::ess_queues {
     # Database handle (shared with ess_configs)
-    variable db ""
+    # bare declaration: an initializer here would WIPE the live handle when
+    # the tm is re-sourced into a running subprocess (bit us hot-patching
+    # 2026-08-02: $db went "" and every queue op threw "invalid command name")
+    variable db
     
     # Current queue state
     variable state
@@ -452,6 +455,7 @@ proc ::ess_queues::queue_add_item {queue_name config_name args} {
 
     ::ess::configs::mark_modified
     publish_queue_items $queue_name $project
+    publish_list
     return $position
 }
 
@@ -473,6 +477,7 @@ proc ::ess_queues::queue_remove_item {queue_name position args} {
     renumber_items $queue_id
     ::ess::configs::mark_modified
     publish_queue_items $queue_name $project
+    publish_list
 }
 
 proc ::ess_queues::queue_clear_items {queue_name args} {
@@ -488,6 +493,7 @@ proc ::ess_queues::queue_clear_items {queue_name args} {
     $db eval {DELETE FROM queue_items WHERE queue_id = :queue_id}
     ::ess::configs::mark_modified
     publish_queue_items $queue_name $project
+    publish_list
 }
 
 proc ::ess_queues::queue_update_item {queue_name position args} {
@@ -533,6 +539,7 @@ proc ::ess_queues::queue_update_item {queue_name position args} {
     
     ::ess::configs::mark_modified
     publish_queue_items $queue_name $project
+    publish_list
     return $position
 }
 
