@@ -5156,6 +5156,61 @@ namespace eval ess {
 		sound_apply_master_gain
 		sound_apply_feedback_volume
     }
+
+    # ---- wav stimuli ---------------------------------------------------
+    # Wav-file stimuli played by the sound module's wav layer (wavLoad /
+    # wavPlay in modules/sound). These are STIMULUS sounds, distinct from
+    # the feedback beeps above: load once at protocol/variant load time,
+    # trigger by name at trial time. Both mix into the same audio device,
+    # so a wav stimulus and a feedback beep have sample-accurate relative
+    # timing. The module publishes sound/wav/onset and sound/wav/offset
+    # datapoints (stimulus name) from the audio callback; the published
+    # onset leads actual DAC output by the device buffer (~10ms).
+    #
+    # Unlike the fire-and-forget feedback wrappers, errors here are
+    # surfaced as real Tcl errors: a missing stimulus file should fail the
+    # load, not play silence at trial time.
+    proc wav_send { cmd } {
+        set result [send sound $cmd]
+        if { [string first "!TCL_ERROR " $result] == 0 } {
+            error [string range $result 11 end]
+        }
+        return $result
+    }
+
+    # Load a sound file as stimulus `name`; returns duration in ms.
+    # `filename` defaults to name.wav. A bare filename is resolved through
+    # the standard data/ search order (protocol -> system -> project,
+    # overlay-aware) like any other data file; absolute paths or paths
+    # with directory components are used as-is. wav/flac/mp3 accepted.
+    proc wav_load { name {filename {}} } {
+        if { $filename eq {} } { set filename ${name}.wav }
+        if { [file pathtype $filename] eq "relative" &&
+             [file tail $filename] eq $filename } {
+            set path [find_data_file $filename]
+            set problem [data_file_problem $path "sound file \"$filename\""]
+            if { $problem ne {} } { error "wav_load: $problem" }
+        } else {
+            set path $filename
+        }
+        return [wav_send [list wavLoad $name $path]]
+    }
+
+    proc wav_play { name {gain 1.0} {loop 0} } {
+        wav_send [list wavPlay $name $gain $loop]
+    }
+
+    proc wav_stop { {name {}} } {
+        if { $name eq {} } {
+            wav_send [list wavStop]
+        } else {
+            wav_send [list wavStop $name]
+        }
+    }
+
+    proc wav_unload { name } { wav_send [list wavUnload $name] }
+    proc wav_list {} { return [wav_send [list wavList]] }
+    proc wav_info { name } { return [wav_send [list wavInfo $name]] }
 }
 
 ###############################################################################
