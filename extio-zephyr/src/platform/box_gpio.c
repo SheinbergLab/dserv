@@ -85,6 +85,21 @@ static volatile uint64_t di_last_edge_us[BOX_NPINS];   /* moving quiet-since    
 static volatile uint8_t  di_unsettled[BOX_NPINS];
 static uint8_t           di_pub_level[BOX_NPINS];      /* poller-only            */
 
+/* A whole pulse can hide inside one poll gap: the ISR latches its first and
+ * last edge, but if the pin is back at the published level by the time the
+ * poller looks, the old code found lvl == di_pub_level and dropped the
+ * episode -- both edges gone. Observed on the wire (extio_test, 2026-08-02):
+ * 1 ms loopback pulses vanished whole whenever a USB TX stall delayed the
+ * poll past the pulse width. The episode's timestamps were captured all
+ * along, so reconstruct the pair instead: emit the away-level edge at
+ * first_edge and queue the return edge at last_edge for the next poll call.
+ * A multi-pulse train inside one gap still collapses to one pair (first/last
+ * bound the episode) -- with the UDC pool fix shrinking stalls to sub-pulse
+ * lengths that residue is out of reach of a real schedule. */
+static uint8_t  di_synth_pending[BOX_NPINS];           /* poller-only */
+static uint64_t di_synth_t[BOX_NPINS];
+static uint8_t  di_synth_lvl[BOX_NPINS];
+
 /* ---- hardware obs-sync input: raw edge latch (clock anchor, unpublished) ---- */
 static volatile int      sync_pin = -1;
 static volatile uint64_t sync_edge[2];                 /* [0]=fall(end) [1]=rise(begin) */
@@ -314,6 +329,19 @@ void box_gpio_exec(const box_config_t *c, const gpio_cmd_t *cmd)
 int box_gpio_poll_di(const box_config_t *c, box_di_event_t *out)
 {
 	uint64_t now = now_us();
+
+	/* drain a reconstructed return-edge before scanning for new episodes,
+	 * so the pair always reaches the publisher in order */
+	for (int i = 0; i < BOX_NPINS; i++) {
+		if (di_synth_pending[i]) {
+			di_synth_pending[i] = 0;
+			out->pin = (uint8_t) i;
+			out->level = di_synth_lvl[i];
+			out->t_us = di_synth_t[i];
+			return 1;
+		}
+	}
+
 	for (int i = 0; i < BOX_NPINS; i++) {
 		unsigned int k = irq_lock();
 		uint8_t  uns   = di_unsettled[i];
@@ -339,6 +367,16 @@ int box_gpio_poll_di(const box_config_t *c, box_di_event_t *out)
 			out->t_us = first;
 			return 1;
 		}
+		/* pin left the published level and came back inside the poll
+		 * gap: a swallowed pulse. Emit the away edge now (at first),
+		 * queue the return edge (at last) for the next call. */
+		out->pin = (uint8_t) i;
+		out->level = (uint8_t) !di_pub_level[i];
+		out->t_us = first;
+		di_synth_pending[i] = 1;
+		di_synth_lvl[i] = di_pub_level[i];
+		di_synth_t[i] = (last > first) ? last : first;
+		return 1;
 	}
 	return 0;
 }
