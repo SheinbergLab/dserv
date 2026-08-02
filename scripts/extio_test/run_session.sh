@@ -97,6 +97,25 @@ for kv in $FAULTS; do
 done
 trap 'clear_faults' EXIT
 
+# ---------------------------------------------------------------- boot hold
+# A real box with no PTP grandmaster (USB rigs) holds its analog sampler for
+# 60 s after boot (BOX_AIN_BOOT_HOLD_MAX_MS) so no sample ever carries an
+# undisciplined clock stamp. state/watchdog counts uptime seconds -- wait it
+# past the hold before any session that streams, or the first analog trial
+# honestly reports "no blocks arrived".
+if [ "$BOX" != "vbox" ]; then
+    wd=$(dservctl get extio/$BOX/state/watchdog 2>/dev/null || echo 0)
+    case "$wd" in ''|*[!0-9]*) wd=0 ;; esac
+    if [ "$wd" -lt 65 ] 2>/dev/null; then
+        echo "box uptime ${wd}s < analog boot-hold; waiting..."
+        while [ "$wd" -lt 65 ] 2>/dev/null; do
+            sleep 5
+            wd=$(dservctl get extio/$BOX/state/watchdog 2>/dev/null || echo 0)
+            case "$wd" in ''|*[!0-9]*) wd=0 ;; esac
+        done
+    fi
+fi
+
 # ---------------------------------------------------------------- load + run
 echo "loading extio_test/loopback/$VARIANT (box $BOX) ..."
 dservctl ess "::ess::load_system extio_test loopback $VARIANT" >/dev/null 2>&1 || true
