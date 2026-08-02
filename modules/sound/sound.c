@@ -3,27 +3,45 @@
  *   sound.c
  *
  * DESCRIPTION
+ *   Sound module for dserv: task signals and wav stimuli through one
+ *   audio output path.
+ *
+ *   Two signal backends (combinable, mode bitmask):
+ *     HARDWARE - MIDI over serial to an external synth (SW60XG / MU series)
+ *     SOFTWARE - FluidSynth rendered in-process
+ *
+ *   The audio device is owned by this module via miniaudio.  FluidSynth no
+ *   longer opens its own driver: the miniaudio callback pulls samples with
+ *   fluid_synth_write_float() and mixes preloaded wav stimuli on top, so
+ *   beeps and stimuli share one device with sample-accurate relative timing
+ *   and no dependency on system-level mixing (dmix/PipeWire).
+ *
+ *   Wav stimuli are decoded (and resampled to the device rate) once at
+ *   wavLoad time and mixed from memory at wavPlay time.  Onset/offset are
+ *   published as datapoints (sound/wav/onset, sound/wav/offset) from the
+ *   audio callback; note the published time is when the block was rendered,
+ *   which leads actual DAC output by the device buffer (~2 periods).
+ *
+ *   Scheduled note-offs for soundPlay are counted down in frames inside the
+ *   callback (sub-block rendering makes durations sample-accurate).  If no
+ *   audio device is running (hardware-MIDI-only rigs), note-offs fall back
+ *   to a detached timing thread.
  *
  * AUTHOR
- *   DLS, 06/24
+ *   DLS, 06/24, 08/26
  */
 
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <netdb.h>
 #include <stdio.h>
-#include <string.h>
 #include <unistd.h>
-#include <stdarg.h>
 #include <fcntl.h>
-#include <sys/ioctl.h>
 #include <signal.h>
 #include <termios.h>
 #include <pthread.h>
-#include <semaphore.h>
+#include <stdatomic.h>
+#include <dlfcn.h>
 
 #include <tcl.h>
 #include "Datapoint.h"
@@ -32,7 +50,13 @@
 /* FluidSynth for software synthesis */
 #include <fluidsynth.h>
 
-/* ALSA for device enumeration on Linux */
+/* miniaudio owns the output device and decodes wav stimuli */
+#define MA_NO_ENCODING
+#define MA_NO_GENERATION
+#define MINIAUDIO_IMPLEMENTATION
+#include "miniaudio.h"
+
+/* ALSA retained only for the soundListAlsaDevices command on Linux */
 #if !defined(__APPLE__) && !defined(WIN32)
 #include <alsa/asoundlib.h>
 #endif
@@ -49,139 +73,120 @@ typedef enum {
 } sound_mode_t;
 
 /*************************************************************************/
-/***                     queues for sound off events                   ***/
+/***                     audio output configuration                    ***/
 /*************************************************************************/
 
-/*
-  semaphore example:
-  http://www2.lawrence.edu/fast/GREGGJ/CMSC480/net/workerThreads.html
-*/
-#define QUEUE_SIZE 16
+#define AO_SAMPLE_RATE    48000
+#define AO_CHANNELS       2
+#define AO_PERIOD_FRAMES  256
+#define AO_PERIODS        2
 
-struct offinfo_s;
+#define MAX_WAVS          64   /* loaded wav table               */
+#define MAX_WAV_VOICES    16   /* simultaneously playing stimuli */
+#define MAX_PENDING_OFFS  64   /* scheduled note-offs in flight  */
+#define WAV_NAME_MAX      64
 
-typedef struct {
-  struct offinfo_s *d[QUEUE_SIZE];
-  int front;
-  int back;
-  sem_t *mutex;
-  sem_t *slots;
-  sem_t *items;
-#ifndef __APPLE__
-  sem_t unnamed_mutex;
-  sem_t unnamed_slots;
-  sem_t unnamed_items;
-#endif
-} queue;
-
-queue* queueCreate();
-void enqueue(queue* q, struct offinfo_s *offinfo);
-struct offinfo_s *dequeue(queue* q);
-
-queue* queueCreate() {
-    queue *q = (queue*) malloc(sizeof(queue));
-    q->front = 0;
-    q->back = 0;
-
-#ifdef __APPLE__
-    q->mutex = sem_open ("qMutex", O_CREAT | O_EXCL, 0644, 1); 
-    sem_unlink ("qMutex");      
-
-    q->slots = sem_open ("qSlots", O_CREAT | O_EXCL, 0644, QUEUE_SIZE); 
-    sem_unlink ("qSlots");      
-
-    q->items = sem_open ("qItems", O_CREAT | O_EXCL, 0644, 0); 
-    sem_unlink ("qItems");      
-#else
-    q->mutex = &q->unnamed_mutex;
-    sem_init(q->mutex, 0, 1);
-
-    q->slots = &q->unnamed_slots;
-    sem_init(q->slots, 0, QUEUE_SIZE);
-
-    q->items = &q->unnamed_items;
-    sem_init(q->items, 0, 0);
-#endif
-    return q;
-}
-
-void enqueue(queue* q, struct offinfo_s *offinfo) {
-    sem_wait(q->slots);
-    sem_wait(q->mutex);
-    q->d[q->back] = offinfo;
-    q->back = (q->back+1)%QUEUE_SIZE;
-    sem_post(q->mutex);
-    sem_post(q->items);
-}
-
-struct offinfo_s *dequeue(queue* q) {
-  struct offinfo_s *offinfo;
-  sem_wait(q->items);
-  sem_wait(q->mutex);
-  offinfo = q->d[q->front];
-  q->front = (q->front+1)%QUEUE_SIZE;
-  sem_post(q->mutex);
-  sem_post(q->slots);
-  return offinfo;
-}
+/* datapoint names */
+#define PT_WAV_LOADED   "sound/wav/loaded"
+#define PT_WAV_ONSET    "sound/wav/onset"
+#define PT_WAV_OFFSET   "sound/wav/offset"
+#define PT_AUDIO_DEVICE "sound/audio/device"
 
 /*************************************************************************/
 /***                            MIDI related info                      ***/
 /*************************************************************************/
 
-#define MIDI_OFF 0	
+#define MIDI_OFF 0
 #define MIDI_ON 64
 
 #define MIDI_VOICES         0
 #define MIDI_SFX           64
 #define MIDI_DRUMS        127
-	
-#define MIDI_CTRL_VOLUME    7	
+
+#define MIDI_CTRL_VOLUME    7
 #define MIDI_CTRL_HOLD     64
 #define MIDI_CTRL_SUSTENTO 66
-
-/*
- * Different write messages supported are identified
- * by their length
- */
-
-#define WRITE_RESET        (1)    /* single byte                  */	
-#define WRITE_VOLUME       (2)    /* channel / volume             */
-#define WRITE_PROGRAM      (3)    /* program, bank, set+channel   */
-#define WRITE_SOUNDON      (4)    /* sizeof(short)+2*sizeof(char) */
 
 /* Set array for program change message */
 static char Sets[] = { MIDI_VOICES, MIDI_DRUMS, MIDI_SFX };
 
-#define WBUF90          (WBUF*9/10)     //flush trip point
-#define NOTE_OFF        '\x80'          //MIDI channel command
-#define NOTE_ON         '\x90'          //MIDI channel command
-#define CHANNEL_CONTROL '\xb0'          //MIDI channel command
-#define PROGRAM_CHANGE  '\xc0'          //MIDI channel command
-#define PITCH_BEND      '\xe0'          //MIDI channel command
+/*************************************************************************/
+/***                            data structures                        ***/
+/*************************************************************************/
 
-struct sound_info_s;
+/* loaded wav stimulus: interleaved stereo f32 at AO_SAMPLE_RATE */
+typedef struct wav_entry_s {
+  char name[WAV_NAME_MAX];
+  float *pcm;
+  ma_uint64 nframes;
+  int used;
+} wav_entry_t;
 
-typedef struct offinfo_s {
-  struct sound_info_s *info;
-  int ms;			/* when to turn off    */
-  char channel;			/* channel to turn off */
-  char pitch;			/* pitch to turn off   */
-} offinfo_t;
+/* voice states: claimed/advanced by the Tcl thread only via FREE->START
+ * and (START|PLAY)->STOPREQ; the audio callback owns every other
+ * transition and is the only reader of pcm/pos while active. */
+enum {
+  WAV_VOICE_FREE    = 0,
+  WAV_VOICE_START   = 1,
+  WAV_VOICE_PLAY    = 2,
+  WAV_VOICE_STOPREQ = 3,
+};
+
+typedef struct wav_voice_s {
+  _Atomic int state;
+  int wav_index;
+  char name[WAV_NAME_MAX];
+  const float *pcm;
+  ma_uint64 nframes;
+  ma_uint64 pos;
+  float gain;
+  int loop;
+} wav_voice_t;
+
+/* scheduled note-off, counted down in frames by the audio callback */
+typedef struct pending_off_s {
+  _Atomic int armed;
+  int channel;
+  int pitch;
+  ma_uint64 frames_remaining;
+} pending_off_t;
+
+/* host (dserv) datapoint API, resolved at load time so the module also
+ * loads into a plain tclsh (publishing simply disabled there) */
+typedef struct host_api_s {
+  tclserver_t *(*get_from_interp)(Tcl_Interp *interp);
+  uint64_t (*now)(tclserver_t *);
+  void (*set_point)(tclserver_t *, ds_datapoint_t *);
+  ds_datapoint_t *(*new_point)(char *, uint64_t, ds_datatype_t,
+                               uint32_t, unsigned char *);
+} host_api_t;
 
 typedef struct sound_info_s
 {
   sound_mode_t mode;
 
-  /* Hardware mode (MIDI over serial) */  
+  /* Hardware mode (MIDI over serial) */
   int midi_fd;
 
-  /* Software mode (FluidSynth) */
-  fluid_settings_t *settings;   /* FluidSynth settings */
-  fluid_synth_t *synth;         /* FluidSynth synthesizer */
-  fluid_audio_driver_t *adriver; /* FluidSynth audio driver */
+  /* Software mode (FluidSynth, rendered by the audio callback) */
+  fluid_settings_t *settings;
+  fluid_synth_t *synth;                   /* owned by the Tcl thread     */
+  _Atomic(fluid_synth_t *) render_synth;  /* what the callback renders   */
 
-  queue* q;
+  /* audio output (miniaudio) */
+  ma_device ao_device;
+  int ao_initialized;
+  _Atomic int ao_running;
+  char ao_name[256];
+
+  _Atomic float master_gain;              /* post-mix, 0.0 - 1.0 */
+
+  wav_entry_t wavs[MAX_WAVS];
+  wav_voice_t voices[MAX_WAV_VOICES];
+  pending_off_t pending_offs[MAX_PENDING_OFFS];
+
+  tclserver_t *tclserver;
+  host_api_t api;
 } sound_info_t;
 
 static int snd_on(sound_info_t *, char channel, char pitch);
@@ -191,11 +196,35 @@ static int snd_program(sound_info_t *, char program, char bank, char ch_set);
 static int snd_reset(sound_info_t *);
 static int snd_volume(sound_info_t *, char volume, char channel);
 static int snd_master_gain(sound_info_t *, double level);
+static int audio_out_ensure(sound_info_t *info, const char *pattern,
+                            char *err, size_t errsz);
+
+/*************************************************************************/
+/***                      datapoint publishing                         ***/
+/*************************************************************************/
+
+static void publish_string(sound_info_t *info, const char *varname,
+                           const char *val)
+{
+  if (!info->tclserver || !info->api.set_point ||
+      !info->api.now || !info->api.new_point)
+    return;
+  ds_datapoint_t *dp = info->api.new_point((char *) varname,
+                                           info->api.now(info->tclserver),
+                                           DSERV_STRING,
+                                           (uint32_t) strlen(val),
+                                           (unsigned char *) val);
+  if (dp) info->api.set_point(info->tclserver, dp);
+}
+
+/*************************************************************************/
+/***                     MIDI backend primitives                       ***/
+/*************************************************************************/
 
 /**************************************************************
  *
  * FUNCTION
- *   sound_program
+ *   snd_program
  *
  * DESCRIPTION
  *   Send a program change message to the midi driver
@@ -211,63 +240,62 @@ static int snd_program(sound_info_t *info, char program, char bank, char ch_set)
 {
   char set, channel;
   int n = 0;
-  
+
   channel = ch_set & 0x0F;	/* Low nibble  */
   set = (ch_set & 0xF0) >> 4; /* High nibble */
-  
+
   if (set > sizeof(Sets)) return 0;
-  
+
   if (info->mode & SOUND_MODE_HARDWARE) {
     /* Hardware mode - send MIDI over serial */
     char cmd[8];
-    
+
     /* Start with Channel change 0 */
     cmd[0] = 0xb0 | channel;
     cmd[1] = 0x00;
     cmd[2] = Sets[(int) set];
-    
+
     /* Here's the LSB (Bank Select) command */
     cmd[3] = 0xb0 | channel;
     cmd[4] = 0x20;
     cmd[5] = bank;
-    
+
     /* Here's the program change */
     cmd[6] = 0xc0 | channel;
     cmd[7] = program-1;
-    
+
     if (info->midi_fd >= 0)
       n = write(info->midi_fd, cmd, sizeof(cmd));
-    
+
     /* Now set the volume to the middle */
     snd_control(info, MIDI_CTRL_VOLUME, 64, channel);
   }
-  
+
   if (info->mode & SOUND_MODE_SOFTWARE) {
-    /* Software mode - use FluidSynth */
     if (info->synth) {
       /* Bank select MSB (CC 0) */
       fluid_synth_cc(info->synth, channel, 0, Sets[(int)set]);
-      
+
       /* Bank select LSB (CC 32) */
       fluid_synth_cc(info->synth, channel, 32, bank);
-      
+
       /* Program change */
       fluid_synth_program_change(info->synth, channel, program - 1);
-      
+
       /* Set volume to middle */
       fluid_synth_cc(info->synth, channel, MIDI_CTRL_VOLUME, 64);
-      
+
       n = 1;
     }
   }
-  
+
   return n;
 }
 
 /**************************************************************
  *
  * FUNCTION
- *   sound_volume
+ *   snd_volume
  *
  * DESCRIPTION
  *   Send a volume change message to the midi driver
@@ -282,7 +310,7 @@ static int snd_volume(sound_info_t *info, char volume, char channel)
 /**************************************************************
  *
  * FUNCTION
- *   sound_control
+ *   snd_control
  *
  * DESCRIPTION
  *   Send a control change message to the midi driver
@@ -292,50 +320,48 @@ static int snd_volume(sound_info_t *info, char volume, char channel)
 static int snd_control(sound_info_t *info, char control, char data, char channel)
 {
   int result = 0;
-  
+
   if (info->mode & SOUND_MODE_HARDWARE) {
     /* Hardware mode - send MIDI over serial */
     char cmd[3];
     cmd[0] = 0xb0 | channel;
     cmd[1] = control;
     cmd[2] = data;
-    
+
     if (info->midi_fd >= 0)
       result = write(info->midi_fd, cmd, sizeof(cmd));
   }
-  
+
   if (info->mode & SOUND_MODE_SOFTWARE) {
-    /* Software mode - use FluidSynth */
     if (info->synth)
       result = fluid_synth_cc(info->synth, channel, control, data);
   }
-  
+
   return result;
 }
 
 static int snd_reset(sound_info_t *info)
 {
   int n = 0;
-  
+
   if (info->mode & SOUND_MODE_HARDWARE) {
     /* Hardware mode - send XG reset SysEx */
     static char xg_on[] = { 0xf0, 0x43, 0x10, 0x4c, 0x00, 0x00,
       0x7e, 0x00, 0xf7 };
     static char master_volume[] = { 0xf0, 0x7f, 0x7f, 0x04, 0x01,
       0x7f, 0x7f, 0xf7 };
-    
+
     if (info->midi_fd >= 0)
       write(info->midi_fd, xg_on, sizeof(xg_on));
 
     /* according to the MU15 docs, the xg_on command takes approx 50ms */
     usleep(50000);
-    
+
     if (info->midi_fd >= 0)
       n = write(info->midi_fd, master_volume, sizeof(master_volume));
   }
-  
+
   if (info->mode & SOUND_MODE_SOFTWARE) {
-    /* Software mode - FluidSynth system reset */
     if (info->synth) {
       fluid_synth_system_reset(info->synth);
       n = 1;
@@ -357,6 +383,10 @@ static int snd_reset(sound_info_t *info)
  *   the hardware's max master volume), so values below 1.0 attenuate the
  *   whole rig -- e.g. to turn a setup down for a housing room without
  *   touching the experiment's per-channel mix.
+ *
+ *   With the unified output path the software-side gain is applied to the
+ *   final mix in the audio callback, so it governs wav stimuli as well as
+ *   synth output (matching the documented "how loud is this rig" intent).
  *
  **************************************************************/
 
@@ -381,29 +411,13 @@ static int snd_master_gain(sound_info_t *info, double level)
       result = write(info->midi_fd, master_volume, sizeof(master_volume));
   }
 
-  if (info->mode & SOUND_MODE_SOFTWARE) {
-    if (info->synth) {
-      fluid_synth_set_gain(info->synth, (float)(level * SND_FLUID_FULL_GAIN));
-      result = 1;
-    }
-  }
+  atomic_store_explicit(&info->master_gain, (float) level,
+                        memory_order_relaxed);
+  if ((info->mode & SOUND_MODE_SOFTWARE) || info->ao_initialized)
+    result = 1;
 
   return result;
 }
-
-/**************************************************************
- * FUNCTION
- *   sound_on
- *
- * DESCRIPTION
- *   Turn on the sound for the specified channel
- *   and schedule it to go off time ms in the future
- *
- * NOTE
- *   We use a free OFF_INFO structure to pass clientdata to the
- *   scheduled off function without fear that some variable
- *   will change upon subsequent calls.
- **************************************************************/
 
 /**************************************************************
  * FUNCTION
@@ -418,36 +432,26 @@ static int snd_on(sound_info_t *info, char channel, char pitch)
 {
   static char vel = 127;
   int n = 0;
-  
+
   if (info->mode & SOUND_MODE_HARDWARE) {
     /* Hardware mode - send MIDI note-on over serial */
     char cmd[3];
     cmd[0] = 0x90 | channel;
     cmd[1] = pitch;
     cmd[2] = vel;
-    
+
     if (info->midi_fd >= 0)
       n = write(info->midi_fd, cmd, sizeof(cmd));
   }
-  
+
   if (info->mode & SOUND_MODE_SOFTWARE) {
-    /* Software mode - FluidSynth note-on */
     if (info->synth)
       n = fluid_synth_noteon(info->synth, channel, pitch, vel);
   }
-  
+
   return n;
 }
 
-/*
- * FUNCTION
- *   sound_off
- *
- * DESCRIPTION
- *   turn off the sound for the channel(s) pointed to
- *   by clientdata (which was supplied in the sound_on
- *   function
- */
 /**************************************************************
  * FUNCTION
  *   snd_off
@@ -455,68 +459,442 @@ static int snd_on(sound_info_t *info, char channel, char pitch)
  * DESCRIPTION
  *   Turn off the sound for the specified channel
  *
+ * NOTE
+ *   Called from the Tcl thread, the audio callback (scheduled offs), or a
+ *   fallback timing thread.  Serial writes are short+nonblocking and the
+ *   FluidSynth API is thread-safe, so no locking is needed here.
+ *
  **************************************************************/
 
 static int snd_off(sound_info_t *info, char channel, char pitch)
 {
   int n = 0;
-  
+
   if (info->mode & SOUND_MODE_HARDWARE) {
     /* Hardware mode - send MIDI note-off over serial */
     char cmd[3];
     cmd[0] = 0x80 | channel;
     cmd[1] = pitch;
     cmd[2] = 0x40;
-    
+
     if (info->midi_fd >= 0)
       n = write(info->midi_fd, cmd, sizeof(cmd));
   }
-  
+
   if (info->mode & SOUND_MODE_SOFTWARE) {
-    /* Software mode - FluidSynth note-off */
-    if (info->synth)
-      n = fluid_synth_noteoff(info->synth, channel, pitch);
+    fluid_synth_t *synth =
+      atomic_load_explicit(&info->render_synth, memory_order_acquire);
+    if (synth)
+      n = fluid_synth_noteoff(synth, channel, pitch);
   }
-  
+
   return n;
 }
 
-static int serveOffRequest(offinfo_t *off)
+/*************************************************************************/
+/***                        audio callback                             ***/
+/*************************************************************************/
+
+static void ao_data_callback(ma_device *dev, void *output, const void *input,
+                             ma_uint32 nframes)
 {
-  sound_info_t *info = off->info;
-  
-  /* sleep for the note duration */
-  usleep(off->ms * 1000);
-  
-  /* send note-off */
-  snd_off(info, off->channel, off->pitch);
-  
-  /* free the request */
-  free(off);
+  sound_info_t *info = (sound_info_t *) dev->pUserData;
+  float *buf = (float *) output;
+  (void) input;
+
+  memset(buf, 0, (size_t) nframes * AO_CHANNELS * sizeof(float));
+
+  fluid_synth_t *synth =
+    atomic_load_explicit(&info->render_synth, memory_order_acquire);
+
+  /* Render the synth in sub-blocks split at scheduled note-off
+   * boundaries so soundPlay durations are sample-accurate rather than
+   * period-quantized. */
+  ma_uint32 done = 0;
+  while (done < nframes) {
+    ma_uint32 chunk = nframes - done;
+
+    for (int i = 0; i < MAX_PENDING_OFFS; i++) {
+      pending_off_t *po = &info->pending_offs[i];
+      if (atomic_load_explicit(&po->armed, memory_order_acquire) != 1)
+        continue;
+      if (po->frames_remaining == 0) {
+        snd_off(info, po->channel, po->pitch);
+        atomic_store_explicit(&po->armed, 0, memory_order_release);
+      } else if (po->frames_remaining < chunk) {
+        chunk = (ma_uint32) po->frames_remaining;
+      }
+    }
+
+    if (synth)
+      fluid_synth_write_float(synth, (int) chunk,
+                              buf + AO_CHANNELS * done, 0, AO_CHANNELS,
+                              buf + AO_CHANNELS * done, 1, AO_CHANNELS);
+
+    for (int i = 0; i < MAX_PENDING_OFFS; i++) {
+      pending_off_t *po = &info->pending_offs[i];
+      if (atomic_load_explicit(&po->armed, memory_order_relaxed) == 1)
+        po->frames_remaining = (po->frames_remaining > chunk) ?
+          po->frames_remaining - chunk : 0;
+    }
+    done += chunk;
+  }
+
+  /* Mix active wav voices */
+  for (int i = 0; i < MAX_WAV_VOICES; i++) {
+    wav_voice_t *v = &info->voices[i];
+    int st = atomic_load_explicit(&v->state, memory_order_acquire);
+
+    if (st == WAV_VOICE_STOPREQ) {
+      publish_string(info, PT_WAV_OFFSET, v->name);
+      atomic_store_explicit(&v->state, WAV_VOICE_FREE, memory_order_release);
+      continue;
+    }
+    if (st == WAV_VOICE_START) {
+      int expected = WAV_VOICE_START;
+      if (atomic_compare_exchange_strong(&v->state, &expected,
+                                         WAV_VOICE_PLAY)) {
+        publish_string(info, PT_WAV_ONSET, v->name);
+        st = WAV_VOICE_PLAY;
+      } else {
+        continue;               /* raced to STOPREQ; retire next block */
+      }
+    }
+    if (st != WAV_VOICE_PLAY) continue;
+
+    ma_uint32 remaining = nframes, at = 0;
+    while (remaining) {
+      ma_uint64 avail = v->nframes - v->pos;
+      ma_uint32 n = (ma_uint32) ((avail < remaining) ? avail : remaining);
+      const float *src = v->pcm + v->pos * AO_CHANNELS;
+      float *dst = buf + (size_t) at * AO_CHANNELS;
+      float g = v->gain;
+      for (ma_uint32 k = 0; k < n * AO_CHANNELS; k++)
+        dst[k] += src[k] * g;
+      v->pos += n; at += n; remaining -= n;
+
+      if (v->pos >= v->nframes) {
+        if (v->loop) {
+          v->pos = 0;
+        } else {
+          publish_string(info, PT_WAV_OFFSET, v->name);
+          atomic_store_explicit(&v->state, WAV_VOICE_FREE,
+                                memory_order_release);
+          break;
+        }
+      }
+    }
+  }
+
+  /* Master gain + hard clip */
+  float g = atomic_load_explicit(&info->master_gain, memory_order_relaxed);
+  for (ma_uint32 k = 0; k < nframes * AO_CHANNELS; k++) {
+    float s = buf[k] * g;
+    buf[k] = (s > 1.0f) ? 1.0f : ((s < -1.0f) ? -1.0f : s);
+  }
+}
+
+/*************************************************************************/
+/***                     audio device management                       ***/
+/*************************************************************************/
+
+/* Find a playback device whose name contains `pattern`.  On Linux a
+ * pattern containing ':' (or "default") is treated as a literal ALSA
+ * device id, so existing local configs like "plughw:1,0" keep working.
+ * Returns a malloc'd device id (caller frees) or NULL for default. */
+static ma_device_id *ao_find_device(const char *pattern,
+                                    char *found, size_t found_size)
+{
+  if (!pattern || !*pattern) return NULL;
+
+#if !defined(__APPLE__) && !defined(WIN32)
+  if (strchr(pattern, ':') || strcmp(pattern, "default") == 0) {
+    ma_device_id *did = (ma_device_id *) calloc(1, sizeof(ma_device_id));
+    if (!did) return NULL;
+    strncpy(did->alsa, pattern, sizeof(did->alsa) - 1);
+    if (found && found_size) {
+      strncpy(found, pattern, found_size - 1);
+      found[found_size - 1] = '\0';
+    }
+    return did;
+  }
+#endif
+
+  ma_context context;
+  ma_device_id *result = NULL;
+
+  if (ma_context_init(NULL, 0, NULL, &context) != MA_SUCCESS)
+    return NULL;
+
+  ma_device_info *devices;
+  ma_uint32 count;
+  if (ma_context_get_devices(&context, &devices, &count,
+                             NULL, NULL) == MA_SUCCESS) {
+    for (ma_uint32 i = 0; i < count; i++) {
+      if (strstr(devices[i].name, pattern) != NULL) {
+        result = (ma_device_id *) malloc(sizeof(ma_device_id));
+        if (result) {
+          *result = devices[i].id;
+          if (found && found_size) {
+            strncpy(found, devices[i].name, found_size - 1);
+            found[found_size - 1] = '\0';
+          }
+        }
+        break;
+      }
+    }
+  }
+  ma_context_uninit(&context);
+  return result;
+}
+
+static int audio_out_ensure(sound_info_t *info, const char *pattern,
+                            char *err, size_t errsz)
+{
+  if (info->ao_initialized) return 0;
+
+  char found[256] = "";
+  ma_device_id *did = ao_find_device(pattern, found, sizeof(found));
+  if (pattern && *pattern && !did
+#if !defined(__APPLE__) && !defined(WIN32)
+      && !strchr(pattern, ':')
+#endif
+      ) {
+    /* pattern given but nothing matched: fall through to default,
+     * but say so */
+    fprintf(stderr, "sound: no audio device matching \"%s\", using default\n",
+            pattern);
+  }
+
+  ma_device_config cfg = ma_device_config_init(ma_device_type_playback);
+  cfg.playback.format = ma_format_f32;
+  cfg.playback.channels = AO_CHANNELS;
+  cfg.sampleRate = AO_SAMPLE_RATE;
+  cfg.periodSizeInFrames = AO_PERIOD_FRAMES;
+  cfg.periods = AO_PERIODS;
+  cfg.dataCallback = ao_data_callback;
+  cfg.pUserData = info;
+#if !defined(__APPLE__) && !defined(WIN32)
+  /* better USB audio compatibility (same workaround as stim2/video.c) */
+  cfg.alsa.noMMap = MA_TRUE;
+#endif
+  if (did) cfg.playback.pDeviceID = did;
+
+  if (ma_device_init(NULL, &cfg, &info->ao_device) != MA_SUCCESS) {
+    if (err) snprintf(err, errsz, "failed to open audio device%s%s",
+                      *found ? " " : "", found);
+    free(did);
+    return -1;
+  }
+  free(did);
+
+  if (ma_device_start(&info->ao_device) != MA_SUCCESS) {
+    ma_device_uninit(&info->ao_device);
+    if (err) snprintf(err, errsz, "failed to start audio device");
+    return -1;
+  }
+
+  strncpy(info->ao_name, info->ao_device.playback.name,
+          sizeof(info->ao_name) - 1);
+  info->ao_initialized = 1;
+  atomic_store_explicit(&info->ao_running, 1, memory_order_release);
+
+  publish_string(info, PT_AUDIO_DEVICE, info->ao_name);
   return 0;
 }
 
-void* workerThread(void *arg) {
-  sound_info_t *info = (sound_info_t *) arg;
-  
-  while(1) {
-    offinfo_t *req = dequeue(info->q);
-    serveOffRequest(req);
+/*************************************************************************/
+/***                      FluidSynth lifecycle                         ***/
+/*************************************************************************/
+
+/* Take the synth out of the callback's view and wait out any in-flight
+ * render before deleting it (bounded: one device buffer + margin). */
+static void retire_synth(sound_info_t *info)
+{
+  if (!info->synth) return;
+
+  atomic_store_explicit(&info->render_synth, NULL, memory_order_release);
+  if (atomic_load_explicit(&info->ao_running, memory_order_acquire))
+    usleep((useconds_t)
+           ((AO_PERIOD_FRAMES * AO_PERIODS * 1000000ULL) / AO_SAMPLE_RATE)
+           + 10000);
+
+  delete_fluid_synth(info->synth);
+  info->synth = NULL;
+  if (info->settings) {
+    delete_fluid_settings(info->settings);
+    info->settings = NULL;
   }
+  info->mode &= ~SOUND_MODE_SOFTWARE;
+}
+
+/*************************************************************************/
+/***                     scheduled note-offs                           ***/
+/*************************************************************************/
+
+/* fallback for rigs with no audio device running (hardware MIDI only):
+ * one detached thread per note sleeps out the duration */
+typedef struct fallback_off_s {
+  sound_info_t *info;
+  int channel, pitch, ms;
+} fallback_off_t;
+
+static void *fallback_off_thread(void *arg)
+{
+  fallback_off_t *fo = (fallback_off_t *) arg;
+  usleep((useconds_t) fo->ms * 1000);
+  snd_off(fo->info, fo->channel, fo->pitch);
+  free(fo);
   return NULL;
 }
 
-static offinfo_t *new_offinfo(sound_info_t *info,
-			      int channel, int pitch, int ms)
+static void schedule_off(sound_info_t *info, int channel, int pitch,
+                         int duration_ms)
 {
-  offinfo_t *request = (offinfo_t *) malloc(sizeof(offinfo_t));
-  request->info = info;
-  request->ms = ms;		/* when to turn off    */
-  request->channel = channel;	/* channel to turn off */
-  request->pitch = pitch;	/* pitch to turn off   */
-  return request;
+  if (atomic_load_explicit(&info->ao_running, memory_order_acquire)) {
+    for (int i = 0; i < MAX_PENDING_OFFS; i++) {
+      pending_off_t *po = &info->pending_offs[i];
+      if (atomic_load_explicit(&po->armed, memory_order_acquire) == 0) {
+        po->channel = channel;
+        po->pitch = pitch;
+        po->frames_remaining =
+          (ma_uint64) duration_ms * (AO_SAMPLE_RATE / 1000);
+        atomic_store_explicit(&po->armed, 1, memory_order_release);
+        return;
+      }
+    }
+    /* table full (64 pending): end the note now rather than leak it */
+    snd_off(info, channel, pitch);
+    return;
+  }
+
+  fallback_off_t *fo = (fallback_off_t *) malloc(sizeof(fallback_off_t));
+  if (!fo) { snd_off(info, channel, pitch); return; }
+  fo->info = info; fo->channel = channel; fo->pitch = pitch;
+  fo->ms = duration_ms;
+
+  pthread_t t;
+  pthread_attr_t attr;
+  pthread_attr_init(&attr);
+  pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+  if (pthread_create(&t, &attr, fallback_off_thread, fo) != 0) {
+    snd_off(info, channel, pitch);
+    free(fo);
+  }
+  pthread_attr_destroy(&attr);
 }
 
+/*************************************************************************/
+/***                        wav stimulus layer                         ***/
+/*************************************************************************/
+
+static int wav_find(sound_info_t *info, const char *name)
+{
+  for (int i = 0; i < MAX_WAVS; i++)
+    if (info->wavs[i].used && strcmp(info->wavs[i].name, name) == 0)
+      return i;
+  return -1;
+}
+
+static int wav_voices_active(sound_info_t *info, int wav_index)
+{
+  int n = 0;
+  for (int i = 0; i < MAX_WAV_VOICES; i++) {
+    wav_voice_t *v = &info->voices[i];
+    if (atomic_load_explicit(&v->state, memory_order_acquire)
+        != WAV_VOICE_FREE &&
+        (wav_index < 0 || v->wav_index == wav_index))
+      n++;
+  }
+  return n;
+}
+
+/* request stop for voices playing wav_index (or all if wav_index < 0) */
+static void wav_stop_voices(sound_info_t *info, int wav_index)
+{
+  int running = atomic_load_explicit(&info->ao_running, memory_order_acquire);
+  for (int i = 0; i < MAX_WAV_VOICES; i++) {
+    wav_voice_t *v = &info->voices[i];
+    if (wav_index >= 0 && v->wav_index != wav_index) continue;
+    if (running) {
+      int st = WAV_VOICE_PLAY;
+      if (!atomic_compare_exchange_strong(&v->state, &st, WAV_VOICE_STOPREQ)) {
+        st = WAV_VOICE_START;
+        atomic_compare_exchange_strong(&v->state, &st, WAV_VOICE_STOPREQ);
+      }
+    } else {
+      /* no reader: retire directly */
+      atomic_store_explicit(&v->state, WAV_VOICE_FREE, memory_order_release);
+    }
+  }
+}
+
+/* wait for voices on wav_index to drain (bounded); 0 on success */
+static int wav_drain(sound_info_t *info, int wav_index, int timeout_ms)
+{
+  int waited = 0;
+  while (wav_voices_active(info, wav_index) > 0) {
+    if (!atomic_load_explicit(&info->ao_running, memory_order_acquire)) {
+      wav_stop_voices(info, wav_index);
+      continue;
+    }
+    if (waited >= timeout_ms) return -1;
+    usleep(5000);
+    waited += 5;
+  }
+  return 0;
+}
+
+/* decode any miniaudio-supported file (wav/flac/mp3) to interleaved
+ * stereo f32 at AO_SAMPLE_RATE */
+static float *wav_decode_file(const char *path, ma_uint64 *out_frames,
+                              char *err, size_t errsz)
+{
+  ma_decoder_config dcfg =
+    ma_decoder_config_init(ma_format_f32, AO_CHANNELS, AO_SAMPLE_RATE);
+  ma_decoder dec;
+
+  if (ma_decoder_init_file(path, &dcfg, &dec) != MA_SUCCESS) {
+    if (err) snprintf(err, errsz, "could not open/decode \"%s\"", path);
+    return NULL;
+  }
+
+  ma_uint64 cap = AO_SAMPLE_RATE;   /* start with 1s, grow as needed */
+  float *pcm = (float *) malloc(cap * AO_CHANNELS * sizeof(float));
+  ma_uint64 total = 0;
+
+  while (pcm) {
+    if (total + 4096 > cap) {
+      cap *= 2;
+      float *bigger = (float *) realloc(pcm, cap * AO_CHANNELS * sizeof(float));
+      if (!bigger) { free(pcm); pcm = NULL; break; }
+      pcm = bigger;
+    }
+    ma_uint64 got = 0;
+    ma_result r = ma_decoder_read_pcm_frames(&dec,
+                                             pcm + total * AO_CHANNELS,
+                                             4096, &got);
+    total += got;
+    if (r != MA_SUCCESS || got == 0) break;
+  }
+  ma_decoder_uninit(&dec);
+
+  if (!pcm) {
+    if (err) snprintf(err, errsz, "out of memory decoding \"%s\"", path);
+    return NULL;
+  }
+  if (total == 0) {
+    free(pcm);
+    if (err) snprintf(err, errsz, "no audio frames in \"%s\"", path);
+    return NULL;
+  }
+  *out_frames = total;
+  return pcm;
+}
+
+/*************************************************************************/
+/***                      serial port (hardware)                       ***/
+/*************************************************************************/
 
 static int configure_serial_port(int fd)
 {
@@ -535,6 +913,10 @@ static int configure_serial_port(int fd)
   return 0;
 }
 
+/*************************************************************************/
+/***                          Tcl commands                             ***/
+/*************************************************************************/
+
 static int sound_open_command (ClientData data, Tcl_Interp *interp,
 			       int objc, Tcl_Obj *objv[])
 {
@@ -547,7 +929,7 @@ static int sound_open_command (ClientData data, Tcl_Interp *interp,
   }
 
   info->midi_fd = open(Tcl_GetString(objv[1]), O_NOCTTY | O_NONBLOCK | O_RDWR);
-  
+
   if (info->midi_fd < 0) {
     Tcl_AppendResult(interp,
 		     Tcl_GetString(objv[0]), ": error opening port \"",
@@ -560,7 +942,7 @@ static int sound_open_command (ClientData data, Tcl_Interp *interp,
   info->mode |= SOUND_MODE_HARDWARE;
 
   Tcl_SetObjResult(interp, Tcl_NewIntObj(ret));
-  
+
   return TCL_OK;
 }
 
@@ -590,7 +972,7 @@ static int sound_program_command (ClientData data, Tcl_Interp *interp,
     return TCL_ERROR;
   if (Tcl_GetIntFromObj(interp, objv[3], &ch_set) != TCL_OK)
     return TCL_ERROR;
-  
+
   snd_program(info, program, bank, ch_set);
 
   return TCL_OK;
@@ -603,7 +985,7 @@ static int sound_setfx_command (ClientData data, Tcl_Interp *interp,
 
   int effect, channel;
   char program, bank, ch_set;
-  
+
   if (objc < 3) {
     Tcl_WrongNumArgs(interp, 1, objv, "effect channel");
     return TCL_ERROR;
@@ -617,7 +999,7 @@ static int sound_setfx_command (ClientData data, Tcl_Interp *interp,
   program = effect;
   bank = 0;
   ch_set = (2 << 4) | channel;
-  
+
   snd_program(info, program, bank, ch_set);
 
   return TCL_OK;
@@ -630,7 +1012,7 @@ static int sound_setdrum_command (ClientData data, Tcl_Interp *interp,
 
   int drum, channel;
   char program, bank, ch_set;
-  
+
   if (objc < 3) {
     Tcl_WrongNumArgs(interp, 1, objv, "drum channel");
     return TCL_ERROR;
@@ -644,7 +1026,7 @@ static int sound_setdrum_command (ClientData data, Tcl_Interp *interp,
   program = drum;
   ch_set = (1 << 4) | channel;
   bank = 0;
-  
+
   snd_program(info, program, bank, ch_set);
 
   return TCL_OK;
@@ -656,7 +1038,7 @@ static int sound_setvoice_command (ClientData data, Tcl_Interp *interp,
   sound_info_t *info = (sound_info_t *) data;
 
   int program, bank, ch_set;
-  
+
   if (objc < 4) {
     Tcl_WrongNumArgs(interp, 1, objv, "program bank channel");
     return TCL_ERROR;
@@ -668,7 +1050,7 @@ static int sound_setvoice_command (ClientData data, Tcl_Interp *interp,
     return TCL_ERROR;
   if (Tcl_GetIntFromObj(interp, objv[3], &ch_set) != TCL_OK)
     return TCL_ERROR;
-  
+
   snd_program(info, program, bank, ch_set);
 
   return TCL_OK;
@@ -678,18 +1060,18 @@ static int sound_volume_command (ClientData data, Tcl_Interp *interp,
 			   int objc, Tcl_Obj *objv[])
 {
   sound_info_t *info = (sound_info_t *) data;
-    
+
   int volume, channel;
   if (objc < 3) {
     Tcl_WrongNumArgs(interp, 1, objv, "volume channel");
     return TCL_ERROR;
   }
-  
+
   if (Tcl_GetIntFromObj(interp, objv[1], &volume) != TCL_OK)
     return TCL_ERROR;
   if (Tcl_GetIntFromObj(interp, objv[2], &channel) != TCL_OK)
     return TCL_ERROR;
-  
+
   snd_volume(info, volume, channel);
 
   return TCL_OK;
@@ -717,16 +1099,15 @@ static int sound_gain_command (ClientData data, Tcl_Interp *interp,
 static int sound_play_command (ClientData data, Tcl_Interp *interp,
 			       int objc, Tcl_Obj *objv[])
 {
-  
   sound_info_t *info = (sound_info_t *) data;
-  
+
   int channel, pitch, duration_ms;
-  
+
   if (objc < 4) {
     Tcl_WrongNumArgs(interp, 1, objv, "channel pitch duration_ms");
     return TCL_ERROR;
   }
-  
+
   if (Tcl_GetIntFromObj(interp, objv[1], &channel) != TCL_OK)
     return TCL_ERROR;
   if (Tcl_GetIntFromObj(interp, objv[2], &pitch) != TCL_OK)
@@ -734,97 +1115,39 @@ static int sound_play_command (ClientData data, Tcl_Interp *interp,
   if (Tcl_GetIntFromObj(interp, objv[3], &duration_ms) != TCL_OK)
     return TCL_ERROR;
 
-  offinfo_t *request = new_offinfo(info, channel, pitch, duration_ms);
   snd_on(info, channel, pitch);
-  
-  enqueue(info->q, request);
+  schedule_off(info, channel, pitch, duration_ms);
+
   return TCL_OK;
 }
 
 static void cleanup_fluidsynth(sound_info_t *info)
 {
-  if (info->adriver) {
-    delete_fluid_audio_driver(info->adriver);
-    info->adriver = NULL;
-  }
-  
-  if (info->synth) {
-    delete_fluid_synth(info->synth);
-    info->synth = NULL;
-  }
-  
-  if (info->settings) {
-    delete_fluid_settings(info->settings);
-    info->settings = NULL;
-  }
-}
-
-
-static const char* find_working_alsa_device(fluid_settings_t *settings) {
-  const char* devices_to_try[] = {
-    "default",           // Try system default first
-    "plughw:0,0",       // Then first hardware device with conversion
-    "sysdefault",       // System default without card specification
-    "hw:0,0",           // Direct hardware access as last resort
-    NULL
-  };
-  
-  // Save the current settings
-  fluid_settings_t *test_settings = new_fluid_settings();
-  if (!test_settings) {
-    return "default";
-  }
-  
-  // Copy relevant settings
-  fluid_settings_setstr(test_settings, "audio.driver", "alsa");
-  fluid_settings_setnum(test_settings, "synth.sample-rate", 44100.0);
-  fluid_settings_setint(test_settings, "audio.period-size", 256);
-  fluid_settings_setint(test_settings, "audio.periods", 2);
-  
-  for (int i = 0; devices_to_try[i] != NULL; i++) {
-    fluid_settings_setstr(test_settings, "audio.alsa.device", devices_to_try[i]);
-    
-    // Try to create a temporary synth and audio driver to test
-    fluid_synth_t *test_synth = new_fluid_synth(test_settings);
-    if (test_synth) {
-      fluid_audio_driver_t *test_driver = new_fluid_audio_driver(test_settings, test_synth);
-      if (test_driver) {
-        // Success! Clean up and return this device
-        delete_fluid_audio_driver(test_driver);
-        delete_fluid_synth(test_synth);
-        delete_fluid_settings(test_settings);
-        return devices_to_try[i];
-      }
-      delete_fluid_synth(test_synth);
-    }
-  }
-  
-  delete_fluid_settings(test_settings);
-  return "default"; // Fall back to default if nothing works
+  retire_synth(info);
 }
 
 static int sound_list_alsa_devices_command(ClientData data, Tcl_Interp *interp,
                                            int objc, Tcl_Obj *objv[])
 {
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(WIN32)
   Tcl_SetResult(interp, "ALSA device enumeration not available on macOS", TCL_STATIC);
   return TCL_ERROR;
 #else
   void **hints, **n;
   Tcl_Obj *result_list = Tcl_NewListObj(0, NULL);
-  
+
   // Get all PCM devices using ALSA hints
   if (snd_device_name_hint(-1, "pcm", &hints) < 0) {
     Tcl_SetResult(interp, "Failed to get ALSA device hints", TCL_STATIC);
     return TCL_ERROR;
   }
-  
+
   n = hints;
   while (*n != NULL) {
     char *name = snd_device_name_get_hint(*n, "NAME");
     char *desc = snd_device_name_get_hint(*n, "DESC");
     char *ioid = snd_device_name_get_hint(*n, "IOID");
-    
+
     // Filter to only useful devices:
     // - Skip null, rate converters, and special plugins
     // - Skip surround configurations (keep stereo/front only)
@@ -839,14 +1162,14 @@ static int sound_list_alsa_devices_command(ClientData data, Tcl_Interp *interp,
         include = 1;
       }
     }
-    
+
     if (include) {
       Tcl_Obj *device_dict = Tcl_NewDictObj();
-      
-      Tcl_DictObjPut(interp, device_dict, 
-                     Tcl_NewStringObj("name", -1), 
+
+      Tcl_DictObjPut(interp, device_dict,
+                     Tcl_NewStringObj("name", -1),
                      Tcl_NewStringObj(name, -1));
-      
+
       if (desc) {
         // Replace newlines with spaces and trim
         char *desc_clean = strdup(desc);
@@ -862,18 +1185,18 @@ static int sound_list_alsa_devices_command(ClientData data, Tcl_Interp *interp,
                        Tcl_NewStringObj("description", -1),
                        Tcl_NewStringObj("", -1));
       }
-      
+
       Tcl_ListObjAppendElement(interp, result_list, device_dict);
     }
-    
+
     if (name) free(name);
     if (desc) free(desc);
     if (ioid) free(ioid);
     n++;
   }
-  
+
   snd_device_name_free_hint(hints);
-  
+
   Tcl_SetObjResult(interp, result_list);
   return TCL_OK;
 #endif
@@ -883,75 +1206,364 @@ static int sound_init_fluidsynth_command(ClientData data, Tcl_Interp *interp,
                                          int objc, Tcl_Obj *objv[])
 {
   sound_info_t *info = (sound_info_t *) data;
-  const char *alsa_device = NULL;
-  
+  const char *device_pattern = NULL;
+  char err[256];
+
   if (objc < 2) {
-    Tcl_WrongNumArgs(interp, 1, objv, "soundfont_path ?alsa_device?");
+    Tcl_WrongNumArgs(interp, 1, objv, "soundfont_path ?device_pattern?");
     return TCL_ERROR;
   }
-  
+  if (objc >= 3) device_pattern = Tcl_GetString(objv[2]);
+
   /* Clean up existing FluidSynth instance if any */
   cleanup_fluidsynth(info);
-  
-  /* Create settings */
+
   info->settings = new_fluid_settings();
   if (!info->settings) {
     Tcl_SetResult(interp, "Failed to create FluidSynth settings", TCL_STATIC);
     return TCL_ERROR;
   }
-  
-  /* Configure audio driver based on platform */
-#ifdef __APPLE__
-  fluid_settings_setstr(info->settings, "audio.driver", "coreaudio");
-#else
-  fluid_settings_setstr(info->settings, "audio.driver", "alsa");
-  
-  // Determine ALSA device
-  if (objc >= 3) {
-    // User specified device explicitly
-    alsa_device = Tcl_GetString(objv[2]);
-  } else {
-    // Auto-detect working device
-    alsa_device = find_working_alsa_device(info->settings);
-  }
-  
-  fluid_settings_setstr(info->settings, "audio.alsa.device", alsa_device);
-#endif
-  
-  /* Configure audio quality/latency - use correct parameter names */
-  fluid_settings_setnum(info->settings, "synth.sample-rate", 44100.0);
-  fluid_settings_setint(info->settings, "audio.period-size", 256);
-  fluid_settings_setint(info->settings, "audio.periods", 2);
-  
-  /* Create synthesizer */
+
+  /* No audio driver: the miniaudio callback pulls samples via
+   * fluid_synth_write_float().  Reverb/chorus off: task signals don't
+   * need them and they dominate synth CPU on small boards. */
+  fluid_settings_setnum(info->settings, "synth.sample-rate",
+                        (double) AO_SAMPLE_RATE);
+  fluid_settings_setint(info->settings, "synth.reverb.active", 0);
+  fluid_settings_setint(info->settings, "synth.chorus.active", 0);
+  fluid_settings_setnum(info->settings, "synth.gain", SND_FLUID_FULL_GAIN);
+
   info->synth = new_fluid_synth(info->settings);
   if (!info->synth) {
     Tcl_SetResult(interp, "Failed to create FluidSynth synth", TCL_STATIC);
-    cleanup_fluidsynth(info);
+    delete_fluid_settings(info->settings);
+    info->settings = NULL;
     return TCL_ERROR;
   }
-  
-  /* Load SoundFont */
+
   if (fluid_synth_sfload(info->synth, Tcl_GetString(objv[1]), 1) ==
       FLUID_FAILED) {
     Tcl_AppendResult(interp, "Failed to load SoundFont: ",
                      Tcl_GetString(objv[1]), NULL);
-    cleanup_fluidsynth(info);
+    delete_fluid_synth(info->synth);
+    delete_fluid_settings(info->settings);
+    info->synth = NULL;
+    info->settings = NULL;
     return TCL_ERROR;
   }
-  
-  /* Create audio driver (starts audio output) */
-  info->adriver = new_fluid_audio_driver(info->settings, info->synth);
-  if (!info->adriver) {
-    Tcl_SetResult(interp, "Failed to create FluidSynth audio driver",
-		  TCL_STATIC);
-    cleanup_fluidsynth(info);
+
+  if (audio_out_ensure(info, device_pattern, err, sizeof(err)) != 0) {
+    delete_fluid_synth(info->synth);
+    delete_fluid_settings(info->settings);
+    info->synth = NULL;
+    info->settings = NULL;
+    Tcl_AppendResult(interp, err, NULL);
     return TCL_ERROR;
   }
-  
-  /* Set or add software mode */
+
+  atomic_store_explicit(&info->render_synth, info->synth,
+                        memory_order_release);
   info->mode |= SOUND_MODE_SOFTWARE;
-  
+
+  return TCL_OK;
+}
+
+/*************************  wav commands  ********************************/
+
+static int wav_load_command(ClientData data, Tcl_Interp *interp,
+                            int objc, Tcl_Obj *objv[])
+{
+  sound_info_t *info = (sound_info_t *) data;
+  char err[512];
+
+  if (objc != 3) {
+    Tcl_WrongNumArgs(interp, 1, objv, "name path");
+    return TCL_ERROR;
+  }
+  const char *name = Tcl_GetString(objv[1]);
+  const char *path = Tcl_GetString(objv[2]);
+
+  if (strlen(name) >= WAV_NAME_MAX) {
+    Tcl_AppendResult(interp, Tcl_GetString(objv[0]),
+                     ": name too long", NULL);
+    return TCL_ERROR;
+  }
+
+  ma_uint64 nframes = 0;
+  float *pcm = wav_decode_file(path, &nframes, err, sizeof(err));
+  if (!pcm) {
+    Tcl_AppendResult(interp, Tcl_GetString(objv[0]), ": ", err, NULL);
+    return TCL_ERROR;
+  }
+
+  /* replace an existing entry of the same name, or take a free slot */
+  int idx = wav_find(info, name);
+  if (idx >= 0) {
+    wav_stop_voices(info, idx);
+    if (wav_drain(info, idx, 250) != 0) {
+      free(pcm);
+      Tcl_AppendResult(interp, Tcl_GetString(objv[0]),
+                       ": voices still active on \"", name, "\"", NULL);
+      return TCL_ERROR;
+    }
+    free(info->wavs[idx].pcm);
+  } else {
+    for (int i = 0; i < MAX_WAVS; i++)
+      if (!info->wavs[i].used) { idx = i; break; }
+    if (idx < 0) {
+      free(pcm);
+      Tcl_AppendResult(interp, Tcl_GetString(objv[0]),
+                       ": wav table full", NULL);
+      return TCL_ERROR;
+    }
+  }
+
+  wav_entry_t *w = &info->wavs[idx];
+  strncpy(w->name, name, WAV_NAME_MAX - 1);
+  w->name[WAV_NAME_MAX - 1] = '\0';
+  w->pcm = pcm;
+  w->nframes = nframes;
+  w->used = 1;
+
+  int duration_ms = (int) ((nframes * 1000ULL) / AO_SAMPLE_RATE);
+
+  char loaded[WAV_NAME_MAX + 32];
+  snprintf(loaded, sizeof(loaded), "%s %d", w->name, duration_ms);
+  publish_string(info, PT_WAV_LOADED, loaded);
+
+  Tcl_SetObjResult(interp, Tcl_NewIntObj(duration_ms));
+  return TCL_OK;
+}
+
+static int wav_play_command(ClientData data, Tcl_Interp *interp,
+                            int objc, Tcl_Obj *objv[])
+{
+  sound_info_t *info = (sound_info_t *) data;
+  char err[256];
+  double gain = 1.0;
+  int loop = 0;
+
+  if (objc < 2 || objc > 4) {
+    Tcl_WrongNumArgs(interp, 1, objv, "name ?gain? ?loop?");
+    return TCL_ERROR;
+  }
+  const char *name = Tcl_GetString(objv[1]);
+  if (objc >= 3 && Tcl_GetDoubleFromObj(interp, objv[2], &gain) != TCL_OK)
+    return TCL_ERROR;
+  if (objc >= 4 && Tcl_GetIntFromObj(interp, objv[3], &loop) != TCL_OK)
+    return TCL_ERROR;
+
+  int idx = wav_find(info, name);
+  if (idx < 0) {
+    Tcl_AppendResult(interp, Tcl_GetString(objv[0]),
+                     ": no wav named \"", name, "\" (use wavLoad)", NULL);
+    return TCL_ERROR;
+  }
+
+  /* device starts on demand so wav-only rigs never touch fluidsynth */
+  if (audio_out_ensure(info, NULL, err, sizeof(err)) != 0) {
+    Tcl_AppendResult(interp, Tcl_GetString(objv[0]), ": ", err, NULL);
+    return TCL_ERROR;
+  }
+
+  for (int i = 0; i < MAX_WAV_VOICES; i++) {
+    wav_voice_t *v = &info->voices[i];
+    if (atomic_load_explicit(&v->state, memory_order_acquire)
+        == WAV_VOICE_FREE) {
+      v->wav_index = idx;
+      strncpy(v->name, info->wavs[idx].name, WAV_NAME_MAX - 1);
+      v->name[WAV_NAME_MAX - 1] = '\0';
+      v->pcm = info->wavs[idx].pcm;
+      v->nframes = info->wavs[idx].nframes;
+      v->pos = 0;
+      v->gain = (float) gain;
+      v->loop = loop;
+      atomic_store_explicit(&v->state, WAV_VOICE_START, memory_order_release);
+      return TCL_OK;
+    }
+  }
+
+  Tcl_AppendResult(interp, Tcl_GetString(objv[0]),
+                   ": no free voices", NULL);
+  return TCL_ERROR;
+}
+
+static int wav_stop_command(ClientData data, Tcl_Interp *interp,
+                            int objc, Tcl_Obj *objv[])
+{
+  sound_info_t *info = (sound_info_t *) data;
+
+  if (objc > 2) {
+    Tcl_WrongNumArgs(interp, 1, objv, "?name?");
+    return TCL_ERROR;
+  }
+
+  if (objc == 2) {
+    const char *name = Tcl_GetString(objv[1]);
+    int idx = wav_find(info, name);
+    if (idx < 0) {
+      Tcl_AppendResult(interp, Tcl_GetString(objv[0]),
+                       ": no wav named \"", name, "\"", NULL);
+      return TCL_ERROR;
+    }
+    wav_stop_voices(info, idx);
+  } else {
+    wav_stop_voices(info, -1);
+  }
+  return TCL_OK;
+}
+
+static int wav_unload_command(ClientData data, Tcl_Interp *interp,
+                              int objc, Tcl_Obj *objv[])
+{
+  sound_info_t *info = (sound_info_t *) data;
+
+  if (objc != 2) {
+    Tcl_WrongNumArgs(interp, 1, objv, "name");
+    return TCL_ERROR;
+  }
+  const char *name = Tcl_GetString(objv[1]);
+  int idx = wav_find(info, name);
+  if (idx < 0) {
+    Tcl_AppendResult(interp, Tcl_GetString(objv[0]),
+                     ": no wav named \"", name, "\"", NULL);
+    return TCL_ERROR;
+  }
+
+  wav_stop_voices(info, idx);
+  if (wav_drain(info, idx, 250) != 0) {
+    Tcl_AppendResult(interp, Tcl_GetString(objv[0]),
+                     ": voices still active on \"", name, "\"", NULL);
+    return TCL_ERROR;
+  }
+
+  free(info->wavs[idx].pcm);
+  memset(&info->wavs[idx], 0, sizeof(wav_entry_t));
+  return TCL_OK;
+}
+
+static int wav_list_command(ClientData data, Tcl_Interp *interp,
+                            int objc, Tcl_Obj *objv[])
+{
+  sound_info_t *info = (sound_info_t *) data;
+  Tcl_Obj *result = Tcl_NewListObj(0, NULL);
+
+  for (int i = 0; i < MAX_WAVS; i++)
+    if (info->wavs[i].used)
+      Tcl_ListObjAppendElement(interp, result,
+                               Tcl_NewStringObj(info->wavs[i].name, -1));
+  Tcl_SetObjResult(interp, result);
+  return TCL_OK;
+}
+
+static int wav_info_command(ClientData data, Tcl_Interp *interp,
+                            int objc, Tcl_Obj *objv[])
+{
+  sound_info_t *info = (sound_info_t *) data;
+
+  if (objc != 2) {
+    Tcl_WrongNumArgs(interp, 1, objv, "name");
+    return TCL_ERROR;
+  }
+  const char *name = Tcl_GetString(objv[1]);
+  int idx = wav_find(info, name);
+  if (idx < 0) {
+    Tcl_AppendResult(interp, Tcl_GetString(objv[0]),
+                     ": no wav named \"", name, "\"", NULL);
+    return TCL_ERROR;
+  }
+
+  wav_entry_t *w = &info->wavs[idx];
+  Tcl_Obj *d = Tcl_NewDictObj();
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("frames", -1),
+                 Tcl_NewWideIntObj((Tcl_WideInt) w->nframes));
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("duration_ms", -1),
+                 Tcl_NewIntObj((int)((w->nframes * 1000ULL) / AO_SAMPLE_RATE)));
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("active_voices", -1),
+                 Tcl_NewIntObj(wav_voices_active(info, idx)));
+  Tcl_SetObjResult(interp, d);
+  return TCL_OK;
+}
+
+/*************************  audio commands  ******************************/
+
+static int audio_init_command(ClientData data, Tcl_Interp *interp,
+                              int objc, Tcl_Obj *objv[])
+{
+  sound_info_t *info = (sound_info_t *) data;
+  char err[256];
+  const char *pattern = NULL;
+
+  if (objc > 2) {
+    Tcl_WrongNumArgs(interp, 1, objv, "?device_pattern?");
+    return TCL_ERROR;
+  }
+  if (objc == 2) pattern = Tcl_GetString(objv[1]);
+
+  if (audio_out_ensure(info, pattern, err, sizeof(err)) != 0) {
+    Tcl_AppendResult(interp, Tcl_GetString(objv[0]), ": ", err, NULL);
+    return TCL_ERROR;
+  }
+  Tcl_SetObjResult(interp, Tcl_NewStringObj(info->ao_name, -1));
+  return TCL_OK;
+}
+
+static int audio_info_command(ClientData data, Tcl_Interp *interp,
+                              int objc, Tcl_Obj *objv[])
+{
+  sound_info_t *info = (sound_info_t *) data;
+
+  int nwavs = 0;
+  for (int i = 0; i < MAX_WAVS; i++) if (info->wavs[i].used) nwavs++;
+
+  Tcl_Obj *d = Tcl_NewDictObj();
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("running", -1),
+                 Tcl_NewIntObj(atomic_load(&info->ao_running) ? 1 : 0));
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("device", -1),
+                 Tcl_NewStringObj(info->ao_initialized ? info->ao_name : "", -1));
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("sample_rate", -1),
+                 Tcl_NewIntObj(AO_SAMPLE_RATE));
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("period_frames", -1),
+                 Tcl_NewIntObj(AO_PERIOD_FRAMES));
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("periods", -1),
+                 Tcl_NewIntObj(AO_PERIODS));
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("synth", -1),
+                 Tcl_NewIntObj(info->synth ? 1 : 0));
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("mode", -1),
+                 Tcl_NewIntObj((int) info->mode));
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("wavs", -1),
+                 Tcl_NewIntObj(nwavs));
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("active_voices", -1),
+                 Tcl_NewIntObj(wav_voices_active(info, -1)));
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("master_gain", -1),
+                 Tcl_NewDoubleObj((double)
+                   atomic_load_explicit(&info->master_gain,
+                                        memory_order_relaxed)));
+  Tcl_SetObjResult(interp, d);
+  return TCL_OK;
+}
+
+static int audio_devices_command(ClientData data, Tcl_Interp *interp,
+                                 int objc, Tcl_Obj *objv[])
+{
+  ma_context context;
+  if (ma_context_init(NULL, 0, NULL, &context) != MA_SUCCESS) {
+    Tcl_SetResult(interp, "failed to initialize audio context", TCL_STATIC);
+    return TCL_ERROR;
+  }
+
+  Tcl_Obj *result = Tcl_NewListObj(0, NULL);
+  ma_device_info *devices;
+  ma_uint32 count;
+  if (ma_context_get_devices(&context, &devices, &count,
+                             NULL, NULL) == MA_SUCCESS) {
+    for (ma_uint32 i = 0; i < count; i++)
+      Tcl_ListObjAppendElement(interp, result,
+                               Tcl_NewStringObj(devices[i].name, -1));
+  }
+  ma_context_uninit(&context);
+
+  Tcl_SetObjResult(interp, result);
   return TCL_OK;
 }
 
@@ -967,7 +1579,7 @@ EXPORT(int,Dserv_sound_Init) (Tcl_Interp *interp)
   int Dserv_sound_Init(Tcl_Interp *interp)
 #endif
 {
-  
+
   if (
 #ifdef USE_TCL_STUBS
       Tcl_InitStubs(interp, "8.6-", 0)
@@ -977,42 +1589,45 @@ EXPORT(int,Dserv_sound_Init) (Tcl_Interp *interp)
       == NULL) {
     return TCL_ERROR;
   }
-  
+
   /* Allocate per-interpreter sound info */
   sound_info_t *info = (sound_info_t *) calloc(1, sizeof(sound_info_t));
   if (!info) {
     Tcl_SetResult(interp, "Failed to allocate sound_info_t", TCL_STATIC);
     return TCL_ERROR;
   }
-  
-  /* Initialize the structure */
+
   info->mode = SOUND_MODE_NONE;
   info->midi_fd = -1;
-  info->settings = NULL;
-  info->synth = NULL;
-  info->adriver = NULL;
-  info->q = queueCreate();
-  
-  const int nworkers = 5;
-  
-  /* setup workers */
-  pthread_t w;
-  for (int i = 0; i < nworkers; i++) {
-    pthread_create(&w, NULL, workerThread, info);
-  }
-  
+  atomic_store_explicit(&info->master_gain, 1.0f, memory_order_relaxed);
+
+  /* Resolve the host datapoint API dynamically: inside dserv these all
+   * resolve and wav onset/offset/loaded points are published; in a plain
+   * tclsh (testing) they don't, and publishing is silently disabled. */
+  info->api.get_from_interp = (tclserver_t *(*)(Tcl_Interp *))
+    dlsym(RTLD_DEFAULT, "tclserver_get_from_interp");
+  info->api.now = (uint64_t (*)(tclserver_t *))
+    dlsym(RTLD_DEFAULT, "tclserver_now");
+  info->api.set_point = (void (*)(tclserver_t *, ds_datapoint_t *))
+    dlsym(RTLD_DEFAULT, "tclserver_set_point");
+  info->api.new_point = (ds_datapoint_t *(*)(char *, uint64_t, ds_datatype_t,
+                                             uint32_t, unsigned char *))
+    dlsym(RTLD_DEFAULT, "dpoint_new");
+  if (info->api.get_from_interp)
+    info->tclserver = info->api.get_from_interp(interp);
+
   /* Hardware initialization */
   Tcl_CreateObjCommand(interp, "soundOpen",
 		       (Tcl_ObjCmdProc *) sound_open_command,
 		       (ClientData) info,
 		       (Tcl_CmdDeleteProc *) NULL);
-  
+
   /* Software initialization */
   Tcl_CreateObjCommand(interp, "soundInitFluidSynth",
 		       (Tcl_ObjCmdProc *) sound_init_fluidsynth_command,
 		       (ClientData) info,
 		       (Tcl_CmdDeleteProc *) NULL);
-  
+
   /* Common commands */
   Tcl_CreateObjCommand(interp, "soundReset",
 		       (Tcl_ObjCmdProc *) sound_reset_command,
@@ -1046,9 +1661,41 @@ EXPORT(int,Dserv_sound_Init) (Tcl_Interp *interp)
                        (Tcl_ObjCmdProc *) sound_list_alsa_devices_command,
                        (ClientData) info,
                        (Tcl_CmdDeleteProc *) NULL);
-   Tcl_CreateObjCommand(interp, "soundPlay",
+  Tcl_CreateObjCommand(interp, "soundPlay",
 		       (Tcl_ObjCmdProc *) sound_play_command,
 		       (ClientData) info,
 		       (Tcl_CmdDeleteProc *) NULL);
+
+  /* Wav stimulus commands */
+  Tcl_CreateObjCommand(interp, "wavLoad",
+                       (Tcl_ObjCmdProc *) wav_load_command,
+                       (ClientData) info, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateObjCommand(interp, "wavPlay",
+                       (Tcl_ObjCmdProc *) wav_play_command,
+                       (ClientData) info, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateObjCommand(interp, "wavStop",
+                       (Tcl_ObjCmdProc *) wav_stop_command,
+                       (ClientData) info, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateObjCommand(interp, "wavUnload",
+                       (Tcl_ObjCmdProc *) wav_unload_command,
+                       (ClientData) info, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateObjCommand(interp, "wavList",
+                       (Tcl_ObjCmdProc *) wav_list_command,
+                       (ClientData) info, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateObjCommand(interp, "wavInfo",
+                       (Tcl_ObjCmdProc *) wav_info_command,
+                       (ClientData) info, (Tcl_CmdDeleteProc *) NULL);
+
+  /* Audio output commands */
+  Tcl_CreateObjCommand(interp, "audioInit",
+                       (Tcl_ObjCmdProc *) audio_init_command,
+                       (ClientData) info, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateObjCommand(interp, "audioInfo",
+                       (Tcl_ObjCmdProc *) audio_info_command,
+                       (ClientData) info, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateObjCommand(interp, "audioDevices",
+                       (Tcl_ObjCmdProc *) audio_devices_command,
+                       (ClientData) info, (Tcl_CmdDeleteProc *) NULL);
+
   return TCL_OK;
 }
