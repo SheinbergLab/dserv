@@ -2,17 +2,25 @@
 # Per-rig overrides for the ain subprocess.
 #
 # Sourced from config/ainconf.tcl at the end of its startup, so the
-# dserv_ain module is loaded and ainStart/ainSetNchan have already run.
-# Use this file for anything rig-specific: different acquisition rate,
-# non-default channel count, signal inversions, or a custom dpoint
-# prefix if this rig wants to isolate its ain output.
+# dserv_ain module is loaded and ainSetNchan has already run. Use this file
+# for anything rig-specific: enabling acquisition, non-default channel count,
+# signal inversions, or a custom dpoint prefix if this rig wants to isolate
+# its ain output.
+#
+# NOTE: acquisition is OFF by default — host-side analog input now lives on
+# the extio box. Only enable it here if this rig genuinely has an MCP320x on
+# the host SPI bus. "hardware 1" in ainGetInfo only means /dev/spidev0.0
+# opened, NOT that a chip is answering; starting acquisition against an empty
+# bus costs ~67% of a core on an i.MX93 and pins slider/position at -2048.
 #
 
-# Example: lower the acquisition rate from 1 kHz to 500 Hz.
-# Ain is already running at 1 ms interval when this file is sourced,
-# so ainStop/ainStart must be used to change it.
+# Enable acquisition at 1 kHz (this rig has a real host-side MCP320x).
 #
-# ainStop
+# ainStart 1
+
+# Example: run at 500 Hz instead of 1 kHz.
+# If acquisition is already running, ainStop first.
+#
 # ainStart 2
 
 # Example: invert channel 1 (signal maps 4095..0 instead of 0..4095).
