@@ -235,7 +235,9 @@ static void pub_run(void *a, void *b, void *c)
  * UNDER ain rather than renumbering ain keeps box_ain.c's deliberate ordering
  * against the SPI driver thread exactly as reasoned there.
  * Stack sized for a full zsock_send stack traversal (TCP/IP/driver inline). */
-#define PUB_THREAD_PRIO  3
+/* 4: below the service loop (now 3) -- shipping yields to everything that
+ * creates or reacts to data. See the priority-lattice note in prj.conf. */
+#define PUB_THREAD_PRIO  4
 #define PUB_THREAD_STACK 4096
 
 K_THREAD_STACK_DEFINE(pub_stack, PUB_THREAD_STACK);

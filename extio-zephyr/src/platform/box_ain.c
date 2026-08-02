@@ -10,19 +10,23 @@
 
 #if defined(BOX_HAVE_ADC)
 
-/* Priority 2: below the service loop (MAIN_THREAD_PRIORITY=0) so a sweep can
- * never delay obs/DI work, and below the mcp320x acquisition thread (pinned to 1
- * in boards/frdm_rw612.conf) so that when we block in adc_read() the driver
- * thread preempts us immediately instead of waiting for a scheduling point.
- * Ordering these three deliberately is the whole reason the ADC thread's default
- * of 0 -- identical to the service loop -- was worth overriding. */
+/* Priority 2: ABOVE the service loop (MAIN_THREAD_PRIORITY=3 since the
+ * 2026-08-02 data-preservation lattice, see prj.conf) -- a sweep is where a
+ * sample comes into existence, and it must not miss its period because the
+ * loop is busy shipping; DI capture is ISR-level and loses nothing to this.
+ * Still below the mcp320x acquisition thread (1, frdm_rw612.conf) so that
+ * when we block in adc_read() the driver preempts us immediately. */
 #define AIN_THREAD_PRIO   2
 /* 4096, not 1024. CONFIG_HW_STACK_PROTECTION would catch an overflow as a loud
  * fatal rather than silent corruption, so this is insurance, not a fix -- but
  * this thread calls down through adc_read into the SPI stack and 1 KB was a
  * guess. */
 #define AIN_STACK_SIZE    4096
-#define AIN_QUEUE_DEPTH   8
+/* 64, not 8: a busy uplink now DEFERS block delivery (bounded by this
+ * queue, ~4 KB) instead of shedding it; st_dropped stays as the honest
+ * counter for the truly pathological case. Same directive as the lattice:
+ * the record beats the deadline. */
+#define AIN_QUEUE_DEPTH   64
 
 K_THREAD_STACK_DEFINE(ain_stack, AIN_STACK_SIZE);
 static struct k_thread ain_thread;
