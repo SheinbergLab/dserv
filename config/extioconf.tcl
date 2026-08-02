@@ -298,19 +298,25 @@ proc extio_ota_push {box file} {
 
     set sha [sha256 -file $file]             ;# hex over the exact file bytes = what the box computes
 
-    # A USB box has no socket to pull over -> PUSH the image as 'D' frames instead
-    # of staging it for a pull. Pure-usb and dual-in-USB-mode both report "usb".
-    if { [dservExists extio/$box/state/transport] && [dservGet extio/$box/state/transport] eq "usb" } {
-        return [extio_ota_push_usb $box $file $sha $size]
+    # The Zephyr boxes (frdm_* and teensy*) do not implement the `<`-get pull OR
+    # the 'D'-frame blast: they take the image as a sequence of cmd/ota/chunk
+    # DATAPOINTS whatever the carrier -- over USB the chunks ride usbio_forward
+    # exactly as they ride the socket push over eth (extio-zephyr main.c:
+    # "a path that already works, unchanged, on both eth and USB"). This check
+    # must come BEFORE the transport==usb branch: a Zephyr box in USB mode
+    # otherwise gets the RP2350 'D'-frame blast it ignores (observed 2026-08-02,
+    # first MCXN947-over-USB OTA -- ack never moved, host_io after 10 s).
+    if { [dservExists extio/$box/state/board] &&
+         ([string match "frdm_*" [dservGet extio/$box/state/board]] ||
+          [string match "teensy*" [dservGet extio/$box/state/board]]) } {
+        return [extio_ota_push_dp $box $file $sha $size]
     }
 
-    # The Zephyr boxes (frdm_rw612 and friends) do not implement the `<`-get pull:
-    # they take the image as a sequence of cmd/ota/chunk DATAPOINTS instead. Same
-    # sha/verify contract, same state/ota/* reporting, same ack-driven resend --
-    # only the carrier differs. See extio_ota_push_dp.
-    if { [dservExists extio/$box/state/board] &&
-         [string match "frdm_*" [dservGet extio/$box/state/board]] } {
-        return [extio_ota_push_dp $box $file $sha $size]
+    # A USB box (RP2350 family) has no socket to pull over -> PUSH the image as
+    # 'D' frames instead of staging it for a pull. Pure-usb and dual-in-USB-mode
+    # both report "usb".
+    if { [dservExists extio/$box/state/transport] && [dservGet extio/$box/state/transport] eq "usb" } {
+        return [extio_ota_push_usb $box $file $sha $size]
     }
 
     set fp [open $file rb]                    ;# same bytes, staged raw (byte array -> Tcl_GetByteArrayFromObj)
@@ -489,16 +495,39 @@ proc extio_ota_push_dp {box file sha size} {
     return "ota dp $box: streaming $size B (sha $sha) in [extio_ota_dp_chunk $box] B chunks -- watch state/ota"
 }
 
+# WINDOWED, self-pacing drip -- not one giant blast. Over eth the chunks ride
+# dserv's native socket push and a full blast is fine; over USB every chunk
+# datapoint must re-enter the extio interp as a usbio_forward CALLBACK, and a
+# blast from inside one blocking command floods that queue -- observed
+# 2026-08-02 (first MCXN947-over-USB OTA): exactly ~42 chunks arrived, the
+# rest silently dropped, every attempt. So send a bounded window, then
+# schedule the next with dservAfter; per-frame write_all backpressure paces
+# each window to the box's drain rate, and the ack-driven stall-resend below
+# remains the loss-recovery net (a resend just restarts the drip from the
+# box's true cursor).
+# window 4 / 40 ms: the MCXN947's USB device controller drops frames at the
+# UDC layer once a burst outruns its RX slab pool ("E: Failed to allocate
+# slab" on the box console; ~8 frames of every 32-frame burst survived).
+# Four back-to-back frames sit inside the pool; 40 ms lets the box drain and
+# flash between windows. ~7.6 KB/s -> ~37 s for a 277 KB image.
+set ::extio_ota_dp_window 4
+
 proc extio_ota_dp_blast {box from} {
     if { ![info exists ::extio_ota_img($box)] } return
+    extio_ota_cancel ::extio_ota_drip $box
     set data  $::extio_ota_img($box)
     set size  $::extio_ota_size($box)
     set chunk [extio_ota_dp_chunk $box]
-    for { set off $from } { $off < $size } { incr off $chunk } {
+    set stop  [expr {min($from + $::extio_ota_dp_window * $chunk, $size)}]
+    for { set off $from } { $off < $stop } { incr off $chunk } {
         set end [expr {min($off + $chunk, $size)}]
         set d   [string range $data $off [expr {$end - 1}]]
         set crc [expr {[zlib crc32 $d] & 0xffffffff}]
         dservSetData extio/$box/cmd/ota/chunk 0 0 [binary format ii $off $crc]$d
+    }
+    if { $stop < $size } {
+        set ::extio_ota_drip($box) \
+            [dservAfter 40 [list extio_ota_dp_blast $box $stop]]
     }
 }
 
@@ -509,6 +538,13 @@ proc extio_ota_dp_on_ack {dp data} {
     if { ![info exists ::extio_ota_size($box)] } return
     if { $data >= $::extio_ota_size($box) } { extio_ota_usb_cleanup $box; return }
     extio_ota_usb_deadline $box
+    # While the drip chain is still delivering, progress is ITS job: a
+    # debounced resend here cancels the drip and re-sends data the box
+    # already holds (dupes -> rejects -> re-acks -> another resend), a
+    # livelock that crawls ~one window per round (observed 2026-08-02,
+    # ~40 B/s). Only once the drip has sent its tail does the stall-resend
+    # own recovery of whatever the box still reports missing.
+    if { [info exists ::extio_ota_drip($box)] } return
     extio_ota_cancel ::extio_ota_timer $box
     set ::extio_ota_timer($box) [dservAfter 400 [list extio_ota_dp_blast $box $data]]
 }
@@ -545,6 +581,7 @@ proc extio_ota_usb_fail {box why} {
 proc extio_ota_usb_cleanup {box} {
     extio_ota_cancel ::extio_ota_timer $box
     extio_ota_cancel ::extio_ota_dead  $box
+    extio_ota_cancel ::extio_ota_drip  $box
     unset -nocomplain ::extio_ota_img($box) ::extio_ota_size($box)
 }
 

@@ -286,10 +286,28 @@ static int usbio_sendframe_command(ClientData data, Tcl_Interp *interp, int objc
   char *name = Tcl_GetString(objv[1]);
   Tcl_WideInt ts;
   if (Tcl_GetWideIntFromObj(interp, objv[2], &ts) != TCL_OK) return TCL_ERROR;
-  Tcl_Size vlen;
-  unsigned char *val = (unsigned char *) Tcl_GetStringFromObj(objv[3], &vlen);
 
-  ds_datapoint_t *dp = dpoint_new(name, (uint64_t) ts, DSERV_STRING, (uint32_t) vlen, val);
+  /* Preserve BINARY payloads. A pure byte-array value (no string rep -- what
+   * the dpoint bridge hands the forward script for a DSERV_BYTE datapoint,
+   * e.g. an OTA chunk) must go out as its raw bytes, typed BYTE. Forcing
+   * everything through Tcl_GetStringFromObj UTF-8-inflates bytes >= 0x80,
+   * which blows the 109-byte frame budget ("name+value too large") -- and
+   * usbio_forward's catch swallowed that error, so binary forwards silently
+   * vanished (found 2026-08-02: first OTA-over-USB to a Zephyr box, every
+   * chunk dropped, ack pinned at 0). Text values keep the old path and type
+   * exactly, so ordinary cmd/config forwards are byte-identical. */
+  Tcl_Size vlen;
+  unsigned char *val;
+  int dtype;
+  if (!Tcl_HasStringRep(objv[3]) &&
+      (val = Tcl_GetBytesFromObj(NULL, objv[3], &vlen)) != NULL) {
+    dtype = DSERV_BYTE;
+  } else {
+    val = (unsigned char *) Tcl_GetStringFromObj(objv[3], &vlen);
+    dtype = DSERV_STRING;
+  }
+
+  ds_datapoint_t *dp = dpoint_new(name, (uint64_t) ts, dtype, (uint32_t) vlen, val);
   if (!dp) return TCL_OK;
 
   unsigned char frame[DPOINT_BINARY_FIXED_LENGTH];
