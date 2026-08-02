@@ -31,6 +31,11 @@
  *   DLS, 06/24, 08/26
  */
 
+/* RTLD_DEFAULT is a GNU extension on glibc; must precede all includes */
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
