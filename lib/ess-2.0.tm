@@ -5196,6 +5196,18 @@ namespace eval ess {
         return [wav_send [list wavLoad $name $path]]
     }
 
+    # Load a stimulus from in-memory sound-file bytes -- e.g. from the
+    # dlsh wav package: wav_load_data tone [wav::render [wav::tone 1000 200]]
+    # No file is involved, so procedurally generated stimuli (adaptive
+    # staircases, per-block synthesis) never touch disk. Bytes travel to
+    # the sound subprocess base64-encoded; intended for short stimuli,
+    # not minutes-long recordings. Returns duration in ms.
+    proc wav_load_data { name bytes } {
+        set b64 [binary encode base64 $bytes]
+        return [wav_send \
+                    "wavLoadData [list $name] \[binary decode base64 [list $b64]\]"]
+    }
+
     proc wav_play { name {gain 1.0} {loop 0} } {
         wav_send [list wavPlay $name $gain $loop]
     }
