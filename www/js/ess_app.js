@@ -143,6 +143,7 @@ function requestInitialData() {
           ess/system ess/protocol ess/variant
           ess/variant_info_json ess/param_settings
           ess/subject_ids ess/subject ess/state ess/status
+          ess/load_error ess/last_good_system
           ess/sound/feedback_volume ess/sound/master_gain
           ess/obs_id ess/obs_total ess/in_obs
           ess/block_pct_complete ess/block_pct_correct

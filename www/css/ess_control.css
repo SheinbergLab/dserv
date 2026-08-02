@@ -5029,3 +5029,80 @@ select.ess-param-select {
 #sync-dirty-badge[hidden] {
     display: none;
 }
+
+/* ── Load-failure modal ───────────────────────────────────────────
+   Shown when ess/load_error is published: a system load threw and
+   nothing was loaded. Wider than the standard modal because the
+   error text and stack trace are the whole point. */
+
+.ess-load-error-modal {
+    width: 560px;
+    max-width: calc(100vw - 40px);
+    border-color: var(--ess-error);
+}
+
+.ess-load-error-modal .ess-modal-title {
+    color: var(--ess-error);
+}
+
+/* severity "warning": the load succeeded but produced no trials */
+.ess-load-error-modal.degraded {
+    border-color: var(--ess-warning);
+}
+
+.ess-load-error-modal.degraded .ess-modal-title,
+.ess-load-error-modal.degraded .ess-load-error-message {
+    color: var(--ess-warning);
+}
+
+.ess-load-error-message {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--ess-error);
+    background: var(--ess-bg-panel);
+    border: 1px solid var(--ess-border);
+    border-radius: 4px;
+    padding: 8px 10px;
+    max-height: 140px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.ess-load-error-details {
+    margin-top: 12px;
+    font-size: 12px;
+}
+
+.ess-load-error-details summary {
+    cursor: pointer;
+    color: var(--ess-text-secondary);
+    user-select: none;
+}
+
+.ess-load-error-details summary:hover {
+    color: var(--ess-text-primary);
+}
+
+.ess-load-error-details pre {
+    margin: 8px 0 0;
+    padding: 8px 10px;
+    max-height: 220px;
+    overflow: auto;
+    font-size: 11px;
+    line-height: 1.45;
+    color: var(--ess-text-secondary);
+    background: var(--ess-bg-panel);
+    border: 1px solid var(--ess-border);
+    border-radius: 4px;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.ess-load-error-hint {
+    margin-top: 12px;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--ess-text-muted);
+}

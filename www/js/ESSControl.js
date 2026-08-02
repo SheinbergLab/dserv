@@ -1006,7 +1006,22 @@ class ESSControl {
         this.dpManager.subscribe('ess/status', (data) => {
             this.updateEssStatus(data.value);
         });
-        
+
+        // A load that fails partway leaves the system unusable but the
+        // controls enabled; this is the only place the reason surfaces.
+        this.dpManager.subscribe('ess/load_error', (data) => {
+            this.handleLoadError(data.value);
+        });
+
+        // Tcl dict "system X protocol Y variant Z" (or empty). Also carried
+        // inside ess/load_error, but kept here for the non-error case.
+        this.dpManager.subscribe('ess/last_good_system', (data) => {
+            const parts = String(data.value || '').trim().split(/\s+/);
+            this.state.lastGoodSystem = parts.length >= 6
+                ? { system: parts[1], protocol: parts[3], variant: parts[5] }
+                : null;
+        });
+
         this.dpManager.subscribe('ess/variant_info_json', (data) => {
             this.updateVariantInfo(data.value);
         });
@@ -1221,6 +1236,133 @@ class ESSControl {
         }
     }
     
+    // =========================================================================
+    // Load failures
+    //
+    // ess/load_error is published by ess::report_load_failure whenever a
+    // load throws (a protocol_init that can't reach a dependency, a loader
+    // that errors, ...) and cleared at the start of every load attempt.
+    // ESS has already put ess/status back to "stopped" by the time this
+    // arrives, so the controls work -- but without this modal the only
+    // symptom is a system that silently loaded nothing.
+    // =========================================================================
+
+    handleLoadError(value) {
+        if (!value || value === '{}') {
+            this.dismissLoadErrorModal();
+            return;
+        }
+
+        let info;
+        try {
+            info = JSON.parse(value);
+        } catch (e) {
+            info = { message: String(value) };
+        }
+
+        // Don't stack modals if the same failure is republished. last_good is
+        // part of the key: it decides whether the recovery button is offered,
+        // so a change in it has to re-render.
+        const g = info.last_good || {};
+        const key = `${info.severity}:${info.system}/${info.protocol}/${info.variant}` +
+              `:${info.message}:${g.system}/${g.protocol}/${g.variant}`;
+        if (this.loadErrorModal && this.loadErrorKey === key) return;
+        this.dismissLoadErrorModal();
+        this.loadErrorKey = key;
+        this.showLoadErrorModal(info);
+    }
+
+    dismissLoadErrorModal() {
+        if (this.loadErrorModal) {
+            this.loadErrorModal.remove();
+            this.loadErrorModal = null;
+        }
+        this.loadErrorKey = null;
+    }
+
+    showLoadErrorModal(info) {
+        const target = [info.system, info.protocol, info.variant]
+              .filter(Boolean).join(' / ') || '(unknown)';
+        const good = info.last_good && info.last_good.system ? info.last_good : null;
+        const goodTarget = good
+              ? [good.system, good.protocol, good.variant].filter(Boolean).join(' / ')
+              : null;
+        // no point offering to "recover" to the thing that just failed
+        const canRecover = goodTarget && goodTarget !== target;
+
+        // "warning" = the load itself succeeded but produced no trials, so
+        // the system is loaded and simply cannot run. "error" = it threw and
+        // nothing is loaded. Same affordances, different framing.
+        const degraded = info.severity === 'warning';
+        const title = degraded ? 'System loaded with no trials' : 'System load failed';
+        const stageLabel = degraded ? 'Reported by' : 'Failed at';
+        const hint = degraded
+              ? `The system is loaded but has no trials, so it cannot be run.
+                 This usually means data it depends on is not available on this host.`
+              : `The system is left unloaded. You can retry, fall back to the
+                 last system that loaded cleanly, or pick another one yourself.`;
+
+        const modal = document.createElement('div');
+        modal.className = 'ess-modal-overlay';
+        modal.innerHTML = `
+            <div class="ess-modal ess-load-error-modal${degraded ? ' degraded' : ''}">
+                <div class="ess-modal-header">
+                    <span class="ess-modal-title">${title}</span>
+                    <button class="ess-modal-close" type="button">×</button>
+                </div>
+                <div class="ess-modal-body">
+                    <div class="ess-modal-section">
+                        <label class="ess-modal-label">Tried to load</label>
+                        <div class="ess-modal-value">${this.escapeHtml(target)}</div>
+                    </div>
+                    <div class="ess-modal-section">
+                        <label class="ess-modal-label">${stageLabel}</label>
+                        <div class="ess-modal-value">${this.escapeHtml(info.stage || 'unknown')}</div>
+                    </div>
+                    <div class="ess-modal-section">
+                        <label class="ess-modal-label">${degraded ? 'Reason' : 'Error'}</label>
+                        <div class="ess-load-error-message">${this.escapeHtml(info.message || '')}</div>
+                    </div>
+                    ${info.details ? `
+                    <details class="ess-load-error-details">
+                        <summary>Stack trace</summary>
+                        <pre>${this.escapeHtml(info.details)}</pre>
+                    </details>` : ''}
+                    <div class="ess-load-error-hint">${hint}</div>
+                </div>
+                <div class="ess-modal-footer">
+                    <button class="ess-modal-btn cancel" type="button">Dismiss</button>
+                    <button class="ess-modal-btn cancel ess-load-error-retry" type="button">Retry</button>
+                    ${canRecover ? `
+                    <button class="ess-modal-btn primary ess-load-error-recover" type="button"
+                            title="Reload ${this.escapeHtml(goodTarget)}">Load last working</button>` : ''}
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(modal);
+        this.loadErrorModal = modal;
+
+        const close = () => this.dismissLoadErrorModal();
+        modal.querySelector('.ess-modal-close').addEventListener('click', close);
+        modal.querySelector('.ess-modal-btn.cancel').addEventListener('click', close);
+        modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+
+        modal.querySelector('.ess-load-error-retry').addEventListener('click', () => {
+            const args = [info.system, info.protocol, info.variant].filter(Boolean).join(' ');
+            close();
+            this.sendCommand(`evalNoReply {ess::load_system ${args}}`);
+        });
+
+        const recoverBtn = modal.querySelector('.ess-load-error-recover');
+        if (recoverBtn) {
+            recoverBtn.addEventListener('click', () => {
+                close();
+                this.sendCommand('evalNoReply {ess::load_last_good}');
+            });
+        }
+    }
+
     updateEssStatus(status) {
         this.state.essStatus = status;
         this.state.essRunning = (status === 'running');
@@ -3427,7 +3569,8 @@ updateConfigRunButtons() {
         const dps = [
             'ess/subject_ids', 'ess/subject', 'ess/systems', 'ess/system',
             'ess/protocols', 'ess/protocol', 'ess/variants', 'ess/variant',
-            'ess/status', 'ess/variant_info_json', 'ess/param_settings',
+            'ess/status', 'ess/load_error', 'ess/last_good_system',
+            'ess/variant_info_json', 'ess/param_settings',
             'ess/param', 'ess/params', 'ess/datafile',
             'ess/obs_id', 'ess/obs_total', 'ess/in_obs',
             'configs/list', 'configs/tags', 'configs/current',
@@ -3435,7 +3578,10 @@ updateConfigRunButtons() {
 	    'projects/active', 'projects/active_detail'	    
         ];
         dps.forEach(dp => this.dpManager.unsubscribe(dp));
-        
+
+        // the load-error modal lives on document.body, not in the container
+        this.dismissLoadErrorModal();
+
         this.listeners.clear();
         this.container.innerHTML = '';
     }
