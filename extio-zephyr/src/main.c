@@ -774,6 +774,28 @@ static int dac_apply(uint16_t code)
 }
 #endif /* BOX_HAVE_DAC0 */
 
+/* +23 instrumentation: the residual certification failures were at-trains
+ * losing their LEADING commands with a silent console -- so the schedule
+ * path gets a full wire-visible ledger. accepted/fired/refused are
+ * cumulative (published 1 Hz with the other counters); every refusal also
+ * answers immediately on state/sched/err, event class, exactly as at_abs
+ * does. With these, a host can classify any missing pulse from the
+ * datafile alone: sent > accepted = lost before the scheduler; accepted >
+ * fired = armed-but-unfired (contract violation); fired but no edge =
+ * output/input path. Knowing exactly what happened is this box's job. */
+static uint32_t sched_acc, sched_fired_n, sched_ref;
+
+static void sched_refuse_reply(const char *why)
+{
+	uint8_t f[DSERV_MSG_LEN];
+	char nm[80];
+
+	sched_ref++;
+	dserv_state_name(&cfg, nm, sizeof nm, "sched/err");
+	dserv_msg_string(f, nm, 0, why);
+	box_pub_event(f);
+}
+
 static void on_usb_frame(const uint8_t *frame, void *ud)
 {
 	ARG_UNUSED(ud);
@@ -1551,20 +1573,28 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 		 * configured pulse_us -- and post state/timer/<n> at the fire. */
 		if (obs_begin_us == 0) {
 			box_console_printf("sched: no beginobs yet, ignoring\n");
+			sched_refuse_reply("no_beginobs");
 		} else {
 			uint32_t w = cfg.do_pulse_us[cmd.pin] ? cfg.do_pulse_us[cmd.pin] : 1000;
 			if (box_sched_arm(&cfg, cmd.pin, cmd.pin, w,
 					  obs_begin_us + cmd.value) != 0) {
 				box_console_printf("sched: table full\n");
+				sched_refuse_reply("table_full");
+			} else {
+				sched_acc++;
 			}
 		}
 	} else if (r == CFG_GPIO && cmd.op == GPIO_OP_SCHED_TIMER) {
 		/* timer/<t>/at: notify-only at beginobs + delta */
 		if (obs_begin_us == 0) {
 			box_console_printf("sched: no beginobs yet, ignoring\n");
+			sched_refuse_reply("no_beginobs");
 		} else if (box_sched_arm(&cfg, BOX_SCHED_NOTIFY_ONLY, cmd.pin, 0,
 					 obs_begin_us + cmd.value) != 0) {
 			box_console_printf("sched: table full\n");
+			sched_refuse_reply("table_full");
+		} else {
+			sched_acc++;
 		}
 	} else if (r == CFG_GPIO && cmd.op != GPIO_OP_NONE) {
 		box_gpio_exec(&cfg, &cmd);            /* immediate DO set/pulse */
@@ -2132,6 +2162,7 @@ int main(void)
 				uint8_t f[DSERV_MSG_LEN];
 				char leaf[20];
 
+				sched_fired_n++;
 				snprintf(leaf, sizeof leaf, "timer/%u", sf.tid);
 				dserv_state_name(&cfg, name, sizeof name, leaf);
 				dserv_msg_int(f, name, event_stamp(sf.fire_us), 1);
@@ -2238,6 +2269,12 @@ int main(void)
 				pub_periodic("dbg/usb_send_us",     ul);
 				pub_periodic("dbg/usb_send_max_us", um);
 				pub_periodic("dbg/usb_drops",       ud);
+				/* the at-schedule ledger (+23): cumulative, so a host
+				 * can delta them over any obs window and classify a
+				 * missing pulse from the datafile alone */
+				pub_periodic("sched/accepted", sched_acc);
+				pub_periodic("sched/fired",    sched_fired_n);
+				pub_periodic("sched/refused",  sched_ref);
 #if defined(BOX_HAVE_ADC)
 				/* Analog health, published because its absence cost a box.
 				 * box3 went silent on 2026-07-28 and there was NOTHING to
