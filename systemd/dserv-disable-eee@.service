@@ -1,0 +1,40 @@
+[Unit]
+# Force Energy-Efficient Ethernet OFF on %i, at every boot.
+#
+# EEE (802.3az) drops the PHY into Low-Power Idle between packets and pays a
+# wake-up latency on every burst. On a host that carries extio box traffic --
+# and doubly so on a PTP grandmaster port, where LPI entry/exit shows up as
+# timestamp jitter the servo cannot model -- it buys a few milliwatts and
+# costs exactly the thing these hosts exist to provide. Found enabled AND
+# active (Tx LPI 250 ms) on rpi500's grandmaster port 2026-08-02, i.e. the
+# distro default is not "off", so every new host needs this explicitly.
+#
+# Disabling host-side is sufficient for the LINK: EEE is negotiated, so when
+# this end stops advertising it the switch side stops using it too -- no
+# switch configuration needed.
+#
+# The ethtool setting survives link bounces and cable replugs (it is autoneg
+# ADVERTISEMENT config held by the driver) but resets on reboot -- hence this
+# unit. A driver reload also resets it; rare enough on these hosts that boot
+# coverage is what matters. NOTE: applying the setting renegotiates the link
+# (~5 s down) -- harmless at boot, but do not enable this for the first time
+# in the middle of a soak or a session.
+#
+# `-` prefix on ExecStart: a NIC with no EEE support (USB dongles, some
+# virtio) makes ethtool exit non-zero, and "EEE unsupported" already means
+# "EEE off" -- that must not paint the unit red on hosts where there is
+# nothing to do.
+Description=Disable Energy-Efficient Ethernet on %i (latency/PTP jitter)
+ConditionPathExists=/sys/class/net/%i
+After=sys-subsystem-net-devices-%i.device
+
+# Deliberately NOT BindsTo= the device -- same rule as the PTP pair: a
+# dependency-stop is not a failure and Restart= does not recover from it.
+
+[Service]
+Type=oneshot
+ExecStart=-/usr/sbin/ethtool --set-eee %i eee off
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

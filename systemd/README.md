@@ -5,6 +5,33 @@
 | `dserv.service` | the dataserver itself |
 | `dserv-ptp4l@.service` | PTP grandmaster for the extio boxes, templated on interface |
 | `dserv-phc2sys@.service` | rate-locks that interface's PHC to the system clock |
+| `dserv-disable-eee@.service` | forces Energy-Efficient Ethernet OFF on an interface at boot |
+| `wifi-powersave-off.conf` | NetworkManager drop-in (not a unit): Wi-Fi power save off + retry-forever |
+
+## Host power-management pair (every new Linux host)
+
+Distro defaults leave two power features on that this platform cannot afford:
+EEE on the wired port (LPI wake jitter, right on the PTP/box path — found
+active on rpi500's grandmaster port) and Wi-Fi power save (the known brcmfmac
+goes-deaf/drops-association syndrome, worst at in-cage signal levels; plus
+multi-ms ssh latency bubbles on management links).
+
+    sudo cp dserv-disable-eee@.service /etc/systemd/system/
+    sudo systemctl daemon-reload
+    sudo systemctl enable --now dserv-disable-eee@eth0     # your wired iface
+    sudo ethtool --show-eee eth0                           # want: status: disabled
+
+    sudo cp wifi-powersave-off.conf /etc/NetworkManager/conf.d/
+    sudo systemctl reload NetworkManager                   # new associations
+    sudo iw dev wlan0 set power_save off                   # the current one
+    iw dev wlan0 get power_save                            # want: off
+
+Caveats: first-time enable of the EEE unit renegotiates the link (~5 s down),
+so not mid-session; the NM drop-in is deliberately conf.d-level because
+netplan-generated profiles are regenerated and per-profile `nmcli modify`
+edits get silently reverted. If a cage machine still drops Wi-Fi with power
+save off, the next knob is `wifi.scan-rand-mac-address = no` (commented in
+the conf file).
 
 ## PTP pair
 
