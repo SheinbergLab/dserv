@@ -137,14 +137,20 @@ verify it armed, and record BEGINOBS at the scheduled time.**
     fallback: not armed / not PTP-held -> current behavior (assert now,
     stamp now), and RECORD which mode produced the epoch
 
-Done fully, the box's own at-epoch should be the SAME T -- which wants a
-firmware verb (+27 candidate): `cmd/obs/begin_at <T>` = schedule the
-mirror line via the at_abs machinery AND set obs_begin_us = T(box), so
-host event stream, box scheduler, and physical TTL agree on ONE instant.
-(Host-only interim: at_abs the line + stamp the event at T; the box's
-internal at-epoch stays the in_obs mapping -- fine internally, but the
-full verb is the clean contract.) ENDOBS can take the same treatment
-later if paradigms want symmetric offsets.
+IMPLEMENTED 2026-08-02 (::ess::obs_schedule_bind / begin_obs), and the
+best part: **no firmware verb was needed -- the primitives compose.**
+at_abs(obs_pin, T) asserts the line at T; a FUTURE-STAMPED ess/in_obs
+(dservSetData with timestamp T) makes the +25 PTP-held box derive its
+own at-epoch as dserv_to_box_us(T) = the same instant; the logger and
+extract inherit T as the obs window; box_schedule_ anchors on the same
+timestamp. Validated against the virtual box: `at` errors unchanged at
+the synthetic 50 us with scheduling active -- a lead-sized epoch
+misalignment would have read +/-20 ms. The obs pin is configured as a
+plain DO (no obs-mirror), owned by the schedule; end_obs clears it
+immediately (an end is not an epoch). Any non-armed at_abs reply is
+recorded (ess/obs_schedule_health) and flips to assert-now fallback,
+with ess/obs_scheduled recording which mode produced every obs. ENDOBS
+can take the same treatment later if paradigms want symmetric offsets.
 
 This generalizes to a doctrine the certification now backs with gates:
 **any host-initiated marker that other systems observe should be

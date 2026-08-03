@@ -1883,13 +1883,93 @@ namespace eval ess {
         set obs_pin $pin
     }
 
+    ########################################################################
+    # Scheduled obs onset (2026-08-02): when an extio box owns the obs line,
+    # asserting it "now" and stamping the event [now] smears the obs epoch
+    # across three observations of a software moment (host stamp, box frame
+    # arrival, physical TTL). With a PTP-held box the platform can do what
+    # it was built for: schedule the onset at T = now + lead, let at_abs
+    # assert the line at T (certified <= 120 us), and make T the epoch
+    # EVERYWHERE -- the BEGINOBS event time, the ess/in_obs timestamp (a
+    # future-stamped dservSetData, which the box's PTP-held anchor maps to
+    # the same instant for its own at-scheduling), the logger, the extract.
+    # No new firmware needed: the primitives compose.
+    #
+    # Trust: sync/source must be in obs_sched_trust, and the box's at_abs
+    # reply is monitored -- any non-armed reply is recorded and flips
+    # obs_sched_ok so subsequent obs fall back to assert-now (also
+    # recorded, on ess/obs_scheduled). The record explains itself.
+    #
+    #   ::ess::obs_schedule_bind <box> <pin> ?lead_ms? ?trust?
+    #   ::ess::obs_schedule_unbind
+    ########################################################################
+    variable obs_sched_box ""
+    variable obs_sched_pin -1
+    variable obs_sched_lead_ms 20
+    variable obs_sched_trust {ptp hw}
+    variable obs_sched_ok 1
+
+    proc obs_schedule_bind {box pin {lead_ms 20} {trust {ptp hw}}} {
+        variable obs_sched_box $box
+        variable obs_sched_pin $pin
+        variable obs_sched_lead_ms $lead_ms
+        variable obs_sched_trust $trust
+        variable obs_sched_ok 1
+        variable io_class
+        dservAddExactMatch $io_class/$box/state/sched/abs_err
+        dpointSetScript $io_class/$box/state/sched/abs_err \
+            ::ess::obs_sched_reply
+        dservSet ess/obs_schedule "box $box pin $pin lead_ms $lead_ms"
+    }
+
+    proc obs_schedule_unbind {} {
+        variable obs_sched_box ""
+        dservSet ess/obs_schedule ""
+    }
+
+    # any non-armed at_abs reply while bound: record it and stop scheduling
+    # (assert-now fallback) until re-bound -- a refused onset must never
+    # silently produce an obs whose line and epoch disagree
+    proc obs_sched_reply {dp data} {
+        variable obs_sched_ok
+        if {$data ne "armed" && $obs_sched_ok} {
+            set obs_sched_ok 0
+            dservSet ess/obs_schedule_health $data
+            ess_warning "obs_schedule: at_abs reply '$data' -- falling back to assert-now" "obs"
+        }
+    }
+
     proc begin_obs {current total} {
         variable in_obs
         variable obs_pin
+        variable obs_sched_box; variable obs_sched_pin
+        variable obs_sched_lead_ms; variable obs_sched_trust
+        variable obs_sched_ok; variable io_class
+
+        set scheduled 0
+        if {$obs_sched_box ne "" && $obs_sched_ok} {
+            set src ""
+            catch {set src [dservGet $io_class/$obs_sched_box/state/sync/source]}
+            if {$src in $obs_sched_trust} {
+                set T [expr {[now] + $obs_sched_lead_ms * 1000}]
+                # the physical line, at T, on the box's disciplined clock
+                dservSet $io_class/$obs_sched_box/cmd/do/$obs_sched_pin/at_abs $T
+                # T is the epoch everywhere: the event...
+                ::ess::evt_put BEGINOBS INFO $T $current $total
+                # ...and the in_obs datapoint (future-stamped: the box's
+                # PTP-held anchor maps this timestamp for its at-epoch, the
+                # logger carries it, box_schedule_ anchors on it)
+                dservSetData ess/in_obs $T 1 "1"
+                set scheduled 1
+            }
+        }
+        if {!$scheduled} {
+            ::ess::evt_put BEGINOBS INFO [now] $current $total
+            dservSet ess/in_obs 1
+        }
         rpioPinOn $obs_pin
-        ::ess::evt_put BEGINOBS INFO [now] $current $total
+        dservSet ess/obs_scheduled $scheduled
         set in_obs 1
-        dservSet ess/in_obs 1
         variable trial_reward_ml
         set trial_reward_ml 0.0
     }
@@ -2062,9 +2142,15 @@ namespace eval ess {
     proc end_obs {{status 1}} {
         variable in_obs
         variable obs_pin
+        variable obs_sched_box; variable obs_sched_pin; variable io_class
 
         if {!$in_obs} {return}
         rpioPinOff $obs_pin
+        if {$obs_sched_box ne ""} {
+            # drop the scheduled obs line (at_abs sets HIGH only); end
+            # timing is not an epoch, immediate is correct here
+            catch {dservSet $io_class/$obs_sched_box/cmd/do/$obs_sched_pin 0}
+        }
 
         ::ess::evt_put ENDOBS $status [now]
         set in_obs 0
