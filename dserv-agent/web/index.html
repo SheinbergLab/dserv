@@ -640,7 +640,11 @@ footer {
 	 renderRow(n) {
              const st = n.status || 'idle';
              const name = (n.name || n.id).replace('Lab Station ', '');
-             const url = `${n.ssl?'https':'http'}://${n.isLocal ? location.hostname : n.ip}:${n.webPort||2565}/`;
+             // Always prefer the numeric IP, local node included. Reaching dserv by an
+             // FQDN in a cookie-bearing domain (e.g. *.brown.edu) sends the site's cookies
+             // along and can blow past uWS's header limit -> 431. An IP literal matches no
+             // cookie domain, so the jump always works.
+             const url = `${n.ssl?'https':'http'}://${n.ip || location.hostname}:${n.webPort||2565}/`;
              const agentUrl = n.ip ? `http://${n.ip}/` : `http://${n.id.toLowerCase()}.local/`;
              const localLabel = n.isLocal ? ' <span class="local-label">(local)</span>' : '';
              const nameHtml = n.isLocal 
@@ -693,7 +697,7 @@ footer {
              // For stim, use rmt_host but need to resolve 'localhost' to the actual host
              // If rmt_host is 'localhost', use the hostname we're viewing from (location.hostname)
              // or the node's IP for remote nodes
-             const stimHost = n.rmt_host === 'localhost' ? (n.isLocal ? location.hostname : n.ip) : n.rmt_host;
+             const stimHost = n.rmt_host === 'localhost' ? (n.ip || location.hostname) : n.rmt_host;
              const stimUrl = hasStim ? `http://${stimHost}:4613` : '';
              const stimDevUrl = hasStim ? `http://${stimHost}:4613/stim2-dev.html` : '';
              
@@ -753,7 +757,7 @@ footer {
                     </div>
                 </div>
                 <div class="node-line2">
-                    <span class="node-badges">${n.isLocal?'<span class="badge ip local-ip">local</span>':(n.ip?`<span class="badge ip">${n.ip}</span>`:'')}${n.ssl?'<span class="badge ssl">SSL</span>':''}</span>
+                    <span class="node-badges">${n.ip?`<span class="badge ip${n.isLocal?' local-ip':''}">${this.esc(n.ip)}</span>`:(n.isLocal?'<span class="badge ip local-ip">local</span>':'')}${n.ssl?'<span class="badge ssl">SSL</span>':''}</span>
                     <span class="last-seen ${staleClass}">${lastSeenText}${staleIcon}</span>
                 </div>
             </div>

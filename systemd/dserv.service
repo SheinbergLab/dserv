@@ -10,6 +10,13 @@ Restart=on-failure
 RestartSec=10
 KillMode=process
 
+# uWS caps total request headers at 4096 by default and answers 431 past that.
+# Reaching a box by an FQDN inside a cookie-bearing domain (hm-0.devices.brown.edu
+# picks up every cookie scoped to .brown.edu -- Shibboleth sessions alone are
+# multi-KB) overruns that, while the bare IP does not, because an IP literal
+# matches no cookie domain. Read by uWS at static-init from the environment.
+Environment=UWS_HTTP_MAX_HEADERS_SIZE=32768
+
 # Cap the stop wait. dserv's own teardown is bounded (subprocesses are told to
 # stop without waiting on them; the log writers get a bounded drain), so if we
 # are still here after 20s something is genuinely stuck and waiting out the
