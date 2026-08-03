@@ -1887,18 +1887,17 @@ namespace eval ess {
     # Scheduled obs onset (2026-08-02): when an extio box owns the obs line,
     # asserting it "now" and stamping the event [now] smears the obs epoch
     # across three observations of a software moment (host stamp, box frame
-    # arrival, physical TTL). With a PTP-held box the platform can do what
-    # it was built for: schedule the onset at T = now + lead, let at_abs
+    # arrival, physical TTL). With a PTP-held box the platform can 
+    # schedule the onset at T = now + lead, let at_abs
     # assert the line at T (certified <= 120 us), and make T the epoch
     # EVERYWHERE -- the BEGINOBS event time, the ess/in_obs timestamp (a
     # future-stamped dservSetData, which the box's PTP-held anchor maps to
     # the same instant for its own at-scheduling), the logger, the extract.
-    # No new firmware needed: the primitives compose.
     #
     # Trust: sync/source must be in obs_sched_trust, and the box's at_abs
     # reply is monitored -- any non-armed reply is recorded and flips
     # obs_sched_ok so subsequent obs fall back to assert-now (also
-    # recorded, on ess/obs_scheduled). The record explains itself.
+    # recorded, on ess/obs_scheduled).
     #
     #   ::ess::obs_schedule_bind <box> <pin> ?lead_ms? ?trust?
     #   ::ess::obs_schedule_unbind
