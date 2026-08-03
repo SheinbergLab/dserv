@@ -95,19 +95,35 @@ void signalHandler(int signum) {
 static void graceful_shutdown(void) {
   std::cout << "\nShutting down gracefully..." << std::endl;
 
-  // Shutdown all subprocesses cleanly
+  /*
+   * Shut subprocesses down from C++, NOT via eval("exit").
+   *
+   * eval() is an unbounded synchronous round-trip: it queues a request and
+   * blocks on rqueue->front() until that subprocess's single worker thread
+   * dequeues it.  A subprocess sitting in a blocking read (serial, socket)
+   * or a long script never gets there, so shutdown hung until systemd's
+   * TimeoutStopSec fired -- 90s of "Job dserv.service/stop running".
+   *
+   * The interp's own "exit" (subprocess_exit_cmd) does nothing but call
+   * tserv->shutdown(), so the round-trip bought us nothing: call it
+   * directly.  It sets m_bDone and pushes the wake message, so the worker
+   * leaves its loop as soon as it finishes whatever it is doing, and we
+   * never wait on a thread that may not be listening.
+   */
   std::cout << "Shutting down subprocesses..." << std::endl;
   std::vector<std::string> names = TclServerRegistry.getNames();
   for (const auto& name : names) {
     if (name != "dserv" && !name.empty()) {
       TclServer* child = TclServerRegistry.getObject(name);
-      if (child && child->getInterp()) {
+      if (child) {
         std::cout << "  Shutting down: " << name << std::endl;
-        child->eval("exit");
+        child->shutdown();
       }
     }
   }
-  // Brief wait for subprocesses to finish cleanup
+  // Brief grace period for subprocesses to unwind. Durable state does not
+  // depend on this: the datafiles are flushed by ~Dataserver below, which
+  // waits (bounded) for the log writers.
   std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
   std::cout << "Deleting TclServer..." << std::endl;
