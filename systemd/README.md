@@ -35,6 +35,22 @@ the conf file).
 
 ## PTP pair
 
+**Prerequisite, and nothing declares it for you** — the dserv package has no
+`Depends`, it only drops the unit templates in place:
+
+    sudo apt install linuxptp ethtool
+
+`linuxptp` supplies all three binaries this uses: `ptp4l` and `phc2sys` (named
+absolutely in the units' `ExecStart`) and `pmc` (how `dserv-ptp-setup` reads port
+state). `ethtool` is what selects the timestamping clock, and is mandatory rather
+than nice-to-have on any host with more than one PHC — see below.
+
+Missing `ptp4l` is a nasty failure to debug unaided: `Type=simple` means the
+start job succeeds as soon as systemd forks, the exec fails in the child, and
+`systemctl enable --now` returns 0. All you see is the unit not being active ten
+seconds later. `dserv-ptp-setup` now checks for the binaries before it enables
+anything.
+
 Install once per host, substituting the interface — `eth0` on the rig Pi,
 `enp86s0` on office-stim:
 
@@ -47,8 +63,11 @@ Check:
     systemctl status dserv-ptp4l@eth0 dserv-phc2sys@eth0
     journalctl -u dserv-phc2sys@eth0 -f     # want "s2" and a small offset
 
-`phc2sys` is `BindsTo` the ptp4l unit, so stopping or losing ptp4l takes it down
-too rather than leaving it disciplining against a dead master.
+`phc2sys` is `Wants=`/`After=` the ptp4l unit — deliberately **not** `BindsTo=`
+or `Requires=`, both of which propagate STOP, and a dependency-stop is not a
+failure so `Restart=` would not recover it. A NIC flap would strand phc2sys down
+silently. Its own `-w` is what waits for ptp4l. (This section claimed `BindsTo`
+for a while; the unit never did.)
 
 ### Before enabling on a NEW host
 
@@ -58,6 +77,41 @@ whole approach is unavailable rather than merely less accurate (a Pi 4 is in
 exactly this position):
 
     ethtool -T <iface>
+
+### An interface can have TWO PHCs, and the kernel may pick the wrong one
+
+Since Linux 6.13, `ethtool -T` reports a **hardware timestamp provider index**,
+because a NIC can expose more than one clock — typically a MAC clock and a PHY
+clock — and which one is used for timestamping is a settable per-interface
+property. **The kernel's default is not always the one you want.**
+
+Measured 2026-08-03 on `hm-0` (CM5, kernel 6.18.34), where `eth0` has both:
+
+| | `ptp0` `bcm_phy_ptp` (PHY, via MDIO) | `ptp1` `gem-ptp-timer` (MAC) |
+|---|---|---|
+| kernel default | **yes** | no |
+| RX filter modes | `none`, `ptpv2-event` | `none`, `all` |
+| `--hwts_filter full` | **ERANGE → port FAULTY** | works |
+| phc2sys `delay` | 215463 ns | **55 ns** |
+| phc2sys offset | ±30 µs | **±40 ns** |
+
+Both ptp4l units now run `scripts/dserv-ptp-select-phc %i` from `ExecStartPre=-`,
+which picks the PHC reachable through the netdev itself — `/sys/class/net/IF/ptpN`
+(platform/macb) or `/sys/class/net/IF/device/ptp/ptpN` (PCI) — since a PHY clock
+hangs off the MDIO bus and appears under neither. It is a no-op on a pre-6.13
+kernel (office-stim, 6.12, prints the old `PTP Hardware Clock: 0` and has no
+provider to select), on single-clock NICs, and where the setting is already right.
+
+**Do not respond to a FAULTY port by deleting `--hwts_filter full`.** That flag is
+correct for a MAC clock offering `{none, all}`; the ERANGE means you are on the
+wrong clock. Run it by hand to see and fix the selection:
+
+    dserv-ptp-select-phc eth0
+
+**`systemctl is-active` does not tell you PTP works.** ptp4l stays running with
+port 1 in FAULTY, timestamping nothing, looking perfectly healthy to systemd.
+`dserv-ptp-setup status` now prints `portState` and the selected clock; that is
+the pair to read.
 
 Look for `PTP Hardware Clock: <n>` (not `none`) plus `hardware-transmit`,
 `hardware-receive`, `hardware-raw-clock`. Also read the **Hardware Receive

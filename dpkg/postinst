@@ -49,13 +49,20 @@ if [ -d /usr/local/dserv/systemd ] && [ -d /etc/systemd/system ]; then
     fi
 fi
 
-# Put the PTP role helper on PATH; it is otherwise buried in the payload.
-if [ -f /usr/local/dserv/scripts/dserv-ptp-setup ]; then
-    chmod 0755 /usr/local/dserv/scripts/dserv-ptp-setup 2>/dev/null || true
+# Put the PTP helpers on PATH; they are otherwise buried in the payload.
+#
+# dserv-ptp-select-phc must be EXECUTABLE even though nobody runs it by hand: the
+# ptp4l units call it from ExecStartPre. That is a `-` prefix, so a missing +x
+# would not fail the unit -- it would silently skip the clock selection and leave
+# PTP running against the wrong PHC, which is the exact failure it exists to
+# prevent. Symlinked too, so `dserv-ptp-select-phc eth0` is available for
+# diagnosis alongside dserv-ptp-setup.
+for h in dserv-ptp-setup dserv-ptp-select-phc; do
+    [ -f "/usr/local/dserv/scripts/$h" ] || continue
+    chmod 0755 "/usr/local/dserv/scripts/$h" 2>/dev/null || true
     mkdir -p /usr/local/bin 2>/dev/null || true
-    ln -sf /usr/local/dserv/scripts/dserv-ptp-setup \
-           /usr/local/bin/dserv-ptp-setup 2>/dev/null || true
-fi
+    ln -sf "/usr/local/dserv/scripts/$h" "/usr/local/bin/$h" 2>/dev/null || true
+done
 
 # Bootstrap dlsh if not already installed
 if [ ! -f /usr/local/dlsh/dlsh.zip ]; then

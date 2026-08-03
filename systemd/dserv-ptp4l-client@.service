@@ -22,6 +22,12 @@
 # advertises only `none` and `all` never honours the default PTP_V2_EVENT
 # filter, and every event message arrives untimestamped while offsets sit at a
 # confident-looking 0. Check `ethtool -T %i` on any new host.
+#
+# And, as there, that filter list belongs to the selected CLOCK: an interface can
+# expose both a MAC and a PHY PHC, and the kernel's default choice can be the one
+# that rejects this flag outright (SIOCSHWTSTAMP ERANGE -> port FAULTY). The
+# ExecStartPre below picks the MAC's own clock; do not "fix" a FAULTY port by
+# deleting --hwts_filter full.
 Description=PTP client (ptp4l slaveOnly) on %i
 Documentation=file:/usr/local/dserv/extio-zephyr/PORTING.md
 Wants=network-online.target
@@ -36,6 +42,10 @@ Conflicts=dserv-ptp4l@%i.service
 
 [Service]
 Type=simple
+# Same clock selection as the grandmaster unit -- a client is if anything more
+# exposed to getting this wrong, since a client on the wrong PHC still elects a
+# master and still prints offsets. See dserv-ptp4l@.service.
+ExecStartPre=-/usr/local/dserv/scripts/dserv-ptp-select-phc %i
 ExecStart=/usr/sbin/ptp4l -i %i -H -m -q -s --hwts_filter full
 Restart=always
 RestartSec=5
