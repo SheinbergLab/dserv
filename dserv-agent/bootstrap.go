@@ -204,11 +204,13 @@ ROLE=""
 WORKGROUP="${DEFAULT_WORKGROUP}"
 DRY_RUN=false
 SKIP_AGENT=false
+ESS_USER_ARG=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --role)        ROLE="$2"; shift 2 ;;
         --workgroup)   WORKGROUP="$2"; shift 2 ;;
+        --user)        ESS_USER_ARG="$2"; shift 2 ;;
         --dry-run)     DRY_RUN=true; shift ;;
         --skip-agent)  SKIP_AGENT=true; shift ;;
         --help|-h)
@@ -219,6 +221,8 @@ while [[ $# -gt 0 ]]; do
             echo "Options:"
             echo "  --role ROLE          Box role (e.g., eyetracker, stim, control)"
             echo "  --workgroup NAME     Workgroup name (default: ${DEFAULT_WORKGROUP})"
+            echo "  --user USER          Local account owning the ESS systems tree"
+            echo "                       (default: the user invoking sudo, else 'lab')"
             echo "  --dry-run            Show what would be done without making changes"
             echo "  --skip-agent         Skip dserv-agent install (components only)"
             echo "  --help               Show this help"
@@ -271,6 +275,7 @@ check_root() {
             local args=""
             [[ -n "$ROLE" ]]      && args="$args --role $ROLE"
             [[ -n "$WORKGROUP" ]] && args="$args --workgroup $WORKGROUP"
+            [[ -n "$ESS_USER_ARG" ]] && args="$args --user $ESS_USER_ARG"
             $DRY_RUN              && args="$args --dry-run"
             $SKIP_AGENT           && args="$args --skip-agent"
             exec sudo bash -c "$(curl -sSL "${REGISTRY_URL}/setup?profile=${PROFILE}")" -- $args
@@ -660,26 +665,102 @@ step_sync_scripts() {
         return
     fi
 
-    # Scripts live in ~lab/systems/ess/, owned by lab
-    local lab_home="/home/lab"
-    local dest="${lab_home}/systems/ess"
+    # Scripts live in <ess user>/systems/ess/, owned by that user. The user
+    # resolves --user flag > $SUDO_USER (whoever invoked sudo) > legacy 'lab',
+    # and the home dir comes from getent, never from a hardcoded /home path --
+    # the /home/lab hardcode silently skipped the sync on any box provisioned
+    # from a personal account.
+    local ess_user="${ESS_USER_ARG:-${SUDO_USER:-lab}}"
+    local user_home
+    user_home=$(getent passwd "$ess_user" | cut -d: -f6)
 
-    if [[ ! -d "$lab_home" ]]; then
-        warn "No /home/lab directory, skipping script sync"
+    if [[ -z "$user_home" || ! -d "$user_home" ]]; then
+        warn "No home directory for user '${ess_user}' (--user to override), skipping script sync"
         rm -f "$zip_file"
         return
     fi
+    local dest="${user_home}/systems/ess"
 
     mkdir -p "$dest"
     run unzip -o "$zip_file" -d "$dest"
     rm -f "$zip_file"
 
-    # Ensure lab owns everything (dserv runs as root but we keep lab ownership)
-    chown -R lab:lab "$dest" 2>/dev/null || true
+    # dserv runs as root but the ess user keeps ownership of their tree
+    chown -R "${ess_user}:${ess_user}" "$dest" 2>/dev/null || true
 
     local file_count
     file_count=$(find "$dest" -type f \( -name "*.tcl" -o -name "*.tm" \) 2>/dev/null | wc -l)
     ok "Synced ${file_count} scripts to ${dest}"
+}
+
+step_power_mgmt() {
+    info "Disabling network power management (wired EEE + Wi-Fi powersave)..."
+
+    # Both were found ON by default on production Pis (2026-08-03) and both
+    # sit directly on paths this platform cares about: EEE's low-power-idle
+    # wake latency jitters PTP and burst delivery on the wired port, and
+    # brcmfmac Wi-Fi powersave is a known goes-deaf/drops-association cause
+    # (worst at in-cage signal levels), compounded by NetworkManager giving
+    # up re-association after 4 tries. Canonical copies + full rationale:
+    # dserv repo systemd/dserv-disable-eee@.service + wifi-powersave-off.conf.
+    #
+    # Applying the EEE setting renegotiates the link (~5 s) -- fine during
+    # provisioning, which is why this runs before services start.
+
+    if ! $DRY_RUN; then
+        cat > /etc/systemd/system/dserv-disable-eee@.service <<'UNIT'
+[Unit]
+# Force Energy-Efficient Ethernet OFF on %i at every boot. LPI wake latency
+# sits on the PTP/box path; the distro default is not off. Host-side disable
+# is sufficient for the link (EEE is negotiated). Tolerant ExecStart: a NIC
+# without EEE already IS off. Canonical copy: dserv repo systemd/.
+Description=Disable Energy-Efficient Ethernet on %i (latency/PTP jitter)
+ConditionPathExists=/sys/class/net/%i
+After=sys-subsystem-net-devices-%i.device
+
+[Service]
+Type=oneshot
+ExecStart=-/usr/sbin/ethtool --set-eee %i eee off
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+    fi
+    run systemctl daemon-reload
+
+    local wired
+    wired=$(ip -o link show 2>/dev/null | awk -F': ' '$2 ~ /^(eth|en)/ {print $2; exit}')
+    if [[ -n "$wired" ]]; then
+        run systemctl enable --now "dserv-disable-eee@${wired}"
+        ok "EEE off on ${wired} (persists across boots)"
+    else
+        info "No wired interface detected; enable later: systemctl enable --now dserv-disable-eee@<iface>"
+    fi
+
+    if [[ -d /etc/NetworkManager/conf.d ]]; then
+        if ! $DRY_RUN; then
+            cat > /etc/NetworkManager/conf.d/wifi-powersave-off.conf <<'NMCONF'
+# Installed by the dserv bootstrap. Canonical copy + rationale: dserv repo
+# systemd/wifi-powersave-off.conf. [connection] keys are NM-level DEFAULTS,
+# so netplan profile regeneration cannot revert them.
+[connection]
+# 2 = disable Wi-Fi power save (brcmfmac goes-deaf/drop syndrome)
+wifi.powersave = 2
+# 0 = retry association forever (NM default blocks the profile after 4 tries)
+connection.autoconnect-retries = 0
+NMCONF
+        fi
+        run systemctl reload NetworkManager
+        local wifi
+        wifi=$(ip -o link show 2>/dev/null | awk -F': ' '$2 ~ /^wl/ {print $2; exit}')
+        if [[ -n "$wifi" ]] && command -v iw &>/dev/null; then
+            run iw dev "$wifi" set power_save off
+        fi
+        ok "Wi-Fi powersave off + retry-forever (NetworkManager conf.d)"
+    else
+        info "No NetworkManager conf.d (dhcpcd-era OS): add 'iw dev wlan0 set power_save off' to a boot script if Wi-Fi matters"
+    fi
 }
 
 step_start_services() {
@@ -748,6 +829,7 @@ main() {
     step_configure_agent
     step_configure_dserv
     step_sync_scripts
+    step_power_mgmt
     step_start_services
     step_verify
 
