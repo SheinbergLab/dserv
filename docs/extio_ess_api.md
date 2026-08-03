@@ -120,6 +120,38 @@ Design principles (agreed up front):
     relative to the intended window, and the docs should state that
     overload detection needs >1 s of sustained overrun.
 
+## The scheduled-obs design (David, 2026-08-02): BEGINOBS as a future instant
+
+Today `::ess::begin_obs` asserts the obs line NOW and stamps the event
+[now] -- so "when did the obs begin" has three answers smeared over ~a
+millisecond with a host-tail: the event's host stamp, the extio box's
+frame-arrival mirror, and the physical line every other instrument syncs
+on. The campaign's numbers now justify the fix the platform was built
+for: **schedule the obs onset in the future on the disciplined clock,
+verify it armed, and record BEGINOBS at the scheduled time.**
+
+    T = now + lead (lead >> the measured ~1 ms delivery tail; 20 ms default)
+    cmd/do/<obs_pin>/at_abs T          ; box asserts the line at T +/-<=120 us (gated)
+    verify state/sched/abs_err == armed   ; the TRUST condition, plus PTP-held
+    evt_put BEGINOBS ... T             ; the event carries the true epoch
+    fallback: not armed / not PTP-held -> current behavior (assert now,
+    stamp now), and RECORD which mode produced the epoch
+
+Done fully, the box's own at-epoch should be the SAME T -- which wants a
+firmware verb (+27 candidate): `cmd/obs/begin_at <T>` = schedule the
+mirror line via the at_abs machinery AND set obs_begin_us = T(box), so
+host event stream, box scheduler, and physical TTL agree on ONE instant.
+(Host-only interim: at_abs the line + stamp the event at T; the box's
+internal at-epoch stays the in_obs mapping -- fine internally, but the
+full verb is the clean contract.) ENDOBS can take the same treatment
+later if paradigms want symmetric offsets.
+
+This generalizes to a doctrine the certification now backs with gates:
+**any host-initiated marker that other systems observe should be
+scheduled on the disciplined clock, verified armed, and recorded at its
+scheduled time** -- observation of a software moment is always smeared;
+a scheduled instant is exact.
+
 ## Candidate surface (to validate by use, not committed a priori)
 
 ```tcl
@@ -137,4 +169,5 @@ Design principles (agreed up front):
 ::ess::io_sync_status                     ;# source/offset/rate dict
 ::ess::io_config_verify {k v ...}         ;# push + announce + readback
 ::ess::io_log_matches <filename>          ;# the standard conversation set
+::ess::io_obs_begin_at ?lead_ms?          ;# scheduled-obs onset (see above)
 ```
