@@ -131,6 +131,7 @@ function boxModel(name) {
               inObs: null, obsPin: -1, syncPin: -1,           /* obs mirror + TTL sync input */
               syncSource: null, syncTransport: null, syncRate: null, syncAt: 0,
               battery: null, uptimeUs: null, uptimeAt: 0, wd: null, wdAt: 0,
+              connects: null, connectLast: null,   /* host-counted announce bursts */
               lastSeen: 0, ready: false };
         boxes.set(name, b);
     }
@@ -155,17 +156,27 @@ function decodeGroup(g, labels) {
     return on.length ? on.join('_') : 'center';
 }
 
-/* extio/<name>/state/<leaf> -> update the box model */
+/* extio/<name>/state/<leaf> -> update the box model.
+ * extio/<name>/host/<leaf> is the HOST's voice about the same box
+ * (extioconf's connect counter) -- routed here too, but never counted as
+ * box liveness: only the box's own state/* traffic proves it alive. */
 function onExtio(msg) {
-    const m = /^extio\/([^/]+)\/state\/(.+)$/.exec(msg.name);
+    const m = /^extio\/([^/]+)\/(state|host)\/(.+)$/.exec(msg.name);
     if (!m) return;
     const b = boxModel(m[1]);
-    const leaf = m[2];
+    const leaf = m[3];
     let v = msg.data !== undefined ? msg.data : msg.value;
     /* box string datapoints carry a trailing C NUL (dserv_msg_string sends
      * strlen+1); cut at it, else Number("14\0") -> NaN corrupts pins/in etc. */
     if (typeof v === 'string') v = v.split('\x00')[0];
     const num = typeof v === 'number' ? v : parseFloat(v);
+    if (m[2] === 'host') {
+        if (leaf === 'connects') b.connects = num;
+        else if (leaf === 'connect_last') b.connectLast = String(v);
+        dirty.add(b.name);
+        scheduleRender();
+        return;
+    }
     b.lastSeen = Date.now();
 
     let mm;
@@ -431,6 +442,17 @@ function cardHtml(b) {
         sync = ` · <b title="${stip}">sync</b> ${parts.join(' ')} (${fmtAge(Date.now() - b.syncAt)})`;
     }
     const bat = b.battery != null ? ` · <b>batt</b> ${b.battery}%` : '';
+    /* host-counted uplink connects since THIS dserv started: a steady box
+     * reads #1; anything higher after the first hour is reconnect churn
+     * (box reboot, cable/PHY event, peer-not-draining cycle, or an
+     * operator cmd/announce). The count survives box vanish/return but
+     * resets with dserv -- which is the right baseline for "is the link
+     * churning while the host sits stable?" */
+    const connSeg = b.connects != null
+        ? ` · <b title="uplink connects seen by this dserv (announce bursts); >1 = reconnects since dserv start${b.connectLast ? ', last at ' + esc(b.connectLast) : ''}">conn</b> ` +
+          `<span${b.connects > 1 ? ' style="color:var(--red)"' : ''}>#${b.connects}` +
+          `${b.connectLast && b.connects > 1 ? ' @' + esc(b.connectLast) : ''}</span>`
+        : '';
     const target = id.dserv
         ? ` · <b>&rarr; dserv</b> <span class="mono">${esc(id.dserv)}</span>` : '';
 
@@ -445,7 +467,7 @@ function cardHtml(b) {
     return `<div class="title"><span class="live ${alive ? 'on' : ''}"></span>` +
            `<span class="name">${esc(b.name)}</span>${obs}${xchip}${fw}${bchip}${ip}` +
            `</div>` + desc +
-           `<div class="meta"><b>up</b> ${upStr} · <b>seen</b> ${fmtAge(age)}${target}${sync}${bat}</div>` +
+           `<div class="meta"><b>up</b> ${upStr} · <b>seen</b> ${fmtAge(age)}${connSeg}${target}${sync}${bat}</div>` +
            di + groups + dout + aingrps + ain;
 }
 
@@ -569,7 +591,9 @@ async function init() {
     dp.on('keys:update', ({ keys }) => {
         const present = new Set();
         for (const k of keys) {
-            const m = /^extio\/([^/]+)\/state\//.exec(k);
+            /* host/ = extioconf's per-box voice (connect counter): seed it too,
+             * else the count only appears after the NEXT live announce */
+            const m = /^extio\/([^/]+)\/(?:state|host)\//.exec(k);
             if (!m) continue;
             present.add(m[1]);
             if (!fetched.has(k)) {

@@ -1386,6 +1386,27 @@ proc extio_wire_common {} {                 ;# device-independent: sync + obs_pi
     dpointSetScript extio/*/state/ota/state extio_ota_on_state
     dservAddMatch extio/*/cmd/ota/pull      ;# network-triggered shelf OTA (extio-setup dserv mode)
     dpointSetScript extio/*/cmd/ota/pull extio_ota_pull_trigger
+    dservAddMatch extio/*/state/build       ;# one set per announce burst = one per uplink connect
+    dpointSetScript extio/*/state/build extio_on_connect
+}
+
+# ---- connect counter (fleet page): a box bursts its announce at every uplink
+# (re)connect (BOX_NET_RESET in extio-zephyr main.c; publish_ident on the
+# RP2350s), and state/build is published exactly once per burst on both
+# families -- so counting its sets counts connects. The count baselines at
+# THIS dserv's start (a restart resets it), which is the question the counter
+# answers: "is the link churning while the host sits stable?" A steady box
+# reads 1; every increment after that is a reconnect (box reboot, cable/PHY
+# event, peer-not-draining cycle) -- or an operator's cmd/announce, which
+# also bursts; the timestamp says when to check the console. ----
+proc extio_on_connect {dp data} {
+    if { ![regexp {^extio/([^/]+)/state/build$} $dp -> box] } return
+    set n 0
+    catch { set n [dservGet extio/$box/host/connects] }
+    if { ![string is integer -strict $n] } { set n 0 }
+    dservSet extio/$box/host/connects [expr {$n + 1}]
+    dservSet extio/$box/host/connect_last \
+        [clock format [clock seconds] -format %H:%M:%S]
 }
 
 # ---- hot-swap + discovery: runs every 2 s. (Re)open when the box's data port
