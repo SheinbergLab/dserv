@@ -10,6 +10,12 @@ Restart=on-failure
 RestartSec=10
 KillMode=process
 
+# Cap the stop wait. dserv's own teardown is bounded (subprocesses are told to
+# stop without waiting on them; the log writers get a bounded drain), so if we
+# are still here after 20s something is genuinely stuck and waiting out the
+# 90s default only delays reboot.
+TimeoutStopSec=20
+
 # RT scheduling
 CPUSchedulingPolicy=fifo
 CPUSchedulingPriority=60
