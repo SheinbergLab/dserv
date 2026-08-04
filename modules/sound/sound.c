@@ -44,6 +44,9 @@
 #include <fcntl.h>
 #include <signal.h>
 #include <termios.h>
+#ifndef WIN32
+#include <sys/ioctl.h>
+#endif
 #include <pthread.h>
 #include <stdatomic.h>
 #include <dlfcn.h>
@@ -362,8 +365,13 @@ static int snd_reset(sound_info_t *info)
     /* according to the MU15 docs, the xg_on command takes approx 50ms */
     usleep(50000);
 
-    if (info->midi_fd >= 0)
+    if (info->midi_fd >= 0) {
       n = write(info->midi_fd, master_volume, sizeof(master_volume));
+      /* both sysex fully on the wire before anything else follows: a
+       * partial XG-ON (no F7) leaves the synth eating every later byte
+       * as sysex data -- silence with a healthy-looking port */
+      tcdrain(info->midi_fd);
+    }
   }
 
   if (info->mode & SOUND_MODE_SOFTWARE) {
@@ -968,6 +976,32 @@ static int sound_open_command (ClientData data, Tcl_Interp *interp,
     return TCL_ERROR;
   }
   int ret = configure_serial_port(info->midi_fd);
+  if (ret < 0) {
+    /* Never latch HARDWARE mode on a half-configured port: it plays
+     * nothing but looks alive (office-stim 2026-08-04). */
+    close(info->midi_fd);
+    info->midi_fd = -1;
+    Tcl_AppendResult(interp,
+		     Tcl_GetString(objv[0]), ": failed to configure port \"",
+		     Tcl_GetString(objv[1]), "\"", NULL);
+    return TCL_ERROR;
+  }
+
+#ifndef WIN32
+  /* Deliberate DTR/RTS cycle + settle.  DIN-MIDI adapters are commonly
+   * powered/enabled from these lines, and after a service restart the
+   * adapter is in whatever state the dying process's close left it
+   * (hupcl drops the lines; one plain re-assert at open was not enough
+   * to revive it on office-stim 2026-08-04 -- boot beeps were silent
+   * until a manual re-open, which is exactly this cycle by accident). */
+  {
+    int lines = TIOCM_DTR | TIOCM_RTS;
+    ioctl(info->midi_fd, TIOCMBIC, &lines);
+    usleep(50000);
+    ioctl(info->midi_fd, TIOCMBIS, &lines);
+    usleep(50000);
+  }
+#endif
 
   /* Set or add hardware mode */
   info->mode |= SOUND_MODE_HARDWARE;
