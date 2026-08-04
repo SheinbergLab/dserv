@@ -30,9 +30,11 @@ class DocBuilder:
         self.js_dir = self.source_dir / 'js'
         self.css_dir = self.source_dir / 'css'
         
-        # Verify directories exist
+        # Verify directories exist. The html/ subdir is optional: the
+        # current web/ tree keeps its pages at the source root (html/
+        # only holds editor backups), so fall back to the root there.
         if not self.html_dir.exists():
-            raise FileNotFoundError(f"HTML directory not found: {self.html_dir}")
+            self.html_dir = self.source_dir
         if not self.js_dir.exists():
             raise FileNotFoundError(f"JavaScript directory not found: {self.js_dir}")
         if not self.css_dir.exists():
@@ -47,6 +49,16 @@ class DocBuilder:
         if not filepath.exists():
             raise FileNotFoundError(f"File not found: {filepath}")
         return filepath.read_text(encoding='utf-8')
+
+    def read_asset(self, ref, asset_dir):
+        """Resolve an href/src reference from an HTML page. Pages have
+        referenced assets both as 'js/x.js' (root layout) and '../js/x.js'
+        (html/ subdir layout): try the reference relative to the HTML dir
+        first, then the asset dir by basename."""
+        for cand in (self.html_dir / ref, asset_dir / Path(ref).name):
+            if cand.exists():
+                return cand.read_text(encoding='utf-8')
+        raise FileNotFoundError(f"Asset not found: {ref}")
     
     def inline_css(self, html_content):
         """Replace <link rel="stylesheet" href="X.css"> with inline <style> tags"""
@@ -67,7 +79,7 @@ class DocBuilder:
             
             # Read and inline CSS
             try:
-                css_content = self.read_file(self.css_dir, href)
+                css_content = self.read_asset(href, self.css_dir)
                 return f'<style>\n{css_content}\n</style>'
             except FileNotFoundError:
                 print(f"  Warning: CSS file not found: {href}")
@@ -96,7 +108,7 @@ class DocBuilder:
             
             # Read and inline JS
             try:
-                js_content = self.read_file(self.js_dir, src)
+                js_content = self.read_asset(src, self.js_dir)
                 return f'<script>\n{js_content}\n</script>'
             except FileNotFoundError:
                 print(f"  Warning: JS file not found: {src}")
@@ -119,8 +131,12 @@ class DocBuilder:
         """Build a single HTML file"""
         print(f"  Building {output_filename}...")
         
-        # Read source HTML
-        html_content = self.read_file(self.html_dir, input_filename)
+        # Read source HTML (html/ subdir first, then the source root —
+        # pages have lived in both places across the tree's history)
+        try:
+            html_content = self.read_file(self.html_dir, input_filename)
+        except FileNotFoundError:
+            html_content = self.read_file(self.source_dir, input_filename)
         
         # Inline CSS first
         html_content = self.inline_css(html_content)

@@ -212,7 +212,26 @@ proc trialsync::sleep_backoff_remaining {} {
     }
 }
 
-# Returns "" when ready to POST; else backoff, upload_in_progress, empty_url, outbox_empty, no_workgroup, no_ingest_key.
+# Offline mode (local/offline or DSERV_OFFLINE=1, see config/dsconf.tcl)
+# with a non-loopback ingest target: trials keep queuing in the outbox but
+# no POST is attempted, so the backlog drains normally once the rig is
+# back online and the flag is cleared. Loopback ingest servers still run.
+proc trialsync::offline_blocked {} {
+    if {![info exists ::env(DSERV_OFFLINE)]} {
+        return 0
+    }
+    set v $::env(DSERV_OFFLINE)
+    if {$v eq "" || $v eq "0"} {
+        return 0
+    }
+    set url [trialsync::ingest_endpoint]
+    if {[regexp {^https?://(localhost|127\.[0-9.]+|\[::1\])(:|/|$)} $url]} {
+        return 0
+    }
+    return 1
+}
+
+# Returns "" when ready to POST; else backoff, upload_in_progress, empty_url, offline, outbox_empty, no_workgroup, no_ingest_key.
 proc trialsync::flush_block_reason {} {
     variable upload_in_progress
     if {[trialsync::backoff_active]} {
@@ -223,6 +242,9 @@ proc trialsync::flush_block_reason {} {
     }
     if {[trialsync::ingest_endpoint] eq ""} {
         return empty_url
+    }
+    if {[trialsync::offline_blocked]} {
+        return offline
     }
     trialsync::ensure_outbox_open
     if {[llength [trialsync::select_batch]] == 0} {
@@ -239,7 +261,7 @@ proc trialsync::flush_block_reason {} {
 
 # Local config gaps — no HTTP request; do not count toward API auth_fail_ip backoff.
 proc trialsync::flush_block_reason_is_local {reason} {
-    return [expr {$reason in {empty_url no_workgroup no_ingest_key}}]
+    return [expr {$reason in {empty_url offline no_workgroup no_ingest_key}}]
 }
 
 # Tiered backoff after a real ingest HTTP failure (403, 429, transport, etc.).
@@ -831,6 +853,9 @@ proc trialsync::maybe_start_flush {} {
             empty_url {
                 trialsync::_dbg "maybe_start_flush: skip (empty ingest endpoint)"
             }
+            offline {
+                trialsync::_dbg "maybe_start_flush: skip (offline mode, queuing only)"
+            }
             outbox_empty {
                 trialsync::_dbg "maybe_start_flush: skip (outbox empty)"
             }
@@ -1089,5 +1114,9 @@ trialsync::_dbg "init: subscribed ess/obs_active -> trialsync::on_obs_active"
 # seconds after boot. New trials already drain via the callbacks above, so no
 # trial is lost — the backlog just flushes slightly later, without stalling init.
 trialsync::arm_startup_drain
-puts stderr "trialsync started. API key and target server loaded. Outbox drain deferred ~[expr {$trialsync::startup_drain_delay_ms / 1000}]s (non-blocking)."
+if {[trialsync::offline_blocked]} {
+    puts stderr "trialsync started in OFFLINE mode: trials queue to the outbox; no POSTs until the offline flag is cleared."
+} else {
+    puts stderr "trialsync started. API key and target server loaded. Outbox drain deferred ~[expr {$trialsync::startup_drain_delay_ms / 1000}]s (non-blocking)."
+}
 flush stderr

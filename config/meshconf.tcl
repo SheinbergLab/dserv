@@ -151,12 +151,21 @@ proc mesh_build_heartbeat {} {
 
 proc mesh_send_heartbeat {} {
     global mesh_registry mesh_workgroup
-    
+
     # Skip if not configured
     if {$mesh_registry eq "" || $mesh_workgroup eq ""} {
         return
     }
-    
+
+    # Offline mode (local/offline or DSERV_OFFLINE=1): skip silently
+    # rather than logging a refused POST every interval. Loopback
+    # registries are exempt, matching TclHttps's socket-layer rule.
+    if {[info exists ::env(DSERV_OFFLINE)]
+        && $::env(DSERV_OFFLINE) ne "" && $::env(DSERV_OFFLINE) ne "0"
+        && ![regexp {^https?://(localhost|127\.[0-9.]+|\[::1\])(:|/|$)} $mesh_registry]} {
+        return
+    }
+
     set url "${mesh_registry}/api/v1/heartbeat"
     set body [mesh_build_heartbeat]
     

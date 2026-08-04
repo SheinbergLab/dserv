@@ -156,6 +156,19 @@ namespace eval scripts {
         catch { dservSet scripts/project $value }
     }
 
+    # True when offline mode is on (local/offline or DSERV_OFFLINE=1, see
+    # config/dsconf.tcl) AND the target is not this box. Loopback
+    # registries stay usable on an air-gapped machine. TclHttps enforces
+    # the same rule at the socket layer; this check just lets callers
+    # skip cleanly with a log line instead of catching an error.
+    proc _offline_blocked {url} {
+        if {![info exists ::env(DSERV_OFFLINE)]} { return 0 }
+        set v $::env(DSERV_OFFLINE)
+        if {$v eq "" || $v eq "0"} { return 0 }
+        if {[regexp {^https?://(localhost|127\.[0-9.]+|\[::1\])(:|/|$)} $url]} { return 0 }
+        return 1
+    }
+
     # Deferred boot sync (armed by scriptsconf via dservAfter): dserv
     # boots on the on-disk tree; the workgroup pull lands here seconds
     # later without blocking boot, ess, or any client.
@@ -163,6 +176,10 @@ namespace eval scripts {
         _registry_from_dserv
         if {![info exists ::ess::registry_url] || $::ess::registry_url eq ""} {
             ess::ess_info "scripts: no registry configured — skipping initial sync" "sync"
+            return
+        }
+        if {[_offline_blocked $::ess::registry_url]} {
+            ess::ess_info "scripts: offline mode — skipping initial sync" "sync"
             return
         }
         if {[catch { pull_all } err]} {

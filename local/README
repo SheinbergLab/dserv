@@ -3,3 +3,8 @@ folder for local configurations that do not get overwritten with updates
 pre-*.tcl will be sourced early in dsconf.tcl (before ess is initialized)
 
 post-*.tcl will be sourced at end of dsconf.tcl (after ess is initialized)
+
+offline (empty marker file) puts dserv in offline / air-gapped mode:
+all outbound network to non-loopback hosts is refused instantly and the
+registry/mesh/trial-ingest paths skip cleanly. Equivalent to exporting
+DSERV_OFFLINE=1. See docs/OFFLINE.md.

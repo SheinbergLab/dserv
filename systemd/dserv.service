@@ -1,5 +1,10 @@
 [Unit]
 Description=Dataserver Service
+# network-online.target keeps first-boot registry sync from racing DHCP on
+# connected rigs. On an AIR-GAPPED box it makes boot wait out the
+# wait-online timeout (~2 min) — don't edit this unit there; instead mask
+# the waiter (see docs/OFFLINE.md):
+#   sudo systemctl mask systemd-networkd-wait-online NetworkManager-wait-online
 After=network-online.target seatd.service
 Wants=network-online.target
 

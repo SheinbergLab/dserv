@@ -38,15 +38,27 @@ class TclEditor {
   }
 
   async _initEditor() {
-    // Import CodeMirror modules
-    const { EditorState, Compartment } = await import('https://esm.sh/@codemirror/state@6');
-    const { EditorView, keymap, lineNumbers, highlightActiveLine, highlightSpecialChars } = await import('https://esm.sh/@codemirror/view@6');
-    const { defaultKeymap, history, historyKeymap, indentWithTab } = await import('https://esm.sh/@codemirror/commands@6');
-    const { syntaxHighlighting, defaultHighlightStyle, bracketMatching, StreamLanguage } = await import('https://esm.sh/@codemirror/language@6');
-    const { dracula } = await import('https://esm.sh/@uiw/codemirror-theme-dracula@4');
-    const { autocompletion, completionKeymap, acceptCompletion, completionStatus, startCompletion } = await import('https://esm.sh/@codemirror/autocomplete@6');
-    const { tcl } = await import('https://esm.sh/@codemirror/legacy-modes@6/mode/tcl');
-    const { searchKeymap, highlightSelectionMatches } = await import('https://esm.sh/@codemirror/search@6');
+    // Import CodeMirror from the locally served vendor bundle (works
+    // offline; see www/js/vendor/README.md to regenerate).
+    let cm;
+    try {
+      cm = await import('/js/vendor/codemirror.js');
+    } catch (e) {
+      console.error('TclEditor: failed to load /js/vendor/codemirror.js', e);
+      this.container.innerHTML =
+        '<div style="padding:12px;color:#ff6b6b;font-family:monospace;font-size:13px;">' +
+        'Editor failed to load: /js/vendor/codemirror.js missing or unreadable.<br>' +
+        'Redeploy the www/ tree (sudo make -C build install).</div>';
+      return;
+    }
+    const { EditorState, Compartment,
+            EditorView, keymap, lineNumbers, highlightActiveLine, highlightSpecialChars,
+            defaultKeymap, history, historyKeymap, indentWithTab,
+            syntaxHighlighting, defaultHighlightStyle, bracketMatching, StreamLanguage,
+            dracula,
+            autocompletion, completionKeymap, acceptCompletion, completionStatus, startCompletion,
+            tcl,
+            searchKeymap, highlightSelectionMatches } = cm;
 
     // Store references for later use
     this._cm = { EditorState, EditorView, keymap, StreamLanguage, acceptCompletion, completionStatus, startCompletion, Compartment };

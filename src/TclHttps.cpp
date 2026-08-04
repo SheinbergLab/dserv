@@ -21,6 +21,7 @@
 
 #include <string>
 #include <cstring>
+#include <cstdlib>
 #include <sstream>
 #include <fstream>
 #include <regex>
@@ -398,6 +399,21 @@ static HttpResponse doHttpRequest(const std::string& method,
     return resp;
 }
 
+// Offline / air-gapped mode (set via local/offline or DSERV_OFFLINE=1,
+// see config/dsconf.tcl). Loopback targets stay allowed so services on
+// the box itself (local registry, local ingest) keep working. Checked
+// per request so the flag can be toggled at runtime through any interp's
+// env array; the refusal happens BEFORE gethostbyname, which -timeout
+// does not bound.
+static bool offlineBlocked(const std::string& host) {
+    const char* v = getenv("DSERV_OFFLINE");
+    if (!v || !*v || strcmp(v, "0") == 0) return false;
+    if (host == "localhost" || host == "::1") return false;
+    if (host.rfind("127.", 0) == 0 &&
+        host.find_first_not_of("0123456789.") == std::string::npos) return false;
+    return true;
+}
+
 // Unified request handler
 static HttpResponse doRequest(const std::string& method,
                                const std::string& urlStr,
@@ -408,7 +424,13 @@ static HttpResponse doRequest(const std::string& method,
         HttpResponse resp = {0, "", false, "Invalid URL: " + urlStr};
         return resp;
     }
-    
+
+    if (offlineBlocked(url.host)) {
+        HttpResponse resp = {0, "", false,
+            "offline mode (DSERV_OFFLINE): refusing outbound connection to " + url.host};
+        return resp;
+    }
+
     if (url.scheme == "https") {
         return doHttpsRequest(method, url, body, timeoutMs);
     } else {

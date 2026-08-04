@@ -324,17 +324,26 @@ def anova_over_time(X_flat, shape, dim1, dim2):
     if (_pyPromise) return _pyPromise;
     _pyPromise = (async () => {
       emit('loading-runtime', 'fetching Pyodide runtime');
-      if (typeof loadPyodide !== 'function') {
-        await loadScript(PYODIDE_CDN + 'pyodide.js');
+      try {
+        if (typeof loadPyodide !== 'function') {
+          await loadScript(PYODIDE_CDN + 'pyodide.js');
+        }
+        const py = await loadPyodide({ indexURL: PYODIDE_CDN });
+        emit('loading-packages', 'installing numpy + scipy');
+        await py.loadPackage(PY_PACKAGES);
+        emit('initializing', 'compiling analysis module');
+        py.runPython(PY_MODULE);
+        _py = py;
+        emit('ready', 'analysis kernel ready');
+        return py;
+      } catch (e) {
+        // The kernel streams from jsdelivr (numpy+scipy are far too large
+        // to vendor) — on an offline/air-gapped rig this is expected.
+        _pyPromise = null; // allow retry if connectivity returns
+        emit('error', 'analysis kernel unavailable: Pyodide loads from ' +
+             'cdn.jsdelivr.net and needs internet access (' + e.message + ')');
+        throw e;
       }
-      const py = await loadPyodide({ indexURL: PYODIDE_CDN });
-      emit('loading-packages', 'installing numpy + scipy');
-      await py.loadPackage(PY_PACKAGES);
-      emit('initializing', 'compiling analysis module');
-      py.runPython(PY_MODULE);
-      _py = py;
-      emit('ready', 'analysis kernel ready');
-      return py;
     })();
     return _pyPromise;
   }

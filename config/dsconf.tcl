@@ -18,8 +18,28 @@ tcl::tm::add $dspath/lib
 errormon enable
 
 # look for any .tcl configs to run before other subprocesses local/*.tcl
-foreach f [glob [file join $dspath local pre-*.tcl]] {
+foreach f [glob -nocomplain [file join $dspath local pre-*.tcl]] {
     source $f
+}
+
+# Offline / air-gapped mode. Opt in by creating the marker file
+# local/offline (contents ignored) or exporting DSERV_OFFLINE=1 — one
+# flag, checked here BEFORE any subprocess starts so every interp
+# inherits it through the process environment. When set, https_get/
+# https_post/https_put/https_delete (TclHttps) refuse any non-loopback
+# host instantly — no DNS lookup, no connect timeout — and the
+# registry/mesh/trial-ingest configs skip their network paths outright.
+# Loopback targets stay allowed, so a registry or ingest server running
+# on the box itself keeps working. Published as system/offline for UIs.
+if { [file exists [file join $dspath local offline]] } {
+    set env(DSERV_OFFLINE) 1
+}
+if { [info exists env(DSERV_OFFLINE)] &&
+     $env(DSERV_OFFLINE) ne "" && $env(DSERV_OFFLINE) ne "0" } {
+    dservSet system/offline 1
+    puts "offline mode: outbound network disabled (local/offline or DSERV_OFFLINE)"
+} else {
+    dservSet system/offline 0
 }
 
 # start an eye movement subprocess
