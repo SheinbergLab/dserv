@@ -23,6 +23,10 @@ package require em
 
 tcl::tm::add $dspath/lib
 package require df 2.0
+package require settingsdb
+
+# Same store essconf uses; sqlite handles the cross-subprocess sharing.
+settingsdb::init [file join $dspath db settings.db]
 
 # Configuration
 set df_db_path "$dspath/db/datafiles.db"
@@ -1426,6 +1430,14 @@ proc configure_auto_export {destination {enabled 1}} {
     dservSet df/export_config [dict create \
         destination $destination \
         enabled $enabled]
+
+    # Persist: retained datapoints don't survive a dserv restart, so without
+    # this the export pipeline silently stops after every restart until
+    # someone re-runs configure_auto_export. Restored at startup below.
+    catch {
+        ::settingsdb::save df_export [dict create \
+            destination $destination enabled $enabled]
+    }
 }
 
 proc get_export_config {} {
@@ -2086,6 +2098,17 @@ dpointSetScript    ess/datafile_path process_ess_datafile
 # Subscribe to export destination (new name)
 dservAddExactMatch df/export_destination
 dpointSetScript    df/export_destination process_export_destination
+
+# Restore the persisted export config (saved by configure_auto_export).
+# Runs before the touches so a retained df/export_destination, when one
+# exists, re-applies on top and stays authoritative.
+catch {
+    set _exp [::settingsdb::load df_export]
+    if {$_exp ne ""} {
+        configure_auto_export [dict get $_exp destination] [dict get $_exp enabled]
+    }
+    unset -nocomplain _exp
+}
 
 # Touch to get current values
 catch {dservTouch ess/system_path}

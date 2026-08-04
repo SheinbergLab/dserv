@@ -67,8 +67,31 @@ proc ::ess_queues::init {db_handle} {
     
     # Tables are created by ess_configs now (unified schema)
     publish_state
-    
+    restore_last_queue
+
     return 1
+}
+
+# Republish the last-started queue (persisted in app_state by queue_start)
+# as queues/last + queues/last_project so a restarted rig's UI can offer it
+# for one-click restart. Selection only: execution state (position, run
+# counts, open datafile) is deliberately NOT restored -- a queue interrupted
+# by a restart must be restarted by a human, from the top.
+proc ::ess_queues::restore_last_queue {} {
+    variable db
+    set q ""
+    set p ""
+    # Validation errors (queue or project since deleted) clear the selection
+    if {[catch {
+        set q [$db onecolumn {SELECT value FROM app_state WHERE key = 'last_queue'}]
+        set p [$db onecolumn {SELECT value FROM app_state WHERE key = 'last_queue_project'}]
+        if {$q ne "" && $p ne ""} { get_queue_id $q $p }
+    }] || $q eq "" || $p eq ""} {
+        set q ""
+        set p ""
+    }
+    dservSet queues/last $q
+    dservSet queues/last_project $p
 }
 
 # =============================================================================
@@ -653,7 +676,18 @@ proc ::ess_queues::queue_start {queue_name args} {
     if {$item_count == 0} {
         error "Queue is empty: $queue_name"
     }
-    
+
+    # Remember the selection across restarts (same app_state pattern as
+    # active_project). Restored by restore_last_queue at init as queues/last
+    # -- a selection for the UI to offer, never an auto-run.
+    catch {
+        $db eval {
+            INSERT OR REPLACE INTO app_state (key, value)
+            VALUES ('last_queue', :queue_name),
+                   ('last_queue_project', :project)
+        }
+    }
+
     # Initialize state
     set state(status) loading
     set state(queue_id) $queue_id
