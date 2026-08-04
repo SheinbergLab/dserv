@@ -1966,6 +1966,7 @@ namespace eval ess {
         rpioPinOn $obs_pin
         set in_obs 1
         dservSet ess/obs_scheduled 1
+        dservSet ess/obs_schedule_health ok    ;# retained: never lie stale
         variable trial_reward_ml
         set trial_reward_ml 0.0
         ::ess::do_update
@@ -1979,13 +1980,16 @@ namespace eval ess {
     }
 
     # +30 fallback: the onset event never arrived (box event timeout -- the
-    # paradigm's wait state calls this). Assert-now, LOUD, and stop
-    # scheduling until re-bound.
+    # paradigm's wait state calls this). Assert-now, LOUD -- and keep
+    # trying: unlike an at_abs REFUSAL (obs_sched_reply, which does
+    # sticky-disable because the box said no), a missed event is transient
+    # by nature and the fallback is per-obs safe, so the next obs schedules
+    # again. The first-ever onset of a fresh bind hitting the subscription
+    # cold is exactly the case that taught this.
     proc obs_begin_now {} {
         variable obs_pending
         if {!$obs_pending} { return }
         set obs_pending 0
-        variable obs_sched_ok 0
         dservSet ess/obs_schedule_health "onset_timeout"
         ess_warning "obs_schedule: onset event never arrived -- asserting now" "obs"
         variable obs_pending_args
@@ -4424,6 +4428,16 @@ namespace eval ess {
 
     proc box_schedule_ {dev key delay_ms} {
 	variable io_class
+	variable obs_pending
+	if {$obs_pending} {
+	    # +30 lead window: a scheduled onset is in flight and the box
+	    # already holds the (provisional) epoch from the onset arming --
+	    # the wire value is simply the offset from that epoch. This is
+	    # the delivery-margin path: commands sent here arrive lead_ms
+	    # before their earliest possible fire.
+	    dservSet $io_class/$dev/cmd/$key/at [expr {int($delay_ms * 1000)}]
+	    return 1
+	}
 	if {![dservExists ess/in_obs] || [dservGet ess/in_obs] == 0} {
 	    ess_warning "box_schedule: not in an obs period (need the beginobs anchor)" "box"
 	    return 0
