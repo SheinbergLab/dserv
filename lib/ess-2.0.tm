@@ -2082,6 +2082,20 @@ namespace eval ess {
                 set obs_pending 1
                 set obs_pending_args [list $current $total]
                 dservSet $io_class/$obs_sched_box/cmd/do/$obs_sched_pin/at_abs $T
+                # Framework-owned onset watchdog, so a paradigm's whole
+                # obligation is one guard line (obs_onset_pending) in its
+                # start_obs transition. If the onset event never lands,
+                # obs_begin_now asserts BEGINOBS host-side; when it did
+                # land (or end_obs aborted the pending obs) obs_pending is
+                # 0 and this is a no-op. do_update wakes the machine only
+                # in the fallback case, from event context -- never inside
+                # a transition.
+                dservAfter [expr {$obs_sched_lead_ms + 500}] {
+                    if {[::ess::obs_onset_pending]} {
+                        ::ess::obs_begin_now
+                        ::ess::do_update
+                    }
+                }
                 return
             }
         }
