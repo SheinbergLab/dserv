@@ -280,6 +280,14 @@ void box_gpio_apply_config(const box_config_t *c)
 		if (box_gpio_reserved(i)) {
 			continue;
 		}
+		/* Disarm first, re-arm only for inputs below. A pin that was
+		 * EVER an input this boot keeps its port-level EDGE_BOTH
+		 * armed unless explicitly disabled -- removing the callback
+		 * only silences the EVENTS. A floating ex-input then fires
+		 * the GPIO ISR on every bounce with nothing visible in any
+		 * counter: an invisible CPU storm (office-stim 2026-08-04,
+		 * shield swap left 6 loop pins chattering "off"). */
+		gpio_pin_interrupt_configure_dt(&specs[i], GPIO_INT_DISABLE);
 		switch (c->pin_mode[i]) {
 		case 1:                                  /* output */
 			gpio_pin_configure_dt(&specs[i], GPIO_OUTPUT_INACTIVE);
@@ -301,7 +309,7 @@ void box_gpio_apply_config(const box_config_t *c)
 			 * loading the pad. */
 			gpio_pin_configure_dt(&specs[i], GPIO_DISCONNECTED);
 			break;
-		default:                                 /* 0 = leave untouched */
+		default:                                 /* 0 = off: pad left alone */
 			break;
 		}
 	}
@@ -387,6 +395,25 @@ int box_gpio_poll_di(const box_config_t *c, box_di_event_t *out)
 			out->pin = (uint8_t) i;
 			out->level = di_pair_lvl[i];
 			out->t_us = di_pair_t[i];
+			return 1;
+		}
+	}
+
+	/* return-edge completion of a swallowed pulse on the DEBOUNCED path
+	 * (queued below where the settle sample equals the published level).
+	 * This drain was MISSING through +32: the away edge went out, the
+	 * queued return never did, and the published level stayed desynced --
+	 * a quick tap inside the settle window left the button stuck pressed
+	 * host-side until the next slow press realigned it (office-stim
+	 * 2026-08-04, "misses some responses"). Same order rule as the pair
+	 * drain: emit before anything newer. */
+	for (int i = 0; i < BOX_NPINS; i++) {
+		if (di_synth_pending[i]) {
+			di_synth_pending[i] = 0;
+			di_pub_level[i] = di_synth_lvl[i];
+			out->pin = (uint8_t) i;
+			out->level = di_synth_lvl[i];
+			out->t_us = di_synth_t[i];
 			return 1;
 		}
 	}
