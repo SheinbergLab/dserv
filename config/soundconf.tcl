@@ -22,6 +22,55 @@ namespace eval sound {
 	}
     }
 
+    # USB audio cards by ALSA card id, in card order. Identity comes from
+    # the DRIVER CLASS (USB-Audio), never the product name -- cheap
+    # class-compliant dongles all call themselves generic things like
+    # "Device" or "CODEC", but on a rig the only USB-Audio card IS the rig
+    # output (the onboard codec enumerates as HDA-Intel/bcm2835/etc).
+    # Optional usbid ("0d8c:0102", glob ok) pins exact hardware the same
+    # way juicerconf pins its pump.
+    proc find_usb_audio { {usbid *} } {
+        set cards {}
+        if { [catch {open /proc/asound/cards} f] } { return $cards }
+        set txt [read $f]; close $f
+        foreach line [split $txt \n] {
+            if { [regexp {^\s*(\d+)\s+\[(\S+)\s*\]:\s+(\S+)} $line -> num id drv] } {
+                if { ![string match USB-Audio* $drv] } { continue }
+                set uid ""
+                catch {
+                    set uf [open /proc/asound/card$num/usbid]
+                    set uid [string trim [read $uf]]
+                    close $uf
+                }
+                if { [string match $usbid $uid] } { lappend cards $id }
+            }
+        }
+        return $cards
+    }
+
+    # Software synth + wav output with automatic device selection: prefer
+    # the (sole) USB audio card; fall back to the system default device.
+    # A rig's local/sound.tcl can stay model-agnostic:
+    #     sound::init_software
+    # and swapping dongle brands never needs a config edit. Pass an
+    # explicit device string to override, or a usbid glob to pin hardware.
+    proc init_software { {soundfont default} {device auto} {usbid *} } {
+        if { $device eq "auto" } {
+            set ids [find_usb_audio $usbid]
+            if { [llength $ids] > 1 } {
+                puts "sound: multiple USB audio cards ($ids), using [lindex $ids 0]"
+            }
+            if { [llength $ids] } {
+                set device plughw:CARD=[lindex $ids 0],DEV=0
+                puts "sound: auto-selected USB audio device $device"
+            } else {
+                set device ""
+                puts "sound: no USB audio card found, using default device"
+            }
+        }
+        init_fluidsynth $soundfont $device
+    }
+
     proc init_fluidsynth { { soundfont {} } { device {} } } {
 
 	# use either default soundfont or allow user to specify
