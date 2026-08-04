@@ -94,6 +94,10 @@ static int u_eth_available(void)
 static int u_eth_connect(const box_config_t *c)   { return box_net_eth_connect(c->dserv_ip, dserv_cfg_port(c)); }
 static int u_eth_connected(void)                  { return box_net_eth_connected(); }
 static int u_eth_poll(uint8_t *b, int m)          { return box_net_eth_poll(b, m); }
+static int u_eth_poll2(uint8_t *b, int m, int *len, uint64_t *arr)
+{
+	return box_net_eth_poll2(b, m, len, arr);
+}
 static int u_eth_send(const uint8_t *b, int l)    { return box_net_eth_send(b, l); }
 static int u_eth_send_stream(const uint8_t *b, int l) { return box_net_eth_send_stream(b, l); }
 /* ---- %reg / %match self-registration (Ethernet only) ----
@@ -295,6 +299,7 @@ static const box_uplink_if uplink_eth = {
 	.connect = u_eth_connect, .connected = u_eth_connected,
 	.poll = u_eth_poll, .send = u_eth_send, .send_stream = u_eth_send_stream,
 	.self_register = u_eth_register,
+	.poll2 = u_eth_poll2,        /* +29: reader-thread frames with stamps */
 };
 #endif /* CONFIG_NETWORKING */
 
@@ -475,6 +480,30 @@ int box_uplink_poll(uint8_t *buf, int max)
 
 	k_mutex_unlock(&uplink_lock);
 	return r;
+}
+
+int box_uplink_poll2(uint8_t *buf, int max, int *len, uint64_t *arr_us)
+{
+	int kind = BOX_UPLINK_RX_NONE;
+
+	*len = 0;
+	*arr_us = 0;
+	k_mutex_lock(&uplink_lock, K_FOREVER);
+	if (active && active->poll2) {
+		kind = active->poll2(buf, max, len, arr_us);
+	} else if (active) {
+		/* Legacy transport (USB CDC): adapt the byte-run contract. */
+		int n = active->poll(buf, max);
+
+		if (n == BOX_NET_RESET) {
+			kind = BOX_UPLINK_RX_RESET;
+		} else if (n > 0) {
+			kind = BOX_UPLINK_RX_BYTES;
+			*len = n;
+		}
+	}
+	k_mutex_unlock(&uplink_lock);
+	return kind;
 }
 
 int box_uplink_send(const uint8_t *buf, int len)

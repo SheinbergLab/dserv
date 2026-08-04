@@ -3,6 +3,9 @@
  */
 #include "box_net_eth.h"
 #include "box_event.h"
+#include "box_gpio.h"                   /* box_gpio_now_us: arrival stamps (+29) */
+#include "box_uplink.h"                 /* BOX_UPLINK_RX_* kinds (+29)           */
+#include "box_fast.h"                   /* the schedule fast path (+29)          */
 #include "dserv_msg.h"                  /* DSERV_MSG_LEN: the wire record size */
 
 #include <zephyr/kernel.h>
@@ -42,39 +45,27 @@ static int srv_listen = -1;     /* listening socket (BOX_ETH_CFG_PORT)          
 static volatile int srv_conn = -1;   /* dserv's accepted connect-back           */
 static int srv_fresh;           /* one-shot: report BOX_NET_RESET after accept  */
 /* ---- inbound instrumentation ----
- * With the stack in ITCM the OUTBOUND cost collapsed (275 -> 61 us) and the
- * remaining loopback time is the command leg. These split the box's share of it:
- *   wake_us  RX thread saw the socket readable -> service loop reached recv
- *   recv_us  cost of the zsock_recv that returned the frame
- * If both are small, the time is spent BEFORE the socket became readable --
- * dserv's send path, transit, or the box's net RX thread -- and not in our loop.
- *
- * ONE-SHOT CONSUME, learned the hard way. The first version computed wake_us on
- * EVERY recv against whatever rx_signal_cyc happened to hold, with a <1 s guard
- * as the only sanity check. Two ways that lies:
- *   - the second frame of a burst recv'd while the RX thread naps its 1 ms
- *     charges the whole inter-frame gap to "wake";
- *   - with the RX thread DEAD, an ancient stamp aliases through the 28.6 s
- *     cycle wrap and lands under the guard, so dbg/wake_us showed plausible
- *     garbage precisely when it needed to scream. That garbage cost real
- *     diagnosis time on 2026-08-01 (box02, 2/4 boots).
- * Now every signal carries a sequence number and each recv consumes it at most
- * once: a recv with no fresh signal since the last consume records nothing,
- * and a 1 Hz stats window with no consumed wake reports UINT32_MAX so the
- * datapoint reads -1 -- "no wake happened", loudly distinct from "wake was
- * fast". */
-static volatile uint32_t rx_signal_cyc;
-static volatile uint32_t rx_signal_seq;      /* bumped by the RX thread per signal */
-static uint32_t rx_seq_seen;                 /* service loop: last seq consumed    */
-static uint32_t wake_window;                 /* wakes consumed since last stats read */
+ * The split changed meaning at +29, when the reader thread took over recv:
+ *   wake_us  queue residence -- frame enqueued at arrival -> service loop
+ *            popped it (ordinary frames only; the schedule classes are
+ *            handled AT arrival and never ride the queue)
+ *   recv_us  cost of the reader's zsock_recv that returned the bytes
+ * wake_us is exactly the latency the fast path removed from arming: watch it
+ * grow with fat service passes while at/at_abs stay unaffected. The 1 Hz
+ * stats window with no pops reports UINT32_MAX (-1 on the wire) -- "nothing
+ * queued", distinct from "queue was fast". (The pre-29 signal/sequence
+ * machinery this replaced lived and died by the same distinction; see git
+ * for its story.) */
+static uint32_t wake_window;                 /* pops since last stats read */
 static uint32_t wake_last_us, wake_max_us;
 static uint32_t recv_last_us, recv_max_us;
 
 void box_net_eth_rx_stats(uint32_t *wake_us, uint32_t *wake_max,
 			  uint32_t *recv_us, uint32_t *recv_max)
 {
-	/* Caller (the 1 Hz status block) and the consumer (box_net_eth_poll) are
-	 * the same thread, so read-then-clear needs no lock. */
+	/* Caller (the 1 Hz status block) and the consumer (box_net_eth_poll2) are
+	 * the same thread, so read-then-clear needs no lock. recv_* is written on
+	 * the reader thread now: a torn read of a diagnostic uint32 is harmless. */
 	if (wake_us)   *wake_us   = wake_window ? wake_last_us : UINT32_MAX;
 	wake_window = 0;
 	if (wake_max)  *wake_max  = wake_max_us;
@@ -394,8 +385,8 @@ int box_net_eth_server_up(void)
  * dbg/ethrx_age_ms / dbg/ethrx_respawns / dbg/ethrx_stack_free are the 1 Hz
  * proof of which layer is doing work; the stack number is there so the next
  * "raise it" has a measurement instead of a guess. */
-static K_THREAD_STACK_DEFINE(eth_rx_stack, 2048);
-static K_THREAD_STACK_DEFINE(eth_rx_stack2, 2048);   /* the spare's own stack --
+static K_THREAD_STACK_DEFINE(eth_rx_stack, 3072);
+static K_THREAD_STACK_DEFINE(eth_rx_stack2, 3072);   /* the spare's own stack --
 					* the wedged thread's stack stays its
 					* grave and is never reused */
 static struct k_thread eth_rx_thread, eth_rx_thread2;
@@ -408,9 +399,69 @@ static uint32_t rx_wd_last_beat;
 static int64_t  rx_wd_last_change;
 static uint8_t  rx_wd_gave_up;
 
+/* ---- +29: this thread is a READER now, not a doorbell. ----
+ *
+ * Until +28 the config link was drained by the SERVICE LOOP: this thread only
+ * poked it awake. That put every inbound command behind whatever pass the
+ * loop happened to be in -- measured as a suspiciously constant ~3.7 ms
+ * loop_max_us -- and a 2 ms-spaced `at` burst landing inside such a pass was
+ * armed after its first targets had already passed: past-due slots fire
+ * ASAP back-to-back and two pulses merge into one. The soaks put that at a
+ * few percent of sessions, with the sched ledger reading acc==fired and
+ * NOTHING dropped anywhere: pure processing latency, which no RX-buffer
+ * geometry could touch (+28 killed the MAC-ring underrun class; this is the
+ * other half).
+ *
+ * Now the frames are received HERE, at priority 2 -- the +28 lattice seat:
+ * arrival is creation-adjacent, below the sampling path, above service --
+ * stamped on recv, framed locally, and offered to box_main_fast_frame(),
+ * which arms the schedule classes (at / at_abs / the obs epoch) inline,
+ * microseconds after the wire. Everything else is queued, stamp attached,
+ * for the service loop to dispatch exactly as before. Arming latency is now
+ * independent of the loop's pass length by construction.
+ *
+ * Ownership moves with the work: THIS thread is the only reader of srv_conn
+ * and the only setter of srv_doom (recv EOF/hard-error dooms; the reap was
+ * already here) -- the close-under-poll hazard shrinks to one thread. */
+typedef struct {
+	uint64_t arr_us;
+	uint8_t  f[DSERV_MSG_LEN];
+} eth_inq_item_t;
+K_MSGQ_DEFINE(eth_inq, sizeof(eth_inq_item_t), 64, 8);
+static uint32_t inq_drop;            /* full-queue drops (dbg/ethin_q_drop) */
+static uint32_t inq_max;             /* depth watermark  (dbg/ethin_q_max)  */
+static dserv_framer_t reader_framer;
+static uint64_t reader_arr_us;       /* stamp for the frames of one recv    */
+
+static void reader_on_frame(const uint8_t *frame, void *ud)
+{
+	ARG_UNUSED(ud);
+	if (box_main_fast_frame(frame, reader_arr_us)) {
+		return;                        /* consumed at arrival */
+	}
+	eth_inq_item_t it;
+
+	it.arr_us = reader_arr_us;
+	memcpy(it.f, frame, DSERV_MSG_LEN);
+	if (k_msgq_put(&eth_inq, &it, K_NO_WAIT) != 0) {
+		/* 64 deep and the loop still hasn't drained: count it loudly.
+		 * These are HOST COMMANDS; a nonzero counter is a real loss. */
+		inq_drop++;
+	} else {
+		uint32_t u = (uint32_t) k_msgq_num_used_get(&eth_inq);
+
+		if (u > inq_max) {
+			inq_max = u;
+		}
+	}
+	box_event_signal();
+}
+
 static void eth_rx_thread_fn(void *a, void *b, void *c)
 {
 	ARG_UNUSED(a); ARG_UNUSED(b); ARG_UNUSED(c);
+	int last_fd = -1;
+
 	for (;;) {
 		rx_beat++;
 		/* Reap first: a doomed fd must never be polled again, and closing
@@ -425,27 +476,55 @@ static void eth_rx_thread_fn(void *a, void *b, void *c)
 			k_msleep(20);            /* nothing to watch yet */
 			continue;
 		}
+		if (fd != last_fd) {
+			/* new session: never carry a half frame across sockets */
+			dserv_framer_reset(&reader_framer);
+			last_fd = fd;
+		}
 		struct zsock_pollfd pfd = { .fd = fd, .events = ZSOCK_POLLIN };
 		/* Bounded wait so a socket swap (reconnect) is picked up promptly.
 		 * The bound is also what makes rx_beat a real liveness signal. */
-		if (zsock_poll(&pfd, 1, 200) > 0) {
-			rx_signal_cyc = k_cycle_get_32();
-			rx_signal_seq++;         /* publish-after-stamp: consumer gates on seq */
-			box_event_signal();
-			/* The loop drains it. Yield so we re-poll after that has happened
-			 * rather than spinning on a still-readable socket. */
-			k_msleep(1);
+		if (zsock_poll(&pfd, 1, 200) <= 0) {
+			continue;
+		}
+		for (;;) {
+			uint8_t rb[512];
+			uint32_t r0 = k_cycle_get_32();
+			int n = zsock_recv(fd, rb, sizeof rb, ZSOCK_MSG_DONTWAIT);
+
+			if (n > 0) {
+				uint32_t d = k_cyc_to_us_floor32(k_cycle_get_32() - r0);
+
+				recv_last_us = d;
+				if (d > recv_max_us) {
+					recv_max_us = d;
+				}
+				reader_arr_us = box_gpio_now_us();
+				dserv_framer_feed(&reader_framer, rb, (uint32_t) n,
+						  reader_on_frame, NULL);
+				continue;        /* drain until EAGAIN */
+			}
+			if (n == 0 ||
+			    (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
+				/* dserv closed (or RST) the config link. DOOM it --
+				 * the reap above closes it between OUR OWN polls,
+				 * same single-owner discipline as before, now with
+				 * both the setter and the reaper on this thread. */
+				atomic_set(&srv_doom, 1);
+			}
+			break;
 		}
 	}
 }
 
-/* Priority 8: below the service loop -- this only needs to make the loop
- * runnable, not to run before it (unchanged from the original design). */
+/* Priority 2 (+29): the arrival seat. Was 8 when this thread only rang the
+ * doorbell; a reader that ARMs schedules must preempt the service loop, or
+ * the fast path would wait behind exactly the pass it exists to bypass. */
 static void rx_wake_spawn(struct k_thread *t, k_thread_stack_t *stk,
 			  size_t sz, const char *name)
 {
 	k_thread_create(t, stk, sz, eth_rx_thread_fn, NULL, NULL, NULL,
-			8, 0, K_NO_WAIT);
+			2, 0, K_NO_WAIT);
 	k_thread_name_set(t, name);
 }
 
@@ -531,8 +610,10 @@ void box_net_eth_rx_health(uint32_t *age_ms, uint32_t *respawns, uint32_t *stack
 	}
 }
 
-int box_net_eth_poll(uint8_t *buf, int max)
+int box_net_eth_poll2(uint8_t *buf, int max, int *len, uint64_t *arr_us)
 {
+	*len = 0;
+	*arr_us = 0;
 	/* A fresh connect-back means dserv is listening NOW: reset the framer and
 	 * let main() describe the box. This is the Ethernet analogue of USB's
 	 * "host opened the pipe" and is deliberately reported on CONNECT.
@@ -541,103 +622,76 @@ int box_net_eth_poll(uint8_t *buf, int max)
 	 * published its manifest at all.) */
 	if (srv_fresh) {
 		srv_fresh = 0;
-		return BOX_NET_RESET;
+		return BOX_UPLINK_RX_RESET;
 	}
 
-	/* ONE poll covers both sockets, and in the common case (nothing pending) that
-	 * is the ONLY syscall this function makes.
-	 *
-	 * Two sockets have to be watched for different reasons: the config link
-	 * carries dserv's pushes, and the client socket carries nothing inbound but
-	 * still needs EOF detection -- box_net_eth_connected() only knows "sock >= 0",
-	 * so without it a dserv restart parks the client socket in CLOSE_WAIT forever,
-	 * the arbiter never reconnects, and the box goes silently write-only (the
-	 * very failure this file exists to fix, reached from the other direction).
-	 *
-	 * Doing that as two separate non-blocking recv()s costs an extra syscall on
-	 * EVERY service-loop pass, and it is not free: measured at ~70-90 us of added
-	 * DI delivery latency with the FLOOR moving too (systematic, not jitter). The
-	 * service loop is this box's scarcest resource -- it is what gates how fast an
-	 * edge reaches dserv -- so per-pass work in here is worth real care. */
-	struct zsock_pollfd pf[2];
-	int nfd = 0, ci = -1, si = -1;
-	/* A doomed connect-back is the RX-wake thread's to close; from here it is
-	 * already gone -- never polled, never recv'd. The doom flag only ever
-	 * goes 0 -> 1 on THIS thread (below), so it cannot flip mid-pass. */
-	int srv_live = (srv_conn >= 0 && atomic_get(&srv_doom) == 0);
+	/* +29: inbound frames come from the reader thread's queue -- receive,
+	 * framing, arrival stamping and the schedule fast path all happened at
+	 * priority 2 the moment the bytes landed. What is left here is delivery
+	 * of the ordinary frames to the dispatch path, plus the one job the
+	 * reader cannot do: EOF detection on the CLIENT socket (it carries
+	 * nothing inbound, but a dserv restart parks it in CLOSE_WAIT forever
+	 * and the arbiter would never reconnect -- the box goes silently
+	 * write-only, the very failure this file exists to fix). */
+	eth_inq_item_t it;
 
-	if (sock >= 0) { ci = nfd; pf[nfd].fd = sock;     pf[nfd].events = ZSOCK_POLLIN; nfd++; }
-	if (srv_live)  { si = nfd; pf[nfd].fd = srv_conn; pf[nfd].events = ZSOCK_POLLIN; nfd++; }
-	if (nfd == 0 || zsock_poll(pf, nfd, 0) <= 0) {
-		return 0;
-	}
+	if (max >= (int) DSERV_MSG_LEN &&
+	    k_msgq_get(&eth_inq, &it, K_NO_WAIT) == 0) {
+		memcpy(buf, it.f, DSERV_MSG_LEN);
+		*len = (int) DSERV_MSG_LEN;
+		*arr_us = it.arr_us;
+		/* dbg/wake_us, reinterpreted (+29): queue residence time --
+		 * enqueue at arrival to pop here. Small when the loop is
+		 * keeping up; grows with exactly the pass length that used to
+		 * delay ARMING. The schedule classes no longer ride it. */
+		uint64_t now = box_gpio_now_us();
 
-	/* Client socket: readable or hung up can only mean EOF -- dserv never sends
-	 * anything down this direction, so there is no data case to handle. */
-	if (ci >= 0 && (pf[ci].revents & (ZSOCK_POLLIN | ZSOCK_POLLHUP | ZSOCK_POLLERR))) {
-		zsock_close(sock);
-		sock = -1;
-		connecting = 0;
-	}
+		if (it.arr_us && now > it.arr_us) {
+			uint32_t w = (uint32_t) (now - it.arr_us);
 
-	if (si >= 0 && (pf[si].revents & (ZSOCK_POLLIN | ZSOCK_POLLHUP | ZSOCK_POLLERR))) {
-		if (max <= 0) {
-			return 0;
-		}
-		uint32_t r0 = k_cycle_get_32();
-		int n = zsock_recv(srv_conn, buf, (size_t) max, ZSOCK_MSG_DONTWAIT);
-		if (n > 0) {
-			uint32_t d = k_cyc_to_us_floor32(k_cycle_get_32() - r0);
-			recv_last_us = d;
-			if (d > recv_max_us) recv_max_us = d;
-
-			/* wake accounting: consume the RX thread's signal AT MOST
-			 * ONCE (see the instrumentation comment up top), and only
-			 * accept it as a MEASUREMENT if this recv followed it
-			 * within the loop's reaction envelope.
-			 *
-			 * The band was 1 s ("cycle-wrap trim") and that was still
-			 * too loose, found on the v0.4.0+13 trial boot: when this
-			 * loop happens to be awake and drains a frame BEFORE the
-			 * prio-8 wake thread runs, the wake thread's k_poll still
-			 * returns the by-then-stale data-available state and
-			 * stamps AFTER the drain -- so the stamp pairs with the
-			 * NEXT frame's recv and dbg/wake_us reads as the
-			 * inter-command gap (85/296/363 ms observed, tracking the
-			 * sender's spacing exactly) on a perfectly healthy box.
-			 * 10 ms accepts every real wake (signal -> recv is us;
-			 * even the 1 ms-timeout fallback plus a fat pass is low
-			 * single-digit ms, loop_max_us ~3 ms worst observed) and
-			 * rejects every phase artifact, which is gap-sized. A
-			 * rejected sample still consumes the seq, so it cannot
-			 * resurface later -- the window then honestly reads -1,
-			 * "no wake MEASURED", with dbg/ethrx_age_ms carrying the
-			 * alive-or-dead verdict. */
-			uint32_t seq = rx_signal_seq;
-			if (seq != rx_seq_seen) {
-				rx_seq_seen = seq;
-				uint32_t w = k_cyc_to_us_floor32(r0 - rx_signal_cyc);
-				if (w < 10000) {
-					wake_last_us = w;
-					if (w > wake_max_us) wake_max_us = w;
-					wake_window++;
-				}
+			wake_last_us = w;
+			if (w > wake_max_us) {
+				wake_max_us = w;
 			}
-			return n;
+			wake_window++;
 		}
-		if (n == 0 ||
-		    (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
-			/* dserv closed the config link (or RST it -- the n<0 hard
-			 * errors used to fall through and leave the dead fd open
-			 * FOREVER: server_up() stayed true, the watchdog never
-			 * re-registered, and the box was deaf until reboot).
-			 * DOOM it, do not close it: the close belongs to the
-			 * RX-wake thread that may be inside zsock_poll on this
-			 * very fd -- closing under it is how fd-slot recycling
-			 * wedged that thread (see the RX-wake section). */
-			atomic_set(&srv_doom, 1);
-			return BOX_NET_RESET;        /* framer reset; the burst is a no-op */
+		return BOX_UPLINK_RX_FRAME;
+	}
+
+	if (sock >= 0) {
+		struct zsock_pollfd pf = { .fd = sock, .events = ZSOCK_POLLIN };
+
+		if (zsock_poll(&pf, 1, 0) > 0 &&
+		    (pf.revents & (ZSOCK_POLLIN | ZSOCK_POLLHUP | ZSOCK_POLLERR))) {
+			/* readable or hung up can only mean EOF: dserv never
+			 * sends anything down the client socket */
+			zsock_close(sock);
+			sock = -1;
+			connecting = 0;
 		}
+	}
+	return BOX_UPLINK_RX_NONE;
+}
+
+void box_net_eth_inq_stats(uint32_t *drop, uint32_t *max_depth)
+{
+	if (drop) {
+		*drop = inq_drop;
+	}
+	if (max_depth) {
+		*max_depth = inq_max;
+	}
+}
+
+/* Legacy byte-run poll: dead on Ethernet since +29 (the service loop uses
+ * poll2; frames never surface as raw bytes here). Kept because the uplink
+ * vtable requires .poll and honesty requires it not to invent data. */
+int box_net_eth_poll(uint8_t *buf, int max)
+{
+	ARG_UNUSED(buf); ARG_UNUSED(max);
+	if (srv_fresh) {
+		srv_fresh = 0;
+		return BOX_NET_RESET;
 	}
 	return 0;
 }

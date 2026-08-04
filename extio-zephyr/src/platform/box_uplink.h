@@ -21,6 +21,16 @@
 #define BOX_NET_RESET (-1)
 #endif
 
+/* What box_uplink_poll2 delivered (+29). BYTES is the historical contract
+ * (a raw run for the caller's framer -- USB CDC); FRAME is one complete
+ * 128-byte frame that the eth reader thread already received, stamped, and
+ * fast-path-screened -- the caller dispatches it directly and must NOT
+ * re-run the fast path or re-count it. */
+#define BOX_UPLINK_RX_NONE   0
+#define BOX_UPLINK_RX_RESET  1     /* transport (re)opened: reset framer, announce */
+#define BOX_UPLINK_RX_BYTES  2     /* raw byte run in buf, *len set               */
+#define BOX_UPLINK_RX_FRAME  3     /* one DSERV_MSG_LEN frame in buf, *arr_us set */
+
 /* One uplink transport's operations. Each wraps a box_net_* backend. */
 typedef struct {
 	const char *name;
@@ -32,6 +42,9 @@ typedef struct {
 	int (*send)(const uint8_t *buf, int len);    /* one 128-byte frame out       */
 	int (*send_stream)(const uint8_t *buf, int len); /* k*128 gathered; bytes taken */
 	int (*self_register)(const box_config_t *cfg); /* announce to dserv on connect */
+	/* Optional (+29): kind-based inbound for transports with a reader thread.
+	 * Absent -> box_uplink_poll2 adapts the legacy poll. */
+	int (*poll2)(uint8_t *buf, int max, int *len, uint64_t *arr_us);
 } box_uplink_if;
 
 /* Init every transport and select+connect the initial active uplink. 0 ok. */
@@ -43,6 +56,11 @@ void box_uplink_service(const box_config_t *cfg);
 
 /* Inbound bytes from the active uplink (BOX_NET_RESET on a fresh session). */
 int box_uplink_poll(uint8_t *buf, int max);
+
+/* Kind-based inbound (+29): returns a BOX_UPLINK_RX_* kind. BYTES fills buf
+ * and *len; FRAME fills buf with one whole frame and *arr_us with its
+ * arrival stamp (0 = transport could not stamp). */
+int box_uplink_poll2(uint8_t *buf, int max, int *len, uint64_t *arr_us);
 
 /* Send one frame out the active uplink; 0 ok, <0 if none active / send failed. */
 int box_uplink_send(const uint8_t *buf, int len);

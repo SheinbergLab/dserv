@@ -24,6 +24,7 @@
 #include "box_sched.h"
 #include "box_group.h"
 #include "box_clock.h"
+#include "box_fast.h"
 #include "box_announce.h"
 #include "box_boot.h"
 #if defined(BOX_HAVE_ADC)
@@ -484,17 +485,9 @@ static void ota_pub_done(void)
 
 #if defined(CONFIG_PTP_CLOCK)
 
-static uint64_t dserv_to_box_us(const box_clock_t *c, uint64_t dserv_us)
-{
-	int64_t box = (int64_t) dserv_us - c->offset_us;
-
-	for (int i = 0; i < 2; i++) {
-		int64_t dt   = box - (int64_t) c->anchor_box_us;
-		int64_t corr = (dt * (int64_t) c->rate_ppb) / 1000000000LL;
-		box = (int64_t) dserv_us - c->offset_us - corr;
-	}
-	return (uint64_t) box;
-}
+/* dserv_to_box_us lived here; it is box_clock_unstamp (core/box_clock.h) now,
+ * seqlock-guarded because +29 moved its callers onto the reader thread while
+ * anchors keep landing elsewhere. */
 
 static void abs_fire(struct k_timer *t)
 {
@@ -807,31 +800,43 @@ static void sched_refuse_reply(const char *why)
 	box_pub_event(f);
 }
 
-static void on_usb_frame(const uint8_t *frame, void *ud)
+/* ---- +29: the inbound schedule fast path (box_fast.h) ----
+ *
+ * Everything an `at` needs to arm correctly is decided in the microseconds
+ * after its frame leaves the wire, so that is where it now runs: the eth
+ * reader thread (priority 2) calls box_main_fast_frame() per received frame
+ * and these handlers arm at ARRIVAL. Before this, arming waited on the
+ * service loop -- whose passes measure up to ~3.7 ms -- and a 2 ms-spaced
+ * burst landing inside a pass had its first targets already in the past:
+ * fire-ASAP merged adjacent pulses with nothing dropped anywhere (the
+ * soak's events signature, a few percent of sessions). The USB path calls
+ * the same handlers from the service loop with arr_us = processing time --
+ * the historical behaviour, byte-identical.
+ *
+ * The late split makes the ledger honest about WHOSE fault a late arm is:
+ *   sched/late_arr   the frame ARRIVED after its target (host/network late)
+ *   sched/late_proc  arrived in time, armed late (the pre-29 conflation;
+ *                    pinned ~0 on eth by construction -- its return is the
+ *                    regression canary)
+ * Both still arm and fire ASAP: the ladder counts edges, and a late pulse
+ * beats a silently missing one (the gates grade the lateness). */
+static uint32_t sched_late_arr, sched_late_proc;
+
+static void sched_count_late(uint64_t target, uint64_t now, uint64_t arr_us)
 {
-	ARG_UNUSED(ud);
-	dserv_msg_t m;
-	if (dserv_msg_parse(frame, &m) != 0) {
+	if (target > now) {
 		return;
 	}
-	cmds_rx++;
+	if (arr_us && arr_us <= target) {
+		sched_late_proc++;
+	} else {
+		sched_late_arr++;
+	}
+}
 
-	char leafbuf[112];
-	const char *leaf = frame_leaf(&m, leafbuf, sizeof leafbuf);
-
+static int fast_msg(const dserv_msg_t *m, const char *leaf, uint64_t arr_us)
+{
 #if defined(CONFIG_PTP_CLOCK)
-	/* <prefix>/cmd/ptp/offset <us> -- the host's PHC->dserv constant.
-	 *
-	 * Handled HERE rather than in dserv_cfg__cmd() because src/core/ is shared
-	 * verbatim with the Pico and this is Zephyr/PTP-only. Same precedent as
-	 * ess/in_obs below, which is also intercepted before dispatch.
-	 *
-	 * Anchoring is gated on !in_obs for the reason PORTING.md records: a
-	 * re-anchor STEPS the offset, and applying that inside a data-collection
-	 * window puts two events of one trial on different mappings. With PTP the
-	 * step is sub-us rather than the hundreds of us an obs anchor moves, but
-	 * the rule is about correctness, not magnitude.
-	 */
 	/* <prefix>/cmd/do/<pin>/at_abs <dserv_us> -- fire at an ABSOLUTE instant. */
 	{
 		int pin2, pos = -1;
@@ -843,7 +848,7 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 		    sscanf(leaf, "cmd/do/%d/at_abs%n", &pin2, &pos) == 1 &&
 		    pos > 0 && leaf[pos] == '\0' &&
 		    pin2 >= 0 && pin2 < BOX_NPINS) {
-			uint64_t T   = (uint64_t) dserv_msg_as_ll(&m);
+			uint64_t T   = (uint64_t) dserv_msg_as_ll(m);
 			uint64_t now = box_gpio_now_us();
 			uint8_t  f3[DSERV_MSG_LEN];
 			char     nm3[80];
@@ -855,16 +860,17 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 				dserv_state_name(&cfg, nm3, sizeof nm3, "sched/abs_err");
 				dserv_msg_string(f3, nm3, 0, "unsynced");
 				box_pub_event(f3);
-				return;
+				return 1;
 			}
 
-			uint64_t target_box = dserv_to_box_us(&boxclk, T);
+			uint64_t target_box = box_clock_unstamp(&boxclk, T);
 			int64_t  lead_us    = (int64_t) target_box - (int64_t) now;
 
 			/* NEVER fire late. A box that silently fires milliseconds after T
 			 * is far worse than one that says it missed -- the whole value of
 			 * time-triggering is that every node agrees on the instant. */
 			if (lead_us <= 0) {
+				sched_count_late(target_box, now, arr_us);
 				dserv_state_name(&cfg, nm3, sizeof nm3, "sched/abs_late_us");
 				dserv_msg_int64(f3, nm3, 0, -lead_us);
 				box_pub_event(f3);
@@ -874,7 +880,7 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 				if (sched_dbg) {
 					sched_dbg_publish(T, now, target_box, lead_us);
 				}
-				return;
+				return 1;
 			}
 
 			abs_target_us[pin2] = T;
@@ -893,9 +899,210 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 			if (sched_dbg) {
 				sched_dbg_publish(T, now, target_box, lead_us);
 			}
+			return 1;
+		}
+	}
+#endif /* CONFIG_PTP_CLOCK */
+
+	/* <prefix>/cmd/do/<n>/at and <prefix>/cmd/timer/<t>/at -- obs-relative
+	 * schedules. These used to ride dserv_dispatch on the service loop; the
+	 * interception here mirrors dispatch's semantics exactly (same width
+	 * default, same refusals, same +23 ledger) and simply happens at
+	 * arrival. The %n guard keeps "at" from matching "at_abs" -- and the
+	 * at_abs block above runs FIRST anyway. */
+	{
+		int pin3, pos = -1;
+
+		if (leaf &&
+		    sscanf(leaf, "cmd/do/%d/at%n", &pin3, &pos) == 1 &&
+		    pos > 0 && leaf[pos] == '\0' &&
+		    pin3 >= 0 && pin3 < BOX_NPINS) {
+			if (obs_begin_us == 0) {
+				box_console_printf("sched: no beginobs yet, ignoring\n");
+				sched_refuse_reply("no_beginobs");
+				return 1;
+			}
+			uint64_t delta  = (uint64_t) dserv_msg_as_ll(m);
+			uint64_t target = obs_begin_us + delta;
+			uint32_t w = cfg.do_pulse_us[pin3] ? cfg.do_pulse_us[pin3] : 1000;
+
+			sched_count_late(target, box_gpio_now_us(), arr_us);
+			if (box_sched_arm(&cfg, (uint8_t) pin3, (uint8_t) pin3, w,
+					  target) != 0) {
+				box_console_printf("sched: table full\n");
+				sched_refuse_reply("table_full");
+			} else {
+				sched_acc++;
+			}
+			return 1;
+		}
+	}
+	{
+		int tid, pos = -1;
+
+		if (leaf &&
+		    sscanf(leaf, "cmd/timer/%d/at%n", &tid, &pos) == 1 &&
+		    pos > 0 && leaf[pos] == '\0' &&
+		    tid >= 0 && tid <= 255) {
+			if (obs_begin_us == 0) {
+				box_console_printf("sched: no beginobs yet, ignoring\n");
+				sched_refuse_reply("no_beginobs");
+				return 1;
+			}
+			uint64_t target = obs_begin_us + (uint64_t) dserv_msg_as_ll(m);
+
+			sched_count_late(target, box_gpio_now_us(), arr_us);
+			if (box_sched_arm(&cfg, BOX_SCHED_NOTIFY_ONLY, (uint8_t) tid, 0,
+					  target) != 0) {
+				box_console_printf("sched: table full\n");
+				sched_refuse_reply("table_full");
+			} else {
+				sched_acc++;
+			}
+			return 1;
+		}
+	}
+
+	/* ess/in_obs -- the obs epoch every `at` above anchors on, so it MUST be
+	 * handled on the same path at the same priority: a beginobs queued
+	 * behind a fat pass while its at-burst fast-pathed ahead would arm
+	 * against the PREVIOUS epoch. Moved here verbatim from the dispatch
+	 * path; the one improvement is the sw-anchor using the true arrival
+	 * stamp instead of processing time. */
+	if (dserv_msg_name_eq(m, BOX_SYNC_DP)) {
+		int obs = (int) dserv_msg_as_long(m);
+		uint64_t now_box = box_gpio_now_us();
+
+		/* ANCHOR. Prefer the IRQ-latched TTL edge (jitter ~us) over frame
+		 * arrival (100s of us of transport jitter): a hardware anchor takes
+		 * the transport out of the error budget entirely, and only trusted
+		 * (hw) anchors are allowed to teach the crystal rate. */
+		uint64_t anchor_box = arr_us ? arr_us : now_box;
+		int hw = 0;
+
+		if (sync_input_enabled(&cfg)) {
+			uint64_t e = box_gpio_sync_edge_us(obs);   /* rising for obs=1 */
+
+			if (e && now_box - e < SYNC_EDGE_WINDOW_US) {
+				anchor_box = e;
+				hw = 1;
+			}
+		}
+		/* +25: a PTP-held clock is never demoted by frame arrival. A
+		 * hardware TTL edge still outranks everything (it also directly
+		 * measures the obs instant); otherwise, while PTP holds, keep
+		 * the disciplined clock untouched and derive the obs epoch from
+		 * the frame's DSERV timestamp mapped through it -- transport
+		 * leaves the at-epoch error budget entirely. */
+		int ptp_held = 0;
+#if defined(CONFIG_PTP_CLOCK)
+		ptp_held = clock_ptp_held && !hw;
+#endif
+		if (!ptp_held) {
+			box_clock_sync(&boxclk, m->timestamp, anchor_box, hw);
+			if (hw) {
+				clock_ptp_held = 0;   /* hw anchors own the clock now */
+			}
+		}
+		box_obs_set(obs);            /* keep the LEVEL, not just the edge */
+		if (obs) {
+#if defined(CONFIG_PTP_CLOCK)
+			obs_begin_us = ptp_held
+				? box_clock_unstamp(&boxclk, m->timestamp)
+				: anchor_box;
+#else
+			obs_begin_us = anchor_box;   /* epoch for box-scheduled events */
+#endif
+		}
+
+		/* drive the obs-mirror output (LED / scope trace) */
+		box_gpio_obs_mirror(&cfg, obs);
+
+		/* publish the box's OWN live copy, so obs state is visible per-box in
+		 * dserv without a scope -- honest, since it only updates when THIS box
+		 * actually received the edge. */
+		uint8_t of[DSERV_MSG_LEN];
+		char onm[80];
+		dserv_state_name(&cfg, onm, sizeof onm, "in_obs");
+		dserv_msg_int(of, onm, m->timestamp, obs);
+		box_pub_event(of);
+
+		if (ptp_held) {
+			/* no anchor happened; re-affirm the held source so the
+			 * fleet viewer shows the truth at each obs boundary */
+			uint8_t sf[DSERV_MSG_LEN];
+			char snm[80];
+
+			dserv_state_name(&cfg, snm, sizeof snm, "sync/source");
+			dserv_msg_string(sf, snm, 0, "ptp");
+			box_pub_event(sf);
+			dserv_state_name(&cfg, snm, sizeof snm, "sync/offset_us");
+			dserv_msg_int64(sf, snm, 0, boxclk.offset_us);
+			box_pub_event(sf);
+		} else {
+			publish_sync(m->timestamp, anchor_box, boxclk.offset_us, hw,
+				     hw ? (int64_t)(now_box - anchor_box) : -1);
+		}
+		return 1;
+	}
+
+	return 0;
+}
+
+int box_main_fast_frame(const uint8_t *frame, uint64_t arr_us)
+{
+	dserv_msg_t m;
+
+	if (dserv_msg_parse(frame, &m) != 0) {
+		return 1;                     /* malformed: consume (drop) */
+	}
+	cmds_rx++;
+
+	char leafbuf[112];
+	const char *leaf = frame_leaf(&m, leafbuf, sizeof leafbuf);
+
+	return fast_msg(&m, leaf, arr_us);
+}
+
+/* Set around the dispatch of a frame the eth reader already screened and
+ * counted (BOX_UPLINK_RX_FRAME): on_usb_frame must not count or fast-check
+ * it again. Service-loop-only state. */
+static int frames_prechecked;
+
+static void on_usb_frame(const uint8_t *frame, void *ud)
+{
+	ARG_UNUSED(ud);
+	dserv_msg_t m;
+	if (dserv_msg_parse(frame, &m) != 0) {
+		return;
+	}
+
+	char leafbuf[112];
+	const char *leaf = frame_leaf(&m, leafbuf, sizeof leafbuf);
+
+	if (!frames_prechecked) {
+		cmds_rx++;
+		/* USB (and any transport without a reader): same fast handlers,
+		 * service-loop context, arrival == processing time -- the
+		 * historical behaviour, now with the ledger split recording it. */
+		if (fast_msg(&m, leaf, box_gpio_now_us())) {
 			return;
 		}
 	}
+
+#if defined(CONFIG_PTP_CLOCK)
+	/* <prefix>/cmd/ptp/offset <us> -- the host's PHC->dserv constant.
+	 *
+	 * Handled HERE rather than in dserv_cfg__cmd() because src/core/ is shared
+	 * verbatim with the Pico and this is Zephyr/PTP-only. Same precedent as
+	 * ess/in_obs (now in fast_msg), which is also intercepted before dispatch.
+	 *
+	 * Anchoring is gated on !in_obs for the reason PORTING.md records: a
+	 * re-anchor STEPS the offset, and applying that inside a data-collection
+	 * window puts two events of one trial on different mappings. With PTP the
+	 * step is sub-us rather than the hundreds of us an obs anchor moves, but
+	 * the rule is about correctness, not magnitude.
+	 */
 
 	/* <prefix>/cmd/sched/debug 0|1 -- arm the at_abs diagnostics. Runtime, not
 	 * persisted: turn it on against a live box, read sched/dbg_*, turn it off.
@@ -1539,114 +1746,15 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 	}
 #endif /* BOX_HAVE_OTA_SLOT */
 
-	if (dserv_msg_name_eq(&m, BOX_SYNC_DP)) {
-		int obs = (int) dserv_msg_as_long(&m);
-		uint64_t now_box = box_gpio_now_us();
-
-		/* ANCHOR. Prefer the IRQ-latched TTL edge (jitter ~us) over frame
-		 * arrival (100s of us of transport jitter): a hardware anchor takes
-		 * the transport out of the error budget entirely, and only trusted
-		 * (hw) anchors are allowed to teach the crystal rate. */
-		uint64_t anchor_box = now_box;
-		int hw = 0;
-
-		if (sync_input_enabled(&cfg)) {
-			uint64_t e = box_gpio_sync_edge_us(obs);   /* rising for obs=1 */
-
-			if (e && now_box - e < SYNC_EDGE_WINDOW_US) {
-				anchor_box = e;
-				hw = 1;
-			}
-		}
-		/* +25: a PTP-held clock is never demoted by frame arrival. A
-		 * hardware TTL edge still outranks everything (it also directly
-		 * measures the obs instant); otherwise, while PTP holds, keep
-		 * the disciplined clock untouched and derive the obs epoch from
-		 * the frame's DSERV timestamp mapped through it -- transport
-		 * leaves the at-epoch error budget entirely. */
-		int ptp_held = 0;
-#if defined(CONFIG_PTP_CLOCK)
-		ptp_held = clock_ptp_held && !hw;
-#endif
-		if (!ptp_held) {
-			box_clock_sync(&boxclk, m.timestamp, anchor_box, hw);
-			if (hw) {
-				clock_ptp_held = 0;   /* hw anchors own the clock now */
-			}
-		}
-		box_obs_set(obs);            /* keep the LEVEL, not just the edge */
-		if (obs) {
-#if defined(CONFIG_PTP_CLOCK)
-			obs_begin_us = ptp_held
-				? dserv_to_box_us(&boxclk, m.timestamp)
-				: anchor_box;
-#else
-			obs_begin_us = anchor_box;   /* epoch for box-scheduled events */
-#endif
-		}
-
-		/* drive the obs-mirror output (LED / scope trace) */
-		box_gpio_obs_mirror(&cfg, obs);
-
-		/* publish the box's OWN live copy, so obs state is visible per-box in
-		 * dserv without a scope -- honest, since it only updates when THIS box
-		 * actually received the edge. */
-		uint8_t of[DSERV_MSG_LEN];
-		char onm[80];
-		dserv_state_name(&cfg, onm, sizeof onm, "in_obs");
-		dserv_msg_int(of, onm, m.timestamp, obs);
-		box_pub_event(of);
-
-		if (ptp_held) {
-			/* no anchor happened; re-affirm the held source so the
-			 * fleet viewer shows the truth at each obs boundary */
-			uint8_t sf[DSERV_MSG_LEN];
-			char snm[80];
-
-			dserv_state_name(&cfg, snm, sizeof snm, "sync/source");
-			dserv_msg_string(sf, snm, 0, "ptp");
-			box_pub_event(sf);
-			dserv_state_name(&cfg, snm, sizeof snm, "sync/offset_us");
-			dserv_msg_int64(sf, snm, 0, boxclk.offset_us);
-			box_pub_event(sf);
-		} else {
-			publish_sync(m.timestamp, anchor_box, boxclk.offset_us, hw,
-				     hw ? (int64_t)(now_box - anchor_box) : -1);
-		}
-		return;
-	}
+	/* ess/in_obs and the at/at_abs schedule classes never reach this point:
+	 * fast_msg() consumed them -- at arrival on the eth reader, or just
+	 * above for USB. The dispatch below still PARSES the at forms (core is
+	 * shared), but their GPIO_OP_SCHED_* results are unreachable here. */
 
 	gpio_cmd_t cmd;
 	cfg_result_t r = dserv_dispatch(&cfg, &m, &cmd);
-	if (r == CFG_GPIO && cmd.op == GPIO_OP_SCHED_PULSE) {
-		/* do/<n>/at: pulse at beginobs + delta, width from the pin's
-		 * configured pulse_us -- and post state/timer/<n> at the fire. */
-		if (obs_begin_us == 0) {
-			box_console_printf("sched: no beginobs yet, ignoring\n");
-			sched_refuse_reply("no_beginobs");
-		} else {
-			uint32_t w = cfg.do_pulse_us[cmd.pin] ? cfg.do_pulse_us[cmd.pin] : 1000;
-			if (box_sched_arm(&cfg, cmd.pin, cmd.pin, w,
-					  obs_begin_us + cmd.value) != 0) {
-				box_console_printf("sched: table full\n");
-				sched_refuse_reply("table_full");
-			} else {
-				sched_acc++;
-			}
-		}
-	} else if (r == CFG_GPIO && cmd.op == GPIO_OP_SCHED_TIMER) {
-		/* timer/<t>/at: notify-only at beginobs + delta */
-		if (obs_begin_us == 0) {
-			box_console_printf("sched: no beginobs yet, ignoring\n");
-			sched_refuse_reply("no_beginobs");
-		} else if (box_sched_arm(&cfg, BOX_SCHED_NOTIFY_ONLY, cmd.pin, 0,
-					 obs_begin_us + cmd.value) != 0) {
-			box_console_printf("sched: table full\n");
-			sched_refuse_reply("table_full");
-		} else {
-			sched_acc++;
-		}
-	} else if (r == CFG_GPIO && cmd.op != GPIO_OP_NONE) {
+	if (r == CFG_GPIO && cmd.op != GPIO_OP_NONE &&
+	    cmd.op != GPIO_OP_SCHED_PULSE && cmd.op != GPIO_OP_SCHED_TIMER) {
 		box_gpio_exec(&cfg, &cmd);            /* immediate DO set/pulse */
 		if (cmd.op == GPIO_OP_SET) {
 			/* the pin has just moved -> stamp its actuation, not arrival */
@@ -2084,8 +2192,31 @@ int main(void)
 		}
 #endif
 
-		int n = box_uplink_poll(rx, sizeof rx);
-		if (n == BOX_NET_RESET) {
+		/* +29: kind-based inbound. BYTES = raw run for the framer (USB);
+		 * FRAME = one whole frame the eth reader already received, stamped
+		 * and fast-path-screened -- dispatch it directly, marked so the
+		 * handler neither re-counts nor re-screens it. Drain a bounded
+		 * burst per pass so a config flood clears in one wake. */
+		int rlen = 0;
+		uint64_t rarr = 0;
+		int kind = box_uplink_poll2(rx, sizeof rx, &rlen, &rarr);
+		for (int drain = 0; kind == BOX_UPLINK_RX_FRAME; ) {
+			uint32_t d0 = k_cycle_get_32();
+
+			frames_prechecked = 1;
+			on_usb_frame(rx, NULL);
+			frames_prechecked = 0;
+			uint32_t dd = k_cyc_to_us_floor32(k_cycle_get_32() - d0);
+			disp_last_us = dd;
+			if (dd > disp_max_us) {
+				disp_max_us = dd;
+			}
+			if (++drain >= 16) {
+				break;           /* stay fair to the rest of the pass */
+			}
+			kind = box_uplink_poll2(rx, sizeof rx, &rlen, &rarr);
+		}
+		if (kind == BOX_UPLINK_RX_RESET) {
 			dserv_framer_reset(&rx_framer);
 			/* A host just opened the pipe. dserv only learns what it is
 			 * told while listening, so describe the box now. */
@@ -2126,12 +2257,12 @@ int main(void)
 				box_pub_event(f0);
 			}
 #endif
-		} else if (n > 0) {
+		} else if (kind == BOX_UPLINK_RX_BYTES && rlen > 0) {
 			/* Cost of turning received bytes into an executed command
 			 * (framer + dispatch + GPIO write). Completes the inbound
 			 * split alongside wake_us / recv_us in box_net_eth.c. */
 			uint32_t d0 = k_cycle_get_32();
-			dserv_framer_feed(&rx_framer, rx, (uint32_t) n, on_usb_frame, NULL);
+			dserv_framer_feed(&rx_framer, rx, (uint32_t) rlen, on_usb_frame, NULL);
 			uint32_t dd = k_cyc_to_us_floor32(k_cycle_get_32() - d0);
 			disp_last_us = dd;
 			if (dd > disp_max_us) {
@@ -2325,6 +2456,13 @@ int main(void)
 				pub_periodic("sched/accepted", sched_acc);
 				pub_periodic("sched/fired",    sched_fired_n);
 				pub_periodic("sched/refused",  sched_ref);
+				/* +29 late split: late_arr = the frame ARRIVED after
+				 * its target (host/network); late_proc = arrived in
+				 * time but armed late -- pinned ~0 on eth by
+				 * construction, so growth here is the fast path
+				 * regressing. */
+				pub_periodic("sched/late_arr",  sched_late_arr);
+				pub_periodic("sched/late_proc", sched_late_proc);
 				pub_periodic("dbg/di_fifo_drop", box_gpio_di_fifo_drops());
 #if defined(BOX_HAVE_ADC)
 				/* Analog health, published because its absence cost a box.
@@ -2524,6 +2662,18 @@ int main(void)
 					box_pub_bulk(f);
 					dserv_state_name(&cfg, name, sizeof name, "dbg/ethrx_stack_free");
 					dserv_msg_int(f, name, 0, (int32_t) es);
+					box_pub_bulk(f);
+
+					/* +29 reader inbound queue: drops are HOST
+					 * COMMANDS lost to a full queue (nonzero =
+					 * real problem); the watermark sizes it. */
+					uint32_t qd = 0, qm = 0;
+					box_net_eth_inq_stats(&qd, &qm);
+					dserv_state_name(&cfg, name, sizeof name, "dbg/ethin_q_drop");
+					dserv_msg_int(f, name, 0, (int32_t) qd);
+					box_pub_bulk(f);
+					dserv_state_name(&cfg, name, sizeof name, "dbg/ethin_q_max");
+					dserv_msg_int(f, name, 0, (int32_t) qm);
 					box_pub_bulk(f);
 					dserv_state_name(&cfg, name, sizeof name, "dbg/disp_us");
 					dserv_msg_int(f, name, 0, (int32_t) disp_last_us);

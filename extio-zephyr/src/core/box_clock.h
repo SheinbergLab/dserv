@@ -50,6 +50,13 @@
 #define BOX_CLOCK_PAIR_MIN_US    500000     /* pairs closer than 0.5s: skip   */
 #define BOX_CLOCK_PAIR_MAX_US    600000000  /* pairs further than 600s: stale */
 
+/* Compiler fence only. Single-core preemption is the concurrency model on
+ * every target this runs on (one writer thread, readers on other threads or
+ * the same one), so ordering against the SEQ field is all the seqlock below
+ * needs -- no cache-coherency barriers, no kernel dependency. GCC/Clang
+ * builds are the fleet; a port to another compiler must supply this. */
+#define BOX_CLOCK_FENCE() __asm__ __volatile__("" ::: "memory")
+
 typedef struct {
     int64_t  offset_us;       /* dserv - box at the last anchor              */
     uint64_t anchor_box_us;   /* box time of that anchor (rate ref point)    */
@@ -59,13 +66,22 @@ typedef struct {
     uint8_t  synced;
     uint8_t  have_trust;
     uint8_t  rate_valid;      /* at least one accepted slope sample          */
+    /* Seqlock, added with the +29 RX fast path: anchors are written on the
+     * eth reader thread while event stamping keeps happening on the service
+     * loop, and a preemption mid-64-bit-read must not hand a stamp half of
+     * one epoch and half of another. Even = stable; odd = writer inside.
+     * ONE writer at a time is still the contract (per box the anchoring
+     * context is unique); the lock only protects readers. */
+    volatile uint32_t seq;
 } box_clock_t;
 
 static inline void box_clock_reset(box_clock_t *c)
 {
+    c->seq++; BOX_CLOCK_FENCE();
     c->offset_us = 0; c->anchor_box_us = 0; c->rate_ppb = 0;
     c->trust_dserv_us = c->trust_box_us = 0;
     c->synced = 0; c->have_trust = 0; c->rate_valid = 0;
+    BOX_CLOCK_FENCE(); c->seq++;
 }
 
 /* Re-align from one sync edge. trusted = box_us is a hardware edge latch
@@ -73,25 +89,42 @@ static inline void box_clock_reset(box_clock_t *c)
 static inline void box_clock_sync(box_clock_t *c, uint64_t dserv_us,
                                   uint64_t box_us, int trusted)
 {
+    c->seq++; BOX_CLOCK_FENCE();
     c->offset_us = (int64_t) dserv_us - (int64_t) box_us;
     c->anchor_box_us = box_us;
     c->synced = 1;
 
-    if (!trusted) return;
-    if (c->have_trust && box_us > c->trust_box_us) {
-        int64_t d_box   = (int64_t)(box_us - c->trust_box_us);
-        int64_t d_dserv = (int64_t)(dserv_us - c->trust_dserv_us);
-        if (d_box >= BOX_CLOCK_PAIR_MIN_US && d_box <= BOX_CLOCK_PAIR_MAX_US) {
-            int64_t sample = ((d_dserv - d_box) * 1000000000LL) / d_box;
-            if (sample >= -BOX_CLOCK_RATE_MAX_PPB && sample <= BOX_CLOCK_RATE_MAX_PPB) {
-                if (!c->rate_valid) { c->rate_ppb = (int32_t) sample; c->rate_valid = 1; }
-                else c->rate_ppb += (int32_t)((sample - c->rate_ppb) / 8);
+    if (trusted) {
+        if (c->have_trust && box_us > c->trust_box_us) {
+            int64_t d_box   = (int64_t)(box_us - c->trust_box_us);
+            int64_t d_dserv = (int64_t)(dserv_us - c->trust_dserv_us);
+            if (d_box >= BOX_CLOCK_PAIR_MIN_US && d_box <= BOX_CLOCK_PAIR_MAX_US) {
+                int64_t sample = ((d_dserv - d_box) * 1000000000LL) / d_box;
+                if (sample >= -BOX_CLOCK_RATE_MAX_PPB && sample <= BOX_CLOCK_RATE_MAX_PPB) {
+                    if (!c->rate_valid) { c->rate_ppb = (int32_t) sample; c->rate_valid = 1; }
+                    else c->rate_ppb += (int32_t)((sample - c->rate_ppb) / 8);
+                }
             }
         }
+        c->trust_dserv_us = dserv_us;
+        c->trust_box_us   = box_us;
+        c->have_trust     = 1;
     }
-    c->trust_dserv_us = dserv_us;
-    c->trust_box_us   = box_us;
-    c->have_trust     = 1;
+    BOX_CLOCK_FENCE(); c->seq++;
+}
+
+/* Coherent snapshot of the mapping terms. Spins only while a writer is
+ * mid-update, which is a handful of stores. */
+static inline void box_clock_snap(const box_clock_t *c, int64_t *off,
+                                  uint64_t *anchor, int32_t *rate, uint8_t *synced)
+{
+    uint32_t s0, s1;
+    do {
+        s0 = c->seq; BOX_CLOCK_FENCE();
+        *off = c->offset_us; *anchor = c->anchor_box_us;
+        *rate = c->rate_ppb; *synced = c->synced;
+        BOX_CLOCK_FENCE(); s1 = c->seq;
+    } while (s0 != s1 || (s0 & 1u));
 }
 
 /* Map a box time_us_64() into dserv time. Returns 0 (=> dserv stamps arrival)
@@ -100,10 +133,30 @@ static inline void box_clock_sync(box_clock_t *c, uint64_t dserv_us,
  * which is equally valid. */
 static inline uint64_t box_clock_stamp(const box_clock_t *c, uint64_t box_us)
 {
-    if (!c->synced) return 0;
-    int64_t dt   = (int64_t) box_us - (int64_t) c->anchor_box_us;
-    int64_t corr = (dt * (int64_t) c->rate_ppb) / 1000000000LL;
-    return (uint64_t)((int64_t) box_us + c->offset_us + corr);
+    int64_t off; uint64_t anchor; int32_t rate; uint8_t synced;
+    box_clock_snap(c, &off, &anchor, &rate, &synced);
+    if (!synced) return 0;
+    int64_t dt   = (int64_t) box_us - (int64_t) anchor;
+    int64_t corr = (dt * (int64_t) rate) / 1000000000LL;
+    return (uint64_t)((int64_t) box_us + off + corr);
+}
+
+/* The inverse: a dserv-time instant onto the box clock (at_abs targets, the
+ * PTP-held obs epoch). Two fixed-point iterations converge to well under a
+ * microsecond at the +/-500 ppm clamp. Lived in main.c as dserv_to_box_us;
+ * moved here so the snapshot guard covers every reader of the mapping. */
+static inline uint64_t box_clock_unstamp(const box_clock_t *c, uint64_t dserv_us)
+{
+    int64_t off; uint64_t anchor; int32_t rate; uint8_t synced;
+    box_clock_snap(c, &off, &anchor, &rate, &synced);
+    (void) synced;                 /* caller gates on synced separately */
+    int64_t box = (int64_t) dserv_us - off;
+    for (int i = 0; i < 2; i++) {
+        int64_t dt   = box - (int64_t) anchor;
+        int64_t corr = (dt * (int64_t) rate) / 1000000000LL;
+        box = (int64_t) dserv_us - off - corr;
+    }
+    return (uint64_t) box;
 }
 
 #endif /* BOX_CLOCK_H */
