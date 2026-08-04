@@ -211,6 +211,8 @@ proc detect_board_type {} {
         return "orangepi"
     } elseif { [string match "*FRDM-IMX93*" $model] } {
         return "imx93"
+    } elseif { [string match "*FRDM-IMX95*" $model] } {
+        return "imx95"
     }
 
     return "unknown"
@@ -224,6 +226,10 @@ proc detect_board_type {} {
 # empirically with an LED HAT (no schematic was available) that gpiochip0
 # offset N drives 40-pin header net GPIO_IOn directly -- see
 # local/post-pins.tcl for the obs-sync line this is actually used for.
+#
+# imx95 (FRDM-IMX95) mirrors it: gpiochip0 is gpio@43810000, the bank whose
+# pads are named GPIO_IO00..37 (the 40-pin header nets); gpiochips 4/5 are
+# the I2C expanders. Same offset-N == GPIO_IOn convention as the imx93.
 set gpio_chip_map {
     x86_64       /dev/gpiochip1
     rpi5         /dev/gpiochip4
@@ -237,6 +243,7 @@ set gpio_chip_map {
     orangepi5plus /dev/gpiochip3
     orangepi     /dev/gpiochip0
     imx93        /dev/gpiochip0
+    imx95        /dev/gpiochip0
     unknown      /dev/gpiochip0
 }
 
