@@ -1907,6 +1907,8 @@ namespace eval ess {
     variable obs_sched_lead_ms 20
     variable obs_sched_trust {ptp hw}
     variable obs_sched_ok 1
+    variable obs_pending 0          ;# +30: a scheduled onset is in flight
+    variable obs_pending_args {}    ;# {current total} for onset/fallback
 
     proc obs_schedule_bind {box pin {lead_ms 20} {trust {ptp hw}}} {
         variable obs_sched_box $box
@@ -1914,28 +1916,89 @@ namespace eval ess {
         variable obs_sched_lead_ms $lead_ms
         variable obs_sched_trust $trust
         variable obs_sched_ok 1
+        variable obs_pending 0
         variable io_class
         dservAddExactMatch $io_class/$box/state/sched/abs_err
         dpointSetScript $io_class/$box/state/sched/abs_err \
             ::ess::obs_sched_reply
+        # +30: the bound box is the BEGINOBS authority -- it emits its
+        # state/in_obs stamped with the ACTUAL assertion instant, and that
+        # event (not the request) is what starts the obs here.
+        dservAddExactMatch $io_class/$box/state/in_obs
+        dpointSetScript $io_class/$box/state/in_obs ::ess::obs_box_onset
         dservSet ess/obs_schedule "box $box pin $pin lead_ms $lead_ms"
     }
 
     proc obs_schedule_unbind {} {
         variable obs_sched_box ""
+        variable obs_pending 0
         dservSet ess/obs_schedule ""
     }
 
     # any non-armed at_abs reply while bound: record it and stop scheduling
     # (assert-now fallback) until re-bound -- a refused onset must never
-    # silently produce an obs whose line and epoch disagree
+    # silently produce an obs whose line and epoch disagree. "cancelled" is
+    # our own abort verb and benign.
     proc obs_sched_reply {dp data} {
         variable obs_sched_ok
-        if {$data ne "armed" && $obs_sched_ok} {
+        if {$data ne "armed" && $data ne "cancelled" && $obs_sched_ok} {
             set obs_sched_ok 0
             dservSet ess/obs_schedule_health $data
             ess_warning "obs_schedule: at_abs reply '$data' -- falling back to assert-now" "obs"
         }
+    }
+
+    # +30: the box's onset event. The datapoint timestamp IS the epoch --
+    # the box captured it in the fire ISR, so it is the actual instant the
+    # line rose, mapped onto the dserv timeline. Everything BEGINOBS-like
+    # happens here, and only here, when an onset is pending.
+    proc obs_box_onset {dp data} {
+        variable obs_pending
+        if {!$obs_pending || $data != 1} { return }
+        set obs_pending 0
+        variable in_obs
+        variable obs_pin
+        variable obs_pending_args
+        lassign $obs_pending_args current total
+        set T [dservTimestamp $dp]
+        ::ess::evt_put BEGINOBS INFO $T $current $total
+        dservSetData ess/in_obs $T 1 "1"
+        rpioPinOn $obs_pin
+        set in_obs 1
+        dservSet ess/obs_scheduled 1
+        variable trial_reward_ml
+        set trial_reward_ml 0.0
+        ::ess::do_update
+    }
+
+    # is a scheduled onset still in flight? (state-machine transitions wait
+    # on ::ess::in_obs; this distinguishes "waiting" from "never requested")
+    proc obs_onset_pending {} {
+        variable obs_pending
+        return $obs_pending
+    }
+
+    # +30 fallback: the onset event never arrived (box event timeout -- the
+    # paradigm's wait state calls this). Assert-now, LOUD, and stop
+    # scheduling until re-bound.
+    proc obs_begin_now {} {
+        variable obs_pending
+        if {!$obs_pending} { return }
+        set obs_pending 0
+        variable obs_sched_ok 0
+        dservSet ess/obs_schedule_health "onset_timeout"
+        ess_warning "obs_schedule: onset event never arrived -- asserting now" "obs"
+        variable obs_pending_args
+        lassign $obs_pending_args current total
+        variable in_obs
+        variable obs_pin
+        ::ess::evt_put BEGINOBS INFO [now] $current $total
+        dservSet ess/in_obs 1
+        rpioPinOn $obs_pin
+        set in_obs 1
+        dservSet ess/obs_scheduled 0
+        variable trial_reward_ml
+        set trial_reward_ml 0.0
     }
 
     proc begin_obs {current total} {
@@ -1944,30 +2007,30 @@ namespace eval ess {
         variable obs_sched_box; variable obs_sched_pin
         variable obs_sched_lead_ms; variable obs_sched_trust
         variable obs_sched_ok; variable io_class
+        variable obs_pending; variable obs_pending_args
 
-        set scheduled 0
         if {$obs_sched_box ne "" && $obs_sched_ok} {
             set src ""
             catch {set src [dservGet $io_class/$obs_sched_box/state/sync/source]}
             if {$src in $obs_sched_trust} {
+                # +30: request the onset and RETURN. The box asserts the
+                # line at T and emits the event; BEGINOBS, ess/in_obs and
+                # in_obs=1 all happen in obs_box_onset with the box's
+                # actual-instant stamp. The paradigm's wait state watches
+                # ::ess::in_obs (with obs_begin_now as its timeout arm).
                 set T [expr {[now] + $obs_sched_lead_ms * 1000}]
-                # the physical line, at T, on the box's disciplined clock
+                set obs_pending 1
+                set obs_pending_args [list $current $total]
                 dservSet $io_class/$obs_sched_box/cmd/do/$obs_sched_pin/at_abs $T
-                # T is the epoch everywhere: the event...
-                ::ess::evt_put BEGINOBS INFO $T $current $total
-                # ...and the in_obs datapoint (future-stamped: the box's
-                # PTP-held anchor maps this timestamp for its at-epoch, the
-                # logger carries it, box_schedule_ anchors on it)
-                dservSetData ess/in_obs $T 1 "1"
-                set scheduled 1
+                return
             }
         }
-        if {!$scheduled} {
-            ::ess::evt_put BEGINOBS INFO [now] $current $total
-            dservSet ess/in_obs 1
-        }
+        # classic path -- byte-identical to the unbound behaviour a system
+        # that never calls obs_schedule_bind has always had
+        ::ess::evt_put BEGINOBS INFO [now] $current $total
+        dservSet ess/in_obs 1
         rpioPinOn $obs_pin
-        dservSet ess/obs_scheduled $scheduled
+        if {$obs_sched_box ne ""} { dservSet ess/obs_scheduled 0 }
         set in_obs 1
         variable trial_reward_ml
         set trial_reward_ml 0.0
@@ -2142,7 +2205,18 @@ namespace eval ess {
         variable in_obs
         variable obs_pin
         variable obs_sched_box; variable obs_sched_pin; variable io_class
+        variable obs_pending
 
+        if {$obs_pending} {
+            # +30: aborted between request and onset. No BEGINOBS was ever
+            # emitted, so no ENDOBS either -- cancel the armed at_abs (T=0
+            # is the cancel verb) and stand down. Without the cancel the
+            # timer would fire a stray onset after we left.
+            set obs_pending 0
+            catch {dservSet $io_class/$obs_sched_box/cmd/do/$obs_sched_pin/at_abs 0}
+            catch {dservSet $io_class/$obs_sched_box/cmd/do/$obs_sched_pin 0}
+            return
+        }
         if {!$in_obs} {return}
         rpioPinOff $obs_pin
         if {$obs_sched_box ne ""} {

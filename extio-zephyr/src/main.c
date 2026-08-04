@@ -162,6 +162,13 @@ static uint64_t       abs_target_us[BOX_NPINS];   /* intended dserv time */
  * drained by the main loop -- one bit per pin, so BOX_NPINS must stay <= 32. */
 BUILD_ASSERT(BOX_NPINS <= 32, "abs_pub_pending is a uint32_t bitmask");
 static volatile uint32_t abs_pub_pending;
+/* +30 box-authoritative obs onset: whoever is bound to the obs line emits
+ * BEGINOBS. When an at_abs fires on cfg.obs_pin, the ISR captures the actual
+ * assertion instant and the loop publishes state/in_obs stamped with it --
+ * the host's ess waits on exactly that event. Unbound rigs never take this
+ * path and behave as they always did. */
+static volatile uint64_t obs_fire_actual_us;
+static volatile uint8_t  obs_fire_pending;
 #endif /* CONFIG_PTP_CLOCK */
 
 /* ---- deferred publishing ----
@@ -514,6 +521,18 @@ static void abs_fire(struct k_timer *t)
 	 * untouched: abs_target_us[] already holds the INTENDED time, which is what
 	 * gets stamped whenever the publish actually goes out. */
 	abs_pub_pending |= (1u << pin);
+
+	/* +30: an at_abs fire ON THE OBS PIN is a scheduled obs onset, and the
+	 * box that owns the line is the authority on when it rose -- capture
+	 * the ACTUAL instant, correct the provisional epoch (set at arming so
+	 * lead-window at-commands could arm), mark obs active, flag the
+	 * publish. Flag-and-timestamp only: the ISR discipline above holds. */
+	if (cfg.obs_en && pin == (int) cfg.obs_pin) {
+		obs_fire_actual_us = box_gpio_now_us();
+		obs_begin_us = obs_fire_actual_us;
+		box_obs_set(1);
+		obs_fire_pending = 1;
+	}
 }
 
 /* Every term behind the armed/late decision, for when a box insists it is late
@@ -853,6 +872,19 @@ static int fast_msg(const dserv_msg_t *m, const char *leaf, uint64_t arr_us)
 			uint8_t  f3[DSERV_MSG_LEN];
 			char     nm3[80];
 
+			/* T == 0 is CANCEL (+30): disarm whatever is pending on this
+			 * pin. Exists for the scheduled-obs abort window -- a quit
+			 * between request and onset must not leave a timer that
+			 * fires a stray obs later. Replies "cancelled", which the
+			 * host's reply monitor treats as benign. */
+			if (T == 0) {
+				k_timer_stop(&abs_timer[pin2]);
+				dserv_state_name(&cfg, nm3, sizeof nm3, "sched/abs_err");
+				dserv_msg_string(f3, nm3, 0, "cancelled");
+				box_pub_event(f3);
+				return 1;
+			}
+
 			/* The abs_err/abs_lead answers are REPLIES -- ess acts on
 			 * armed-vs-refused before the pulse time arrives -- so they ride
 			 * the event class, never behind a manifest drain. */
@@ -887,6 +919,16 @@ static int fast_msg(const dserv_msg_t *m, const char *leaf, uint64_t arr_us)
 			k_timer_stop(&abs_timer[pin2]);
 			k_timer_user_data_set(&abs_timer[pin2], (void *) (intptr_t) pin2);
 			k_timer_start(&abs_timer[pin2], K_USEC(lead_us), K_NO_WAIT);
+
+			/* +30: arming the OBS pin declares a scheduled onset. The
+			 * epoch is knowable NOW (the target), and the whole point of
+			 * the lead window is that at-commands arrive inside it -- so
+			 * they must find the epoch already set. Provisional here;
+			 * the fire corrects it to the actual instant (<= the
+			 * certified 120 us away) and marks obs ACTIVE. */
+			if (cfg.obs_en && pin2 == (int) cfg.obs_pin) {
+				obs_begin_us = target_box;
+			}
 
 			/* Publish the lead so the host can see the margin it actually got
 			 * -- shrinking lead is the early warning before anything is late. */
@@ -2283,6 +2325,27 @@ int main(void)
 					publish_do((uint8_t) p, 1, abs_target_us[p]);
 				}
 			}
+		}
+
+		/* +30: the box-authoritative obs onset (see abs_fire). state/in_obs
+		 * is stamped with the ACTUAL assertion instant on the dserv
+		 * timeline; obs_fire_err_us = actual - requested is the per-obs
+		 * fire error, the number the certification bounds at 120 us --
+		 * published every obs now instead of measured only on the bench. */
+		if (obs_fire_pending) {
+			obs_fire_pending = 0;
+			uint64_t actual = obs_fire_actual_us;
+			uint8_t of[DSERV_MSG_LEN];
+
+			dserv_state_name(&cfg, name, sizeof name, "in_obs");
+			dserv_msg_int(of, name, event_stamp(actual), 1);
+			box_pub_event(of);
+			dserv_state_name(&cfg, name, sizeof name,
+					 "sched/obs_fire_err_us");
+			dserv_msg_int64(of, name, 0,
+					(int64_t) event_stamp(actual) -
+					(int64_t) abs_target_us[cfg.obs_pin]);
+			box_pub_event(of);
 		}
 #endif
 
