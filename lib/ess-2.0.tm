@@ -1984,16 +1984,23 @@ namespace eval ess {
         dservSet ess/obs_schedule ""
     }
 
-    # any non-armed at_abs reply while bound: record it and stop scheduling
-    # (assert-now fallback) until re-bound -- a refused onset must never
-    # silently produce an obs whose line and epoch disagree. "cancelled" is
-    # our own abort verb and benign.
+    # at_abs replies while bound. "armed" and our own "cancelled" are fine.
+    # "late" is TIMING, not capability -- the arm lost a race (e.g. the
+    # +32 order fence draining a bind flood ahead of it) and the next obs
+    # deserves a fresh try; record it, this obs falls back, scheduling
+    # continues. Only "unsynced" sticky-disables: an untrusted clock is a
+    # state, and every retry would lie the same way until re-bound.
     proc obs_sched_reply {dp data} {
         variable obs_sched_ok
-        if {$data ne "armed" && $data ne "cancelled" && $obs_sched_ok} {
-            set obs_sched_ok 0
-            dservSet ess/obs_schedule_health $data
-            ess_warning "obs_schedule: at_abs reply '$data' -- falling back to assert-now" "obs"
+        if {$data eq "armed" || $data eq "cancelled"} { return }
+        dservSet ess/obs_schedule_health $data
+        if {$data eq "unsynced"} {
+            if {$obs_sched_ok} {
+                set obs_sched_ok 0
+                ess_warning "obs_schedule: at_abs reply 'unsynced' -- scheduling disabled until re-bound" "obs"
+            }
+        } else {
+            ess_warning "obs_schedule: at_abs reply '$data' -- this obs asserts now, next obs retries" "obs"
         }
     }
 
