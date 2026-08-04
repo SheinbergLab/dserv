@@ -1972,13 +1972,13 @@ namespace eval ess {
     }
 
     proc obs_schedule_unbind {} {
-        variable obs_sched_box
-        variable io_class
-        if {$obs_sched_box ne ""} {
-            # courteous restore: leadership was the BINDING's meaning; the
-            # persisted role comes back at the box's next reboot anyway
-            catch {dservSet $io_class/$obs_sched_box/config/obs/mode mirror}
-        }
+        # Deliberately does NOT restore config/obs/mode to mirror. The
+        # "courteous restore" version did, and the resulting mirror->leader
+        # churn on every deinit/bind cycle put a mode flip in the config
+        # queue right before the first obs -- where the reader's fast path
+        # could overtake it (queue-forensic 2026-08-04: every first trial
+        # armed against a stale epoch as a merged blob). The role stays as
+        # last asserted; a reboot restores the persisted one.
         variable obs_sched_box ""
         variable obs_pending 0
         dservSet ess/obs_schedule ""

@@ -1117,6 +1117,11 @@ int box_main_fast_frame(const uint8_t *frame, uint64_t arr_us)
  * counted (BOX_UPLINK_RX_FRAME): on_usb_frame must not count or fast-check
  * it again. Service-loop-only state. */
 static int frames_prechecked;
+/* Arrival stamp for a fence-deferred frame (BOX_UPLINK_RX_FRAME_RAW):
+ * the reader stamped it at recv; the fast handlers here should judge
+ * lateness against that truth, not the (later) processing instant. 0 on
+ * the USB path, where arrival genuinely is processing time. */
+static uint64_t dispatch_arr_us;
 
 static void on_usb_frame(const uint8_t *frame, void *ud)
 {
@@ -1133,8 +1138,10 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 		cmds_rx++;
 		/* USB (and any transport without a reader): same fast handlers,
 		 * service-loop context, arrival == processing time -- the
-		 * historical behaviour, now with the ledger split recording it. */
-		if (fast_msg(&m, leaf, box_gpio_now_us())) {
+		 * historical behaviour, now with the ledger split recording it.
+		 * A fence-deferred eth frame instead carries its true arrival. */
+		if (fast_msg(&m, leaf, dispatch_arr_us ? dispatch_arr_us
+						       : box_gpio_now_us())) {
 			return;
 		}
 	}
@@ -2253,11 +2260,18 @@ int main(void)
 		int rlen = 0;
 		uint64_t rarr = 0;
 		int kind = box_uplink_poll2(rx, sizeof rx, &rlen, &rarr);
-		for (int drain = 0; kind == BOX_UPLINK_RX_FRAME; ) {
+		for (int drain = 0; kind == BOX_UPLINK_RX_FRAME ||
+				    kind == BOX_UPLINK_RX_FRAME_RAW; ) {
 			uint32_t d0 = k_cycle_get_32();
 
-			frames_prechecked = 1;
+			/* FRAME = reader already counted + fast-screened it;
+			 * FRAME_RAW = deferred by the +32 order fence: run the
+			 * full path here, in queue order, with the true arrival
+			 * stamp carried along for the fast handlers. */
+			frames_prechecked = (kind == BOX_UPLINK_RX_FRAME);
+			dispatch_arr_us = rarr;
 			on_usb_frame(rx, NULL);
+			dispatch_arr_us = 0;
 			frames_prechecked = 0;
 			uint32_t dd = k_cyc_to_us_floor32(k_cycle_get_32() - d0);
 			disp_last_us = dd;
@@ -2748,6 +2762,10 @@ int main(void)
 					box_pub_bulk(f);
 					dserv_state_name(&cfg, name, sizeof name, "dbg/ethin_q_max");
 					dserv_msg_int(f, name, 0, (int32_t) qm);
+					box_pub_bulk(f);
+					dserv_state_name(&cfg, name, sizeof name, "dbg/ethin_fenced");
+					dserv_msg_int(f, name, 0,
+						      (int32_t) box_net_eth_inq_fenced());
 					box_pub_bulk(f);
 					dserv_state_name(&cfg, name, sizeof name, "dbg/disp_us");
 					dserv_msg_int(f, name, 0, (int32_t) disp_last_us);

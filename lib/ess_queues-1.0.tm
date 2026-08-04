@@ -623,7 +623,11 @@ proc ::ess_queues::queue_start {queue_name args} {
     if {$state(status) ni {idle finished}} {
         error "Queue already active: $state(queue_name)"
     }
-    
+
+    # A queue must start from known run state: clear whatever the last
+    # session retained (see the stale-complete note in start_run).
+    dservSet ess/run_state idle
+
     set project [::ess::configs::project_active]
     set start_position 0
     
@@ -948,6 +952,13 @@ proc ::ess_queues::start_run {} {
         set state(status) running
         set state(run_started) [clock seconds]
         publish_state
+        # Overwrite any RETAINED ess/run_state before starting: a stale
+        # "complete" from an earlier session, re-emitted during the start
+        # sequence, matched the running-status guard and threw the machine
+        # into flushing before the first trial existed (queue forensic
+        # 2026-08-04, office-stim). The truth is ours to stamp here; the
+        # session sets "complete" itself when it genuinely finishes.
+        dservSet ess/run_state running
         ess_start
     } else {
         set state(status) running

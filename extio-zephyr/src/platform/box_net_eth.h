@@ -59,6 +59,11 @@ int box_net_eth_poll2(uint8_t *buf, int max, int *len, uint64_t *arr_us);
  * nonzero is a real problem) and the depth watermark. */
 void box_net_eth_inq_stats(uint32_t *drop, uint32_t *max_depth);
 
+/* +32: frames the order fence deferred to the loop (cumulative). Nonzero is
+ * NORMAL around config floods; it is the reordering that would have
+ * happened without the fence. */
+uint32_t box_net_eth_inq_fenced(void);
+
 /* Send one frame; 0 if the whole frame went out, <0 otherwise. */
 int box_net_eth_send(const uint8_t *buf, int len);
 

@@ -29,7 +29,11 @@
 #define BOX_UPLINK_RX_NONE   0
 #define BOX_UPLINK_RX_RESET  1     /* transport (re)opened: reset framer, announce */
 #define BOX_UPLINK_RX_BYTES  2     /* raw byte run in buf, *len set               */
-#define BOX_UPLINK_RX_FRAME  3     /* one DSERV_MSG_LEN frame in buf, *arr_us set */
+#define BOX_UPLINK_RX_FRAME  3     /* one DSERV_MSG_LEN frame in buf, *arr_us set;
+                                    * reader already counted + fast-screened it   */
+#define BOX_UPLINK_RX_FRAME_RAW 4  /* +32: frame DEFERRED by the reader's order
+                                    * fence -- not counted, not screened; the
+                                    * dispatcher runs the full path, in order    */
 
 /* One uplink transport's operations. Each wraps a box_net_* backend. */
 typedef struct {

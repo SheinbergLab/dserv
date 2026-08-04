@@ -425,21 +425,40 @@ static uint8_t  rx_wd_gave_up;
  * already here) -- the close-under-poll hazard shrinks to one thread. */
 typedef struct {
 	uint64_t arr_us;
+	uint8_t  screened;   /* 1 = fast path already ran (and declined) */
 	uint8_t  f[DSERV_MSG_LEN];
 } eth_inq_item_t;
 K_MSGQ_DEFINE(eth_inq, sizeof(eth_inq_item_t), 64, 8);
 static uint32_t inq_drop;            /* full-queue drops (dbg/ethin_q_drop) */
 static uint32_t inq_max;             /* depth watermark  (dbg/ethin_q_max)  */
+static uint32_t inq_fence;           /* frames deferred by the order fence  */
 static dserv_framer_t reader_framer;
 static uint64_t reader_arr_us;       /* stamp for the frames of one recv    */
 
 static void reader_on_frame(const uint8_t *frame, void *ud)
 {
 	ARG_UNUSED(ud);
-	if (box_main_fast_frame(frame, reader_arr_us)) {
-		return;                        /* consumed at arrival */
-	}
+	/* +32 ORDER FENCE. Fast-handling a frame while ordinary frames sit
+	 * queued would let a schedule command overtake a config sent BEFORE
+	 * it -- observed on the first queue run: the deinit/bind cycle's
+	 * config/obs/mode flip was still queued when the obs at_abs was
+	 * fast-armed against the old role and a stale epoch (every first
+	 * trial a merged blob). Wire order is the contract; the fast path is
+	 * an optimization that must only fire when it cannot reorder --
+	 * i.e. when nothing is pending. Mid-trial bursts (the case the fast
+	 * path exists for) arrive with an empty queue, so the latency win is
+	 * untouched where it matters. */
 	eth_inq_item_t it;
+
+	if (k_msgq_num_used_get(&eth_inq) == 0) {
+		if (box_main_fast_frame(frame, reader_arr_us)) {
+			return;                /* consumed at arrival */
+		}
+		it.screened = 1;
+	} else {
+		it.screened = 0;               /* full path in the loop, in order */
+		inq_fence++;
+	}
 
 	it.arr_us = reader_arr_us;
 	memcpy(it.f, frame, DSERV_MSG_LEN);
@@ -640,6 +659,12 @@ int box_net_eth_poll2(uint8_t *buf, int max, int *len, uint64_t *arr_us)
 		memcpy(buf, it.f, DSERV_MSG_LEN);
 		*len = (int) DSERV_MSG_LEN;
 		*arr_us = it.arr_us;
+		if (!it.screened) {
+			/* +32 fence deferral: the loop must run the FULL frame
+			 * path (count + fast handlers) in queue order. Signalled
+			 * by kind so the dispatcher knows. */
+			return BOX_UPLINK_RX_FRAME_RAW;
+		}
 		/* dbg/wake_us, reinterpreted (+29): queue residence time --
 		 * enqueue at arrival to pop here. Small when the loop is
 		 * keeping up; grows with exactly the pass length that used to
@@ -681,6 +706,11 @@ void box_net_eth_inq_stats(uint32_t *drop, uint32_t *max_depth)
 	if (max_depth) {
 		*max_depth = inq_max;
 	}
+}
+
+uint32_t box_net_eth_inq_fenced(void)
+{
+	return inq_fence;
 }
 
 /* Legacy byte-run poll: dead on Ethernet since +29 (the service loop uses
