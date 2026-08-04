@@ -23,7 +23,10 @@
 #include <string.h>
 
 #define BOX_PERSIST_MAGIC    0x57494F31u   /* "WIO1" */
-#define BOX_PERSIST_VERSION  22  /* v22: console_mode (cdc|uart -- a timing choice).
+#define BOX_PERSIST_VERSION  23  /* v23: obs_mode (mirror|leader -- the obs pin's role;
+                                  * a persisted leader is the announced obs-leader
+                                  * capability hosts discover).
+                                  * v22: console_mode (cdc|uart -- a timing choice).
                                    * v21: static net gateway + subnet mask (net_gw/net_sn).
                                    * v20: MCP3204 analog groups (ain_rate + ain_group_*).
                                    * v19: channel (firmware update track, default dev).

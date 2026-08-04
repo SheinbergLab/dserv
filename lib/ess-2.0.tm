@@ -1910,14 +1910,56 @@ namespace eval ess {
     variable obs_pending 0          ;# +30: a scheduled onset is in flight
     variable obs_pending_args {}    ;# {current total} for onset/fallback
 
+    # +31: resolve the announced obs leader. Capability is what the boxes
+    # DECLARE (manifest obs_leader, from persisted config/obs/mode=leader);
+    # fitness is judged here -- a live watchdog and nothing else, since
+    # sync trust is begin_obs's per-obs decision. Exactly one leader may
+    # announce: zero is a plain error, two is a rig configuration mistake
+    # that must be fixed, not guessed around.
+    proc obs_leader_resolve {} {
+        variable io_class
+        set leaders {}
+        foreach k [dservKeys] {
+            if {![regexp "^$io_class/(\[^/\]+)/state/obs_leader\$" $k -> b]} continue
+            if {[catch {dservGet $k} v] || $v != 1} continue
+            set wk $io_class/$b/state/watchdog
+            if {[catch {dservTimestamp $wk} ts]} continue
+            if {[now] - $ts > 10000000} continue     ;# stale box: not fit
+            lappend leaders $b
+        }
+        if {[llength $leaders] == 0} {
+            error "obs_schedule_bind auto: no live box announces obs_leader\
+ (set config/obs/mode leader + cmd/save on the box that owns the line)"
+        }
+        if {[llength $leaders] > 1} {
+            error "obs_schedule_bind auto: MULTIPLE obs leaders announced\
+ ({$leaders}) -- a rig has one obs line; fix the extra box"
+        }
+        return [lindex $leaders 0]
+    }
+
     proc obs_schedule_bind {box pin {lead_ms 20} {trust {ptp hw}}} {
+        variable io_class
+        if {$box eq "auto"} {
+            set box [obs_leader_resolve]
+            # the leader announced its pin with its manifest
+            if {$pin eq "auto" || $pin < 0} {
+                if {[catch {dservGet $io_class/$box/state/obs_pin} pin]} {
+                    error "obs_schedule_bind auto: $box announces no obs_pin"
+                }
+            }
+        }
         variable obs_sched_box $box
         variable obs_sched_pin $pin
         variable obs_sched_lead_ms $lead_ms
         variable obs_sched_trust $trust
         variable obs_sched_ok 1
         variable obs_pending 0
-        variable io_class
+        # assert the ROLE (+31): the box may have been mirror; leadership is
+        # what the binder means, and pushing it is idempotent on a persisted
+        # leader. RAM-resident -- a reboot restores the persisted role.
+        dservSet $io_class/$box/config/obs/pin $pin
+        dservSet $io_class/$box/config/obs/mode leader
         dservAddExactMatch $io_class/$box/state/sched/abs_err
         dpointSetScript $io_class/$box/state/sched/abs_err \
             ::ess::obs_sched_reply
@@ -1930,6 +1972,13 @@ namespace eval ess {
     }
 
     proc obs_schedule_unbind {} {
+        variable obs_sched_box
+        variable io_class
+        if {$obs_sched_box ne ""} {
+            # courteous restore: leadership was the BINDING's meaning; the
+            # persisted role comes back at the box's next reboot anyway
+            catch {dservSet $io_class/$obs_sched_box/config/obs/mode mirror}
+        }
         variable obs_sched_box ""
         variable obs_pending 0
         dservSet ess/obs_schedule ""
@@ -2034,7 +2083,13 @@ namespace eval ess {
         ::ess::evt_put BEGINOBS INFO [now] $current $total
         dservSet ess/in_obs 1
         rpioPinOn $obs_pin
-        if {$obs_sched_box ne ""} { dservSet ess/obs_scheduled 0 }
+        if {$obs_sched_box ne ""} {
+            # +31: a bound-but-untrusted obs still deserves a physical line.
+            # The leader-mode box suppresses its mirror, so drive it
+            # explicitly (end_obs's bound path already clears it).
+            catch {dservSet $io_class/$obs_sched_box/cmd/do/$obs_sched_pin 1}
+            dservSet ess/obs_scheduled 0
+        }
         set in_obs 1
         variable trial_reward_ml
         set trial_reward_ml 0.0

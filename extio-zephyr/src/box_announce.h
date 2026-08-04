@@ -31,6 +31,12 @@
  * every config edit. */
 void box_announce_manifest(const box_config_t *c);
 
+/* +31: just the obs role pair (state/obs/mode + state/obs_leader) -- published
+ * live when config/obs/mode changes, so a UI's role select reflects the box
+ * without a manual re-announce (the same courtesy pin-mode changes get from
+ * the manifest refresh). */
+void box_announce_obs_role(const box_config_t *c);
+
 /* Full burst for a freshly connected host: identity (transport, board, build,
  * fw, boot cause, channel, ip) + the manifest + the CURRENT DI and chord levels,
  * so a UI shows live state immediately instead of waiting for the next edge. */

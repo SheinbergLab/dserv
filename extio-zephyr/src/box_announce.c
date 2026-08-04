@@ -129,6 +129,13 @@ static void announce_ident(const box_config_t *c)
 	}
 	pub_str(c, "build",     box_build_key());     /* shelf image match key   */
 	pub_str(c, "board",     BOX_BOARD_ID);       /* OTA compat filter       */
+	/* +31: the obs pin's declared role, and the discoverable capability.
+	 * obs/mode is what the pin DOES (mirror follows the host; leader owns
+	 * the line and the epoch); obs_leader=1 is the flag a host scans for
+	 * when resolving `obs_schedule_bind auto`. Announced from persisted
+	 * config -- capability is static, per-obs fitness (sync trust, live
+	 * watchdog) is the binder's judgement at bind time. */
+	box_announce_obs_role(c);
 	pub_str(c, "channel",   dserv_cfg_channel(c));
 	/* which device the console bound to -- a timing-relevant choice, so a host
 	 * can see it without guessing (see config/console). */
@@ -417,6 +424,13 @@ static void announce_levels(const box_config_t *c, const group_rt_t *groups)
 		snprintf(leaf, sizeof leaf, "group/%s", gn);
 		pub_int(c, leaf, groups[g].cur);
 	}
+}
+
+void box_announce_obs_role(const box_config_t *c)
+{
+	pub_str(c, "obs/mode",  obs_is_leader(c) ? "leader" :
+				(obs_mirror_enabled(c) ? "mirror" : "off"));
+	pub_int(c, "obs_leader", obs_is_leader(c) ? 1 : 0);
 }
 
 void box_announce_burst(const box_config_t *c, const group_rt_t *groups)

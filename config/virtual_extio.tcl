@@ -57,6 +57,8 @@ namespace eval vbox {
     variable pending   {}                      ;# {due_us kind pin level} DI/DO events
     variable levhist   {}                      ;# {t level} history of ain_src_pin
     variable obs_anchor 0
+    variable obs_mode mirror        ;# +31: mirror | leader (config/obs/mode)
+    variable obs_pin 10             ;# +31: the obs line (config/obs/pin)
 
     # analog stream state
     variable ain
@@ -250,7 +252,10 @@ namespace eval vbox {
             drive $pin 1 $due
             drive $pin 0 [expr {$due + $w}]
         } elseif { [regexp {^cmd/do/(\d+)/at_abs$} $leaf -> pin] } {
-            if { [fault atabs_refuse] } {
+            if { $data == 0 } {
+                # +30 cancel verb
+                pub_str sched/abs_err $now cancelled
+            } elseif { [fault atabs_refuse] } {
                 pub_str sched/abs_err $now late
                 pub_int sched/abs_late_us $now 0
                 log "FAULT at_abs refused"
@@ -261,6 +266,18 @@ namespace eval vbox {
                 pub_str sched/abs_err $now armed
                 pub_int sched/abs_lead_us $now [expr {$data - $now}]
                 drive $pin 1 $data
+                # +31 leader: an at_abs on the obs pin IS a scheduled onset.
+                # Provisional epoch at arm (so lead-window at-commands
+                # anchor), and the box-authoritative onset event -- future-
+                # stamped at T with a synthetic ~40 us fire error, the
+                # virtual license the +27 validation already used.
+                variable obs_mode; variable obs_pin
+                if { $obs_mode eq "leader" && $pin == $obs_pin } {
+                    variable obs_anchor
+                    set obs_anchor $data
+                    pub_int in_obs $data 1
+                    pub_int sched/obs_fire_err_us $now 40
+                }
             }
         } elseif { [regexp {^cmd/dac/(\d+)$} $leaf -> dch] } {
             # v0.4.0+18 wire contract: immediate 12-bit DAC set, ch 0 only;
@@ -289,6 +306,16 @@ namespace eval vbox {
 
         if { [regexp {^config/pin/(\d+)/pulse_us$} $leaf -> pin] } {
             set pulsew($pin) $data
+        } elseif { $leaf eq "config/obs/mode" } {
+            variable obs_mode
+            set obs_mode [expr {$data eq "leader" || $data == 1 ? "leader" : "mirror"}]
+            # live role reflection, exactly like firmware CFG_OBS_MODE
+            pub_str obs/mode $now $obs_mode
+            pub_int obs_leader $now [expr {$obs_mode eq "leader" ? 1 : 0}]
+        } elseif { $leaf eq "config/obs/pin" } {
+            variable obs_pin
+            set obs_pin $data
+            pub_int obs_pin $now $data
         } elseif { $leaf eq "config/ain/rate" } {
             set ain(rate) $data
         } elseif { $leaf eq "config/ain/enable" } {
@@ -361,6 +388,11 @@ namespace eval vbox {
         pub_str fw_ver $now 0.0.0+vbox
         pub_str sync/source $now sw
         pub_int dac_en $now 1
+        # +31 obs-leader role: announced capability, exactly like firmware
+        variable obs_mode; variable obs_pin
+        pub_str obs/mode $now $obs_mode
+        pub_int obs_leader $now [expr {$obs_mode eq "leader" ? 1 : 0}]
+        pub_int obs_pin $now $obs_pin
     }
 
     proc init {} {

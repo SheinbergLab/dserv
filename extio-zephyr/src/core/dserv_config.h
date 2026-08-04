@@ -205,7 +205,22 @@ typedef struct {
      * Safe to persist wrongly: the console is NOT the control channel, so
      * config/console is still reachable over the frame pipe from dserv. */
     uint8_t  console_mode;
+    /* v23: the obs pin's ROLE (valid iff obs_en; pin stays obs_pin).
+     * 0 = mirror (default: the output follows the host's ess/in_obs --
+     * today's behaviour, and what an older blob loads). 1 = LEADER: the
+     * box owns the obs line and the epoch -- an at_abs on the pin is a
+     * scheduled onset (provisional epoch at arm, actual-stamped
+     * state/in_obs at fire), and mirror-following is SUPPRESSED so the
+     * physical line moves only at scheduled instants plus the end clear:
+     * once other instruments trigger on that line it is data, and a
+     * twitch at frame-arrival time would be a lie on the wire. A
+     * persisted leader is announced (manifest obs_leader) so hosts can
+     * DISCOVER the box that may lead: ::ess::obs_schedule_bind auto. */
+    uint8_t  obs_mode;
 } box_config_t;
+
+#define OBS_MODE_MIRROR 0
+#define OBS_MODE_LEADER 1
 
 #define AIN_GROUP_FLAG_AVG  0x01u   /* ain_group_flags: decimate window -> boxcar mean, not drop */
 
@@ -229,6 +244,7 @@ typedef enum {
     CFG_NET_IP,
     CFG_NET_MODE,
     CFG_OBS_PIN,
+    CFG_OBS_MODE,
     CFG_SYNC_PIN,
     CFG_CONSOLE,
     CFG_ACTIVE_LOW,
@@ -450,6 +466,8 @@ static inline int         dserv_console_val(const char *w)
  * valid mirror pin and the zeroed factory default is "off". */
 static inline int  obs_mirror_enabled(const box_config_t *c) { return c->obs_en != 0; }
 static inline int  obs_mirror_pin(const box_config_t *c)     { return (int) c->obs_pin; }
+static inline int  obs_is_leader(const box_config_t *c)
+{ return c->obs_en != 0 && c->obs_mode == OBS_MODE_LEADER; }
 static inline void obs_mirror_set(box_config_t *c, int gpio) { c->obs_pin = (uint8_t) gpio; c->obs_en = 1; }
 static inline void obs_mirror_off(box_config_t *c)          { c->obs_en = 0; }
 
@@ -680,6 +698,18 @@ static inline cfg_result_t dserv_cfg__config(box_config_t *c, const char *k,
         }
         c->applied_count++; return CFG_OBS_PIN;
     }
+    if (strcmp(k, "obs/mode") == 0) {
+        char w[8]; dserv_msg_copy_cstr(m, w, sizeof w);
+        if (m->type == DSERV_STRING && !strcmp(w, "leader")) {
+            c->obs_mode = OBS_MODE_LEADER;
+        } else if (m->type == DSERV_STRING && !strcmp(w, "mirror")) {
+            c->obs_mode = OBS_MODE_MIRROR;
+        } else {
+            long v = dserv_msg_as_long(m);
+            c->obs_mode = (v == 1) ? OBS_MODE_LEADER : OBS_MODE_MIRROR;
+        }
+        c->applied_count++; return CFG_OBS_MODE;
+    }
     if (strcmp(k, "sync/pin") == 0) {
         char w[8]; dserv_msg_copy_cstr(m, w, sizeof w);
         if (m->type == DSERV_STRING && !strcmp(w, "off")) sync_input_off(c);
@@ -771,6 +801,7 @@ static inline const char *dserv_cfg_result_str(cfg_result_t r)
     case CFG_NET_IP:     return "net_ip";
     case CFG_NET_MODE:   return "net_mode";
     case CFG_OBS_PIN:    return "obs_pin";
+    case CFG_OBS_MODE:   return "obs_mode";
     case CFG_SYNC_PIN:   return "sync_pin";
     case CFG_CONSOLE:    return "console";
     case CFG_ACTIVE_LOW: return "active_low";

@@ -527,7 +527,7 @@ static void abs_fire(struct k_timer *t)
 	 * the ACTUAL instant, correct the provisional epoch (set at arming so
 	 * lead-window at-commands could arm), mark obs active, flag the
 	 * publish. Flag-and-timestamp only: the ISR discipline above holds. */
-	if (cfg.obs_en && pin == (int) cfg.obs_pin) {
+	if (obs_is_leader(&cfg) && pin == (int) cfg.obs_pin) {
 		obs_fire_actual_us = box_gpio_now_us();
 		obs_begin_us = obs_fire_actual_us;
 		box_obs_set(1);
@@ -926,7 +926,7 @@ static int fast_msg(const dserv_msg_t *m, const char *leaf, uint64_t arr_us)
 			 * they must find the epoch already set. Provisional here;
 			 * the fire corrects it to the actual instant (<= the
 			 * certified 120 us away) and marks obs ACTIVE. */
-			if (cfg.obs_en && pin2 == (int) cfg.obs_pin) {
+			if (obs_is_leader(&cfg) && pin2 == (int) cfg.obs_pin) {
 				obs_begin_us = target_box;
 			}
 
@@ -1057,8 +1057,15 @@ static int fast_msg(const dserv_msg_t *m, const char *leaf, uint64_t arr_us)
 #endif
 		}
 
-		/* drive the obs-mirror output (LED / scope trace) */
-		box_gpio_obs_mirror(&cfg, obs);
+		/* drive the obs-mirror output (LED / scope trace) -- unless the
+		 * pin is the LEADER-owned obs line (+31): then it moves only at
+		 * scheduled instants (at_abs fire) plus the end clear below, so
+		 * anything triggering on it never sees a frame-arrival twitch. */
+		if (!obs_is_leader(&cfg)) {
+			box_gpio_obs_mirror(&cfg, obs);
+		} else if (!obs) {
+			box_gpio_obs_mirror(&cfg, 0);   /* end clear is always honest */
+		}
 
 		/* publish the box's OWN live copy, so obs state is visible per-box in
 		 * dserv without a scope -- honest, since it only updates when THIS box
@@ -1846,6 +1853,10 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 #endif
 		groups_resync();          /* DI levels may have changed meaning */
 		box_announce_manifest(&cfg);   /* pins/in|out, obs_pin, sync_pin moved */
+	} else if (r == CFG_OBS_MODE) {
+		/* +31: reflect the role change live, so a UI's select doesn't sit
+		 * stale until the next announce -- same courtesy pin moves get. */
+		box_announce_obs_role(&cfg);
 	} else if (r == CFG_ANNOUNCE) {
 		/* Everything, not just the manifest: identity and the OTA counters
 		 * live in the burst, and a UI asking "what are you now" wants the

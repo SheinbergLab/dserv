@@ -158,6 +158,32 @@ scheduled on the disciplined clock, verified armed, and recorded at its
 scheduled time** -- observation of a software moment is always smeared;
 a scheduled instant is exact.
 
+SUPERSEDED IN PART by +30/+31 (2026-08-04, David's design): the box that
+owns the obs line is now the BEGINOBS *authority*, not just its actuator.
++30: begin_obs under a bound box REQUESTS the onset (at_abs at T) and
+returns pending; the box fires, captures the ACTUAL instant in the ISR,
+and publishes state/in_obs stamped with it (plus per-obs
+state/sched/obs_fire_err_us, the live version of the certified 120 us
+bound); the host's onset subscription emits BEGINOBS/ess/in_obs with the
+box's stamp and wakes the state machine. Per-obs positive control: no
+event -> loud timeout fallback (obs_begin_now), never a declared-but-
+never-asserted obs. at-mode bursts are sent INSIDE the lead window
+(box_schedule_ passes the raw offset while an onset is pending; the box
+holds the provisional epoch from arming) -- that margin is what closed
+the events variant's 2 ms-rung races (battery 600/600 after; the
+wait-for-onset-then-send version inverted the margin and failed 6-10
+trials/session, a mistake the code comments now guard).
++31: the role is DECLARED AND DISCOVERABLE -- config/obs/mode =
+mirror|leader (obs/pin unchanged), leader = onset semantics + mirror
+suppression (the line moves only at scheduled instants + end clear);
+manifest announces obs/mode + obs_leader; `obs_schedule_bind auto auto`
+resolves the single announced live leader and refuses ambiguity. The TTL
+sync input (sync/pin) is the complementary FOLLOWER role: leader asserts
+the physical line, wired followers hw-stamp the same edge -- one leader,
+N followers, all locked to one instant, and the announces let tooling
+verify that topology instead of assuming it. Unbound systems keep the
+byte-identical classic begin_obs.
+
 ## Candidate surface (to validate by use, not committed a priori)
 
 ```tcl

@@ -843,7 +843,23 @@ function renderPanel() {
     <table>
       <tr><th>obs pin</th><td>${field(b, 'obs_pin', 'obs/pin', { i32: 1 })}${silkPin(sk, get(b, 'obs_pin'))} ${ageSpan(b, 'obs_pin')}</td>
           <th>sync pin</th><td>${field(b, 'sync_pin', 'sync/pin', { i32: 1 })}${silkPin(sk, get(b, 'sync_pin'))} ${ageSpan(b, 'sync_pin')}</td></tr>
+      <tr><th>obs mode</th><td>${(() => {
+            const m = String(get(b, 'obs/mode', 'mirror'));
+            return `<select onchange="cfgSet('${b}','obs/mode',this.value)">` +
+              ['mirror', 'leader'].map(o =>
+                `<option${o === m ? ' selected' : ''}>${o}</option>`).join('') +
+              `</select>`;
+          })()} ${get(b, 'obs_leader', 0) == 1
+            ? '<span class="ok">announced obs leader</span>' : ''}</td>
+          <th></th><td></td></tr>
     </table>
+    <p class="note"><b>mirror</b> follows the host's <code>ess/in_obs</code> (the classic LED/scope
+       trace). <b>leader</b> makes this box the obs authority: an <code>at_abs</code> on the obs pin
+       is a scheduled onset — the box asserts the line at T, stamps the actual instant into
+       <code>state/in_obs</code>, and mirror-following is suppressed so the line moves only at
+       scheduled instants. A persisted leader (<code>cmd/save</code>) is announced, and
+       <code>::ess::obs_schedule_bind auto auto</code> finds it. The sync pin is the complementary
+       follower role: boxes wired to the leader's line hardware-stamp the same edge.</p>
 
     <h2>pins</h2>
     <table><tr><th>pin</th><th>mode</th><th>level</th><th>label</th><th>debounce ms</th><th>pulse µs</th><th>act low</th></tr>${pinRows}</table>

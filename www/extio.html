@@ -41,6 +41,7 @@
   .chip.eth { background: #14351f; color: var(--green); }
   .chip.usb { background: #17293f; color: var(--blue); }
   .chip.wdg { background: #3f1d1d; color: var(--red); }
+  .chip.lead { background: #3a2c10; color: #e8b34b; }
   .obs { font-size: 11px; font-weight: 700; letter-spacing: 0.06em; padding: 1px 8px;
          border-radius: 9px; background: var(--off); color: var(--faint); transition: all 120ms; }
   .obs.on { background: #14351f; color: var(--green); box-shadow: 0 0 8px rgba(74,222,128,0.5); }
@@ -241,6 +242,8 @@ function onExtio(msg) {
                leaf === 'fw_ver' || leaf === 'ip' || leaf === 'dserv' ||
                leaf === 'board') {
         b.ident[leaf] = String(v);
+    } else if (leaf === 'obs_leader') {
+        b.obsLeader = num == 1;      /* +31: announced obs-onset authority */
     }
     /* watchdog/link/timer/sync raw parts: liveness only (lastSeen above) */
     dirty.add(b.name);
@@ -337,6 +340,10 @@ function cardHtml(b) {
         ? `<span class="chip ${id.transport === 'usb' ? 'usb' : 'eth'}">${esc(id.transport)}</span>` : '';
     const bchip = id.boot
         ? `<span class="chip ${id.boot === 'watchdog' ? 'wdg' : ''}">boot: ${esc(id.boot)}</span>` : '';
+    /* +31: the announced obs-onset authority -- the box a paradigm's
+     * `obs_schedule_bind auto` will resolve. One per rig by contract. */
+    const lchip = b.obsLeader
+        ? `<span class="chip lead" title="announced obs leader: owns the obs line and emits BEGINOBS (actual-stamped onset); obs_schedule_bind auto resolves this box">obs leader</span>` : '';
     /* fw_ver is what MCUboot ACTUALLY booted; fw is compiled in and cannot change
      * when an OTA lands, so a box updated overnight would still show its old
      * number here. Prefer fw_ver, fall back to fw for pre-MCUboot firmware. */
@@ -465,7 +472,7 @@ function cardHtml(b) {
     const desc = b.desc ? `<div class="desc">${esc(b.desc)}</div>` : '';
 
     return `<div class="title"><span class="live ${alive ? 'on' : ''}"></span>` +
-           `<span class="name">${esc(b.name)}</span>${obs}${xchip}${fw}${bchip}${ip}` +
+           `<span class="name">${esc(b.name)}</span>${obs}${xchip}${fw}${bchip}${lchip}${ip}` +
            `</div>` + desc +
            `<div class="meta"><b>up</b> ${upStr} · <b>seen</b> ${fmtAge(age)}${connSeg}${target}${sync}${bat}</div>` +
            di + groups + dout + aingrps + ain;
