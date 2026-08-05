@@ -105,18 +105,19 @@ namespace eval sound {
             set card [lindex $ids 0]
             set dev plughw:CARD=$card,DEV=0
             puts "sound: auto-selected USB audio device $dev"
-            # Normalize the card's HARDWARE mixer to 0 dB. It sits UNDER
-            # everything dserv controls, ships at arbitrary levels (a
-            # C-Media arrived at 56% = -20 dB, officepi 2026-08-05), and no
-            # GUI sees it -- a rig with every dserv gain at max was still
-            # quiet. Loudness policy belongs to the dserv gain chain; the
-            # hardware layer should be transparent. alsactl store makes it
-            # survive reboots. catch: amixer absent or an unnamed control
-            # is fine -- this is normalization, not a dependency.
+            # DO NOT auto-normalize the card's hardware mixer to 0 dB.
+            # Tried 2026-08-05 and REVERTED the same evening: full-scale
+            # playback at 0 dB through a C-Media dongle spiked USB VBUS
+            # current and HARD-CRASHED a Pi 5 -- twice, instantly, at the
+            # loudest sample (vcgencmd undervoltage flags; the shipped 56%
+            # (-20 dB) default was accidentally load-bearing brownout
+            # protection). The mixer level is a PER-RIG electrical
+            # decision (PSU headroom, powered vs passive speakers): set it
+            # deliberately with amixer + alsactl store, never blindly.
+            # Unmute alone is safe -- a shipped-muted card is just broken.
             foreach ctl {Speaker PCM Headphone} {
-                catch { exec amixer -c $card sset $ctl 100% unmute }
+                catch { exec amixer -c $card sset $ctl unmute }
             }
-            catch { exec alsactl store }
             return $dev
         }
         set ids [find_hdmi_audio]
