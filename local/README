@@ -4,7 +4,76 @@ pre-*.tcl will be sourced early in dsconf.tcl (before ess is initialized)
 
 post-*.tcl will be sourced at end of dsconf.tcl (after ess is initialized)
 
+<name>.tcl (ain, camera, extio, input, juicer, mesh, openephys, slider,
+sound) is sourced by that subprocess's own config, near the end of it.
+
 offline (empty marker file) puts dserv in offline / air-gapped mode:
 all outbound network to non-loopback hosts is refused instantly and the
 registry/mesh/trial-ingest paths skip cleanly. Equivalent to exporting
 DSERV_OFFLINE=1. See docs/OFFLINE.md.
+
+
+WHAT AN ERROR IN ONE OF THESE FILES COSTS
+
+None of these are sourced inside a catch, and every one of them is
+hand-written per rig, which makes them the likeliest source of a boot that
+does not finish. What you lose depends on which file threw:
+
+  pre-*.tcl    aborts dsconf.tcl at the very top. NO subprocesses start at
+               all. This is the most expensive place to make a mistake.
+
+  post-*.tcl   aborts config/essconf.tcl. dserv keeps booting (the rest of
+               dsconf.tcl still runs) but `ess` is left half-initialized --
+               typically no system loaded, and ::ess::init refuses to run.
+               post-pins.tcl is the usual suspect here: a gpioLineRequest
+               for a line that is missing, already claimed, or not yet
+               released by a previous dserv throws like anything else.
+
+  <name>.tcl   aborts that subprocess's config only. The subprocess stays
+               alive and reachable, but half-configured.
+
+In every case the failure is recorded rather than silent: <name>/init_error
+carries the message and the full errorInfo goes to the systemd journal.
+Nothing prints on the console, so you have to look.
+
+
+CHECKING THAT A BOOT ACTUALLY FINISHED
+
+  # did dsconf.tcl reach its last line?      1 = yes
+  dservGet system/boot_complete
+
+  # if not, the last step it attempted
+  dservGet system/boot_stage
+
+  # any subprocess whose config threw
+  dservKeys *init_error*
+  dservGet ess/init_error          ;# etc, for whatever the line above lists
+
+From a shell:
+
+  printf 'dservKeys *init_error*\n' | nc -q1 localhost 2570
+
+If dserv does not answer at all, a config script is BLOCKED rather than
+broken -- config scripts run synchronously, so one that waits on hardware
+(serial, USB, ALSA, a stim2 connect) hangs the whole boot, and the control
+port then accepts connections but never replies. The journal is the only
+channel left: look for the last
+
+  dsconf: starting <name>
+
+with no matching "started <name> ok". That names the subprocess that hung.
+
+scripts/boot_soak.sh restarts dserv repeatedly and captures all of the
+above on the first bad boot, for chasing intermittent ones.
+
+
+WRITING THESE FILES
+
+Datapoints owned by another subprocess may not exist yet, or at all if that
+subprocess failed. A bare dservGet of an absent datapoint RAISES, so guard
+any cross-subprocess read:
+
+  if { [dservExists ess/system] } { set sys [dservGet ess/system] }
+
+`after ms script` does NOT work here -- there is no Tcl event loop. Use
+dservWhen, dservAfter, or the timer module instead.

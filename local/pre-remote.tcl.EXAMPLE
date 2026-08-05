@@ -1,2 +1,35 @@
+#
+# Remote stim2 configuration.
+#
+# Copy to local/pre-remote.tcl and edit. Only needed when stim2 runs on a
+# DIFFERENT machine than dserv; a local stim2 needs no file at all.
+#
+
+# Where stim2 is listening. config/stimconf.tcl connects here (port 4612).
+# Defaults to "localhost" when this is unset.
 set env(ESS_RMT_HOST) 192.168.88.50
+
+# The address stim2 should use to reach THIS box.
+#
+# ESS hands it to stim2 over rmt -- `rmtSend "set dservhost ..."` in
+# lib/ess-2.0.tm -- so stim2 knows where to send its datapoints BACK. Getting
+# it wrong fails SILENTLY in both directions: stim2 connects to the wrong
+# host (often itself) and the datapoints simply never arrive.
+#
+# OPTIONAL as of the ess/ipaddr fallback fix. dsconf.tcl now derives it:
+#   1. this setting, if present                            <- always wins
+#   2. else, if ESS_RMT_HOST above names another machine,
+#      this box's LAN IPv4 (same value as system/hostaddr)
+#   3. else 127.0.0.1 (local stim2; survives a downed link)
+#
+# So on a normal single-NIC rig you can delete this line and rule 2 does the
+# right thing. Set it explicitly when the derived answer would be wrong:
+#
+#   - multi-homed box, and stim2 is not on the default-route interface
+#     (the derivation uses `ip route get`, i.e. the default route)
+#   - dserv reachable via NAT/port-forward, or a name rather than an address
+#   - you want stim2 pinned to a specific interface
+#
+# Check what was derived with:  dservGet ess/ipaddr
+#
 set env(ESS_IPADDR)   192.168.88.29

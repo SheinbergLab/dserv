@@ -17,6 +17,46 @@ tcl::tm::add $dspath/lib
 # enable error logging
 errormon enable
 
+# Boot breadcrumbs. dsconf.tcl runs as ONE Tcl_Eval, so a script-level error
+# anywhere in it silently truncates the boot: everything below that line never
+# runs, and the only evidence is which subprocesses are missing from
+# `subprocessInfo`. These two datapoints make that self-reporting:
+#
+#   system/boot_stage      last thing dsconf.tcl attempted
+#   system/boot_complete   0 until dsconf.tcl reaches its last line, then 1
+#
+# So `dservGet system/boot_complete` answers "did the boot finish?" and
+# system/boot_stage names the exact step it died on. The subprocess wrapper
+# below only records while booting, so on-demand spawns later (virtual_subject,
+# virtual_extio, -link children) leave the post-mortem breadcrumb intact.
+dservSet system/boot_complete 0
+dservSet system/boot_stage    start
+set ::dsconf_booting 1
+
+# The stderr line matters as much as the datapoint. subprocess config scripts
+# run SYNCHRONOUSLY (subprocess_command -> child->eval blocks on the reply
+# queue), so a config that blocks on hardware -- juicer serial, extio USB,
+# ALSA, a stim2 connect -- hangs dsconf.tcl forever. In that state the main
+# interp never returns to its request loop, so ports 2560/2565/2570 accept
+# connections but answer nothing: the breadcrumb DATAPOINTS are unreadable
+# precisely when they would be most useful. The journal is the only channel
+# that still works, so mirror there. Last "dsconf: starting X" in the journal
+# with no matching "ok" names the subprocess that hung.
+rename subprocess _subprocess
+proc subprocess {args} {
+    if { ![info exists ::dsconf_booting] } {
+	return [uplevel 1 [linsert $args 0 _subprocess]]
+    }
+    set who [lindex $args 0]
+    dservSet system/boot_stage "subprocess $who"
+    puts stderr "dsconf: starting $who"
+    flush stderr
+    set rc [catch { uplevel 1 [linsert $args 0 _subprocess] } result options]
+    puts stderr "dsconf: started $who [expr {$rc ? "FAILED: $result" : "ok"}]"
+    flush stderr
+    return -options $options $result
+}
+
 # look for any .tcl configs to run before other subprocesses local/*.tcl
 foreach f [glob -nocomplain [file join $dspath local pre-*.tcl]] {
     source $f
@@ -139,11 +179,6 @@ proc get_local_hostaddr {} {
 }
 
 proc set_hostinfo {} {
-    # set IP addresses for use in stim communication
-    if { [dservGet ess/ipaddr] == "" } {
-	dservSet ess/ipaddr 127.0.0.1
-    }
-
     # set host address to identify this machine (LAN IPv4; loopback fallback)
     set addr [get_local_hostaddr]
     if { $addr eq "" } {
@@ -151,17 +186,80 @@ proc set_hostinfo {} {
     }
     dservSet system/hostaddr $addr
 
-    if { $::tcl_platform(os) == "Darwin" } {
-	set name [exec scutil --get ComputerName]
-    } elseif { $::tcl_platform(os) == "Linux" } {
-	set name [exec hostname]
-    } else {
-	set name $::env(COMPUTERNAME)
+    # ess/ipaddr is the address ESS hands to stim2 over rmt --
+    #     rmtSend "set dservhost [dservGet ess/ipaddr]"   (lib/ess-2.0.tm)
+    # -- so stim2 knows where to send its datapoints BACK. Three cases, in
+    # precedence order:
+    #
+    #  1. $env(ESS_IPADDR) set (local/pre-remote.tcl): essconf.tcl already
+    #     seeded ess/ipaddr from it. Explicit rig declaration; never override.
+    #  2. $env(ESS_RMT_HOST) names another machine (config/stimconf.tcl uses
+    #     the same variable to locate stim2): stim2 is REMOTE, so it must be
+    #     handed our LAN address. Loopback here tells a remote stim2 to send
+    #     datapoints to ITSELF, where they vanish with no error on either
+    #     side -- such rigs only worked because ESS_IPADDR was set by hand.
+    #  3. otherwise stim2 is local: 127.0.0.1.
+    #
+    # Case 3 stays on loopback deliberately. Routing-wise it makes no odds --
+    # the kernel resolves this box's own LAN address to `dev lo` (verified:
+    # `ip route get <own addr>` -> "local ... dev lo"), and 30k round trips
+    # through dserv's port measured identical (median 28 us either way, minima
+    # within 0.1 us). But loopback survives a downed link, and the LAN address
+    # does not: pull the cable and the local route disappears with it, taking
+    # a LOCAL stim2's connection with it. No reason to make the common case
+    # depend on the network being up.
+    #
+    # dservExists guards the read because ess/ipaddr is owned by a DIFFERENT
+    # subprocess, and a bare dservGet of an absent dpoint raises a Tcl error
+    # (Dataserver.cpp dserv_get_command). That used to abort this whole script
+    # -- taking stim/mesh/db/trialsync/virtual_eye/virtual_slider/camera with
+    # it -- whenever essconf.tcl died before reaching its own `dservSet
+    # ess/ipaddr`. Same "one rogue subprocess kills dsconf" failure the
+    # subprocess_command fix closed; it survived there because this coupling
+    # runs through a datapoint read rather than the subprocess return code.
+    set stim_addr 127.0.0.1
+    if { [info exists ::env(ESS_RMT_HOST)] } {
+	set rmt $::env(ESS_RMT_HOST)
+	if { $rmt ne "" && $rmt ne "localhost" &&
+	     ![string match 127.* $rmt] && $rmt ne $addr } {
+	    set stim_addr $addr
+	}
     }
+    if { ![dservExists ess/ipaddr] || [dservGet ess/ipaddr] eq "" } {
+	dservSet ess/ipaddr $stim_addr
+    }
+
+    # Every branch here is wrapped, for the same reason get_local_hostaddr
+    # wraps its own execs: `exec` FORKS, and this process is large, heavily
+    # threaded and mlockall()ed under RT scheduling. A fork that fails (or a
+    # tool that is missing, or COMPUTERNAME being unset on a non-Darwin,
+    # non-Linux host) raised a bare Tcl error on the boot path and truncated
+    # dsconf.tcl right here -- losing stim/mesh/db/trialsync/virtual_eye/
+    # virtual_slider/camera. A cosmetic datapoint must never be able to do
+    # that; fall back to the kernel hostname file, then to "unknown".
+    set name ""
+    catch {
+	if { $::tcl_platform(os) == "Darwin" } {
+	    set name [exec scutil --get ComputerName]
+	} elseif { $::tcl_platform(os) == "Linux" } {
+	    set name [exec hostname]
+	} else {
+	    set name $::env(COMPUTERNAME)
+	}
+    }
+    if { $name eq "" } {
+	catch {
+	    set f [open /proc/sys/kernel/hostname r]
+	    set name [string trim [read $f]]
+	    close $f
+	}
+    }
+    if { $name eq "" } { set name unknown }
     dservSet system/hostname $name
     dservSet system/os $::tcl_platform(os)
 }
 
+dservSet system/boot_stage set_hostinfo
 set_hostinfo
 
 set host [dservGet system/hostaddr]
@@ -188,5 +286,10 @@ subprocess virtual_slider "source [file join $dspath config/virtualsliderconf.tc
 if { [file exists $dspath/modules/dserv_camera[info sharedlibextension]] } {
     subprocess camera "source [file join $dspath config/cameraconf.tcl]"
 }
+
+# dsconf.tcl ran to completion -- see the boot breadcrumb comment at the top.
+unset ::dsconf_booting
+dservSet system/boot_stage    done
+dservSet system/boot_complete 1
 
 

@@ -98,6 +98,15 @@ foreach dp $ess_dps {
 proc mesh_init_current_values {} {
     global ess_dps mesh_fields mesh_status
     foreach dp $ess_dps {
+        # These are owned by the `ess` subprocess and are absent until it has
+        # loaded a system -- which is exactly what "in case ess is already
+        # running" means. A bare dservGet of an absent dpoint RAISES (see
+        # Dataserver.cpp dserv_get_command), so on a box where essconf.tcl
+        # failed, this loop aborted meshconf.tcl and left mesh with no ess
+        # subscriptions at all. Skip what is not there yet; the
+        # dpointSetScript handlers below pick each field up when ess
+        # publishes it.
+        if { ![dservExists ess/$dp] } { continue }
         set val [dservGet ess/$dp]
         if {$val ne ""} {
             if {$dp eq "status"} {
