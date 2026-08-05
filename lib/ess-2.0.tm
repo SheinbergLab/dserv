@@ -5303,20 +5303,42 @@ namespace eval ess {
     # the sound module across both backends, independent of the per-channel
     # MIDI mix -- an overall "how loud is this rig" knob. 1.0 == prior loudness.
     #
-    # Both are persisted per box via settingsdb (subsystem "sound", one dict)
+    # SYNTH GAIN and WAV GAIN sit one level below master, on each source
+    # separately, so the two can be balanced against each other:
+    #
+    #     synth -> synth_gain -.
+    #                           +-> master_gain -> clip -> device
+    #     wav   -> wav_gain ---'
+    #
+    # A normalized wav stimulus is near full scale while the synth renders
+    # well below it, so mixing both at 1.0 is what drives the output into the
+    # clipper. Turning wav_gain down fixes that without making the feedback
+    # beeps quieter (master would) and without touching the per-channel MIDI
+    # mix (feedback_volume would). Applied inside the mixer, so a change takes
+    # effect immediately -- including on an already-playing wav. Software path
+    # only: a hardware MIDI synth's audio never passes through our mixer, so
+    # on those rigs its level stays under master gain and CC7.
+    #
+    # All are persisted per box via settingsdb (subsystem "sound", one dict)
     # and re-applied by sound_init, so they survive dserv restarts and system
     # reloads without wrapping any sound_play call site.
     variable feedback_volume 127
     variable master_gain 1.0
+    variable synth_gain 1.0
+    variable wav_gain 1.0
     variable feedback_channels {0 1 2 3 4 5 6}
 
     # Persist the current sound settings as one opaque dict under "sound".
     proc sound_persist_settings {} {
 		variable feedback_volume
 		variable master_gain
+		variable synth_gain
+		variable wav_gain
 		catch {
 			::settingsdb::save sound \
-				[dict create feedback_volume $feedback_volume master_gain $master_gain]
+				[dict create feedback_volume $feedback_volume \
+					 master_gain $master_gain \
+					 synth_gain $synth_gain wav_gain $wav_gain]
 		}
     }
 
@@ -5372,6 +5394,57 @@ namespace eval ess {
 		return $level
     }
 
+    # Push the per-source bus gains to the sound module and publish them.
+    proc sound_apply_synth_gain {} {
+		variable synth_gain
+		send sound "soundSynthGain $synth_gain"
+		dservSet ess/sound/synth_gain $synth_gain
+    }
+
+    proc sound_apply_wav_gain {} {
+		variable wav_gain
+		send sound "soundWavGain $wav_gain"
+		dservSet ess/sound/wav_gain $wav_gain
+    }
+
+    # Set + persist + apply the synth bus level (0.0 silent .. 1.0 full).
+    proc sound_set_synth_gain { level } {
+		variable synth_gain
+		if {![string is double -strict $level] || $level < 0.0 || $level > 1.0} {
+			error "synth gain must be a number 0.0-1.0"
+		}
+		set synth_gain $level
+		sound_persist_settings
+		sound_apply_synth_gain
+		return $level
+    }
+
+    proc sound_get_synth_gain {} {
+		variable synth_gain
+		dservTouch ess/sound/synth_gain
+		return $synth_gain
+    }
+
+    # Set + persist + apply the wav stimulus bus level (0.0 silent .. 1.0
+    # full). This is the knob for a full-scale wav that clips against the
+    # feedback beeps; it leaves the synth and the MIDI mix alone.
+    proc sound_set_wav_gain { level } {
+		variable wav_gain
+		if {![string is double -strict $level] || $level < 0.0 || $level > 1.0} {
+			error "wav gain must be a number 0.0-1.0"
+		}
+		set wav_gain $level
+		sound_persist_settings
+		sound_apply_wav_gain
+		return $level
+    }
+
+    proc sound_get_wav_gain {} {
+		variable wav_gain
+		dservTouch ess/sound/wav_gain
+		return $wav_gain
+    }
+
     proc sound_get_master_gain {} {
 		variable master_gain
 		dservTouch ess/sound/master_gain
@@ -5383,6 +5456,8 @@ namespace eval ess {
     proc sound_restore_settings {} {
 		variable feedback_volume
 		variable master_gain
+		variable synth_gain
+		variable wav_gain
 		set stored ""
 		catch { set stored [::settingsdb::load sound] }
 		# Tolerate a missing/legacy value: treat anything that isn't a dict as none.
@@ -5391,13 +5466,20 @@ namespace eval ess {
 			set v [dict get $stored feedback_volume]
 			if {[string is integer -strict $v]} { set feedback_volume $v }
 		}
-		if {[dict exists $stored master_gain]} {
-			set g [dict get $stored master_gain]
-			if {[string is double -strict $g]} { set master_gain $g }
+		# Each gain is restored independently, so a dict written before the
+		# per-source gains existed simply leaves them at 1.0.
+		foreach key {master_gain synth_gain wav_gain} {
+			if {[dict exists $stored $key]} {
+				set g [dict get $stored $key]
+				if {[string is double -strict $g]} { set $key $g }
+			}
 		}
 		dservSet ess/sound/feedback_volume $feedback_volume
 		dservSet ess/sound/master_gain $master_gain
-		return [list feedback_volume $feedback_volume master_gain $master_gain]
+		dservSet ess/sound/synth_gain $synth_gain
+		dservSet ess/sound/wav_gain $wav_gain
+		return [list feedback_volume $feedback_volume master_gain $master_gain \
+					synth_gain $synth_gain wav_gain $wav_gain]
     }
 
     proc sound_init {} {
@@ -5410,6 +5492,8 @@ namespace eval ess {
 		sound_set_voice 8 0 5
 		sound_set_voice 113 100 6
 		sound_apply_master_gain
+		sound_apply_synth_gain
+		sound_apply_wav_gain
 		sound_apply_feedback_volume
     }
 

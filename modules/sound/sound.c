@@ -187,7 +187,15 @@ typedef struct sound_info_s
   _Atomic int ao_running;
   char ao_name[256];
 
+  /* Gain chain:  synth -> synth_gain -.
+   *                                    +-> master_gain -> clip -> device
+   *   wav voice -> voice gain -> wav_gain -'
+   * The two bus gains let a rig balance stimuli against feedback beeps --
+   * e.g. pull full-scale wavs out of the clipper -- without disturbing the
+   * other source or the per-channel MIDI mix. */
   _Atomic float master_gain;              /* post-mix, 0.0 - 1.0 */
+  _Atomic float synth_gain;               /* synth bus, pre-mix  */
+  _Atomic float wav_gain;                 /* wav bus, pre-mix    */
 
   wav_entry_t wavs[MAX_WAVS];
   wav_voice_t voices[MAX_WAV_VOICES];
@@ -553,7 +561,19 @@ static void ao_data_callback(ma_device *dev, void *output, const void *input,
     done += chunk;
   }
 
+  /* Synth bus gain. The render above overwrites rather than accumulates, so
+   * buf holds nothing but synth output at this point and can be scaled in
+   * place -- before any wav voice is mixed in below. Deliberately not
+   * fluidsynth's own synth.gain: that lives on the synth object and would
+   * be silently lost every time soundInitFluidSynth rebuilds it. */
+  float sgain = atomic_load_explicit(&info->synth_gain, memory_order_relaxed);
+  if (synth && sgain != 1.0f) {
+    for (ma_uint32 k = 0; k < nframes * AO_CHANNELS; k++)
+      buf[k] *= sgain;
+  }
+
   /* Mix active wav voices */
+  float wgain = atomic_load_explicit(&info->wav_gain, memory_order_relaxed);
   for (int i = 0; i < MAX_WAV_VOICES; i++) {
     wav_voice_t *v = &info->voices[i];
     int st = atomic_load_explicit(&v->state, memory_order_acquire);
@@ -581,7 +601,7 @@ static void ao_data_callback(ma_device *dev, void *output, const void *input,
       ma_uint32 n = (ma_uint32) ((avail < remaining) ? avail : remaining);
       const float *src = v->pcm + v->pos * AO_CHANNELS;
       float *dst = buf + (size_t) at * AO_CHANNELS;
-      float g = v->gain;
+      float g = v->gain * wgain;
       for (ma_uint32 k = 0; k < n * AO_CHANNELS; k++)
         dst[k] += src[k] * g;
       v->pos += n; at += n; remaining -= n;
@@ -666,17 +686,29 @@ static int audio_out_ensure(sound_info_t *info, const char *pattern,
 {
   if (info->ao_initialized) return 0;
 
+  /* No pattern, or the literal "default", means the system default device.
+   * Asking for it explicitly is supported; ending up on it by accident is
+   * not (see below). */
+  int want_default = (!pattern || !*pattern ||
+                      strcmp(pattern, "default") == 0);
+
   char found[256] = "";
-  ma_device_id *did = ao_find_device(pattern, found, sizeof(found));
-  if (pattern && *pattern && !did
+  ma_device_id *did = want_default ? NULL :
+    ao_find_device(pattern, found, sizeof(found));
+  if (!want_default && !did
 #if !defined(__APPLE__) && !defined(WIN32)
       && !strchr(pattern, ':')
 #endif
       ) {
-    /* pattern given but nothing matched: fall through to default,
-     * but say so */
-    fprintf(stderr, "sound: no audio device matching \"%s\", using default\n",
-            pattern);
+    /* A device that was asked for by name but doesn't exist is a
+     * configuration error.  Quietly substituting the default device is
+     * how a rig ends up on a Pi's HDMI output -- that is, playing out of
+     * the stimulus display's speakers -- instead of its intended card. */
+    if (err) snprintf(err, errsz,
+                      "no audio device matching \"%s\" (audioDevices lists "
+                      "them; pass \"default\" to force the system default)",
+                      pattern);
+    return -1;
   }
 
   ma_device_config cfg = ma_device_config_init(ma_device_type_playback);
@@ -1161,6 +1193,45 @@ static int sound_gain_command (ClientData data, Tcl_Interp *interp,
   return TCL_OK;
 }
 
+/* Shared get/set for the two pre-mix bus gains: with a level, set it; with
+ * no argument, just report. Both return the resulting level, so a caller
+ * can clamp-and-read in one call. Unlike soundGain these are software-path
+ * only -- a hardware MIDI synth's output never passes through our mixer,
+ * so its level stays under soundGain (SysEx master volume) and CC7. */
+static int bus_gain_getset(Tcl_Interp *interp, int objc, Tcl_Obj *objv[],
+                           _Atomic float *slot)
+{
+  if (objc > 2) {
+    Tcl_WrongNumArgs(interp, 1, objv, "?level(0.0-1.0)?");
+    return TCL_ERROR;
+  }
+  if (objc == 2) {
+    double level;
+    if (Tcl_GetDoubleFromObj(interp, objv[1], &level) != TCL_OK)
+      return TCL_ERROR;
+    if (level < 0.0) level = 0.0;
+    if (level > 1.0) level = 1.0;
+    atomic_store_explicit(slot, (float) level, memory_order_relaxed);
+  }
+  Tcl_SetObjResult(interp, Tcl_NewDoubleObj((double)
+    atomic_load_explicit(slot, memory_order_relaxed)));
+  return TCL_OK;
+}
+
+static int synth_gain_command (ClientData data, Tcl_Interp *interp,
+                               int objc, Tcl_Obj *objv[])
+{
+  sound_info_t *info = (sound_info_t *) data;
+  return bus_gain_getset(interp, objc, objv, &info->synth_gain);
+}
+
+static int wav_gain_command (ClientData data, Tcl_Interp *interp,
+                             int objc, Tcl_Obj *objv[])
+{
+  sound_info_t *info = (sound_info_t *) data;
+  return bus_gain_getset(interp, objc, objv, &info->wav_gain);
+}
+
 static int sound_play_command (ClientData data, Tcl_Interp *interp,
 			       int objc, Tcl_Obj *objv[])
 {
@@ -1450,7 +1521,6 @@ static int wav_play_command(ClientData data, Tcl_Interp *interp,
                             int objc, Tcl_Obj *objv[])
 {
   sound_info_t *info = (sound_info_t *) data;
-  char err[256];
   double gain = 1.0;
   int loop = 0;
 
@@ -1471,9 +1541,15 @@ static int wav_play_command(ClientData data, Tcl_Interp *interp,
     return TCL_ERROR;
   }
 
-  /* device starts on demand so wav-only rigs never touch fluidsynth */
-  if (audio_out_ensure(info, NULL, err, sizeof(err)) != 0) {
-    Tcl_AppendResult(interp, Tcl_GetString(objv[0]), ": ", err, NULL);
+  /* Deliberately no on-demand device open here.  Opening the default
+   * device at first play means, on a box with no sound hardware, the HDMI
+   * port driving the stimulus display -- so a full-scale wav stimulus
+   * starts coming out of the subject's monitor.  Wav-only rigs that never
+   * touch fluidsynth open the device up front with audioInit. */
+  if (!info->ao_initialized) {
+    Tcl_AppendResult(interp, Tcl_GetString(objv[0]),
+                     ": no audio device open (use audioInit, or "
+                     "soundInitFluidSynth for synth as well)", NULL);
     return TCL_ERROR;
   }
 
@@ -1650,6 +1726,14 @@ static int audio_info_command(ClientData data, Tcl_Interp *interp,
                  Tcl_NewDoubleObj((double)
                    atomic_load_explicit(&info->master_gain,
                                         memory_order_relaxed)));
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("synth_gain", -1),
+                 Tcl_NewDoubleObj((double)
+                   atomic_load_explicit(&info->synth_gain,
+                                        memory_order_relaxed)));
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("wav_gain", -1),
+                 Tcl_NewDoubleObj((double)
+                   atomic_load_explicit(&info->wav_gain,
+                                        memory_order_relaxed)));
   Tcl_SetObjResult(interp, d);
   return TCL_OK;
 }
@@ -1711,6 +1795,8 @@ EXPORT(int,Dserv_sound_Init) (Tcl_Interp *interp)
   info->mode = SOUND_MODE_NONE;
   info->midi_fd = -1;
   atomic_store_explicit(&info->master_gain, 1.0f, memory_order_relaxed);
+  atomic_store_explicit(&info->synth_gain, 1.0f, memory_order_relaxed);
+  atomic_store_explicit(&info->wav_gain, 1.0f, memory_order_relaxed);
 
   /* Resolve the host datapoint API dynamically: inside dserv these all
    * resolve and wav onset/offset/loaded points are published; in a plain
@@ -1774,6 +1860,14 @@ EXPORT(int,Dserv_sound_Init) (Tcl_Interp *interp)
                        (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateObjCommand(interp, "soundPlay",
 		       (Tcl_ObjCmdProc *) sound_play_command,
+		       (ClientData) info,
+		       (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateObjCommand(interp, "soundSynthGain",
+		       (Tcl_ObjCmdProc *) synth_gain_command,
+		       (ClientData) info,
+		       (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateObjCommand(interp, "soundWavGain",
+		       (Tcl_ObjCmdProc *) wav_gain_command,
 		       (ClientData) info,
 		       (Tcl_CmdDeleteProc *) NULL);
 
