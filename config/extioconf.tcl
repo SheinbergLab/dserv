@@ -1468,9 +1468,14 @@ proc extio_obs_autobind_try {box} {
         dservAfter 3000 [list extio_obs_autobind_try $box]
         return
     }
-    if { [catch { send ess {::ess::obs_schedule_bind auto auto 80} } err] } {
-        puts "extio: obs auto-bind to $box failed: $err"
-        dservSet extio/obs_autobind_last "failed: $err"
+    # send reports interp errors as "!TCL_ERROR ..." STRINGS, not Tcl errors
+    # (the wav_send lesson) -- a naive catch logged a failed resolve as
+    # "bound" on officepi 2026-08-04
+    set r ""
+    catch { set r [send ess {::ess::obs_schedule_bind auto auto 80}] } r
+    if { [string first "!TCL_ERROR " $r] == 0 } {
+        puts "extio: obs auto-bind to $box failed: $r"
+        dservSet extio/obs_autobind_last "failed: $r"
     } else {
         puts "extio: obs scheduler auto-bound to $box"
         dservSet extio/obs_autobind_last \
