@@ -175,7 +175,11 @@ if { [file exists $dspath/local/sound.tcl] } {
     source $dspath/local/sound.tcl
 } else {
     sound::init_hardware
-    sound::init_fluidsynth
+    # auto-select a USB sound card over the system default: on Pis the
+    # default lands on a vc4-hdmi (a DISPLAY), and on HDMI-only x86 boxes
+    # it points at a device that does not exist (officepi/office-stim,
+    # 2026-08-05). A rig with neither gets the old default behaviour.
+    sound::init_software
 }
 
 puts "Sound initialized"
