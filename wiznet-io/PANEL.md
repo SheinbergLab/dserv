@@ -193,10 +193,8 @@ that builds `cmd/panel/slot/<n>` frames — the same shape as `usbio_forward`
 
 Everything above this line is assembly. The genuinely new pieces:
 
-1. **The TFT driver.** 16-bit 8080 parallel via PIO + DMA. There is no display
-   abstraction to slot into — `pico_oled.h` is a concrete SSD1306 with file-scope
-   statics and a 21x4 text grid. Write `panel_*` alongside it under `BOX_PANEL`;
-   do **not** try to generalise `pico_oled.h`.
+1. ~~**The TFT driver.**~~ **DONE — see Stage 1 below.** `pico/pico_panel.h`,
+   bit-banged, and the measurements say PIO+DMA is not needed for this workload.
 2. **FT-class capacitive touch on `i2c1`.** Nothing in the tree touches any
    capacitive controller today.
 3. **Touch -> `di_event_t` synthesis on core 1**, or a cross-core queue in the
@@ -334,6 +332,82 @@ not reality" shape; don't read `up` as image uptime when diagnosing OTA boots.
 
 Not yet done: no display driver, no touch driver, `BOX_PANEL` currently only
 selects the USB identity.
+
+## Stage 1 — display driver working (VALIDATED 2026-08-05)
+
+`pico/pico_panel.h`. Colour bars confirmed on the glass; register read-back
+confirms the write path independently of anyone looking at it.
+
+### The controller is an ILI9341 — read off the chip, not guessed
+
+4D do not publish the driver IC (Graphics4D abstracts it, and the resource-centre
+page for the 32CT links only the RP2350 datasheet), so `panel id` asks the part
+directly over the RD line:
+
+```
+  04: 0000 0000 0000 0000 0000
+  D3: 0000 0000 0093 0041 0041     <- RDID4 = 0x93 0x41 -> ILI9341
+  09: 0000 0000 0061 0000 0000
+```
+
+The same probe settled a second question for free: **8-bit values come back on
+D0..D7**, not the high lane. So command parameters go out in the low byte and
+only RAMWR pixel data uses all 16 lines. Guessing that wrong is a blank screen
+with no diagnostic.
+
+### Two things that bit, both worth remembering
+
+**The data bus straddles the SIO bank boundary.** D0..D15 is GP21..GP36, so
+D0..D10 are in the low bank and D11..D15 in the high one. Every access uses the
+*64* GPIO API (`gpio_put_masked64` / `gpio_get_all64` / `gpio_set_dir_*64`),
+which RP2350B has. The 32-bit calls compile fine and silently drive only the low
+11 bits. This is also why 4D drive it from PIO — with `GPIOBASE=16` the 16 pins
+are one contiguous field.
+
+**`RDDCOLMOD` returning 0x05 when we wrote 0x55 is not a fault.** The register
+splits: [6:4] is the RGB (DPI) interface format, [2:0] the MCU interface. This
+module has no DPI video interface wired, so the RGB nibble is legitimately 0 and
+only the MCU nibble echoes our 16 bpp. Compare bits [2:0] only. `RDDMADCTL` is
+the honest read-write check and returns exactly the 0x48 we sent.
+
+### Measured — and it retires the PIO+DMA plan
+
+`panel bench`, on the actual board:
+
+| operation | full screen (240x320, 76,800 px) |
+|---|---|
+| fill (constant colour — bus parked, strobe only) | **6.5 ms** |
+| blit (arbitrary pixels — bus write + strobe each) | **17.1 ms** |
+
+The design above assumed PIO+DMA was mandatory. **It is not.** The worst case
+that exists for this device — repainting the entire screen with arbitrary pixels
+— is 17 ms on core 0, against a 250 ms service tick: under 7% of the
+housekeeping core, and that is the case a status panel never actually hits. A
+realistic repaint is a few text fields of a few hundred pixels each, comfortably
+under a millisecond.
+
+So bit-banging ships. PIO+DMA stays available as a known optimisation if a later
+need appears (animation, an image, a much larger panel), but building it now
+would be optimising a path with 30x of headroom. **The one discipline that
+remains load-bearing** is placement: this blocks whichever core runs it, so it
+must stay on core 0 exactly like `pico_oled.h`, and must never migrate to the RT
+core.
+
+### CLI
+
+```
+panel id       raw ID-register dump (the probe; also lights the backlight)
+panel init     run the ILI9341 init sequence
+panel test     six colour bars: red green blue white yellow black
+panel status   read back RDDPM / RDDMADCTL / RDDCOLMOD
+panel fill 0xRGB565
+panel bench    the numbers above
+```
+
+`panel <sub>` parses in `common/pico_cli.h` on every build and returns
+`CLI_PANEL`; all hardware work happens on the pico side, so `common/` stays
+hardware-free and host-testable. On a non-panel build it prints "not a panel
+build" — the same inert-elsewhere shape as `cmd/ble/pair`.
 
 ## Open
 

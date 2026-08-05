@@ -75,6 +75,9 @@
 #include "pico_mcp3204.h"       /* MCP3204 SPI analog-in (joystick): always compiled, runtime-enabled (mcp_en) */
 #include "pico_ain_group.h"     /* analog groups: channel-set sampling policy (on-change / continuous+batch) */
 #include "pico_oled.h"          /* SSD1306 status display: always compiled, runtime-enabled (oled_en) */
+#ifdef BOX_PANEL
+#include "pico_panel.h"         /* gen4 TFT MCU-16 bus: per-board pins, so NOT always compiled (PANEL.md) */
+#endif
 #include "pico_ota.h"           /* Stage-0 OTA receiver: pull image -> scratch flash -> sha verify */
 #include "pico_ota_slot.h"      /* Stage-1 probe: bootrom A/B partition + boot-info (read-only) */
 /* `debug 1/0` hot-path log gate. Declared HERE (before the radio headers) so
@@ -1647,6 +1650,60 @@ static void cmd_exec(const char *line)
                                    pico_gpio_apply_config(&g_cfg); printf("erased\n"); }
     else if (act == CLI_REBOOT)  box_reboot(0);
     else if (act == CLI_BOOTSEL) box_reboot(1);
+    else if (act == CLI_PANEL) {
+#ifdef BOX_PANEL
+        /* All of this runs on core 0 (the console core), so the RT loop is
+         * undisturbed -- the bit-banged bus busy-waits and must never sit on
+         * core 1. Same reasoning as the OLED service (pico_oled.h). */
+        const char *sub = line + 6;
+        if (!strcmp(sub, "id")) {
+            char pout[512];
+            panel_probe(pout, sizeof pout);
+            printf("panel bus probe (raw MCU-16 reads, see PANEL.md):\n%s", pout);
+        } else if (!strcmp(sub, "init")) {
+            panel_init();
+            printf("panel init done (ILI9341, 240x320 RGB565, backlight on)\n");
+        } else if (!strcmp(sub, "test")) {
+            panel_init();
+            panel_test_pattern();
+            printf("panel test: 6 bars top->bottom = red green blue white yellow black\n");
+        } else if (!strcmp(sub, "bench")) {
+            /* What does the bit-banged path actually cost? Decides whether the
+             * PIO+DMA pixel path is needed at all for a status panel that
+             * repaints a few small fields at 1-4 Hz. Measure, then choose. */
+            uint64_t t0 = time_us_64();
+            for (int i = 0; i < 10; i++) panel_fill(i & 1 ? 0x0000 : 0xFFFF);
+            /* 32-bit: the SDK's reduced printf has no %llu unless
+             * PICO_PRINTF_SUPPORT_LONG_LONG, and passing one silently misaligns
+             * the whole varargs list. 10 frames is tens of ms -- it fits. */
+            unsigned long dt = (unsigned long) (time_us_64() - t0);
+            printf("panel bench: 10 full-screen fills in %lu us -> %lu us/frame (%lu px)\n",
+                   dt, dt / 10, (unsigned long) LCD_WIDTH * LCD_HEIGHT);
+            {   /* one 240-px row of varying data, blitted 320 times = a full
+                 * screen of arbitrary pixels, without needing a 150 KB buffer */
+                static uint16_t row[LCD_WIDTH];
+                for (int i = 0; i < LCD_WIDTH; i++) row[i] = (uint16_t) (i * 0x0821);
+                uint64_t b0 = time_us_64();
+                for (int y = 0; y < LCD_HEIGHT; y++) panel_blit(0, (uint16_t) y, LCD_WIDTH, 1, row);
+                unsigned long bt = (unsigned long) (time_us_64() - b0);
+                printf("panel bench: full-screen arbitrary-pixel blit %lu us\n", bt);
+            }
+        } else if (!strcmp(sub, "status")) {
+            char pout[512];
+            panel_status(pout, sizeof pout);
+            printf("panel status (read-back of what init wrote):\n%s", pout);
+        } else if (!strncmp(sub, "fill ", 5)) {
+            unsigned v = (unsigned) strtoul(sub + 5, NULL, 0);
+            panel_init();
+            panel_fill((uint16_t) v);
+            printf("panel fill 0x%04x\n", v & 0xFFFF);
+        } else {
+            printf("panel id | panel init | panel test | panel fill 0xRGB565\n");
+        }
+#else
+        printf("not a panel build (needs -DBOX_PANEL, sh build.sh gen4panel)\n");
+#endif
+    }
     else if (act == CLI_PIN)   { pico_gpio_apply_config(&g_cfg); groups_reset_all(); publish_manifest(); }
     else if (act == CLI_GROUP) { groups_reset_all(); publish_manifest(); }  /* label/group/desc changed */
     else if (act == CLI_AIN)   { g_ain_reset_req = 1; publish_manifest(); }  /* analog group/rate changed */

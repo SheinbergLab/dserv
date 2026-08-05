@@ -34,7 +34,11 @@
 
 /* CLI_GROUP = labels/groups/desc changed: caller refreshes the group runtime
  * and re-announces the manifest (no GPIO re-apply needed). */
-typedef enum { CLI_OK, CLI_ERR, CLI_PIN, CLI_GROUP, CLI_AIN, CLI_GPIO, CLI_SAVE, CLI_FACTORY, CLI_REBOOT, CLI_BOOTSEL } cli_action_t;
+/* CLI_PANEL = probe the gen4 TFT bus and report raw controller-ID words. The
+ * command parses on every build (like cmd/ble/pair) and is simply inert where
+ * BOX_PANEL is not defined -- common/ stays hardware-free, so the caller does
+ * the bus work, same contract as CLI_BOOTSEL. */
+typedef enum { CLI_OK, CLI_ERR, CLI_PIN, CLI_GROUP, CLI_AIN, CLI_GPIO, CLI_SAVE, CLI_FACTORY, CLI_REBOOT, CLI_BOOTSEL, CLI_PANEL } cli_action_t;
 
 /* mode word<->value shared with dserv_config.h: dserv_mode_val / dserv_mode_str */
 
@@ -444,6 +448,9 @@ static inline cli_action_t pico_cli_exec(pico_config_t *c, const char *line,
     if (!strcmp(line, "factory")) { snprintf(out, outsz, "factory reset...\r\n"); return CLI_FACTORY; }
     if (!strcmp(line, "reboot"))  { snprintf(out, outsz, "rebooting...\r\n"); return CLI_REBOOT; }
     if (!strcmp(line, "bootsel")) { snprintf(out, outsz, "entering USB BOOTSEL (then: picotool load <uf2>)...\r\n"); return CLI_BOOTSEL; }
+    /* panel <sub>: caller owns the bus and fills out[]. Sub-commands are matched
+     * on the pico side so common/ needs no knowledge of the display at all. */
+    if (!strncmp(line, "panel ", 6)) { out[0] = 0; return CLI_PANEL; }
     if (!strcmp(line, "help")) {
         snprintf(out, outsz,
             "cmds: show | dump | name NAME | desc TEXT | channel NAME | " PICO_CLI_HELP_XTRA
