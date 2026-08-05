@@ -102,8 +102,21 @@ namespace eval sound {
             puts "sound: multiple USB audio cards ($ids), using [lindex $ids 0]"
         }
         if { [llength $ids] } {
-            set dev plughw:CARD=[lindex $ids 0],DEV=0
+            set card [lindex $ids 0]
+            set dev plughw:CARD=$card,DEV=0
             puts "sound: auto-selected USB audio device $dev"
+            # Normalize the card's HARDWARE mixer to 0 dB. It sits UNDER
+            # everything dserv controls, ships at arbitrary levels (a
+            # C-Media arrived at 56% = -20 dB, officepi 2026-08-05), and no
+            # GUI sees it -- a rig with every dserv gain at max was still
+            # quiet. Loudness policy belongs to the dserv gain chain; the
+            # hardware layer should be transparent. alsactl store makes it
+            # survive reboots. catch: amixer absent or an unnamed control
+            # is fine -- this is normalization, not a dependency.
+            foreach ctl {Speaker PCM Headphone} {
+                catch { exec amixer -c $card sset $ctl 100% unmute }
+            }
+            catch { exec alsactl store }
             return $dev
         }
         set ids [find_hdmi_audio]
