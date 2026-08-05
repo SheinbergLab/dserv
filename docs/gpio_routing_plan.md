@@ -116,6 +116,38 @@ Backwards compatibility matters here — every deployed rig has a hand-written
 - Migrate rigs opportunistically; drop the shims only once
   `ess/io_deprecated` is quiet fleet-wide.
 
+### `board_type` must stay a global
+
+Step 1 moves chip custody into `::ess::io` — `detect_board_type`
+(`config/essconf.tcl:171`), `gpio_chip_map` (233-251) and the
+`gpioOutputInit`/`gpioInputInit` calls (255-256). Two globals those lines
+currently leave behind in the ess interp, `board_type` and `gpiochip`, are
+**part of the per-rig contract whether or not that was intended**:
+
+    # local/post-pins.tcl.EXAMPLE:5 -- and every deployed post-pins.tcl
+    switch $board_type {
+        "rpi4" - "rpi5" - "rpi" - "beagley-ai" { ... }
+
+`post-pins.tcl` is sourced *after* those lines, reads `$board_type` at its very
+first statement, and picks its pin numbers from it. Encapsulating the globals
+into the new namespace therefore breaks every rig on line 5 of its own pins
+file — with a `can't read "board_type": no such variable` thrown out of
+essconf.tcl, i.e. exactly the half-initialized-ess failure this work exists to
+remove, inflicted fleet-wide instead of intermittently.
+
+So: `::ess::io` may *own* detection, but it must keep publishing `board_type`
+and `gpiochip` as ess-interp globals for as long as the deprecation shims live.
+Retire them on the same schedule as the shims, once `io_route` has made the
+`switch $board_type` blocks unnecessary (per-board pin choices become per-rig
+route declarations, which is the point).
+
+Worth a regression test rather than a read-through: source a representative
+`post-pins.tcl` against the new module and assert it still resolves its pins.
+The same goes for the `ess_validation-1.0.tm` stub set
+(`lib/ess_validation-1.0.tm:155` currently stubs only `gpioLineSetValue`) —
+if the io layer becomes the caller and the harness does not stub or `none`-route
+it, the headless sim breaks silently.
+
 ## Order of work
 
 1. `::ess::io` with the routing table, `io_route`, and caught requests
@@ -130,6 +162,32 @@ Backwards compatibility matters here — every deployed rig has a hand-written
 
 Steps 1–2 are mechanical and independently shippable. Step 3 is the one that
 needs hardware verification.
+
+### Files affected by steps 1-2
+
+Step 1 — new `lib/ess_io-1.0.tm`, plus:
+
+| file | change |
+|---|---|
+| `config/essconf.tcl` | `package require ess_io`; `rpioPinOn`/`rpioPinOff` (70-71) become shims; chip custody moves in (171, 233-251, 255-256) |
+| `lib/ess-2.0.tm` | `set_obs_pin` (1888) becomes a shim; `variable obs_pin` (987) stays as its backing store |
+| `lib/ess_validation-1.0.tm` | 155 — stub set (see above) |
+| `local/post-pins.tcl.EXAMPLE` | `io_route` form alongside the old |
+| `local/README` | "writing these files" section |
+
+Step 2 — 4 call sites in 2 files:
+
+| site | what |
+|---|---|
+| `lib/ess-2.0.tm:4627` | the one `gpioLineRequestInput` in `button_init`'s local-pin branch |
+| `config/essconf.tcl:314` | `joystick_init` — joystick4 interrupt (`RISING`) |
+| `config/essconf.tcl:323` | `joystick_init` — `joystick/lines` |
+| `config/essconf.tcl:334` | `joystick_init` — `joystick/button_line` |
+
+Deliberately untouched: `modules/gpio_input/`, `modules/gpio_output/`,
+`modules/juicer/` (C unchanged — this is a Tcl-layer consolidation);
+`extio-zephyr/host/*.sh` (bench tools, keep the raw verbs);
+`lib/examples/em_window_sampling.tcl`.
 
 ## Open questions
 
