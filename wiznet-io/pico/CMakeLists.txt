@@ -53,6 +53,9 @@ elseif(BOX_TARGET STREQUAL "usb")       # plain Pico 2, USB-CDC to a host dserv 
     if(BOX_USB_FORWARD_REGISTER)        # box emits its %match forwards over USB (modules/usbio auto-wires)
         target_compile_definitions(${CFG_NAME} PRIVATE BOX_USB_FORWARD_REGISTER)
     endif()
+    if(BOX_PANEL)                       # 4D Systems gen4-RP2350 cage panel: own USB identity (PANEL.md)
+        target_compile_definitions(${CFG_NAME} PRIVATE BOX_PANEL)
+    endif()
     target_link_libraries(${CFG_NAME} PRIVATE
         pico_stdlib
         pico_multicore

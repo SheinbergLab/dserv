@@ -27,6 +27,12 @@
 #ifdef BOX_NET_BLE
 #define EXTIO_USB_PID     0x100C            /* dev PID for the BLE handheld */
 #define EXTIO_USB_PRODUCT "dserv handheld"  /* NO "extio": host box-globs must not match */
+#elif defined(BOX_PANEL)
+#define EXTIO_USB_PID     0x100D            /* dev PID for the gen4-RP2350 cage panel (PANEL.md) */
+#define EXTIO_USB_PRODUCT "dserv panel"     /* NO "extio": Linux by-id globs *extio*if02* would
+                                             * otherwise steal a real box's data port (the macOS
+                                             * matcher is an exact compare, so it would only bite
+                                             * on Linux -- see PANEL.md "the naming trap") */
 #else
 #define EXTIO_USB_PID     0x100B            /* dev PID for the extio USB box */
 #define EXTIO_USB_PRODUCT "extio USB box"

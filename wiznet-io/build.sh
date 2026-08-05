@@ -7,6 +7,7 @@
 #   sh build.sh pico2wusb    # Pico 2 W: USB box + BLE central (the BLE.md receiver)
 #   sh build.sh handheld     # Pico 2 W: BLE-peripheral handheld / bench TX (BLE.md)
 #   sh build.sh thingplus-handheld   # THE handheld: Thing Plus RP2350 (RM2 + LiPo + fuel gauge)
+#   sh build.sh gen4panel    # 4D Systems gen4-RP2350 3.2" CT cage-side panel (PANEL.md)
 #   sh build.sh dual --push         # publish just this bench uf2 to the shelf (dev channel)
 #   sh build.sh dual --tbyb --push  # RELEASE bundle: publishes bin=TBYB trial (OTA pull) +
 #                                   #   uf2=matching NON-tbyb hashed base (bench flash / provision slot A).
@@ -137,6 +138,10 @@ case "$TARGET" in
   usb)                                                # plain Pico 2, USB-CDC to a host dserv (modules/usbio)
     BOARD=pico2; VARIANT=usb; FLAGS="-DBOX_TARGET=usb -DPICO_BOARD=pico2"
     [ -n "$USB_AUTOREG" ] && FLAGS="$FLAGS -DBOX_USB_FORWARD_REGISTER=1" ;;   # box self-declares its forwards
+  gen4panel)                                          # 4D Systems gen4-RP2350 3.2" CT panel: cage-side control surface (PANEL.md)
+    BOARD=gen4_rp2350_32ct; VARIANT=panel              # RP2350B, 16 MB flash, 240x320 16-bit parallel LCD + FT cap touch on i2c1
+    FLAGS="-DBOX_TARGET=usb -DPICO_BOARD=$BOARD -DBOX_PANEL=1"   # rides the usb transport; BOX_TARGET is a closed set (see pico/CMakeLists.txt)
+    [ -n "$USB_AUTOREG" ] && FLAGS="$FLAGS -DBOX_USB_FORWARD_REGISTER=1" ;;
   pico2wusb)                                          # Pico 2 W: the usb box + BLE central (BLE.md receiver)
     BOARD=pico2_w; VARIANT=usb; FLAGS="-DBOX_TARGET=pico2wusb -DPICO_BOARD=pico2_w"
     [ -n "$USB_AUTOREG" ] && FLAGS="$FLAGS -DBOX_USB_FORWARD_REGISTER=1"
@@ -156,7 +161,7 @@ case "$TARGET" in
   dual)                                               # W6300-EVB: USB by default, Ethernet via `mode eth` (persisted)
     BOARD=pico2; VARIANT=dual; FLAGS="-DBOX_TARGET=dual -DPICO_BOARD=pico2 $EVB_FLASH" ;;
   *)
-    echo "unknown target '$TARGET' (want: w6300 | pico2w | picoplus2w | thingplus | usb | pico2wusb | handheld | thingplus-handheld | dual)" >&2; exit 1 ;;
+    echo "unknown target '$TARGET' (want: w6300 | pico2w | picoplus2w | thingplus | usb | gen4panel | pico2wusb | handheld | thingplus-handheld | dual)" >&2; exit 1 ;;
 esac
 # ADS1115 analog-in is always compiled in; activate at runtime with `ain enable 1`.
 BUILD="$WIZ/build_${TARGET}${DBGSUF}${XIPSUF}${TBYBSUF}${SIGNSUF}${HASHSUF}"
