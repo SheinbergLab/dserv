@@ -21,6 +21,11 @@ foreach m { usbio timer } {
     load ${dspath}/modules/dserv_${m}[info sharedlibextension]
 }
 
+# persisted rig settings (obs_autobind); same store essconf/dfconf use
+tcl::tm::add $dspath/lib
+package require settingsdb
+settingsdb::init [file join $dspath db settings.db]
+
 # The box exposes two CDCs: console + data. Prefer selecting the DATA CDC by the
 # box's stable USB IDENTITY (descriptors: manufacturer "dserv", product "extio
 # USB box", per-chip serial; data CDC = interface if02) so we can NEVER grab a
@@ -1388,6 +1393,8 @@ proc extio_wire_common {} {                 ;# device-independent: sync + obs_pi
     dpointSetScript extio/*/cmd/ota/pull extio_ota_pull_trigger
     dservAddMatch extio/*/state/build       ;# one set per announce burst = one per uplink connect
     dpointSetScript extio/*/state/build extio_on_connect
+    dservAddMatch extio/*/state/obs_leader  ;# leader announce -> rig-level auto-bind (opt-in)
+    dpointSetScript extio/*/state/obs_leader extio_on_obs_leader
 }
 
 # ---- connect counter (fleet page): a box bursts its announce at every uplink
@@ -1407,6 +1414,77 @@ proc extio_on_connect {dp data} {
     dservSet extio/$box/host/connects [expr {$n + 1}]
     dservSet extio/$box/host/connect_last \
         [clock format [clock seconds] -format %H:%M:%S]
+}
+
+# ---- obs-leader auto-bind (opt-in per rig) ---------------------------------
+# Announcing `leader` makes a box the obs-onset AUTHORITY -- but the pin only
+# fires once the HOST binds (::ess::obs_schedule_bind), and that bind is
+# session state: every dserv restart silently reverted a leader rig to "dark
+# obs pin, loud per-obs fallback" until someone re-bound by hand (officepi,
+# 2026-08-04). Consent lives on the HOST, persisted in settings.db
+# (subsystem obs_autobind): "" = off (default), "auto" = bind whatever single
+# leader announces, "<boxname>" = only that box. The TRIGGER is the announce
+# (state/obs_leader -> 1), never boot -- announces always come (registration
+# burst, box reboot, cmd/announce), so the bind self-heals across every
+# disruption class without racing startup. Re-announces are idempotent: an
+# already-bound host is left alone. Never grabs authority mid-obs (defers).
+#
+#   send extio {extio_obs_autobind auto}     ;# opt this rig in (persisted)
+#   send extio {extio_obs_autobind off}      ;# back to manual binding
+
+proc extio_obs_autobind_get {} {
+    set v ""
+    catch { set v [::settingsdb::load obs_autobind] }
+    return $v
+}
+
+proc extio_obs_autobind {value} {
+    if { $value eq "off" } { set value "" }
+    ::settingsdb::save obs_autobind $value
+    dservSet extio/obs_autobind $value
+    # apply immediately if a matching leader is already announced
+    if { $value ne "" } {
+        set boxes {}
+        catch { set boxes [dservGet extio/boxes] }
+        foreach b $boxes {
+            set lead 0
+            catch { set lead [dservGet extio/$b/state/obs_leader] }
+            if { $lead == 1 } { extio_obs_autobind_try $b }
+        }
+    }
+    return [expr {$value eq "" ? "off" : $value}]
+}
+
+proc extio_obs_autobind_try {box} {
+    set flag [extio_obs_autobind_get]
+    if { $flag eq "" } { return }
+    if { $flag ne "auto" && $flag ne $box } { return }
+    set bound ""
+    catch { set bound [send ess {set ::ess::obs_sched_box}] }
+    if { $bound ne "" } { return }
+    set inobs 0
+    catch { set inobs [dservGet ess/in_obs] }
+    if { $inobs == 1 } {
+        dservAfter 3000 [list extio_obs_autobind_try $box]
+        return
+    }
+    if { [catch { send ess {::ess::obs_schedule_bind auto auto 80} } err] } {
+        puts "extio: obs auto-bind to $box failed: $err"
+        dservSet extio/obs_autobind_last "failed: $err"
+    } else {
+        puts "extio: obs scheduler auto-bound to $box"
+        dservSet extio/obs_autobind_last \
+            "bound $box [clock format [clock seconds] -format %H:%M:%S]"
+    }
+}
+
+proc extio_on_obs_leader {dp data} {
+    if { ![regexp {^extio/([^/]+)/state/obs_leader$} $dp -> box] } return
+    if { $data != 1 } return
+    # the announce burst delivers obs_leader alongside obs_pin and the rest of
+    # the manifest; a short defer lets the whole burst land before the
+    # resolver reads it (it requires a watchdog-fresh announce anyway)
+    dservAfter 1000 [list extio_obs_autobind_try $box]
 }
 
 # ---- hot-swap + discovery: runs every 2 s. (Re)open when the box's data port
@@ -1451,6 +1529,9 @@ proc init {} {
 }
 
 init
+
+# surface the persisted auto-bind flag (UIs + humans); "" reads as off
+dservSet extio/obs_autobind [extio_obs_autobind_get]
 
 # optional rig-specific overrides (port pinning, extra forwards). Not needed for a
 # single auto-discovered box.
