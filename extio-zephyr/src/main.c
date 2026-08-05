@@ -2767,6 +2767,14 @@ int main(void)
 					dserv_msg_int(f, name, 0,
 						      (int32_t) box_net_eth_inq_fenced());
 					box_pub_bulk(f);
+					/* v34: uplink sessions torn down by the
+					 * give-up path. The connect counter only
+					 * sees full resets (announce bursts);
+					 * soft heals were invisible until this. */
+					dserv_state_name(&cfg, name, sizeof name, "dbg/uplink_cycles");
+					dserv_msg_int(f, name, 0,
+						      (int32_t) box_net_eth_uplink_cycles());
+					box_pub_bulk(f);
 					dserv_state_name(&cfg, name, sizeof name, "dbg/disp_us");
 					dserv_msg_int(f, name, 0, (int32_t) disp_last_us);
 					box_pub_bulk(f);

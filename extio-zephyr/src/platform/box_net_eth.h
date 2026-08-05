@@ -89,6 +89,7 @@ int box_net_eth_server_up(void);
 /* Lifetime count of publishes dropped because the uplink send failed. Non-zero
  * means frames were lost; a jump means the uplink was rebuilt (see the .c). */
 unsigned box_net_eth_uplink_drops(void);
+unsigned box_net_eth_uplink_cycles(void);   /* sessions torn down by give-up (v34) */
 
 /* Cost of the last zsock_send() and the running max, in us. Instrumentation for
  * the publish-latency investigation; see box_net_eth.c. */

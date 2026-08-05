@@ -98,23 +98,47 @@ void box_console_printf(const char *fmt, ...)
 	box_console_write(buf);
 }
 
+/* Which device the console actually BOUND (vs what the config asked for):
+ * 0 = dead, 1 = as configured, 2 = fell back to the other device. Announced
+ * as state/console_bound -- before v34 a failed bind meant the console died
+ * SILENTLY everywhere (no output, no error, no observable), which is a
+ * miserable thing to debug over a network. */
+int box_console_bound;
+
 int box_console_init(const box_config_t *cfg)
 {
 	/* Bind per config (v22 console_mode). Claiming the console CDC costs ~0.21 ms
 	 * of median round-trip latency; the same console on the board's console UART
 	 * is essentially free (see PORTING.md). Binding the UART leaves the console
 	 * CDC enumerated but UNCLAIMED, which measures free. */
+	const struct device *want, *other;
+
 	if (dserv_cfg_console_mode(cfg) == CONSOLE_MODE_UART) {
-		con = DEVICE_DT_GET(DT_CHOSEN(zephyr_console));
+		want  = DEVICE_DT_GET(DT_CHOSEN(zephyr_console));
+		other = DEVICE_DT_GET(DT_NODELABEL(cdc_acm_console));
 	} else {
-		con = DEVICE_DT_GET(DT_NODELABEL(cdc_acm_console));
+		want  = DEVICE_DT_GET(DT_NODELABEL(cdc_acm_console));
+		other = DEVICE_DT_GET(DT_CHOSEN(zephyr_console));
+	}
+	con = want;
+	box_console_bound = 1;
+	if (!device_is_ready(con)) {
+		/* v34: any console beats none -- fall back to the other device
+		 * and say so there, instead of dying silently on both. */
+		con = other;
+		box_console_bound = 2;
 	}
 	if (!device_is_ready(con)) {
 		con = NULL;
+		box_console_bound = 0;
 		return -1;
 	}
 	uart_irq_callback_user_data_set(con, con_isr, NULL);
 	uart_irq_rx_enable(con);
+	if (box_console_bound == 2) {
+		box_console_write("console: configured device not ready -- "
+				  "fell back to the other one\r\n");
+	}
 	return 0;
 }
 

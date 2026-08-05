@@ -21,6 +21,8 @@
  * UART) and start its RX interrupt. 0 on success. MUST be called AFTER the
  * persisted config is loaded, or the saved choice is ignored. */
 int box_console_init(const box_config_t *cfg);
+/* 0 = dead, 1 = bound as configured, 2 = fell back to the other device (v34) */
+extern int box_console_bound;
 
 /* Drain input, run any complete CLI line against cfg, queue the reply. Bounded
  * and non-blocking; call once per service pass. */

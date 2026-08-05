@@ -1954,6 +1954,12 @@ namespace eval ess {
                 if {[catch {dservGet $io_class/$box/state/obs_pin} pin]} {
                     error "obs_schedule_bind auto: $box announces no obs_pin"
                 }
+                # fw v34 announces -1 for "leader with no pin configured"
+                # (mode persisted without a pin -- the officepi half-config)
+                if {$pin < 0} {
+                    error "obs_schedule_bind auto: $box announces obs_pin -1\
+ -- set + save config/obs/pin on the box"
+                }
             }
         }
         variable obs_sched_box $box

@@ -6,6 +6,7 @@
 #include "box_gpio.h"
 #include "box_uplink.h"                 /* box_uplink_active_name for "transport" */
 #include "box_pub.h"
+#include "platform/box_console.h"       /* box_console_bound (v34) */
 
 #include <zephyr/kernel.h>
 #include <zephyr/devicetree.h>          /* dac_en capability check below */
@@ -76,6 +77,24 @@ static const char *box_build_key(void)
  *
  * Publish a marker instead. "!toolong" is short enough to always fit, and a
  * consumer showing it is being told the truth about what happened. */
+/* v34: pace the burst. Announces fire dozens of frames flat-out into a
+ * finite net_buf pool, and whichever frames lose that race are silently
+ * dropped -- a random subset of manifest keys missing per boot (officepi
+ * 2026-08-05: state/obs_pin absent after a reconnect burst, so auto-bind
+ * had nothing to resolve; .50 logged 118 boot-burst wire drops the same
+ * way). Announces are rare, run in main-loop context, and are worthless
+ * when lossy: yield briefly every few frames so TX drains. A ~40-frame
+ * manifest gains ~15 ms, once per (re)connect. */
+static unsigned pace_n;
+
+static void pace(void)
+{
+	if (++pace_n >= 6) {
+		pace_n = 0;
+		k_sleep(K_MSEC(2));
+	}
+}
+
 static void pub_str(const box_config_t *c, const char *leaf, const char *val)
 {
 	uint8_t f[DSERV_MSG_LEN];
@@ -86,6 +105,7 @@ static void pub_str(const box_config_t *c, const char *leaf, const char *val)
 		dserv_msg_string(f, nm, 0, "!toolong");
 	}
 	(void) box_pub_bulk(f);
+	pace();
 }
 
 static void pub_int(const box_config_t *c, const char *leaf, int64_t val)
@@ -96,6 +116,7 @@ static void pub_int(const box_config_t *c, const char *leaf, int64_t val)
 	dserv_state_name(c, nm, sizeof nm, leaf);
 	dserv_msg_int(f, nm, 0, (int) val);
 	(void) box_pub_bulk(f);
+	pace();
 }
 
 /* ---- identity ---- */
@@ -140,6 +161,7 @@ static void announce_ident(const box_config_t *c)
 	/* which device the console bound to -- a timing-relevant choice, so a host
 	 * can see it without guessing (see config/console). */
 	pub_str(c, "console",   dserv_console_str((uint8_t) dserv_cfg_console_mode(c)));
+	pub_int(c, "console_bound", box_console_bound);   /* 0 dead / 1 ok / 2 fellback (v34) */
 
 	/* 0.0.0.0 over USB -- `transport` says why, so this is informative rather
 	 * than an error. */
@@ -431,6 +453,11 @@ void box_announce_obs_role(const box_config_t *c)
 	pub_str(c, "obs/mode",  obs_is_leader(c) ? "leader" :
 				(obs_mirror_enabled(c) ? "mirror" : "off"));
 	pub_int(c, "obs_leader", obs_is_leader(c) ? 1 : 0);
+	/* v34: the pin rides every role announce -- auto-bind resolution
+	 * reads it, and a role without its pin is exactly the half-config
+	 * that stranded officepi (leader persisted, pin not). -1 is honest
+	 * "leader with no pin configured"; the resolver refuses it loudly. */
+	pub_int(c, "obs_pin", obs_mirror_enabled(c) ? obs_mirror_pin(c) : -1);
 }
 
 void box_announce_burst(const box_config_t *c, const group_rt_t *groups)

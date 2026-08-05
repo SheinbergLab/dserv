@@ -768,7 +768,35 @@ void box_net_eth_send_stats(uint32_t *last_us, uint32_t *max_us)
  * which lets the existing re-registration path (box_uplink) rebuild the uplink on
  * its own. The recovery machinery already existed -- it was simply never reached,
  * because nothing ever admitted the connection had failed. */
-#define UPLINK_EAGAIN_LIMIT 200   /* ~consecutive full-buffer sends before giving up */
+/* v34: give-up is TIME-based. The old 200-consecutive-EAGAIN limit was
+ * calibrated on the RP2350/W6300 pacing; at this port's superloop retry
+ * pace (~140 us/pass) it meant "declare the peer dead after ~30 ms" -- a
+ * hair trigger against Linux hosts whose storage hiccups (SD-card fsync
+ * on a Pi) close the TCP window for tens of ms routinely (officepi
+ * 2026-08-05: episodic teardowns on an idle rig, zero real harm). TCP
+ * rides those out; tearing the session down cost more than the stall.
+ * Give up only after UPLINK_STALL_MS with no successful send -- still
+ * catches the silent-forever-wedge this path exists for. */
+#define UPLINK_STALL_MS 500
+
+static int64_t uplink_stall_since;  /* k_uptime ms; 0 = no active stall run */
+static unsigned uplink_cycles;      /* sessions torn down by uplink_failed */
+
+static void uplink_failed(const char *why);
+
+/* one EAGAIN-class failure: arm/advance the stall clock, tear down on expiry */
+static void uplink_strike(const char *why)
+{
+	int64_t now = k_uptime_get();
+
+	if (uplink_stall_since == 0) {
+		uplink_stall_since = now;
+		return;
+	}
+	if (now - uplink_stall_since >= UPLINK_STALL_MS) {
+		uplink_failed(why);
+	}
+}
 
 static unsigned uplink_eagain;
 static unsigned uplink_drops;      /* lifetime, for state/dbg */
@@ -835,11 +863,14 @@ static void uplink_failed(const char *why)
 	}
 	sock = -1;
 	connecting = 0;
+	uplink_cycles++;
 	uplink_eagain = 0;
+	uplink_stall_since = 0;
 	txp_len = 0;                    /* the half-sent frame died with the session */
 }
 
 unsigned box_net_eth_uplink_drops(void) { return uplink_drops; }
+unsigned box_net_eth_uplink_cycles(void) { return uplink_cycles; }
 
 int box_net_eth_send(const uint8_t *buf, int len)
 {
@@ -868,9 +899,8 @@ int box_net_eth_send(const uint8_t *buf, int len)
 		/* The socket still owes a prior frame's tail: nothing new may go out
 		 * ahead of it. Same accounting and strike logic as a full buffer. */
 		uplink_drops++;
-		if (++uplink_eagain >= UPLINK_EAGAIN_LIMIT) {
-			uplink_failed("peer not draining");
-		}
+		uplink_eagain++;
+		uplink_strike("peer not draining");
 		return -1;
 	}
 	uint32_t t0 = k_cycle_get_32();
@@ -885,6 +915,7 @@ int box_net_eth_send(const uint8_t *buf, int len)
 
 	if (n == len) {
 		uplink_eagain = 0;
+		uplink_stall_since = 0;
 		return 0;
 	}
 	if (n > 0) {
@@ -893,6 +924,7 @@ int box_net_eth_send(const uint8_t *buf, int len)
 		 * sent. The old policy closed the connection here. */
 		txp_stash(buf + n, len - n);
 		uplink_eagain = 0;
+		uplink_stall_since = 0;
 		return 0;
 	}
 
@@ -902,17 +934,15 @@ int box_net_eth_send(const uint8_t *buf, int len)
 		/* ENOTCONN/EINPROGRESS/EALREADY belong here, not with the hard errors:
 		 * they mean "not ready yet", the same as a full buffer. Classifying them
 		 * as fatal is what created the reconnect thrash loop described above. */
-		if (++uplink_eagain >= UPLINK_EAGAIN_LIMIT) {
-			uplink_failed("peer not draining");
-		}
+		uplink_eagain++;
+		uplink_strike("peer not draining");
 		return -1;
 	}
 	if (n == 0) {
 		/* send() taking zero bytes without an error is a full buffer in
 		 * different clothes. */
-		if (++uplink_eagain >= UPLINK_EAGAIN_LIMIT) {
-			uplink_failed("peer not draining");
-		}
+		uplink_eagain++;
+		uplink_strike("peer not draining");
 		return -1;
 	}
 	uplink_failed("send error");
@@ -936,11 +966,9 @@ int box_net_eth_send_stream(const uint8_t *buf, int len)
 		return -1;
 	}
 	if (pf == -1) {
-		if (++uplink_eagain >= UPLINK_EAGAIN_LIMIT) {
-			uplink_failed("peer not draining");
-			return -1;
-		}
-		return 0;
+		uplink_eagain++;
+		uplink_strike("peer not draining");
+		return (sock < 0) ? -1 : 0;
 	}
 	uint32_t t0 = k_cycle_get_32();
 	int n = zsock_send(sock, buf, (size_t) len, 0);
@@ -955,23 +983,20 @@ int box_net_eth_send_stream(const uint8_t *buf, int len)
 	if (n < 0) {
 		if (err == EAGAIN || err == EWOULDBLOCK ||
 		    err == ENOTCONN || err == EINPROGRESS || err == EALREADY) {
-			if (++uplink_eagain >= UPLINK_EAGAIN_LIMIT) {
-				uplink_failed("peer not draining");
-				return -1;
-			}
-			return 0;
+			uplink_eagain++;
+			uplink_strike("peer not draining");
+			return (sock < 0) ? -1 : 0;
 		}
 		uplink_failed("send error");
 		return -1;
 	}
 	if (n == 0) {
-		if (++uplink_eagain >= UPLINK_EAGAIN_LIMIT) {
-			uplink_failed("peer not draining");
-			return -1;
-		}
-		return 0;
+		uplink_eagain++;
+		uplink_strike("peer not draining");
+		return (sock < 0) ? -1 : 0;
 	}
 	uplink_eagain = 0;
+	uplink_stall_since = 0;
 
 	int rem = n % DSERV_MSG_LEN;
 
