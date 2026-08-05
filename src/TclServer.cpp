@@ -2215,9 +2215,29 @@ static int subprocess_command (ClientData data, Tcl_Interp *interp,
   if (!script.empty()) {
     auto result = child->eval(script);
     if (result.starts_with("!TCL_ERROR ")) {
-      Tcl_AppendResult(interp, result.c_str(), NULL);
-      delete child;
-      return TCL_ERROR;
+      /*
+       * A failed config script must be LOUD but not fatal: deleting the
+       * child here would also abort the rest of the caller's config
+       * (dsconf.tcl stops at the first failing subprocess), and a
+       * half-initialized interp is still reachable for diagnosis and
+       * re-source ("send <name> {source .../config/<name>conf.tcl}").
+       * So keep the subprocess, log the full errorInfo to stderr (the
+       * systemd journal), and publish <name>/init_error so agents/GUIs
+       * can surface it.  The dpoint survives because the child stays
+       * alive: subprocess teardown clears every "name/" datapoint.
+       */
+      std::string msg = result.substr(11);
+      auto einfo = child->eval("set ::errorInfo");
+      if (einfo.starts_with("!TCL_ERROR ")) einfo = msg;
+      std::cerr << "subprocess " << name << ": config script failed: "
+                << einfo << std::endl;
+
+      ds_datapoint_t dpoint;
+      std::string varname = name + "/init_error";
+      dpoint_set(&dpoint, (char *) varname.c_str(),
+                 tclserver->ds->now(), DSERV_STRING, msg.size(),
+                 (unsigned char *) msg.c_str());
+      tclserver->ds->set(dpoint);
     }
   }
   

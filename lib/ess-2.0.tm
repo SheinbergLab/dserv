@@ -1767,6 +1767,13 @@ namespace eval ess {
     }
 
     proc init {} {
+        # ::nTimers is a Tcl_LinkVar from the timer module, loaded by
+        # essconf.tcl's module loop. If it is missing, the config script
+        # aborted at boot and this interp is half-initialized -- say so
+        # instead of dying below with "can't read ::nTimers".
+        if { ![info exists ::nTimers] } {
+            error "ess subprocess not fully initialized (config/essconf.tcl failed at boot -- see ess/init_error and the dserv journal); restart dserv"
+        }
         dservRemoveAllMatches
         dpointRemoveAllScripts
         for {set i 0} {$i < $::nTimers} {incr i} {
