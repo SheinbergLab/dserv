@@ -111,9 +111,13 @@ static uint32_t hold_left_ms(void)
  * a crash and it does not look like one -- box3 simply went silent on
  * 2026-07-28, and with no published stats there was nothing to see.
  *
- * Continuous mode does not need this: batching already packs many scans into one
- * frame, which is what makes a 1 kHz eye feed affordable (2 channels, batch 12 ->
- * ~83 frames/s). This bounds the mode that has no such control.
+ * Continuous mode is EXEMPT: its rate is declared by the operator (rate/
+ * decimate/batch), not by noise, and batching is the intended tool for keeping
+ * the frame rate affordable (2 channels @ 1 kHz, batch 12 -> ~83 frames/s).
+ * Gating it too didn't cap -- it BEAT: a 250 Hz batch=1 eye feed (4 ms cadence)
+ * against the 5 ms gate published every OTHER block, silently halving a
+ * deliberate feed to 125 Hz (officepi, 2026-08-06). The ceiling binds only the
+ * mode whose rate nobody chose.
  *
  * Blocks refused here are COUNTED (ain/dbg/throttled), never silently lost. */
 #define AIN_MAX_BLOCKS_PER_S  200
@@ -310,7 +314,8 @@ static void ain_thread_fn(void *a, void *b, void *c)
 					   running_period, &blk)) {
 				int64_t now_ms = k_uptime_get();
 
-				if (now_ms - last_block_ms[g] < (1000 / AIN_MAX_BLOCKS_PER_S)) {
+				if (!cfg->ain_group_mode[g] &&
+				    now_ms - last_block_ms[g] < (1000 / AIN_MAX_BLOCKS_PER_S)) {
 					st_throttled++;
 					continue;
 				}

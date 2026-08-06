@@ -1827,6 +1827,8 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 		 * the box went silent. Config that applies only after a reboot is a
 		 * config field that lies. */
 		box_ain_apply();
+		box_announce_manifest(&cfg);   /* else ain/group/<label>/* reads stale
+		                                * (batch=1 applied live, announced 2) */
 #endif
 	} else if (r == CFG_CONSOLE) {
 		box_console_printf("console=%s -- save+reboot to apply\n",
