@@ -1470,14 +1470,26 @@ proc extio_ota_on_trial {dp data} {
 #   send extio {extio_obs_autobind auto}     ;# opt this rig in (persisted)
 #   send extio {extio_obs_autobind off}      ;# back to manual binding
 
-proc extio_obs_autobind_get {} {
-    set v ""
-    catch { set v [::settingsdb::load obs_autobind] }
+# Boolean-intent spellings are consent, not box names: `extio_obs_autobind 1`
+# persisted "1", every announce was declined against it as a name filter, and
+# the rig sat unbound with zero breadcrumbs (rpi500, 2026-08-06). Normalize on
+# read too, so a value persisted before this guard self-heals.
+proc extio_obs_autobind_norm {v} {
+    switch -nocase -- $v {
+        1 - on - true - yes { return auto }
+        0 - off - false - no - none { return "" }
+    }
     return $v
 }
 
+proc extio_obs_autobind_get {} {
+    set v ""
+    catch { set v [::settingsdb::load obs_autobind] }
+    return [extio_obs_autobind_norm $v]
+}
+
 proc extio_obs_autobind {value} {
-    if { $value eq "off" } { set value "" }
+    set value [extio_obs_autobind_norm $value]
     ::settingsdb::save obs_autobind $value
     dservSet extio/obs_autobind $value
     # apply immediately if a matching leader is already announced
@@ -1496,7 +1508,17 @@ proc extio_obs_autobind {value} {
 proc extio_obs_autobind_try {box} {
     set flag [extio_obs_autobind_get]
     if { $flag eq "" } { return }
-    if { $flag ne "auto" && $flag ne $box } { return }
+    if { $flag ne "auto" && $flag ne $box } {
+        # a name-filtered rig is quiet only while its chosen box is bound;
+        # an unbound rig declining announces must say so (the rpi500 lesson:
+        # the silent version of this branch cost a debugging session)
+        set bound ""
+        catch { set bound [send ess {set ::ess::obs_sched_box}] }
+        if { $bound eq "" } {
+            dservSet extio/obs_autobind_last "declined $box (flag $flag)"
+        }
+        return
+    }
     set bound ""
     catch { set bound [send ess {set ::ess::obs_sched_box}] }
     if { $bound ne "" } { return }

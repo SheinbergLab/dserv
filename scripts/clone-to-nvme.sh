@@ -167,8 +167,22 @@ fi
 # -x already stops rsync descending into other filesystems, so /proc, /sys,
 # /dev, /run and /tmp are skipped as content but still created as empty
 # mountpoints. The excludes below are for things on the root fs itself.
+# rsync exit 24 is "source files vanished during transfer", which is normal and
+# harmless when copying a live root. Every other non-zero status is a real
+# failure and must not be mistaken for success - the summary rsync prints says
+# what it attempted, not what landed.
+run_rsync() {
+  local rc=0
+  rsync "$@" || rc=$?
+  case "$rc" in
+    0)  ;;
+    24) say "note: some files vanished mid-copy (rsync 24) - expected on a live root" ;;
+    *)  die "rsync failed with exit status $rc" ;;
+  esac
+}
+
 say "copying / -> $MNT"
-rsync "${RSYNC_ROOT_OPTS[@]}" \
+run_rsync "${RSYNC_ROOT_OPTS[@]}" \
   --exclude="$MNT" \
   --exclude=/boot/firmware/'*' \
   --exclude=/lost+found \
@@ -179,12 +193,38 @@ rsync "${RSYNC_ROOT_OPTS[@]}" \
   / "$MNT/"
 
 say "copying /boot/firmware -> $MNT/boot/firmware"
-rsync "${RSYNC_BOOT_OPTS[@]}" /boot/firmware/ "$MNT/boot/firmware/"
+run_rsync "${RSYNC_BOOT_OPTS[@]}" /boot/firmware/ "$MNT/boot/firmware/"
 
 if [ "$DRYRUN" -eq 1 ]; then
   say "dry run complete - nothing was written"
   exit 0
 fi
+
+# The boot partition is where a bad clone hurts most: the Pi 5 bootloader reads
+# the kernel and DTB straight off it, and a missing file surfaces as a bare
+# "Boot error: code 7" with no other diagnosis. Check what actually landed.
+say "verifying boot partition"
+
+for pat in 'kernel*.img' '*.dtb' 'config.txt' 'cmdline.txt'; do
+  # shellcheck disable=SC2086
+  if ! compgen -G "$MNT/boot/firmware/"$pat >/dev/null; then
+    die "no $pat on the target boot partition - it would not boot"
+  fi
+done
+[ -d "$MNT/boot/firmware/overlays" ] && [ -n "$(ls -A "$MNT/boot/firmware/overlays")" ] \
+  || die "target boot partition has no overlays/ - it would not boot"
+
+SRC_BOOT_N=$(find /boot/firmware -type f | wc -l)
+TGT_BOOT_N=$(find "$MNT/boot/firmware" -type f | wc -l)
+SRC_BOOT_B=$(find /boot/firmware -type f -printf '%s\n' | awk '{s+=$1} END{print s+0}')
+TGT_BOOT_B=$(find "$MNT/boot/firmware" -type f -printf '%s\n' | awk '{s+=$1} END{print s+0}')
+
+[ "$SRC_BOOT_N" -eq "$TGT_BOOT_N" ] \
+  || die "boot file count differs: source $SRC_BOOT_N, target $TGT_BOOT_N"
+[ "$SRC_BOOT_B" -eq "$TGT_BOOT_B" ] \
+  || die "boot byte total differs: source $SRC_BOOT_B, target $TGT_BOOT_B (truncated copy?)"
+
+say "boot partition OK: $TGT_BOOT_N files, $((TGT_BOOT_B/1024/1024))M, kernel+dtb+overlays present"
 
 # Empty mountpoints the kernel needs at boot; rsync creates most, but be sure.
 for d in proc sys dev run tmp mnt media; do mkdir -p "$MNT/$d"; done
