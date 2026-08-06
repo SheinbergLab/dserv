@@ -1319,7 +1319,7 @@ set ::extio_cfg_writable {
     net/mode net/ip net/mask net/gateway
     dserv/ip dserv/port
     wifi/ssid wifi/pass wifi/pm
-    obs/pin sync/pin
+    obs/pin obs/mode sync/pin
     ain/enable ain/rate
     console channel
 }
