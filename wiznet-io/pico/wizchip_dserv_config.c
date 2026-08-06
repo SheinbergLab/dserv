@@ -77,6 +77,11 @@
 #include "pico_oled.h"          /* SSD1306 status display: always compiled, runtime-enabled (oled_en) */
 #ifdef BOX_PANEL
 #include "pico_panel.h"         /* gen4 TFT MCU-16 bus: per-board pins, so NOT always compiled (PANEL.md) */
+#include "pico_touch.h"         /* gen4 FocalTech capacitive touch on i2c1 */
+/* `panel watch` deadline. Core 0 only: armed by the CLI, polled by the
+ * superloop, so nothing ever blocks past the 2 s watchdog. */
+static uint64_t g_touch_watch_until;
+static uint8_t  g_touch_draw;      /* watch mode also paints a dot at each touch */
 #endif
 #include "pico_ota.h"           /* Stage-0 OTA receiver: pull image -> scratch flash -> sha verify */
 #include "pico_ota_slot.h"      /* Stage-1 probe: bootrom A/B partition + boot-info (read-only) */
@@ -1697,8 +1702,55 @@ static void cmd_exec(const char *line)
             panel_init();
             panel_fill((uint16_t) v);
             printf("panel fill 0x%04x\n", v & 0xFFFF);
+        } else if (!strcmp(sub, "touch")) {
+            char pout[512];
+            touch_probe(pout, sizeof pout);
+            printf("touch probe (i2c1, FocalTech-class):\n%s", pout);
+        } else if (!strncmp(sub, "watch", 5)) {
+            /* Arm a DEADLINE; the polling itself happens in the core-0 superloop
+             * (touch_watch_service_core0). Doing it inline here would block core 0
+             * past BOX_WDT_MS=2000 and the watchdog would reboot the box halfway
+             * through the test -- and the console ring would not drain either, so
+             * the output would be lost with it. */
+            int secs = (int) strtol(sub + 5, NULL, 0);
+            if (secs <= 0 || secs > 60) secs = 10;
+            touch_bus_init();
+            g_touch_draw = 0;
+            g_touch_watch_until = time_us_64() + (uint64_t) secs * 1000000u;
+            printf("touch watch: tap the screen (%d s), raw controller coords\n", secs);
+        } else if (!strncmp(sub, "corner", 6)) {
+            /* Four labelled corners, then report RAW touch coords. Touching a
+             * known corner is the only way to pin the mapping down without
+             * reasoning in circles about MADCTL's MX bit versus the header's
+             * LCD_TOUCH_MIRROR_Y -- one of them flips an axis and the algebra
+             * is easy to get backwards. */
+            int secs = (int) strtol(sub + 6, NULL, 0);
+            if (secs <= 0 || secs > 60) secs = 20;
+            panel_init();
+            panel_fill(0x0000);
+            panel_fill_rect(0,   0,   60, 60, 0xF800);   /* RED    top-left     */
+            panel_fill_rect(180, 0,   60, 60, 0x07E0);   /* GREEN  top-right    */
+            panel_fill_rect(0,   260, 60, 60, 0x001F);   /* BLUE   bottom-left  */
+            panel_fill_rect(180, 260, 60, 60, 0xFFFF);   /* WHITE  bottom-right */
+            touch_bus_init();
+            g_touch_draw = 0;
+            g_touch_watch_until = time_us_64() + (uint64_t) secs * 1000000u;
+            printf("panel corner (%d s): RED=top-left GREEN=top-right BLUE=bottom-left WHITE=bottom-right\n"
+                   "  touch RED first, then GREEN, then BLUE. Expected if unmirrored:\n"
+                   "    RED ~ (0..60, 0..60)   GREEN ~ (180..240, 0..60)   BLUE ~ (0..60, 260..320)\n", secs);
+        } else if (!strncmp(sub, "draw", 4)) {
+            int secs = (int) strtol(sub + 4, NULL, 0);
+            if (secs <= 0 || secs > 60) secs = 20;
+            panel_init();
+            panel_fill(0x0000);
+            touch_bus_init();
+            g_touch_draw = 1;
+            g_touch_watch_until = time_us_64() + (uint64_t) secs * 1000000u;
+            printf("panel draw: tap the screen (%d s) -- a yellow dot marks each reported point.\n"
+                   "  dot under your finger = raw mapping correct;\n"
+                   "  dot mirrored top<->bottom = LCD_TOUCH_MIRROR_Y must be honoured\n", secs);
         } else {
-            printf("panel id | panel init | panel test | panel fill 0xRGB565\n");
+            printf("panel id|init|test|status|fill 0xRGB565|bench|touch|watch [secs]\n");
         }
 #else
         printf("not a panel build (needs -DBOX_PANEL, sh build.sh gen4panel)\n");
@@ -2185,6 +2237,55 @@ static void ota_buy_service_core0(void)
            OTA_SELFTEST_MS, rc, rc == 0 ? "COMMITTED" : "buy FAILED");
 }
 
+#ifdef BOX_PANEL
+/* `panel watch`: poll the CTP while its deadline is live and print changes, so
+ * a human can tap the glass and read raw controller coordinates. Core 0, 20 Hz,
+ * one short I2C block read per tick -- cheap enough to sit next to the OLED
+ * service, and non-blocking so the watchdog keeps getting petted. */
+static void touch_watch_service_core0(void)
+{
+    static uint32_t next_ms;
+    static int last = -1;
+    if (!g_touch_watch_until) return;
+
+    if (time_us_64() > g_touch_watch_until) {
+        g_touch_watch_until = 0; last = -1;
+        printf("touch watch: done\n");
+        return;
+    }
+    uint32_t now = to_ms_since_boot(get_absolute_time());
+    if ((int32_t) (now - next_ms) < 0) return;
+    next_ms = now + 50;
+
+    /* Print the RAW page on any change, not our decode. Idle this part reports
+     * 0xFF across the data page, so if a finger changes those bytes we learn
+     * both that touch works and what the real layout is -- whereas a decode
+     * built on an assumed register map would just print nothing either way. */
+    uint8_t b[16];
+    static uint8_t prev[16];
+    if (touch_raw(b) < 0) { printf("  i2c read failed\n"); g_touch_watch_until = 0; return; }
+    if (memcmp(b, prev, sizeof b) != 0) {
+        memcpy(prev, b, sizeof b);
+        printf("  INT=%d raw:", gpio_get(LCD_TOUCH_INT));
+        for (unsigned i = 0; i < sizeof b; i++) printf(" %02X", b[i]);
+        touch_pt_t pt[LCD_TOUCH_POINTS];
+        int n = touch_read(pt, LCD_TOUCH_POINTS);
+        if (n > 0) for (int i = 0; i < n; i++) printf("  | id=%u ev=%u x=%u y=%u", pt[i].id, pt[i].ev, pt[i].x, pt[i].y);
+        else if (n == 0) printf("  | no points");
+        printf("\n");
+        /* Paint the reported point. This is the orientation test: if the dot
+         * lands under the finger the raw mapping is already correct; if it
+         * mirrors top-to-bottom then the board header's LCD_TOUCH_MIRROR_Y
+         * needs honouring. Far more conclusive than reasoning about MADCTL. */
+        if (g_touch_draw)
+            for (int i = 0; i < n; i++)
+                if (pt[i].x < LCD_WIDTH - 4 && pt[i].y < LCD_HEIGHT - 4)
+                    panel_fill_rect(pt[i].x, pt[i].y, 5, 5, 0xFFE0 /* yellow */);
+        last = n;
+    }
+}
+#endif
+
 /* Render the status snapshot to the OLED, 4 Hz (core 0; ~0.5ms per frame).
  *   row 0: name + transport (+ '*' while auto is still sensing)
  *   row 1: IP / DHCP state / USB host state
@@ -2363,6 +2464,9 @@ int main(void)
          * config while we hunted the load bug. Never re-add a boot-time WRITE
          * probe; `show`'s persist line reads the load diagnostics instead.) */
         oled_service_core0();       /* status panel, 4 Hz, ~0.5ms/frame on this core */
+#ifdef BOX_PANEL
+        touch_watch_service_core0();   /* only while `panel watch` is armed */
+#endif
         watchdog_service();         /* arm once core 1 is up; pet while its heartbeat advances */
 #ifdef BOX_BLE
         box_ble_service(&g_cfg, g_core1_ready,       /* radio on THIS core. core-1-ready gate =

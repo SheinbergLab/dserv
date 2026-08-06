@@ -195,8 +195,8 @@ Everything above this line is assembly. The genuinely new pieces:
 
 1. ~~**The TFT driver.**~~ **DONE — see Stage 1 below.** `pico/pico_panel.h`,
    bit-banged, and the measurements say PIO+DMA is not needed for this workload.
-2. **FT-class capacitive touch on `i2c1`.** Nothing in the tree touches any
-   capacitive controller today.
+2. ~~**FT-class capacitive touch on `i2c1`.**~~ **DONE — see Stage 2 below.**
+   `pico/pico_touch.h`, FocalTech FT5x46 at 0x38.
 3. **Touch -> `di_event_t` synthesis on core 1**, or a cross-core queue in the
    shape of `g_ain_q`. `g_cfg` and the publish loop are core-1-owned.
 4. **Extending `box_status_t`** past its current four DI pins. Keep the existing
@@ -408,6 +408,91 @@ panel bench    the numbers above
 `CLI_PANEL`; all hardware work happens on the pico side, so `common/` stays
 hardware-free and host-testable. On a non-panel build it prints "not a panel
 build" — the same inert-elsewhere shape as `cmd/ble/pair`.
+
+## Stage 2 — capacitive touch working (VALIDATED 2026-08-05)
+
+`pico/pico_touch.h`. One device on i2c1, and it identifies as FocalTech:
+
+```
+  i2c1 scan: 0x38
+  addr 0x38  CHIPID 0x54  VENDID 0x79  FIRMID 0x01
+```
+
+`CHIPID 0x54` is the **FT5x46** family, consistent with the header's
+`LCD_TOUCH_POINTS 5`. Register map is the standard FocalTech layout — TD_STATUS
+at 0x02, then one 6-byte block per point from 0x03, with the event flag in
+XH[7:6], the 12-bit X split across XH[3:0]/XL, the touch id in YH[7:4] and Y
+across YH[3:0]/YL.
+
+**Raw coordinates land directly in panel space** — no scaling needed. A traced
+drag reports smoothly:
+
+```
+  id=0 ev=2 x=89 y=31 -> x=76 y=29 -> x=73 y=28 -> ... -> x=41 y=15
+```
+
+### The trap: the data page reads 0xFF until the first touch, ever
+
+Straight after a cold boot, with no finger ever having landed:
+
+```
+  regs 00-0F: 00 FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF
+```
+
+Register 0x00 reads correctly and every ID register reads correctly, so the bus
+is provably fine — the *data page* is simply invalid until the controller's
+first touch populates it. After that, idle reads a proper `TD_STATUS = 0x00`.
+
+This matters because `TD_STATUS = 0xFF` means "15 points down". **Reject an
+implausible count; do not clamp it.** Clamping 15 to `LCD_TOUCH_POINTS` would
+manufacture five phantom touches on every poll forever, and they would look
+entirely real downstream — the same "fields that report memory not reality"
+shape as the extio persist gotchas. `touch_read` returns -2 instead.
+
+### `panel watch` must not block — the watchdog is 2 s
+
+The obvious implementation, a poll loop inside the CLI handler, **reboots the
+box**. `BOX_WDT_MS` is 2000 ms and `watchdog_service()` is petted from the core-0
+superloop, so any multi-second inline loop starves it; the console ring would
+not drain either, so the output would be lost along with the box. The watch is
+therefore a *deadline* armed by the CLI and polled by
+`touch_watch_service_core0()` in the superloop, right next to the OLED service.
+Same core-0 discipline as everything else cosmetic here.
+
+INT (GP38, active-low) does assert during contact, but poll/edge timing means it
+is occasionally high while a point is reported. Polling at 20 Hz is the correct
+choice anyway — see the Open note about not treating panel taps as behavioural
+timestamps.
+
+### Y is mirrored; X is not — measured, not reasoned
+
+Raw coordinates arrive in panel units but with Y running opposite the display.
+`panel corner` paints four labelled corner squares and reports raw touches, which
+settles it without any algebra about MADCTL's `MX` bit versus the header's
+`LCD_TOUCH_MIRROR_Y`:
+
+| touched (as displayed) | raw report | X | Y |
+|---|---|---|---|
+| RED, top-left | x=41 y=289 | correct | wrong |
+| GREEN, top-right | x=202 y=295 | correct | wrong |
+| BLUE, bottom-left | x=42 y=27 | correct | wrong |
+
+So `y = LCD_HEIGHT - 1 - y_raw`, X passes through. Applied in `touch_read`
+under `#ifdef LCD_TOUCH_MIRROR_Y` — driven off the board header rather than
+hardcoded, so the other gen4 sizes pick up their own convention. Re-verified
+after the fix: RED reports (36, 35) and BLUE (45, 278), both correct.
+
+`touch_raw()` deliberately stays unmirrored so bring-up can still see exactly
+what the controller said.
+
+### CLI
+
+```
+panel touch        probe: i2c scan + ID registers + raw page dump
+panel watch [s]    print raw page + decoded points on change
+panel draw  [s]    black screen, yellow dot at each reported point
+panel corner [s]   four labelled corners; the axis-mapping test
+```
 
 ## Open
 
