@@ -1830,9 +1830,12 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 	} else if (r == CFG_CONSOLE) {
 		box_console_printf("console=%s -- save+reboot to apply\n",
 		       dserv_console_str((uint8_t) dserv_cfg_console_mode(&cfg)));
+		box_announce_manifest(&cfg);   /* else state/console reads stale */
 	} else if (r == CFG_XPORT) {
 		/* transport policy: stored now, decided at the next boot (like
-		 * console). Re-announce the policy so a UI's select settles. */
+		 * console). Re-announce so state/xport/mode (in the manifest)
+		 * reflects the set live, instead of reading stale until the next
+		 * full burst. */
 		box_console_printf("xport.mode=%s -- save+reboot to apply\n",
 		       dserv_xmode_str(cfg.transport_mode));
 		box_announce_manifest(&cfg);

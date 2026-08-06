@@ -126,7 +126,6 @@ static void announce_ident(const box_config_t *c)
 	char s[24];
 
 	pub_str(c, "transport", box_uplink_active_name());   /* ACTIVE now */
-	pub_str(c, "xport/mode", dserv_xmode_str(c->transport_mode)); /* POLICY (config twin) */
 	/* LATCHED at boot by box_boot_init(), not read here: the hardware cause
 	 * register is cleared after that read, and it also carries the OTA verdicts
 	 * (trial/revert/rejected) that no register knows about. */
@@ -163,6 +162,12 @@ static void announce_ident(const box_config_t *c)
 	 * can see it without guessing (see config/console). */
 	pub_str(c, "console",   dserv_console_str((uint8_t) dserv_cfg_console_mode(c)));
 	pub_int(c, "console_bound", box_console_bound);   /* 0 dead / 1 ok / 2 fellback (v34) */
+	/* transport boot POLICY (config/xport/mode twin), in the MANIFEST not
+	 * announce_ident: CFG_XPORT re-announces via box_announce_manifest, so
+	 * the leaf must live here or a datapoint set reads back stale -- the
+	 * exact "looks like it didn't stick" bug this parity work exists to
+	 * kill. state/transport (ACTIVE) stays in ident; this is the policy. */
+	pub_str(c, "xport/mode", dserv_xmode_str(c->transport_mode));
 
 	/* 0.0.0.0 over USB -- `transport` says why, so this is informative rather
 	 * than an error. */
