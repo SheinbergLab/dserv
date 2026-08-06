@@ -2095,6 +2095,19 @@ namespace eval ess {
             set src ""
             catch {set src [dservGet $io_class/$obs_sched_box/state/sync/source]}
             if {$src in $obs_sched_trust} {
+                # Loads WIPE the interp's match table, killing the bind's
+                # subscriptions (officepi 2026-08-05: a boot-time auto-bind
+                # went deaf after the session restore -- the box onset
+                # arrived, nothing consumed it, and every obs silently paid
+                # the full watchdog timeout while the LED fired correctly).
+                # AddExactMatch/SetScript are idempotent: re-assert both at
+                # every bound onset so the path self-heals under any reset.
+                dservAddExactMatch $io_class/$obs_sched_box/state/sched/abs_err
+                dpointSetScript $io_class/$obs_sched_box/state/sched/abs_err \
+                    ::ess::obs_sched_reply
+                dservAddExactMatch $io_class/$obs_sched_box/state/in_obs
+                dpointSetScript $io_class/$obs_sched_box/state/in_obs \
+                    ::ess::obs_box_onset
                 # +30: request the onset and RETURN. The box asserts the
                 # line at T and emits the event; BEGINOBS, ess/in_obs and
                 # in_obs=1 all happen in obs_box_onset with the box's
