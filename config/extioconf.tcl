@@ -1459,8 +1459,11 @@ proc extio_ota_on_trial {dp data} {
 # fires once the HOST binds (::ess::obs_schedule_bind), and that bind is
 # session state: every dserv restart silently reverted a leader rig to "dark
 # obs pin, loud per-obs fallback" until someone re-bound by hand (officepi,
-# 2026-08-04). Consent lives on the HOST, persisted in settings.db
-# (subsystem obs_autobind): "" = off (default), "auto" = bind whatever single
+# 2026-08-04). Consent lives on the HOST. Its DECLARED home is
+# local/extio.tcl (see the .EXAMPLE) -- that file sources last, so its value
+# re-asserts at every boot; settings.db (subsystem obs_autobind) is the
+# runtime persistence, and the fallback for rigs with no file line.
+# Values: "" = off (default), "auto" = bind whatever single
 # leader announces, "<boxname>" = only that box. The TRIGGER is the announce
 # (state/obs_leader -> 1), never boot -- announces always come (registration
 # burst, box reboot, cmd/announce), so the bind self-heals across every
@@ -1488,6 +1491,25 @@ proc extio_obs_autobind_get {} {
     return [extio_obs_autobind_norm $v]
 }
 
+# What does local/extio.tcl DECLARE for autobind, if anything?
+# Returns {1 <normalized>} when an active (uncommented) line exists, {0 {}}
+# otherwise. Last line wins, matching what sourcing the file would do.
+proc extio_local_declared_autobind {} {
+    set f [file join $::dspath local extio.tcl]
+    if { ![file exists $f] || [catch { open $f } fd] } { return {0 {}} }
+    set txt [read $fd]; close $fd
+    set found 0; set val ""
+    foreach line [split $txt \n] {
+        set line [string trim $line]
+        if { [string index $line 0] eq "#" } continue
+        if { [regexp {^extio_obs_autobind\s+(\S+)} $line -> v] } {
+            set found 1
+            set val [extio_obs_autobind_norm [string trim $v "\"{}"]]
+        }
+    }
+    return [list $found $val]
+}
+
 proc extio_obs_autobind {value} {
     set value [extio_obs_autobind_norm $value]
     ::settingsdb::save obs_autobind $value
@@ -1502,7 +1524,19 @@ proc extio_obs_autobind {value} {
             if { $lead == 1 } { extio_obs_autobind_try $b }
         }
     }
-    return [expr {$value eq "" ? "off" : $value}]
+    set out [expr {$value eq "" ? "off" : $value}]
+    # A runtime change is outlived by the file's declaration (re-asserted at
+    # every boot) -- say so now, instead of silently reverting at the next
+    # restart (the officepi lesson, generalized).
+    if { ![info exists ::extio_local_sourcing] || !$::extio_local_sourcing } {
+        lassign [extio_local_declared_autobind] dfound dval
+        if { $dfound && $dval ne $value } {
+            append out " -- NOTE: local/extio.tcl declares\
+ '[expr {$dval eq "" ? "off" : $dval}]', which re-asserts at the next dserv\
+ restart; edit the file to make this change permanent"
+        }
+    }
+    return $out
 }
 
 proc extio_obs_autobind_try {box} {
@@ -1598,10 +1632,16 @@ init
 # surface the persisted auto-bind flag (UIs + humans); "" reads as off
 dservSet extio/obs_autobind [extio_obs_autobind_get]
 
-# optional rig-specific overrides (port pinning, extra forwards). Not needed for a
-# single auto-discovered box.
+# rig-local DECLARED config + overrides (autobind consent, port pinning,
+# extra forwards) -- see local/extio.tcl.EXAMPLE. Sourced LAST deliberately:
+# file declarations re-assert over db-persisted values at every boot. The
+# flag lets procs called from inside the file (e.g. extio_obs_autobind)
+# know the file itself is speaking, so they skip the ephemerality note.
+set ::extio_local_sourcing 0
 if { [file exists $dspath/local/extio.tcl] } {
+    set ::extio_local_sourcing 1
     source $dspath/local/extio.tcl
+    set ::extio_local_sourcing 0
 }
 
 puts "extio initialized"
