@@ -1393,6 +1393,8 @@ proc extio_wire_common {} {                 ;# device-independent: sync + obs_pi
     dpointSetScript extio/*/cmd/ota/pull extio_ota_pull_trigger
     dservAddMatch extio/*/state/build       ;# one set per announce burst = one per uplink connect
     dpointSetScript extio/*/state/build extio_on_connect
+    dservAddMatch extio/*/state/ota/trial   ;# trial->0 = OTA settled: unstick a stale lifecycle
+    dpointSetScript extio/*/state/ota/trial extio_ota_on_trial
     dservAddMatch extio/*/state/obs_leader  ;# leader announce -> rig-level auto-bind (opt-in)
     dpointSetScript extio/*/state/obs_leader extio_on_obs_leader
 }
@@ -1414,6 +1416,42 @@ proc extio_on_connect {dp data} {
     dservSet extio/$box/host/connects [expr {$n + 1}]
     dservSet extio/$box/host/connect_last \
         [clock format [clock seconds] -format %H:%M:%S]
+    # Self-heal a STALE OTA lifecycle. A box that (re)registers while the
+    # lifecycle sits in a non-terminal transfer phase is orphaned: the confirm
+    # request timed out (human delay past the 30 s deadline), the confirm was
+    # driven from the console, or the trial image reverted. The web UI then
+    # sticks at "confirming" with no shelf-update option (box02, 2026-08-05).
+    # trial==0 means the box has SETTLED on a permanent image, so the transfer
+    # is over however it ended -- resolve the UI. A genuinely in-flight OTA
+    # has trial==1 across its one reboot, so this never pre-empts a live one.
+    catch {
+        set phase [dservGet extio/$box/state/ota/lifecycle]
+        if { $phase in {staging verifying arming trial confirming} } {
+            set trial 1
+            catch { set trial [dservGet extio/$box/state/ota/trial] }
+            if { $trial == 0 } {
+                set v "?"; catch { set v [dservGet extio/$box/state/fw_ver] }
+                extio_ota_lc_pub $box done "running $v (settled after reconnect)"
+            }
+        }
+    }
+}
+
+# The confirm that resolves the lifecycle can arrive WITHOUT the web request
+# catching it: from the console, or after the 30 s request deadline lapsed
+# while a human read the log. The box publishes state/ota/trial -> 0 on
+# confirm (main.c) regardless of HOW confirm happened, so watch that as the
+# authoritative "done" signal -- the request callback is now just the fast
+# path, not the only one. (box02 console-confirm left the UI stuck, 2026-08-05.)
+proc extio_ota_on_trial {dp data} {
+    if { ![regexp {^extio/([^/]+)/state/ota/trial$} $dp -> box] } return
+    if { $data != 0 } return
+    set phase ""
+    catch { set phase [dservGet extio/$box/state/ota/lifecycle] }
+    if { $phase in {confirming trial arming} } {
+        set v "?"; catch { set v [dservGet extio/$box/state/fw_ver] }
+        extio_ota_lc_pub $box done "running $v, confirmed permanent"
+    }
 }
 
 # ---- obs-leader auto-bind (opt-in per rig) ---------------------------------

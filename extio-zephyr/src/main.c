@@ -1808,6 +1808,7 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 	 * shared), but their GPIO_OP_SCHED_* results are unreachable here. */
 
 	gpio_cmd_t cmd;
+	uint8_t xport_was = cfg.transport_mode;   /* for the strand-guard below */
 	cfg_result_t r = dserv_dispatch(&cfg, &m, &cmd);
 	if (r == CFG_GPIO && cmd.op != GPIO_OP_NONE &&
 	    cmd.op != GPIO_OP_SCHED_PULSE && cmd.op != GPIO_OP_SCHED_TIMER) {
@@ -1832,13 +1833,31 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 		       dserv_console_str((uint8_t) dserv_cfg_console_mode(&cfg)));
 		box_announce_manifest(&cfg);   /* else state/console reads stale */
 	} else if (r == CFG_XPORT) {
-		/* transport policy: stored now, decided at the next boot (like
-		 * console). Re-announce so state/xport/mode (in the manifest)
-		 * reflects the set live, instead of reading stale until the next
-		 * full burst. */
-		box_console_printf("xport.mode=%s -- save+reboot to apply\n",
-		       dserv_xmode_str(cfg.transport_mode));
-		box_announce_manifest(&cfg);
+		/* STRAND GUARD: refuse a policy that would orphan the box over the
+		 * link this very set arrived on. Setting `usb` on a box whose
+		 * active uplink is eth (or `eth` on a usb box) means the next boot
+		 * comes up on the OTHER transport with no host -- recoverable only
+		 * from the physical console (officepi/box02, 2026-08-05: usb set
+		 * over eth, lost contact, fixed at the UART). `auto` is always safe
+		 * (boots usb, senses the PHY, upgrades). The CLI `mode` verb keeps
+		 * usb -- that path IS physical access. Datapoint-set is remote by
+		 * definition, so this is a justified single-surface asymmetry, not
+		 * a parity regression (documented in PORTING.md). */
+		const char *act = box_uplink_active_name();
+		uint8_t tgt = cfg.transport_mode;
+		int strands = (tgt == XMODE_USB && !strcmp(act, "eth")) ||
+			      (tgt == XMODE_ETH && !strcmp(act, "usb"));
+		if (strands) {
+			cfg.transport_mode = xport_was;   /* revert; nothing persisted */
+			box_console_printf("xport.mode=%s REFUSED over %s -- would strand "
+				"the box; set it from the console\n",
+				dserv_xmode_str(tgt), act);
+			box_announce_manifest(&cfg);      /* re-announce the UNCHANGED value */
+		} else {
+			box_console_printf("xport.mode=%s -- save+reboot to apply\n",
+			       dserv_xmode_str(cfg.transport_mode));
+			box_announce_manifest(&cfg);
+		}
 	} else if (r == CFG_GROUP || r == CFG_LABEL || r == CFG_DESC) {
 		/* group/label/desc change: reseed the chord machines from the
 		 * pins' current levels, and re-announce so the edit reaches
@@ -2207,6 +2226,21 @@ int main(void)
 		 * short deadline each pass rather than latching a flag, so the hold
 		 * dies with the loop instead of outliving it. */
 		ain_boot_gate();
+
+#if defined(BOX_HAVE_OTA_SLOT)
+		/* Hold analog for the ENTIRE staging phase, refreshed here each pass
+		 * (not just per chunk). The per-chunk 2 s yield lapses when an
+		 * inter-chunk gap exceeds it -- which the RX-underrun retransmit
+		 * stalls during a big transfer routinely do, so analog resumed
+		 * mid-download and ADDED to the contention that caused the stall (a
+		 * feedback loop; box02 OTA 2026-08-05). Keyed on the state machine,
+		 * the hold lasts exactly as long as bytes are actually streaming and
+		 * releases the instant staging ends (verify/arm/fail) -- more precise
+		 * than any timeout. */
+		if (g_ota.state == BOX_OTA_STAGING) {
+			box_ain_hold(1000);
+		}
+#endif
 
 		/* Analog blocks, built on the sampling thread, stamped and ENQUEUED
 		 * here. The uplink's single-writer invariant lives one level down:

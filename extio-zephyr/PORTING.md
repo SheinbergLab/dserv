@@ -5550,3 +5550,16 @@ web-settable leaf, also add it to host `config/extioconf.tcl`
 `::extio_cfg_writable` — that allowlist is a THIRD gate that silently rejects
 unknown leaves. Runtime actions (`do`, `ble pair/forget`, `save`, `announce`)
 are cmd/*, not config, and are exempt.
+
+### Update (+37): xport/mode=usb is a JUSTIFIED single-surface case
+
+The parity sweep added `config/xport/mode` (datapoint) to match the CLI `mode`
+verb. But setting it to `usb` over a datapoint is a footgun: the datapoint
+arrives over the box's ACTIVE uplink, and if that is eth, the next boot comes
+up usb-only with no host -- the box is stranded, recoverable only from the
+physical console (box02, 2026-08-05). +37 the datapoint path REFUSES a policy
+that would strand the box over the link the set arrived on (usb-while-eth or
+eth-while-usb); `auto` is always allowed. The CLI `mode` verb keeps usb -- that
+path IS physical access, which is the only place usb-only makes sense (you need
+the USB cable anyway). So usb is deliberately console-only over the network,
+per the parity rule's documented-exception clause -- not a regression.
