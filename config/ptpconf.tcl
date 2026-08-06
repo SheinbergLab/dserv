@@ -322,6 +322,23 @@ proc ptp_tick {} {
     set ::ptp_timer [dservAfter [expr {$::ptp_period_s * 1000}] ptp_tick]
 }
 
+# A box that (re)REGISTERS needs a fresh D unconditionally. A rebooted box
+# regains PTP lock long before anything re-anchors it -- it announces
+# source "ptp" with a tight window, so the sync-source hook's `ne none`
+# early-return skips it -- while its LOCAL clock restarted, making any
+# prior D garbage: every at_abs lands 'late' until the next sweep
+# (officepi brownout 2026-08-05: dark obs LED, onset_timeout fallbacks
+# for minutes). state/build is set exactly once per announce burst = one
+# fire per uplink (re)connect; a redundant anchor is cheap and the box
+# refuses re-anchoring mid-obs on its own.
+proc ptp_on_box_connect {dp data} {
+    if { ![regexp {^extio/([^/]+)/state/build$} $dp -> box] } return
+    dservAfter 2000 [list ptp_anchor_all "box $box (re)connected"]
+}
+
+dservAddMatch   extio/*/state/build
+dpointSetScript extio/*/state/build ptp_on_box_connect
+
 dservAddMatch   extio/*/state/sync/source
 dpointSetScript extio/*/state/sync/source ptp_on_sync_source
 

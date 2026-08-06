@@ -2068,6 +2068,15 @@ namespace eval ess {
         ::ess::evt_put BEGINOBS INFO [now] $current $total
         dservSet ess/in_obs 1
         rpioPinOn $obs_pin
+        # a bound obs still deserves a physical line (the +31 principle):
+        # the leader-mode box suppresses its mirror and the scheduled fire
+        # never happened -- drive the line explicitly, as begin_obs's
+        # bound-untrusted branch does. Without this, every timeout-fallback
+        # obs ran with a dark obs pin (officepi brownout, 2026-08-05).
+        variable obs_sched_box; variable obs_sched_pin; variable io_class
+        if {$obs_sched_box ne ""} {
+            catch {dservSet $io_class/$obs_sched_box/cmd/do/$obs_sched_pin 1}
+        }
         set in_obs 1
         dservSet ess/obs_scheduled 0
         variable trial_reward_ml
