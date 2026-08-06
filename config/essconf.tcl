@@ -123,8 +123,20 @@ proc samplerSetActive { slot active } { processSetParam "sampler" active $active
 
 # Query functions
 proc samplerQueryRate { {slot 0} } { processSetParam "sampler" rate 1 $slot }
+# Read the datapoint; do NOT ask the processor to republish it.
+#
+# The sampler maintains proc/sampler/status itself -- it publishes 0 from the
+# start handler and sets status_pending on completion, flushed on the next
+# input sample -- so forcing a republish adds nothing. It also FEEDS BACK:
+# ess wires dpointSetScript proc/sampler/status -> do_update, so every poll
+# published a datapoint that woke the state machine, which re-ran the
+# sample_position transition, which polled again. Measured on the rig
+# 2026-08-06: 310,115 status publishes across 18 trials (17,228 per trial,
+# ~30k/s inside the sample windows), each one running the whole state machine.
+# That spin starved the sampler's own input -- eyetracking/raw was delivered at
+# 246 Hz but only 44 samples landed in a 400 ms window -- which is what made
+# count-based sampling miss its deadline and skip store_calibration.
 proc samplerGetStatus { {slot 0} } {
-    processSetParam sampler status 1 0
     return [dservGet proc/sampler/status]
 }
 proc samplerGetVals { {slot 0} } {

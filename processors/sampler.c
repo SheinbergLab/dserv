@@ -238,7 +238,9 @@ int setProcessParams(dpoint_process_param_setting_t *pinfo)
     /* Return the current status */
     int current_status;
     if (!p->active) {
-      /* If inactive, check if we have completed samples */
+      /* Inactive: complete iff THIS run computed something. "start" clears
+       * last_computation_count, so a previous run's result cannot answer for
+       * one that has not finished. */
       current_status = (p->last_computation_count > 0) ? 1 : 0;
     } else {
       /* If active, we're still sampling */
@@ -259,22 +261,32 @@ int setProcessParams(dpoint_process_param_setting_t *pinfo)
     return DPOINT_PROCESS_DSERV;
   }
   
-  /* Handle start command */
+  /* Handle start command
+   *
+   * Always (re)starts, even if a previous run is still active. Ignoring the
+   * command while active silently made the new caller inherit the old run's
+   * partial buffer: a run whose consumer gave up (an ESS state that timed out
+   * and moved on) is never stopped, so the next trial's start was a no-op and
+   * its "mean eye position" pooled samples from two different targets. A start
+   * request is unambiguous -- honor it and discard whatever was in flight.
+   *
+   * last_computation_count is cleared here so that "status" answers did THIS
+   * run complete, not have I ever completed. Without it a caller that polls
+   * status before the first sample arrives reads a stale 1 from the run
+   * before. */
   if (!strcmp(name, "start")) {
-    if (!p->active) {
-      p->active = SAMPLER_ACTIVE;
-      p->current_count = 0;
-      p->type_locked = 0;  /* Allow type re-detection on new start */
-      /* window_start_time will be set on first sample */
-      
-      /* Signal that sampling has started (status = 0) */
-      int status = 0;
-      memcpy(p->status_dpoint.data.buf, &status, sizeof(int));
-      p->status_dpoint.timestamp = pinfo->timestamp;
-      pinfo->dpoint = &p->status_dpoint;
-      return DPOINT_PROCESS_DSERV;
-    }
-    return DPOINT_PROCESS_IGNORE;
+    p->active = SAMPLER_ACTIVE;
+    p->current_count = 0;
+    p->last_computation_count = 0;
+    p->type_locked = 0;  /* Allow type re-detection on new start */
+    /* window_start_time will be set on first sample */
+
+    /* Signal that sampling has started (status = 0) */
+    int status = 0;
+    memcpy(p->status_dpoint.data.buf, &status, sizeof(int));
+    p->status_dpoint.timestamp = pinfo->timestamp;
+    pinfo->dpoint = &p->status_dpoint;
+    return DPOINT_PROCESS_DSERV;
   }
 
   /* Handle stop command */
