@@ -461,6 +461,19 @@ class EyeTouchVisualizer {
         if (this.connection) {
             // Refresh windows when connection is established/re-established
             this.connection.on('connected', () => {
+                // Assume the virtual eye is OFF until the server says otherwise.
+                // A dserv restart clears eyetracking/virtual_enabled entirely --
+                // virtualeyeconf only creates it on first use -- so the
+                // dservTouch in refreshWindows answers with nothing, the
+                // subscription never fires, and a checkbox ticked before the
+                // restart stays ticked over an eye that is no longer running.
+                // Dropping to false first makes "no answer" read as off; if the
+                // server really does have it on, the touch republishes 1 and the
+                // subscription ticks it straight back.
+                this.applyVirtualEyeState(false);
+                const virtualEyeCheck = document.getElementById('eyetouch-virtual-eye');
+                if (virtualEyeCheck) virtualEyeCheck.checked = false;
+
                 // Small delay to ensure connection is fully ready
                 setTimeout(() => this.refreshWindows(), 100);
             });
@@ -966,16 +979,21 @@ class EyeTouchVisualizer {
         
         // Build lines to display
         const lines = [];
-        
+
+        // toFixed keeps the sign of a value that rounds to zero, so a centred
+        // eye dithering either side of zero alternates "0.0" and "-0.0" --
+        // flicker that carries no information. Round-to-zero prints as zero.
+        const deg = (v) => v.toFixed(1).replace(/^-(0(?:\.0+)?)$/, '$1');
+
         // Eye position (always show)
-        const eyeX = this.state.eyePos.x.toFixed(1);
-        const eyeY = this.state.eyePos.y.toFixed(1);
+        const eyeX = deg(this.state.eyePos.x);
+        const eyeY = deg(this.state.eyePos.y);
         lines.push({ text: `Eye: ${eyeX}°, ${eyeY}°`, color: '#ffffff' });
-        
+
         // Virtual eye (if active)
         if (this.state.virtualEyeEnabled && this.state.virtualEye.active) {
-            const vx = this.state.virtualEye.x.toFixed(1);
-            const vy = this.state.virtualEye.y.toFixed(1);
+            const vx = deg(this.state.virtualEye.x);
+            const vy = deg(this.state.virtualEye.y);
             lines.push({ text: `VEye: ${vx}°, ${vy}°`, color: '#ff8c00' });
         }
         
