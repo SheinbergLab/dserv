@@ -125,7 +125,8 @@ static void announce_ident(const box_config_t *c)
 {
 	char s[24];
 
-	pub_str(c, "transport", box_uplink_active_name());
+	pub_str(c, "transport", box_uplink_active_name());   /* ACTIVE now */
+	pub_str(c, "xport/mode", dserv_xmode_str(c->transport_mode)); /* POLICY (config twin) */
 	/* LATCHED at boot by box_boot_init(), not read here: the hardware cause
 	 * register is cleared after that read, and it also carries the OTA verdicts
 	 * (trial/revert/rejected) that no register knows about. */

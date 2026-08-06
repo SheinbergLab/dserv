@@ -1830,6 +1830,12 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 	} else if (r == CFG_CONSOLE) {
 		box_console_printf("console=%s -- save+reboot to apply\n",
 		       dserv_console_str((uint8_t) dserv_cfg_console_mode(&cfg)));
+	} else if (r == CFG_XPORT) {
+		/* transport policy: stored now, decided at the next boot (like
+		 * console). Re-announce the policy so a UI's select settles. */
+		box_console_printf("xport.mode=%s -- save+reboot to apply\n",
+		       dserv_xmode_str(cfg.transport_mode));
+		box_announce_manifest(&cfg);
 	} else if (r == CFG_GROUP || r == CFG_LABEL || r == CFG_DESC) {
 		/* group/label/desc change: reseed the chord machines from the
 		 * pins' current levels, and re-announce so the edit reaches

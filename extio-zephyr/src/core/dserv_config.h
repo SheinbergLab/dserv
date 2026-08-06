@@ -247,6 +247,8 @@ typedef enum {
     CFG_OBS_MODE,
     CFG_SYNC_PIN,
     CFG_CONSOLE,
+    CFG_XPORT,      /* xport/mode auto|usb|eth -- transport boot policy, the
+                     * datapoint twin of the CLI `mode` verb (save+reboot) */
     CFG_ACTIVE_LOW,
     CFG_WIFI_SSID,
     CFG_WIFI_PASS,
@@ -688,6 +690,19 @@ static inline cfg_result_t dserv_cfg__config(box_config_t *c, const char *k,
         if (v < 0) return CFG_UNKNOWN;
         c->console_mode = (uint8_t) v; c->applied_count++; return CFG_CONSOLE;
     }
+    if (strcmp(k, "xport/mode") == 0) {       /* auto|usb|eth transport boot
+        * policy -- the datapoint twin of the CLI `mode` verb. Was CLI-only
+        * through v34, so the web config page (datapoint-only) could not set
+        * it: the same latent bug obs/mode had, one surface over. Persisted
+        * policy, applied at the NEXT boot (strap-open decides then); GND
+        * strap still hard-forces eth. */
+        char w[8]; dserv_msg_copy_cstr(m, w, sizeof w);
+        int v = !strcmp(w, "auto") ? XMODE_AUTO :
+                !strcmp(w, "eth")  ? XMODE_ETH  :
+                !strcmp(w, "usb")  ? XMODE_USB  : -1;
+        if (v < 0) return CFG_UNKNOWN;
+        c->transport_mode = (uint8_t) v; c->applied_count++; return CFG_XPORT;
+    }
     if (strcmp(k, "obs/pin") == 0) {
         char w[8]; dserv_msg_copy_cstr(m, w, sizeof w);
         if (m->type == DSERV_STRING && !strcmp(w, "off")) obs_mirror_off(c);
@@ -804,6 +819,7 @@ static inline const char *dserv_cfg_result_str(cfg_result_t r)
     case CFG_OBS_MODE:   return "obs_mode";
     case CFG_SYNC_PIN:   return "sync_pin";
     case CFG_CONSOLE:    return "console";
+    case CFG_XPORT:      return "xport_mode";
     case CFG_ACTIVE_LOW: return "active_low";
     case CFG_WIFI_SSID:  return "wifi_ssid";
     case CFG_WIFI_PASS:  return "wifi_pass";

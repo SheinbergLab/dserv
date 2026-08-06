@@ -36,6 +36,16 @@ elseif(CONFIG_FILE_SYSTEM)
 	target_compile_definitions(app PRIVATE BOX_HAVE_PERSIST=1)
 endif()
 
+# BOX_HAVE_OBS_LEADER: this app's main.c carries the +30 obs-leader onset
+# machinery (the at_abs obs-pin fire hook that ISR-stamps the actual instant
+# and publishes actual-stamped state/in_obs). Board-independent within
+# extio-zephyr, so it is an app capability, not a board one. It gates the CLI
+# `obs mode leader` verb (box_cli.h) so a build WITHOUT the machinery -- an
+# RP2350 image built from the same shared core -- refuses to announce an
+# authority it cannot exercise. The datapoint obs/mode path is ungated (a
+# leaderless box that persists mode=leader simply never fires, same as before).
+target_compile_definitions(app PRIVATE BOX_HAVE_OBS_LEADER=1)
+
 # MCUboot chainload repair: the RW6xx SoC init powers the TDDR PLL down in any
 # image without Ethernet (i.e. MCUboot), and nothing ever powers it back up, so
 # our ENET 1588 clock arrives dead and the first PTP read spins forever with

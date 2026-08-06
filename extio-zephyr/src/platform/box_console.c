@@ -38,6 +38,11 @@
 #include "box_persist.h"
 #endif
 
+/* Defined in box_announce.c (platform-specific); the CLI_OBS path re-announces
+ * the obs role, same as main.c's CFG_OBS_MODE. Forward-declared rather than
+ * pulling box_announce.h into the console TU. */
+void box_announce_obs_role(const box_config_t *cfg);
+
 static const struct device *con;
 
 RING_BUF_DECLARE(con_rx, 256);
@@ -416,6 +421,12 @@ static void run_line(box_config_t *cfg, const char *line)
 	switch (a) {
 	case CLI_GPIO:
 		box_gpio_exec(cfg, &cmd);
+		break;
+	case CLI_OBS:
+		/* obs mode changed: re-announce the role so a host's leader scan
+		 * sees it live, exactly as main.c does for CFG_OBS_MODE. No pin
+		 * re-apply -- the mode is a role, not a mux change. */
+		box_announce_obs_role(cfg);
 		break;
 	case CLI_PIN:
 	case CLI_GROUP:

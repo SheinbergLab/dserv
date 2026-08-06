@@ -5521,3 +5521,32 @@ that image predates this change and still prints the line once per boot).
 4. An OTA on a SYNCED box, then `clock_sane.sh` after: does sync survive the
    blast, and if it stepped, did it re-converge. TD-dropped Sync stamps during
    the blast are expected and fine; permanent loss afterwards is not.
+
+## CLI ↔ datapoint config parity (audited 2026-08-05, closed in v0.4.0+35)
+
+Config is settable two ways and they MUST stay in lockstep: the line CLI
+(`box_cli.h`, over serial/USB — bring-up + the `extio-setup` serial tool) and
+the datapoint path (`dserv_config.h` apply, `config/<key>` — dserv + the
+`extio-config` web page). A key present on only one surface is invisible from
+the other, and the failure is silent: the write is refused (or the verb is
+missing) and the value looks unset. Two real divergences were live before +35:
+
+- **`obs/mode`**: datapoint had it (`CFG_OBS_MODE`), the CLI had no `obs mode`
+  verb — so the serial path could not reach LEADER at all. (The web page could,
+  but a *host*-side allowlist also omitted the leaf; that was the extioconf
+  `::extio_cfg_writable` fix, host repo 9fa84576.)
+- **transport `mode auto|usb|eth`**: the CLI `mode` verb had it, no datapoint
+  did — so the web page could not set the boot transport policy. Same bug,
+  opposite surface.
+
+Both closed in +35: CLI `obs mode mirror|leader` (gated on `BOX_HAVE_OBS_LEADER`
+so a leaderless build refuses it), and `config/xport/mode` datapoint (+
+`state/xport/mode` announce, + the extioconf allowlist). `show`/`dump` report
+both.
+
+RULE for any NEW config field: add it to BOTH surfaces in the same change, or
+document here why it is deliberately single-surface. When adding a
+web-settable leaf, also add it to host `config/extioconf.tcl`
+`::extio_cfg_writable` — that allowlist is a THIRD gate that silently rejects
+unknown leaves. Runtime actions (`do`, `ble pair/forget`, `save`, `announce`)
+are cmd/*, not config, and are exempt.

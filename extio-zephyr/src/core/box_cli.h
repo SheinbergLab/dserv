@@ -96,8 +96,12 @@ static inline int  box_cli_pin_reserved(int n)
 }
 
 /* CLI_GROUP = labels/groups/desc changed: caller refreshes the group runtime
- * and re-announces the manifest (no GPIO re-apply needed). */
-typedef enum { CLI_OK, CLI_ERR, CLI_PIN, CLI_GROUP, CLI_AIN, CLI_GPIO, CLI_SAVE, CLI_FACTORY, CLI_REBOOT, CLI_BOOTSEL } cli_action_t;
+ * and re-announces the manifest (no GPIO re-apply needed).
+ * CLI_OBS = obs mode changed: caller re-announces the obs role
+ * (box_announce_obs_role), exactly as the datapoint CFG_OBS_MODE path does.
+ * The platform-agnostic core cannot reach into box_announce.c, so it signals
+ * and the platform caller acts -- same split as CLI_PIN. */
+typedef enum { CLI_OK, CLI_ERR, CLI_PIN, CLI_GROUP, CLI_AIN, CLI_GPIO, CLI_OBS, CLI_SAVE, CLI_FACTORY, CLI_REBOOT, CLI_BOOTSEL } cli_action_t;
 
 /* mode word<->value shared with dserv_config.h: dserv_mode_val / dserv_mode_str */
 
@@ -135,6 +139,11 @@ static inline void box_cli_show(const box_config_t *c, char *out, int outsz)
     if (k < outsz - 24)
         k += snprintf(out + k, outsz - k, "  console=%s\r\n",
                       dserv_console_str((uint8_t) dserv_cfg_console_mode(c)));
+    /* CONFIGURED role, not obs_is_leader() -- report the setting even when no
+     * pin is set yet, so `obs mode leader` then `show` reflects the choice. */
+    if (k < outsz - 24)
+        k += snprintf(out + k, outsz - k, "  obs.mode=%s\r\n",
+                      c->obs_mode == OBS_MODE_LEADER ? "leader" : "mirror");
     if (c->desc[0] && k < outsz - 8)
         k += snprintf(out + k, outsz - k, "  desc=%s\r\n", c->desc);
     for (int i = 0; i < BOX_NPINS && k < outsz - 64; i++)
@@ -195,6 +204,7 @@ static inline void box_cli_dump(const box_config_t *c)
             if (c->group_quiet[g])        printf("group %d quiet 1\r\n",   g);
         }
     if (obs_mirror_enabled(c))            printf("obs pin %d\r\n", obs_mirror_pin(c));
+    if (c->obs_mode == OBS_MODE_LEADER)   printf("obs mode leader\r\n");
     if (sync_input_enabled(c))            printf("sync pin %d\r\n", sync_input_pin(c));
     if (c->wifi_ssid[0])                  printf("wifi ssid %s\r\n", c->wifi_ssid);
     if (c->wifi_pass[0])                  printf("# wifi pass <re-enter manually; not dumped>\r\n");
@@ -446,6 +456,36 @@ static inline cli_action_t box_cli_exec(box_config_t *c, const char *line,
     if (!strcmp(line, "obs off")) {
         obs_mirror_off(c); c->applied_count++;
         snprintf(out, outsz, "OK obs off\r\n"); return CLI_PIN;
+    }
+    /* obs mode mirror|leader -- the pin's ROLE, orthogonal to `obs pin N`
+     * (which sets WHICH pin and implies mirror). Mirror follows the host's
+     * ess/in_obs; leader OWNS the line + the epoch (fires it at an at_abs
+     * instant, stamps the actual onset). Applies live -- no save+reboot --
+     * and re-announces so a host's leader scan sees it now. Was CLI-only-
+     * MISSING through v34 (datapoint config/obs/mode had it, the CLI did
+     * not), so the serial config path could not reach leader at all. */
+    {
+        char w[8];
+        if (sscanf(line, "obs mode %7s", w) == 1) {
+            if (!strcmp(w, "mirror")) {
+                c->obs_mode = OBS_MODE_MIRROR; c->applied_count++;
+                snprintf(out, outsz, "OK obs mode=mirror\r\n"); return CLI_OBS;
+            }
+            if (!strcmp(w, "leader")) {
+#ifdef BOX_HAVE_OBS_LEADER
+                c->obs_mode = OBS_MODE_LEADER; c->applied_count++;
+                snprintf(out, outsz, "OK obs mode=leader%s\r\n",
+                         obs_mirror_enabled(c) ? ""
+                         : " (WARN no obs pin set -- `obs pin N` first)");
+                return CLI_OBS;
+#else
+                snprintf(out, outsz,
+                    "ERR this build has no obs-leader machinery (mirror only)\r\n");
+                return CLI_ERR;
+#endif
+            }
+            snprintf(out, outsz, "ERR obs mode mirror|leader\r\n"); return CLI_ERR;
+        }
     }
     if (sscanf(line, "sync pin %d", &n) == 1) {   /* TTL obs-sync INPUT (hardware clock anchor) */
         if (n < 0 || n >= BOX_NPINS) { snprintf(out, outsz, "ERR sync pin 0-%d (or 'sync off')\r\n", BOX_NPINS - 1); return CLI_ERR; }
