@@ -459,7 +459,12 @@ void box_ain_late_gaps(uint32_t *last_us, uint32_t *max_us)
 }
 
 void box_ain_stats_reset(void)
-{ st_sweeps = st_blocks = st_dropped = st_late = st_throttled = 0; }
+{
+	st_sweeps = st_blocks = st_dropped = st_late = st_throttled = 0;
+	/* The gaps are part of the late story -- leaving them behind would report
+	 * a 32 ms worst gap against a late count of zero. */
+	st_late_gap_last_us = st_late_gap_max_us = 0;
+}
 
 #else  /* no ADC on this board */
 

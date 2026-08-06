@@ -280,6 +280,18 @@ typedef enum {
                      * until the next reconnect -- indistinguishable from the
                      * write having failed. This makes "tell me what you are
                      * now" an explicit, cheap request instead of a wait. */
+    CFG_STATS_RESET,/* cmd/stats/reset -> zero the SINCE-BOOT diagnostic counters
+                     * (ain sweeps/blocks/dropped/late + late gaps, adc
+                     * sweep_max_us, eth send_max_us). Rates can be had by
+                     * diffing counters over a window, but the high-water marks
+                     * only ever climb, so one bad millisecond during an OTA
+                     * hours ago is indistinguishable from a problem happening
+                     * now. Zeroing at the start of a session makes what you
+                     * read afterwards describe THAT session. loop_max_us and
+                     * disp_max_us are already per-publish-window and are left
+                     * alone. Rebooting also clears these, but costs PTP lock,
+                     * re-registration, and the accumulated `late` history that
+                     * is the most useful thing here. */
     CFG_UNKNOWN     /* under this box's name but unrecognized */
 } cfg_result_t;
 
@@ -767,6 +779,7 @@ static inline cfg_result_t dserv_cfg__cmd(const char *k, const dserv_msg_t *m,
         cmd->value = (uint32_t) dserv_msg_as_long(m); return CFG_GPIO;
     }
     if (strcmp(k, "announce") == 0) return CFG_ANNOUNCE;
+    if (strcmp(k, "stats/reset") == 0) return CFG_STATS_RESET;
     if (strcmp(k, "save")    == 0) return CFG_SAVE;
     if (strcmp(k, "reboot")  == 0) return CFG_REBOOT;
     if (strcmp(k, "factory") == 0) return CFG_FACTORY;
@@ -837,6 +850,7 @@ static inline const char *dserv_cfg_result_str(cfg_result_t r)
     case CFG_DSERV_PORT: return "dserv_port";
     case CFG_GPIO:       return "cmd_do";
     case CFG_ANNOUNCE:   return "announce";
+    case CFG_STATS_RESET: return "stats_reset";
     case CFG_SAVE:       return "save";
     case CFG_REBOOT:     return "reboot";
     case CFG_FACTORY:    return "factory";

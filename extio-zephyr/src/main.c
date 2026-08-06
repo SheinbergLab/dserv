@@ -1901,6 +1901,19 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 		 * to cover today's caller. */
 		box_announce_burst(&cfg, groups);
 		box_console_printf("cmd/announce -> full re-announce\n");
+	} else if (r == CFG_STATS_RESET) {
+		/* Zero the since-boot diagnostic counters. The periodic publisher
+		 * pushes the new values on its next tick, so the host sees zeros
+		 * without asking. loop_max_us / disp_max_us are already windowed
+		 * and reset themselves, so they are deliberately untouched. */
+#if defined(BOX_HAVE_ADC)
+		box_ain_stats_reset();
+		box_adc_stats_reset();
+#endif
+#if defined(CONFIG_NETWORKING)
+		box_net_eth_send_stats_reset();
+#endif
+		box_console_printf("cmd/stats/reset -> ain + adc + send counters zeroed\n");
 	} else if (r == CFG_SAVE) {
 #if defined(BOX_HAVE_PERSIST)
 		if (box_obs_active()) {      /* never program flash mid-trial */

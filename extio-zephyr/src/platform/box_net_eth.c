@@ -741,6 +741,14 @@ void box_net_eth_send_stats(uint32_t *last_us, uint32_t *max_us)
 	if (max_us)  *max_us  = send_max_us;
 }
 
+/* send_max_us only ever climbs, so without this the worst millisecond since
+ * boot masks everything after it. Zeroed by cmd/stats/reset. */
+void box_net_eth_send_stats_reset(void)
+{
+	send_last_us = 0;
+	send_max_us  = 0;
+}
+
 /* UPLINK FAILURE DETECTION. Without this the box publishes into a dead socket
  * forever and looks dead from dserv while running perfectly.
  *

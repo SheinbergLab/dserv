@@ -94,6 +94,7 @@ unsigned box_net_eth_uplink_cycles(void);   /* sessions torn down by give-up (v3
 /* Cost of the last zsock_send() and the running max, in us. Instrumentation for
  * the publish-latency investigation; see box_net_eth.c. */
 void box_net_eth_send_stats(uint32_t *last_us, uint32_t *max_us);
+void box_net_eth_send_stats_reset(void);   /* cmd/stats/reset */
 
 /* Inbound split: RX-thread-signal -> loop-reached-recv, and the recv cost.
  * wake_us is WINDOWED and one-shot: it is the last wake measured since the
