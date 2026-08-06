@@ -26,7 +26,7 @@ Description=Rate-lock the %i PHC to the system clock (phc2sys)
 Documentation=file:/usr/local/dserv/extio-zephyr/PORTING.md
 Wants=network-online.target
 Wants=dserv-ptp4l@%i.service
-After=network-online.target dserv-ptp4l@%i.service
+After=network-online.target time-sync.target dserv-ptp4l@%i.service
 
 # Wants=, not Requires=/BindsTo=. Both of those propagate STOP, and a unit
 # stopped by a dependency is not restarted by Restart= -- so every ptp4l restart
@@ -35,7 +35,16 @@ After=network-online.target dserv-ptp4l@%i.service
 
 [Service]
 Type=simple
-ExecStart=/usr/sbin/phc2sys -c %i -s CLOCK_REALTIME -w -m -q
+# -S 1.0: STEP offsets over 1 s instead of slewing. Without it, the boot
+# order bites: phc2sys spends its one free first-step syncing the PHC to
+# the still-wrong boot clock, chrony then steps CLOCK_REALTIME, and
+# phc2sys drags the PHC across that gap at max slew (~65 ms/s) for many
+# minutes -- during which every extio D anchor is stale within a second
+# and all scheduled onsets land 'late' (officepi brownout, 2026-08-05:
+# 69 s residue = 18 min of dark obs LED). A >1 s offset means the
+# timeline is already unusable; stepping is strictly better. time-sync
+# ordering above narrows the window; -S closes it.
+ExecStart=/usr/sbin/phc2sys -c %i -s CLOCK_REALTIME -w -m -q -S 1.0
 Restart=always
 RestartSec=5
 
