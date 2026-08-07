@@ -407,8 +407,18 @@ function cardHtml(b) {
         aingrps = '<div class="sect"><div class="lbl">analog groups</div>' +
             [...b.aingrp.keys()].sort().map(gn => {
                 const g = b.aingrp.get(gn);
-                const rate = g.count > 1 && g.interval_us
-                    ? `${Math.round(1e6 / g.interval_us)} Hz ×${g.count}${g.avg ? ' avg' : ''}`
+                /* MODE COMES FROM interval_us, NOT FROM count. The firmware
+                 * sets interval_us to exactly 0 for an on-change block and to
+                 * decimate*base_period for a continuous one, so it is the only
+                 * field that states the mode; count is the BATCH size and says
+                 * nothing about it. Testing `count > 1` conflated batch=1 with
+                 * on-change, so a continuous group publishing one scan per
+                 * block -- which is what an eye feed wants, and what the rig
+                 * switched to on 2026-08-06 to stop discarding samples -- was
+                 * labelled "on-change" while streaming at 250 Hz. */
+                const rate = g.interval_us
+                    ? `${Math.round(1e6 / g.interval_us)} Hz` +
+                      `${g.count > 1 ? ` ×${g.count}` : ''}${g.avg ? ' avg' : ''}`
                     : 'on-change';
                 const rows = g.chans.map((ch, i) => {
                     const val = g.last[i];

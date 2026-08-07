@@ -222,9 +222,13 @@ function tickAges(root) {
     const bb = boxes.get(el.dataset.ainBox) || {};
     const raw = bb['ain/' + el.dataset.ainGrp];
     const blk = raw && Array.isArray(raw.v) ? ExtioAinBlock.decode(raw.v) : null;
+    /* interval_us states the MODE (0 = on-change, else decimate*base_period);
+     * count is the batch size and states nothing. Testing count>1 labelled a
+     * continuous group with batch=1 as "on-change" -- see extio.html, same fix. */
     el.textContent = !blk ? '—'
-      : blk.last.join(' ') + ' · ' + (blk.count > 1 && blk.interval_us
-          ? Math.round(1e6 / blk.interval_us) + ' Hz ×' + blk.count + (blk.avg ? ' avg' : '')
+      : blk.last.join(' ') + ' · ' + (blk.interval_us
+          ? Math.round(1e6 / blk.interval_us) + ' Hz' +
+            (blk.count > 1 ? ' ×' + blk.count : '') + (blk.avg ? ' avg' : '')
           : 'on-change');
   }
   for (const el of root.querySelectorAll('[data-grp]')) {
