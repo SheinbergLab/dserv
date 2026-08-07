@@ -80,6 +80,23 @@
                                      * agree about when a box is gone */
 #define DISC_TICK_MS      1000      /* recvfrom timeout == how fast a TTL expiry
                                      * is noticed when nothing is arriving */
+#define DISC_STRAND_MS    30000     /* how long a box must have been unable to
+                                     * reach its dserv before we call it stranded.
+                                     *
+                                     * NOT zero, which is what this was first. A
+                                     * dserv restart drops the box's link for a
+                                     * few seconds -- measured at ~4.5 s on the
+                                     * rig -- and restarts are ROUTINE here (any
+                                     * make install does one). Flagging those
+                                     * would put a red badge on the fleet page
+                                     * during ordinary work, and a warning that
+                                     * cries wolf on maintenance trains people
+                                     * to ignore the one that matters.
+                                     *
+                                     * 30 s is comfortably past any restart while
+                                     * still surfacing a real problem within half
+                                     * a minute. It is deliberately the same
+                                     * order as the box's own MATCH_REFRESH_MS. */
 #define DISC_JSON_MAX     (DISC_MAX_BOXES * 512 + 64)
 
 /* One discovered box. Strings are copied out of the beacon and bounded here;
@@ -222,10 +239,24 @@ static void expire(disc_info_t *info)
 
 /* Serialise the live set. Returns -1 rather than a truncated array: half a
  * fleet list is a wrong answer wearing the shape of a complete one. Caller
- * holds the lock and has already called expire(). */
+ * holds the lock and has already called expire().
+ *
+ * NO PER-ENTRY AGE FIELD, deliberately, and it was here once. Two reasons, and
+ * they reinforce each other. It made the JSON differ on every rebuild, so the
+ * change-detection in publish_if_changed never suppressed anything and the
+ * aggregate went out ~1.3 times a second on a completely idle fleet -- exactly
+ * the churn the change-only design exists to avoid. And under change-only
+ * publishing an age is FROZEN at publish time: it would sit there reading "2s"
+ * for as long as nothing else moved, which is the stale-field trap this file's
+ * header is already about. The 12 s TTL is the freshness guarantee -- every
+ * entry present was heard from within it -- and a consumer wanting more can
+ * read the datapoint's own timestamp.
+ *
+ * What DOES still vary is down_ms/tries on a box that cannot reach its dserv.
+ * That republishes about twice a second, which is correct: it is proportional
+ * to something actually going wrong, and stops the moment it is fixed. */
 static int build_json(disc_info_t *info, char *out, size_t osz)
 {
-    uint64_t now = now_ms();
     int w = snprintf(out, osz, "[");
 
     for (int keep = 1; keep <= info->nboxes; keep++) {
@@ -245,7 +276,21 @@ static int build_json(disc_info_t *info, char *out, size_t osz)
          * broken -- the absence of a health report is not a bad one -- so
          * stranded requires v>=2. */
         int configured = (b.target[0] && strncmp(b.target, "0.0.0.0", 7) != 0);
-        int stranded   = (b.v >= 2 && configured && !strcmp(b.link, "down"));
+        int stranded   = (b.v >= 2 && configured && !strcmp(b.link, "down") &&
+                          b.down_ms >= DISC_STRAND_MS);
+
+        /* Ownership, which is NOT the same question as health and must not be
+         * folded into it. `mine` compares the box's target host against the
+         * address that reaches it from here -- so a box pointed at a DIFFERENT
+         * dserv on this subnet reads as neither free nor mine, and a page can
+         * decline to offer a one-click adopt that would quietly steal it out of
+         * a running rig. Every dserv on the LAN sees every box now, so "someone
+         * else's" has to be a state we can name. */
+        int mine = 0;
+        if (configured && b.via[0]) {
+            size_t vl = strlen(b.via);
+            mine = (strncmp(b.target, b.via, vl) == 0 && b.target[vl] == ':');
+        }
 
         /* snprintf returns what it WOULD have written, so `w` can run past the
          * buffer on a long entry. Bail the moment it does rather than forming
@@ -255,9 +300,9 @@ static int build_json(disc_info_t *info, char *out, size_t osz)
         w += snprintf(out + w, osz - w,
             "%s{\"ip\":\"%s\",\"name\":\"%s\",\"fw\":\"%s\",\"board\":\"%s\","
             "\"build\":\"%s\",\"target\":\"%s\",\"via\":\"%s\",\"v\":%d,"
-            "\"configured\":%d,\"stranded\":%d,\"ageMs\":%llu",
+            "\"configured\":%d,\"mine\":%d,\"stranded\":%d",
             (keep > 1) ? "," : "", b.ip, en, ef, eb, ebd, et, b.via, b.v,
-            configured, stranded, (unsigned long long) (now - b.last_ms));
+            configured, mine, stranded);
         if (w >= (int) osz) return -1;
 
         /* Health only from a box that actually reports it. Emitting link:""

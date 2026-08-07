@@ -42,6 +42,22 @@
   .chip.usb { background: #17293f; color: var(--blue); }
   .chip.wdg { background: #3f1d1d; color: var(--red); }
   .chip.lead { background: #3a2c10; color: #e8b34b; }
+  /* ---- discovery panel (extio/discovered) ---- */
+  #disco { margin: 0 24px 18px; }
+  #disco h2 { font-size: 12px; font-weight: 600; color: var(--muted);
+              text-transform: uppercase; letter-spacing: .06em; margin: 0 0 8px; }
+  #disco .drow { display: flex; align-items: center; gap: 10px; padding: 7px 12px;
+                 background: var(--card); border: 1px solid var(--card-edge);
+                 border-radius: 8px; margin-bottom: 6px; font-size: 13px; }
+  #disco .dip { font-family: ui-monospace, Menlo, monospace; }
+  #disco .dmeta { color: var(--faint); font-size: 12px; margin-left: auto;
+                  text-align: right; }
+  /* free = actionable, spoken-for = deliberately quiet, stranded = the alarm */
+  #disco .chip.free  { background: #14351f; color: var(--green); }
+  #disco .chip.mine  { background: var(--off); color: var(--muted); }
+  #disco .chip.other { background: var(--off); color: var(--faint); }
+  #disco .chip.lost  { background: #3f1d1d; color: var(--red); }
+  #disco .drow.other { opacity: .6; }
   .obs { font-size: 11px; font-weight: 700; letter-spacing: 0.06em; padding: 1px 8px;
          border-radius: 9px; background: var(--off); color: var(--faint); transition: all 120ms; }
   .obs.on { background: #14351f; color: var(--green); box-shadow: 0 0 8px rgba(74,222,128,0.5); }
@@ -105,6 +121,7 @@
   </span>
   <span id="conn"><span class="dot"></span><span id="conn-msg">connecting</span></span>
 </header>
+<div id="disco" hidden></div>
 <div id="grid"></div>
 <div id="empty">no boxes seen yet — waiting for <code>extio/*/state/*</code> datapoints</div>
 
@@ -161,7 +178,23 @@ function decodeGroup(g, labels) {
  * extio/<name>/host/<leaf> is the HOST's voice about the same box
  * (extioconf's connect counter) -- routed here too, but never counted as
  * box liveness: only the box's own state/* traffic proves it alive. */
+/* Boxes heard on the LAN but not necessarily adopted -- the whole point being
+ * that an UNADOPTED box never registers, so it appears in no extio/<name>/*
+ * namespace and is invisible to everything else on this page. */
+let discovered = [];
+
+function onDiscovered(msg) {
+    let v = msg.data !== undefined ? msg.data : msg.value;
+    if (typeof v === 'string') v = v.split('\x00')[0];
+    try { discovered = JSON.parse(v) || []; } catch (e) { discovered = []; }
+    renderDisco();
+}
+
 function onExtio(msg) {
+    /* Checked FIRST: this leaf has two segments, so the per-box regex below
+     * rejects it and it would otherwise be dropped on the floor. */
+    if (msg.name === 'extio/discovered') { onDiscovered(msg); return; }
+
     const m = /^extio\/([^/]+)\/(state|host)\/(.+)$/.exec(msg.name);
     if (!m) return;
     const b = boxModel(m[1]);
@@ -490,6 +523,73 @@ function cardHtml(b) {
            di + groups + dout + aingrps + ain;
 }
 
+/* ---- THE THREE OWNERSHIP STATES ----
+ *
+ * Every dserv on this subnet now hears every box, so "is this box available"
+ * is no longer a yes/no. Three answers, and conflating any two of them causes a
+ * different kind of damage:
+ *
+ *   free        target 0.0.0.0 -- no dserv has claimed it. Adoptable.
+ *   mine        its target IS us. Nothing to do; shown so the list is complete
+ *               and you can see the box is where you think it is.
+ *   spoken for  its target is a DIFFERENT dserv on this LAN. Adopting it would
+ *               silently steal it out of a running rig, so no action is offered
+ *               here at all. This is the state a naive "adopt" button gets
+ *               wrong, and the one where getting it wrong hurts someone else.
+ *
+ * `mine` is decided in the C module against the address that actually reaches
+ * that box (extiodisc.c `via`), not against a hostname -- dserv is multi-homed
+ * and a name resolves to whichever interface it feels like.
+ *
+ * STRANDED is a separate axis, not a fourth state: a box can be stranded and
+ * still be ours, or stranded and someone else's. It means the box has a target
+ * it has been unable to reach for over 30 s (the module holds a grace period so
+ * routine dserv restarts, which drop the link for a few seconds, do not raise
+ * an alarm during ordinary work).
+ */
+function renderDisco() {
+    const el = document.getElementById('disco');
+    if (!el) return;
+    if (!discovered.length) { el.hidden = true; el.innerHTML = ''; return; }
+
+    const ago = ms => ms >= 60000 ? Math.floor(ms / 60000) + 'm'
+                                  : Math.round(ms / 1000) + 's';
+
+    const rows = discovered.map(d => {
+        const free  = !d.configured;
+        const mine  = !!d.mine;
+        const state = free ? 'free' : mine ? 'mine' : 'other';
+        const label = free ? 'unclaimed' : mine ? 'this dserv' : 'another dserv';
+
+        /* An adopted box keeps beaconing, so `target` is what tells you WHOSE
+         * it is. Showing it on every configured row is what makes "spoken for"
+         * checkable rather than something you take on trust. */
+        const tgt = d.configured ? `<span class="chip ${state}">${esc(label)}</span>` +
+                                   `<span class="dmeta">&rarr; ${esc(d.target)}</span>`
+                                 : `<span class="chip free">${esc(label)}</span>`;
+
+        /* Health only where the box reports it (v2). A v1 box omits link
+         * entirely and its silence must not be drawn as a verdict. */
+        const lost = d.stranded
+            ? `<span class="chip lost" title="${d.ever
+                 ? 'reached this target before, and cannot now'
+                 : 'has never reached this target -- wrong address or subnet'}">${
+                 d.ever ? 'lost dserv' : 'never reached'} ${ago(d.down_ms || 0)}</span>`
+            : '';
+
+        return `<div class="drow ${state === 'other' ? 'other' : ''}">
+          <span class="dip">${esc(d.ip)}</span>
+          <b>${esc(d.name || '?')}</b>
+          <span class="chip">${esc(d.board || '?')}</span>
+          ${tgt}${lost}
+        </div>`;
+    }).join('');
+
+    const html = `<h2>on this network</h2>${rows}`;
+    if (html !== el.dataset.last) { el.innerHTML = html; el.dataset.last = html; }
+    el.hidden = false;
+}
+
 function render() {
     const grid = document.getElementById('grid');
     document.getElementById('empty').style.display = boxes.size ? 'none' : '';
@@ -602,6 +702,11 @@ async function init() {
 
     dp = new DatapointManager(conn, { autoGetKeys: false });
     dp.subscribe('extio/*', onExtio);          /* live stream, all boxes */
+    /* Subscriptions fire on CHANGE only, and the discovery set changes rarely
+     * once a rig is settled -- without seeding the retained value the panel
+     * stays empty until a box appears or leaves, which on a stable rig could be
+     * days. (Same trap as ess_app.js's requestInitialData touch list.) */
+    dp.sendGet('extio/discovered');
 
     /* @keys is PUSHED by dserv on every key add/remove (set_key_dpoint), so this
      * fires live: seed retained values for new keys, and PRUNE boxes whose keys
