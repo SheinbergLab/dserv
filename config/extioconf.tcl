@@ -295,9 +295,20 @@ proc extio_unforward_box {name} {
 proc extio_clear {name} {
     catch { extio_unforward_box $name }
     set n 0
+    # EVERYTHING under extio/<name>/, not just state/ and decoded/.
+    #
+    # Leaving the rest is not harmless bookkeeping: `host/connects` and
+    # `host/connect_last` are OUR OWN per-box datapoints, and www/extio.html
+    # builds its presence set from keys matching state/ OR host/ -- so a box
+    # cleared the old way stayed "present" forever on the strength of a connect
+    # counter, and its ghosted card could never be pruned. The clear reported
+    # success and the card did not move, which is the worst pairing.
+    #
+    # config/* and cmd/* go too. They are the host's intent for a box that is
+    # being forgotten, and a retained config leaf outliving the box it
+    # described is the same stale-record problem one level up.
     foreach k [dservKeys] {
-        if { [string match extio/$name/state/* $k] ||
-             [string match extio/$name/decoded/* $k] } { catch { dservClear $k }; incr n }
+        if { [string match extio/$name/* $k] } { catch { dservClear $k }; incr n }
     }
     foreach k [array names ::extio_gmap $name/*] { unset -nocomplain ::extio_gmap($k) }
     unset -nocomplain ::extio_known($name) ::extio_wd($name) ::extio_stale($name)
