@@ -45,6 +45,24 @@
 
 #define USBIO_MAXWIRE 12             /* de-dup table for auto-registered forward patterns */
 
+/* ---- '}' variable-length frames ----
+ * dserv's TCP handler accepts a length-prefixed datapoint push with no size cap
+ * (Datapoint.h DPOINT_BINARY_VAR_MSG_CHAR); this framer only knew the fixed
+ * 128-byte '>' form, so anything bulky over USB simply vanished -- a box's
+ * cmd/dump reply was built, sent, and silently discarded here.
+ *
+ * Layout after the lead char (18-byte header, little-endian):
+ *   varlen(u16) type(u32) datalen(u32) timestamp(u64) varname[varlen] data[datalen]
+ *
+ * BOUNDS ARE TIGHTER THAN THE TCP PATH ON PURPOSE. Dataserver.cpp allows 128 MB
+ * because it is reading a socket it trusts to be framed; this is a serial line
+ * that resyncs from arbitrary mid-stream positions, so a corrupt header must not
+ * be able to allocate a gigabyte. 64 KB is far above any real payload (a whole
+ * box config dump is ~1 KB) and small enough to be harmless if it is garbage. */
+#define USBIO_VAR_HDR       18
+#define USBIO_VAR_MAX_NAME  200
+#define USBIO_VAR_MAX_DATA  (64 * 1024)
+
 typedef struct usbio_info_s
 {
   int usbio_fd;
@@ -53,9 +71,14 @@ typedef struct usbio_info_s
   volatile int running;
   pthread_t worker;
   /* inbound dual-mode framer state */
-  int fr_mode;                 /* 0 idle, 1 binary(128B), 2 text(newline) */
+  int fr_mode;                 /* 0 idle, 1 binary(128B), 2 text(newline),
+                                * 3 var header, 4 var body ('}' frames) */
   int fr_have;
   uint8_t fr[256];
+  /* '}' frame in progress: header parsed, body accumulating into vbuf */
+  uint8_t *vbuf;
+  uint32_t vneed, vhave, vvarlen, vdlen, vdtype;
+  uint64_t vts;
   /* auto-registration: patterns the box has asked us to forward (from its %match) */
   int  nwired;
   char wired[USBIO_MAXWIRE][96];
@@ -63,6 +86,7 @@ typedef struct usbio_info_s
   uint64_t rx_bin;    /* binary frames parsed + handed to tclserver_set_point */
   uint64_t rx_bad;    /* frames failing the bounds check (framer desync) */
   uint64_t rx_txt;    /* text lines (setdata / %match) */
+  uint64_t rx_var;    /* '}' variable-length frames parsed */
 } usbio_info_t;
 
 /* NB: state is PER-INTERP (allocated in Init, passed as command ClientData) -- this
@@ -90,6 +114,32 @@ static void process_binary_frame(usbio_info_t *info, const uint8_t *frame)
   if (!ts) ts = tclserver_now(info->tclserver);
   ds_datapoint_t *dp = dpoint_new(name, ts, (ds_datatype_t) dtype, dlen, (unsigned char *) p);
   if (dp) tclserver_set_point(info->tclserver, dp);
+}
+
+/* A completed '}' frame -> datapoint. Name and data were length-counted into
+ * info->vbuf by the framer, so nothing here can over-read. */
+static void process_var_frame(usbio_info_t *info)
+{
+  char name[USBIO_VAR_MAX_NAME + 1];
+
+  memcpy(name, info->vbuf, info->vvarlen);
+  name[info->vvarlen] = '\0';
+
+  info->rx_var++;
+  uint64_t ts = info->vts ? info->vts : tclserver_now(info->tclserver);
+  ds_datapoint_t *dp = dpoint_new(name, ts, (ds_datatype_t) info->vdtype,
+                                  info->vdlen, info->vbuf + info->vvarlen);
+  if (dp) tclserver_set_point(info->tclserver, dp);
+}
+
+/* Abandon a '}' in progress (bad header, alloc failure, or device gone) and go
+ * back to idle. Freeing here is what keeps a truncated frame from leaking. */
+static void var_reset(usbio_info_t *info)
+{
+  free(info->vbuf);
+  info->vbuf = NULL;
+  info->vneed = info->vhave = 0;
+  info->fr_mode = 0; info->fr_have = 0;
 }
 
 /* Auto-registration: the box (built with -DBOX_USB_FORWARD_REGISTER) periodically
@@ -146,6 +196,7 @@ static void usbio_feed(usbio_info_t *info, const uint8_t *data, int n)
     uint8_t b = data[i];
     if (info->fr_mode == 0) {                                 /* idle: pick mode by first byte */
       if (b == DPOINT_BINARY_MSG_CHAR) { info->fr_mode = 1; info->fr[0] = b; info->fr_have = 1; }
+      else if (b == DPOINT_BINARY_VAR_MSG_CHAR) { info->fr_mode = 3; info->fr_have = 0; }
       else if (b == '\n' || b == '\r' || b == 0x00) { /* filler / resync: skip */ }
       else { info->fr_mode = 2; info->fr[0] = b; info->fr_have = 1; }
     }
@@ -154,6 +205,32 @@ static void usbio_feed(usbio_info_t *info, const uint8_t *data, int n)
       if (info->fr_have >= DPOINT_BINARY_FIXED_LENGTH) {
         process_binary_frame(info, info->fr);
         info->fr_mode = 0; info->fr_have = 0;
+      }
+    }
+    else if (info->fr_mode == 3) {                            /* '}': 18-byte header */
+      info->fr[info->fr_have++] = b;
+      if (info->fr_have < USBIO_VAR_HDR) continue;
+      uint16_t vl;
+      memcpy(&vl, info->fr + 0, sizeof vl);      /* varlen is u16 on the wire */
+      info->vvarlen = vl;
+      memcpy(&info->vdtype,  info->fr + 2,  sizeof(uint32_t));
+      memcpy(&info->vdlen,   info->fr + 6,  sizeof(uint32_t));
+      memcpy(&info->vts,     info->fr + 10, sizeof(uint64_t));
+      if (info->vvarlen == 0 || info->vvarlen > USBIO_VAR_MAX_NAME ||
+          info->vdlen > USBIO_VAR_MAX_DATA) {
+        info->rx_bad++; var_reset(info); continue;              /* bad header -> resync */
+      }
+      info->vneed = info->vvarlen + info->vdlen;
+      info->vhave = 0;
+      info->vbuf  = (uint8_t *) malloc(info->vneed ? info->vneed : 1);
+      if (!info->vbuf) { info->rx_bad++; var_reset(info); continue; }
+      info->fr_mode = 4;
+    }
+    else if (info->fr_mode == 4) {                            /* '}': name + data body */
+      info->vbuf[info->vhave++] = b;
+      if (info->vhave >= info->vneed) {
+        process_var_frame(info);
+        var_reset(info);
       }
     }
     else {                                                    /* text: to newline */
@@ -392,8 +469,9 @@ static int usbio_stats_command(ClientData data, Tcl_Interp *interp, int objc, Tc
   (void) objc; (void) objv;
   usbio_info_t *info = (usbio_info_t *) data;
   char buf[160];
-  snprintf(buf, sizeof buf, "rx_bin %llu rx_bad %llu rx_txt %llu fd %d alive %d",
-           (unsigned long long) info->rx_bin, (unsigned long long) info->rx_bad,
+  snprintf(buf, sizeof buf, "rx_bin %llu rx_var %llu rx_bad %llu rx_txt %llu fd %d alive %d",
+           (unsigned long long) info->rx_bin, (unsigned long long) info->rx_var,
+           (unsigned long long) info->rx_bad,
            (unsigned long long) info->rx_txt, info->usbio_fd,
            (info->usbio_fd >= 0 && info->running) ? 1 : 0);
   Tcl_SetObjResult(interp, Tcl_NewStringObj(buf, -1));
