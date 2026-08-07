@@ -21,6 +21,32 @@ foreach m { usbio timer } {
     load ${dspath}/modules/dserv_${m}[info sharedlibextension]
 }
 
+# LAN discovery (dserv_extiodisc): listen for the UDP :5011 beacons extio boxes
+# broadcast, and publish the live set as `extio/discovered`. This is how a box
+# that has an address but NO dserv target becomes visible at all -- it never
+# registers, so nothing else here knows it exists.
+#
+# OPTIONAL ON PURPOSE. A rig runs experiments whether or not it can discover new
+# hardware, so a missing or stale module must not take the extio subprocess down
+# with it -- and it would: this file's failure would abort everything below,
+# including the juicer and pin routing. The specific way that bites is a
+# half-install (config newer than modules/), which is exactly what happens when
+# someone copies a config file to a rig by hand.
+#
+# But the breadcrumb is not optional. A silently absent listener looks identical
+# to a LAN with no boxes on it, so the failure is recorded where it can be read.
+if { [catch { load ${dspath}/modules/dserv_extiodisc[info sharedlibextension] } msg] } {
+    dservSet extio/discover/error "module not loaded: $msg"
+    puts stderr "extio: LAN discovery unavailable -- $msg"
+} elseif { [catch { extioDiscoverStart } msg] } {
+    # Port taken is the common one (another dserv, or extio-setup on this host).
+    # SO_REUSEPORT means sharing normally works, so this is worth seeing.
+    dservSet extio/discover/error "listener not started: $msg"
+    puts stderr "extio: LAN discovery not listening -- $msg"
+} else {
+    dservSet extio/discover/error ""
+}
+
 # persisted rig settings (obs_autobind); same store essconf/dfconf use
 tcl::tm::add $dspath/lib
 package require settingsdb
