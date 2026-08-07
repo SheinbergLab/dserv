@@ -89,6 +89,49 @@ static void tcp_nodelay(int fd)
 	(void) zsock_setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
 }
 
+/* Keepalive on the connect-back, so a host that VANISHES eventually frees the
+ * box's one adoption slot.
+ *
+ * The slot is exclusive: box_net_eth_server_service() accepts only while
+ * srv_conn < 0, so whoever holds it locks everyone else out. That is the safety
+ * property -- a healthy box cannot be stolen -- but it inverts badly on death.
+ * srv_doom is set from EOF/RST, which require the peer to SEND something. A
+ * dserv stopped as a process sends FIN and the slot frees in seconds (measured
+ * on the rig). A host that loses power, drops its cable, or panics sends
+ * nothing at all: without this the box holds a dead slot indefinitely, reports
+ * link:up, and is un-adoptable while looking perfectly healthy -- the worst of
+ * both, since the exclusivity that protects a live box now protects a corpse.
+ *
+ * Same constants dserv uses on its own sockets (src/socket_keepalive.h,
+ * 30/10/3 -> ~60 s): dserv already learned this lesson from the mirror-image
+ * bug, 40 ESTABLISHED sockets to a single box's stale DHCP leases. The box
+ * never learned it. Kernel defaults would take ~2 hours.
+ *
+ * ONLY the connect-back needs it. The outbound publish socket is never idle --
+ * this box pushes analog at 250 Hz -- so a vanished dserv is caught there by
+ * retransmission timeout instead, and keepalive would never fire anyway
+ * (probes run only on an IDLE connection; that gap is exactly what bit dserv).
+ *
+ * Requires CONFIG_NET_TCP_KEEPALIVE (set in the board confs). Zephyr gates the
+ * whole option on it and otherwise returns ENOPROTOOPT, so the result is
+ * CHECKED rather than assumed -- the beacon's SO_BROADCAST was silently dead
+ * for a release because nobody looked. */
+static void srv_keepalive(int fd)
+{
+	int on = 1;
+
+	if (zsock_setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &on, sizeof on) < 0) {
+		printk("net: SO_KEEPALIVE refused (%d) -- a vanished host will hold "
+		       "the config slot\n", errno);
+		return;                 /* nothing below is meaningful without it */
+	}
+	int idle = 30, intvl = 10, cnt = 3;
+
+	(void) zsock_setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE,  &idle,  sizeof idle);
+	(void) zsock_setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, &intvl, sizeof intvl);
+	(void) zsock_setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT,   &cnt,   sizeof cnt);
+}
+
 /* Close a DOOMED connect-back, exactly once. The CAS is the claim: whichever
  * reaper wins moves 1 -> 2, does the teardown, and only then re-arms the flag
  * to 0. The loser sees 2 (or 0) and walks away. srv_conn goes to -1 BEFORE the
@@ -339,6 +382,7 @@ void box_net_eth_server_service(void)
 		return;                      /* EAGAIN: nobody waiting */
 	}
 	tcp_nodelay(c);                          /* inbound cmd/config, same argument */
+	srv_keepalive(c);                        /* so a VANISHED host frees the slot */
 	zsock_fcntl(c, ZVFS_F_SETFL, ZVFS_O_NONBLOCK);
 	/* Remember WHO took the slot. Not used for any decision here -- see
 	 * box_net_eth_server_peer -- but a fact worth reporting. */
