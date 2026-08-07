@@ -704,8 +704,11 @@ Verified in the source, not remembered:
 * **`target: 0.0.0.0` is already the "unconfigured" marker on the wire.** The
   one field a discovery scheme needs most is in the protocol today.
 * `tools/extio-setup/discover.go` already listens (12 s TTL, keyed by box IP)
-  and exposes `/api/discover`; its own comment says assigning the target is "a
-  follow-up".
+  and exposes `/api/discover`. Its comment still calls assigning the target "a
+  follow-up", but `/api/discover/assign` is built (`api.go`). NOTE 2026-08-07:
+  extio-setup is NOT the integration point for the Zephyr boxes -- those are
+  driven from `www/extio.html` / `www/extio-config.html`, served by dserv, so
+  the listener belongs in dserv rather than in this tool.
 * Boxes additionally run a **config server on TCP :5010**.
 
 So the model today is *box advertises, human adopts via extio-setup*. The
@@ -748,15 +751,53 @@ silently. Constraints:
 
 ### What this costs on the Zephyr boxes
 
-**Neither piece exists here.** Tier 3 lists both "LAN discovery beacon (UDP
-:5011)" and the config server as *no counterpart*, which is precisely why the
-MCXN947 had to be told an IP over a serial console during bring-up. So the
-Zephyr port needs the beacon and the :5010 config server ported before it can
-participate in EITHER shape. That is a port of something already written and
-proven, not a design — but it is real work, and it is a prerequisite, not a
-consequence.
+**Both pieces now exist -- this section is kept for the reasoning, not the
+status.** Corrected 2026-08-07:
 
-### Open decisions
+* The **beacon is DONE** (v0.4.0+49, `src/platform/box_beacon.c`), with health
+  fields the RP2350 does not have yet.
+* The **:5010 listener was already here** and this section was wrong to say
+  otherwise -- but it is not a "config server" in the RP2350's sense. It is
+  where **dserv's connect-back lands** (`box_net_eth_server_service`, socket
+  `srv_listen`), and inbound bytes are ordinary dserv datapoint frames, not CLI
+  lines. `config/dserv/ip` is a live config leaf, so the retarget command is
+  one of them.
+
+### The consequence, which changes the plan
+
+`box_net_eth_server_service()` runs **every service pass on every eth-capable
+board, ungated by whether a dserv target is set**. So a box with `dserv
+0.0.0.0` is already listening, and **acquisition needs no firmware at all** --
+only a way to learn the box's address, which is exactly and only what the
+beacon adds. The chicken-and-egg was never "how do we talk to an unconfigured
+box"; it was "how do we find it".
+
+The whole adopt path exists today on dserv's own command port (verified in
+`src/Dataserver.cpp`: `%reg` -> `tcpip_register` -> `add_new_send_client`):
+
+```
+%reg   <boxip> 5010 1                    open a connect-back to the box
+%match <boxip> 5010 extio/<name>/* 1     route its datapoints down it
+dservSet extio/<name>/config/dserv/ip <dserv's address ON THIS INTERFACE>
+dservSet extio/<name>/cmd/save
+```
+
+`<name>` must be the box's CURRENT name, which is why the beacon carries it: a
+fresh box answers to its default, and addressing it by the name you wish it had
+reaches nothing.
+
+The address in step 3 is the point of the whole exercise. It is not a name to
+resolve and not a config constant -- it is the address on the interface the
+BEACON ARRIVED ON, which is the one this box demonstrably reaches. On a
+multi-homed dserv that is the difference between adoption and a box that looks
+configured and routes nowhere.
+
+Missing glue, and it is small: (a) a UDP :5011 listener inside dserv, and (b)
+`%reg`/`%match` are reachable only over dserv's TCP command port, so either the
+listener opens a loopback socket to issue them, or `tcpip_register` gets a Tcl
+binding (there is none today -- `dservSendClients` only LISTS).
+
+## Open decisions
 
 1. Broadcast or multicast for B, and whether the beacon port is shared with
    5011 or separate (a shared port with a `"t"` discriminator is tempting and
@@ -764,9 +805,33 @@ consequence.
 2. Whether adoption is announced — a box that adopted should say so
    (`state/dserv/adopted` = the source of the target), or the whole thing is
    invisible when it goes wrong. Same principle as the manifest announce.
-3. Whether extio-setup's existing `/api/discover` becomes the adoption UI (a
-   button per unconfigured box) before anything automatic exists at all. That
-   may be enough on its own, and it is the smallest possible step.
+3. ~~Whether extio-setup's `/api/discover` becomes the adoption UI~~ —
+   SETTLED 2026-08-07: not for the Zephyr boxes. Those are driven from
+   `www/extio.html` / `www/extio-config.html`, so the listener goes in dserv and
+   the button goes on the fleet page.
+
+4. **A (host reaches in) vs B (dserv invites), revisited now that the beacon
+   exists.** A is available TODAY with no firmware: the box's :5010 listener is
+   ungated, so a host that knows the address can write `config/dserv/ip`
+   straight in. B needs a box-side listener AND a trust policy — who may
+   invite, which site, and what stops the loudest broadcaster on the subnet
+   from capturing a box.
+
+   That asymmetry is the whole decision. A's answer to "who may retarget this
+   box" is *whoever a human told to*, and it needs no new concept. B has to
+   invent one before it is safe.
+
+   B does have a real argument, and it is the multi-homing one again, running
+   the other way: a dserv broadcasting out each interface with THAT interface's
+   address hands every box a reachable address by construction, with no
+   arrival-interface bookkeeping. Worth having eventually. It is not worth
+   blocking adoption on, and A leaves no protocol behind if B replaces it.
+
+5. **Adoption must be visible either way** (this is decision 2 sharpened): a box
+   that took its target from a host rather than from its own flash should say
+   so — `state/dserv/adopted` naming the source. An adopted target that looks
+   identical to a configured one is the retained-`sync/source` bug waiting to
+   happen: right until someone reboots and it silently is not.
 
 ## Tier 2 — peripherals
 
@@ -884,7 +949,9 @@ Wiring (Teensy 4.1, `zephyr,console = &lpuart6`, 115200 8N1):
       handler behind it. Zephyr has its own WDT subsystem — do not transliterate
       the Pico's dual-core scheme.
 - [ ] **UDP fast-path DO** (`wizchip_udp_do.c`) — no counterpart.
-- [ ] **LAN discovery beacon** (UDP :5011, found by extio-setup) — no counterpart.
+- [x] **LAN discovery beacon** (UDP :5011) — DONE v0.4.0+49, `src/platform/box_beacon.c`. v1 fields byte-identical to the RP2350's so one
+      listener serves both fleets; `"v":2` adds registration health
+      (`link`/`down_ms`/`tries`/`ever`). Rig-verified on the wire.
 
 ## Tier 4 — radio (RW612 only)
 
