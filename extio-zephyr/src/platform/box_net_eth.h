@@ -41,6 +41,11 @@ int box_net_eth_get_ip(uint8_t out[4]);
 /* Open a TCP connection to dserv (blocking connect, then non-blocking I/O). 0 ok. */
 int box_net_eth_connect(const uint8_t dserv_ip[4], uint16_t port);
 
+/* Drop the session if it is pointed anywhere other than (dserv_ip, port); the
+ * next service pass then redials. 1 if a session was actually dropped. Without
+ * this, changing config/dserv/ip on a CONNECTED box changes nothing. */
+int box_net_eth_retarget(const uint8_t dserv_ip[4], uint16_t port);
+
 /* Non-blocking inbound: bytes read (0 if none), or BOX_NET_RESET when the config
  * link changes state (dserv just connected back, or it dropped).
  *

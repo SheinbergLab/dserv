@@ -19,6 +19,8 @@
 static struct net_if *iface;
 static int sock = -1;
 static int connecting;          /* 1 = a non-blocking connect() is in flight */
+static uint8_t  cur_ip[4];      /* target the live session was opened to      */
+static uint16_t cur_port;       /* (box_net_eth_retarget compares these)      */
 /* Doom flag for srv_conn: 0 = live, 1 = dead (EOF/RST seen, awaiting close),
  * 2 = a reaper has claimed the close and is mid-teardown. atomic_t because the
  * claim is a CAS -- two reapers exist (the RX-wake thread and, if that thread
@@ -235,6 +237,8 @@ int box_net_eth_connect(const uint8_t dserv_ip[4], uint16_t port)
 	if (sock < 0) {
 		return -1;
 	}
+	memcpy(cur_ip, dserv_ip, 4);    /* what THIS session was dialled with */
+	cur_port = port;
 	txp_len = 0;                    /* no half-sent frame carries into a new session */
 	tcp_nodelay(sock);                       /* publishes are small and latency-critical */
 	zsock_fcntl(sock, ZVFS_F_SETFL, ZVFS_O_NONBLOCK);
@@ -251,6 +255,36 @@ int box_net_eth_connect(const uint8_t dserv_ip[4], uint16_t port)
 	zsock_close(sock);
 	sock = -1;
 	return -1;
+}
+
+/* Drop the uplink if it is pointed somewhere other than (ip, port), so the next
+ * service pass redials the new target. Returns 1 if a session was dropped.
+ *
+ * WHY THIS HAS TO EXIST. Setting config/dserv/ip updates the config struct and
+ * NOTHING ELSE: uplink_service_locked only reconnects when the session is
+ * already down, so a box with a live uplink keeps publishing to its old host
+ * indefinitely while state/dserv and the discovery beacon both report the new
+ * address. Config that reads as applied while behaviour follows the old value
+ * is the failure this codebase keeps paying for, and here it made adoption work
+ * on a stranded box but silently do nothing to a healthy one.
+ *
+ * Compares rather than dropping unconditionally: re-setting the address a box
+ * already has is a normal thing for a host to do (an adopt action that
+ * reasserts the current target, a config replay), and it must not cost a
+ * reconnect. */
+int box_net_eth_retarget(const uint8_t dserv_ip[4], uint16_t port)
+{
+	if (sock < 0) {
+		return 0;                       /* nothing live -- next connect uses it */
+	}
+	if (memcmp(cur_ip, dserv_ip, 4) == 0 && cur_port == port) {
+		return 0;                       /* already where it was told to be */
+	}
+	zsock_close(sock);
+	sock = -1;
+	connecting = 0;
+	txp_len = 0;                    /* the tail belonged to the old session */
+	return 1;
 }
 
 void box_net_eth_server_service(void)

@@ -501,6 +501,32 @@ static void uplink_service_locked(const box_config_t *cfg)
 	}
 }
 
+/* Act on a changed dserv target: drop a session pointed at the old address so
+ * the next service pass redials, and re-register there.
+ *
+ * Deliberately NOT gated on box_obs_active(). Skipping mid-obs would make the
+ * command a silent no-op exactly when someone is watching for it to work, and
+ * this file has already been burned by config that reports applied while
+ * behaviour follows the old value. Retargeting a box during an obs period is a
+ * destructive act on purpose; it should be destructive visibly. */
+void box_uplink_retarget(const box_config_t *cfg)
+{
+#if defined(CONFIG_NETWORKING)
+	k_mutex_lock(&uplink_lock, K_FOREVER);
+	if (box_net_eth_retarget(cfg->dserv_ip, dserv_cfg_port(cfg))) {
+		printk("dserv target changed -> %u.%u.%u.%u:%u (session dropped)\n",
+		       cfg->dserv_ip[0], cfg->dserv_ip[1], cfg->dserv_ip[2],
+		       cfg->dserv_ip[3], dserv_cfg_port(cfg));
+		/* Reconnect now rather than waiting on the next tick: the caller
+		 * just told us where to be. */
+		uplink_service_locked(cfg);
+	}
+	k_mutex_unlock(&uplink_lock);
+#else
+	(void) cfg;
+#endif
+}
+
 void box_uplink_service(const box_config_t *cfg)
 {
 	k_mutex_lock(&uplink_lock, K_FOREVER);

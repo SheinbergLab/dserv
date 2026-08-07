@@ -58,6 +58,11 @@ int box_uplink_init(const box_config_t *cfg);
  * Call once per service pass. */
 void box_uplink_service(const box_config_t *cfg);
 
+/* Call after config/dserv/ip or /port changes: drops a session aimed at the old
+ * target and redials. Without it a CONNECTED box keeps publishing to its
+ * previous host while every status field reports the new one. */
+void box_uplink_retarget(const box_config_t *cfg);
+
 /* Inbound bytes from the active uplink (BOX_NET_RESET on a fresh session). */
 int box_uplink_poll(uint8_t *buf, int max);
 

@@ -1904,6 +1904,22 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 		/* +31: reflect the role change live, so a UI's select doesn't sit
 		 * stale until the next announce -- same courtesy pin moves get. */
 		box_announce_obs_role(&cfg);
+	} else if (r == CFG_DSERV_IP || r == CFG_DSERV_PORT) {
+		/* Act on it. The matcher has already written the new target into cfg,
+		 * and until this existed that was ALL that happened: uplink_service
+		 * only redials a session that is already down, so a connected box kept
+		 * publishing to its old host forever while state/dserv and the
+		 * discovery beacon both reported the new address.
+		 *
+		 * That made adoption work on a stranded box and silently do nothing to
+		 * a healthy one -- the difference being invisible from every status
+		 * field. Found on the rig 2026-08-07 while returning an adopted box:
+		 * the target read 192.168.88.40 while the box was still streaming to
+		 * .17, and only a restart of the OLD host moved it.
+		 *
+		 * No-op when the target is unchanged, so a host reasserting the address
+		 * a box already has costs nothing. */
+		box_uplink_retarget(&cfg);
 	} else if (r == CFG_ANNOUNCE) {
 		/* Everything, not just the manifest: identity and the OTA counters
 		 * live in the burst, and a UI asking "what are you now" wants the
