@@ -592,7 +592,8 @@ function renderPanel() {
   const b = sel, L = liveness(b);
   /* Silkscreen names for this board, or null -- annotation beside the numeric
    * ids, never a replacement for them (the number is the wire contract). */
-  const sk = ExtioSilk.of(get(b, 'board'));
+  /* announced silk wins over the host-side table; see extio_silk.js */
+  const sk = ExtioSilk.fromBox(get(b, 'board'), get(b, 'pins/silk'), get(b, 'ain/silk'));
 
   /* PINS. Read from what the box ANNOUNCES, which is NOT the same namespace you
    * WRITE. The box publishes `label/<n>` and `di/<n>`; you set `pin/<n>/label`.
@@ -626,22 +627,45 @@ function renderPanel() {
                     : pinsIn.includes(p)  ? 'in'
                     : pinsOut.includes(p) ? 'out' : 'off';
 
+  /* PINS THE OBS/SYNC ROLES ALREADY OWN.
+   *
+   * These are NOT in pins/reserved: box_gpio_reserved() covers only pins the
+   * board does not map plus the DT box-reserved list (the PHY's MDIO). So the
+   * firmware will cheerfully accept `pin <obspin> mode in` while the obs mirror
+   * is also driving that pad -- two owners, no complaint, and the symptom is a
+   * pin that will not follow either one. Ghost them here so the conflict is not
+   * offered in the first place; clearing obs/sync pin hands the pad back.
+   *
+   * A UI GUARD, NOT ENFORCEMENT -- the box would still take the write from any
+   * other client. Making box_gpio_reserved() include the obs/sync pins is the
+   * real fix and belongs in firmware. */
+  /* unset reads back as -1 from obs_pin but as 4294967295 from sync_pin (u32),
+   * so normalise rather than leaning on "no pin is ever that big" */
+  const claimed = v => { const n = Number(v); return (n >= 0 && n < 64) ? n : -1; };
+  const obsPin  = claimed(get(b, 'obs_pin', -1));
+  const syncPin = claimed(get(b, 'sync_pin', -1));
+  const obsMode = String(get(b, 'obs/mode', 'mirror'));
+  const ownedBy = p => (p >= 0 && p === obsPin)  ? `obs (${obsMode})`
+                     : (p >= 0 && p === syncPin) ? 'sync in' : null;
+
   const pinRows = pins.map(p => {
     const mode = modeOf(p), lvl = get(b, `di/${p}`, null), res = mode === 'reserved';
+    const own = res ? null : ownedBy(p);
     const sel = ['off', 'in', 'in_pullup', 'out', 'ain'].map(o =>
       `<option ${o === mode ? 'selected' : ''}>${o}</option>`).join('');
-    return `<tr class="row" ${res ? 'style="opacity:.5"' : ''}>
+    return `<tr class="row" ${(res || own) ? 'style="opacity:.5"' : ''}>
       <td><b>${p}</b>${sk && sk.pin(p) ? ` <span class="age">${sk.pin(p)}</span>` : ''}</td>
       <td>${res ? '<span class="age">reserved</span>'
+                : own ? `<span class="age" title="claimed by the obs/sync role — clear it above to free this pin">${own}</span>`
                 : `<select onchange="cfgSet('${b}','pin/${p}/mode',this.value)">${sel}</select>`}</td>
       <td>${(mode === 'in' || mode === 'in_pullup') && lvl !== null
             ? `<b><span data-val-box="${esc(b)}" data-val-leaf="di/${p}"></span></b> ${ageSpan(b, 'di/' + p)}` : ''}</td>
-      <td>${res ? '' : field(b, `label/${p}`, `pin/${p}/label`, { wide: 1 })}</td>
-      <td>${res ? '' : `<input class="w4" value="${deb.get(p) ?? ''}" placeholder="0"
+      <td>${(res || own) ? '' : field(b, `label/${p}`, `pin/${p}/label`, { wide: 1 })}</td>
+      <td>${(res || own) ? '' : `<input class="w4" value="${deb.get(p) ?? ''}" placeholder="0"
               onchange="cfgSet('${b}','pin/${p}/debounce_ms',this.value)">`}</td>
-      <td>${res ? '' : `<input class="w4" value="${pul.get(p) ?? ''}" placeholder="0"
+      <td>${(res || own) ? '' : `<input class="w4" value="${pul.get(p) ?? ''}" placeholder="0"
               onchange="cfgSet('${b}','pin/${p}/pulse_us',this.value)">`}</td>
-      <td>${res ? '' : `<input type="checkbox" ${alo.has(p) ? 'checked' : ''}
+      <td>${(res || own) ? '' : `<input type="checkbox" ${alo.has(p) ? 'checked' : ''}
               onchange="cfgSet('${b}','pin/${p}/active_low',this.checked?1:0)">`}</td>
     </tr>`;
   }).join('') || '<tr><td colspan="7" class="age">no pins announced</td></tr>';
@@ -870,7 +894,8 @@ function renderPanel() {
     <p class="note">${havePinsAll
        ? 'Every pin the board maps, from <code>pins/all</code>; reserved pins are shown but refused by the box. Blank debounce/pulse means the default (0) — the manifest sends only pins that differ.'
        : 'This box predates <code>pins/all</code>, so only ACTIVE pins appear and a pin set to <code>off</code> cannot be shown or re-enabled. Update its firmware to configure the full map.'}${
-       sk ? ' Pin numbers ARE the silkscreen: box pin <i>n</i> is Arduino D<i>n</i>, and pins 14–17 are the A2–A5 positions.' : ''}</p>
+       (sk && !sk.announced) ? ' Pin numbers ARE the silkscreen: box pin <i>n</i> is Arduino D<i>n</i>, and pins 14–17 are the A2–A5 positions.'
+       : sk ? ' The grey name beside each pin is what is printed on the board, announced by the box itself — box pin numbers are an internal index and need not match it.' : ''}</p>
 
     <h2>digital groups</h2>
     <table><tr><th>#</th><th>label</th><th>pins</th><th>settle ms</th><th>quiet</th><th>value</th><th></th></tr>${groups}</table>

@@ -102,6 +102,27 @@
 		 * this box is runtime and persisted, and one exception means an
 		 * image per rig. */
 		box-ain-pins = [ff ff 0e 0f 10 11];
+
+		/* ---- SILK: what is PRINTED on the board, per box pin ----
+		 *
+		 * Here the map IS the identity -- box pin n IS Arduino Dn, and 14-17 are
+		 * A2-A5 -- so this column is nearly redundant on THIS board. It is
+		 * declared anyway because the extio page reads one property for every
+		 * card: a board that omits it silently falls back to bare numbers, and
+		 * "the identity boards are the ones with no column" is exactly the
+		 * inconsistency an experimenter should never have to hold in their head.
+		 *
+		 * NOT `label N <text>`: that is a user-set ROLE, persisted and editable.
+		 * This is a hardware fact -- compiled in, never persisted, absent from
+		 * `dump`. Positional: index = box pin. */
+		box-pin-silk = "D0","D1","D2","D3","D4","D5","D6","D7","D8","D9",
+			       "D10","D11","D12","D13","A2","A3","A4","A5";
+
+		/* ain channel k IS Ak here (the analog twin of the digital identity) --
+		 * unlike the Teensy, where the channel number is the hardware ADC input
+		 * and A0 lands on channel 7. */
+		box-ain-silk = "A0","A1","A2","A3","A4","A5";
+
 	};
 };
 

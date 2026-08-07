@@ -31,6 +31,10 @@
  * every config edit. */
 void box_announce_manifest(const box_config_t *c);
 
+/* The board's printed pin/channel names (state/pins/silk, state/ain/silk), from
+ * devicetree. Compiled-in hardware facts, NOT the user's editable role labels. */
+void box_announce_silk(const box_config_t *c);
+
 /* +31: just the obs role pair (state/obs/mode + state/obs_leader) -- published
  * live when config/obs/mode changes, so a UI's role select reflects the box
  * without a manual re-announce (the same courtesy pin-mode changes get from

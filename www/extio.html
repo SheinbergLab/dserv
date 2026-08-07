@@ -240,7 +240,7 @@ function onExtio(msg) {
         b.battery = num;
     } else if (leaf === 'transport' || leaf === 'boot' || leaf === 'fw' ||
                leaf === 'fw_ver' || leaf === 'ip' || leaf === 'dserv' ||
-               leaf === 'board') {
+               leaf === 'board' || leaf === 'pins/silk' || leaf === 'ain/silk') {
         b.ident[leaf] = String(v);
     } else if (leaf === 'obs_leader') {
         b.obsLeader = num == 1;      /* +31: announced obs-onset authority */
@@ -335,7 +335,9 @@ function cardHtml(b) {
      * UNLABELLED pin prefers the silkscreen -- that is the string printed next
      * to the physical pin someone is probing -- and the tooltip always carries
      * the numeric id, which is what every command and datapoint speaks. */
-    const sk = ExtioSilk.of(id.board);
+    /* Announced silk wins over the host-side table -- the board states what is
+     * printed on it; see extio_silk.js. */
+    const sk = ExtioSilk.fromBox(id.board, id['pins/silk'], id['ain/silk']);
     const xchip = id.transport
         ? `<span class="chip ${id.transport === 'usb' ? 'usb' : 'eth'}">${esc(id.transport)}</span>` : '';
     const bchip = id.boot

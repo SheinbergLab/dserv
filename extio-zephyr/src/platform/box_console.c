@@ -299,11 +299,31 @@ void box_console_set_reserved_pins(uint32_t mask)
 static char line_buf[128];
 static int  line_len;
 
+/* `dump` to the CDC the operator is typing at.
+ *
+ * box_cli_dump's body uses printf, which goes to zephyr,console -- and on the
+ * Teensy that is lpuart6 (pins 0/1, an external USB-serial adapter), NOT this
+ * USB CDC. So `dump` printed a perfect config into a device nobody was
+ * watching and looked like it did nothing. Intercept it here and re-emit
+ * through box_console_write, which is where the CLI's own output goes. The
+ * sink strips the CRLF the format carries, so put it back. */
+static void dump_console_sink(void *ud, const char *line)
+{
+	ARG_UNUSED(ud);
+	box_console_write(line);
+	box_console_write("\r\n");
+}
+
 static void run_line(box_config_t *cfg, const char *line)
 {
 	char resp[1024];   /* `help`/`show` output is large */
 	gpio_cmd_t cmd = { .op = GPIO_OP_NONE };
 	cli_action_t a;
+
+	if (strcmp(line, "dump") == 0) {
+		box_cli_dump_to(cfg, dump_console_sink, NULL);
+		return;
+	}
 
 	/* `verbose 0|1` -- routine registration chatter. Platform-local for the
 	 * same reason as adccal: it names a behaviour of this port's uplink, not a

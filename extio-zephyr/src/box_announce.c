@@ -181,8 +181,76 @@ static void announce_ident(const box_config_t *c)
 
 /* ---- manifest ---- */
 
+
+/* ---- SILK: the board's own printed pin names, announced once per connect ----
+ *
+ * Box pin numbers are an internal index (GPIO2 bit indices on the Teensy, the
+ * Arduino identity on the MCXN947) and match no marking on some boards -- box
+ * pin 2 is Teensy pin 11. Publishing what is PRINTED lets the extio page show
+ * it beside the number, so wiring does not require PINMAP.md.
+ *
+ * ONE datapoint, not one per pin: a full map is ~126 bytes on the MCXN947,
+ * past the 109-byte fixed-frame payload, and per-pin frames would add ~18 to an
+ * announce burst that already drops some. Sent with the '}' length-prefixed
+ * form (dserv_msg_var_build) straight down box_uplink_send, which takes a
+ * length -- box_pub's queue is fixed-frame only.
+ *
+ * Index-qualified ("0:T10,1:T12") so gaps are safe: entries the board leaves ""
+ * are skipped entirely rather than published as blanks, which is how a 4.0
+ * expresses the pins that only exist on a 4.1.
+ *
+ * A board that declares neither property publishes nothing and the page falls
+ * back to bare numbers -- that is the intended default for a new card, not a
+ * failure. */
+#define SILK_NODE DT_PATH(zephyr_user)
+
+static void pub_silk_map(const box_config_t *c, const char *leaf,
+                         const char *const *names, int n)
+{
+        static uint8_t vf[512];
+        char body[320];
+        char nm[80];
+        int k = 0;
+
+        for (int i = 0; i < n; i++) {
+                if (!names[i] || !names[i][0]) {
+                        continue;               /* not bonded out on this variant */
+                }
+                int w = snprintf(body + k, sizeof body - k, "%s%d:%s",
+                                 k ? "," : "", i, names[i]);
+                if (w < 0 || k + w >= (int) sizeof body) {
+                        break;                  /* full: publish what fits */
+                }
+                k += w;
+        }
+        if (!k) {
+                return;
+        }
+        body[k] = '\0';
+        dserv_state_name(c, nm, sizeof nm, leaf);
+        int vlen = dserv_msg_var_string(vf, sizeof vf, nm, 0, body);
+
+        if (vlen > 0) {
+                (void) box_uplink_send(vf, vlen);
+        }
+}
+
+void box_announce_silk(const box_config_t *c)
+{
+#if DT_NODE_HAS_PROP(SILK_NODE, box_pin_silk)
+        static const char *const pin_silk[] = DT_PROP(SILK_NODE, box_pin_silk);
+        pub_silk_map(c, "pins/silk", pin_silk, (int) ARRAY_SIZE(pin_silk));
+#endif
+#if DT_NODE_HAS_PROP(SILK_NODE, box_ain_silk)
+        static const char *const ain_silk[] = DT_PROP(SILK_NODE, box_ain_silk);
+        pub_silk_map(c, "ain/silk", ain_silk, (int) ARRAY_SIZE(ain_silk));
+#endif
+}
+
 void box_announce_manifest(const box_config_t *c)
 {
+	box_announce_silk(c);   /* board-printed pin names; see above */
+
 	char leaf[48], csv[96];
 
 	pub_str(c, "desc", c->desc);

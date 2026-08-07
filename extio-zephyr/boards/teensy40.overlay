@@ -12,6 +12,36 @@
 		box-gpio-port     = &gpio2;   /* box pin n -> gpio2.n (3 = board LED) */
 	};
 
+	zephyr,user {
+		/* ---- SILK: what is PRINTED on the board, per box pin ----
+		 *
+		 * Box pins here are GPIO2 bit indices, which match no marking on the
+		 * board -- box pin 2 is Teensy pin 11. Without this an experimenter has
+		 * to go to PINMAP.md to wire anything, and three numbering schemes are
+		 * in play (box pin, SoC pad, silkscreen). Announced so the extio page
+		 * can show it beside the pin number.
+		 *
+		 * NOT the same thing as `label N <text>`: that is a user-set ROLE
+		 * ("btn_left"), persisted config, editable, and it belongs in a config
+		 * dump. This is a hardware fact -- compiled in, never editable, never
+		 * persisted, and deliberately absent from `dump`.
+		 *
+		 * Positional: index = box pin. "" where the pad is not bonded out on a
+		 * 4.0 (box pins 4-9 are Teensy 40-45, which exist only on the 4.1; the
+		 * 4.1 also moves its 34-37 onto B1 pads). Values are from Zephyr's own
+		 * board doc (boards/pjrc/teensy4/doc/index.rst) pin->pad table crossed
+		 * with the GPIO2 bank, NOT from the silkscreen -- a wrong silk label is
+		 * worse than none, because it misdirects with confidence. */
+		box-pin-silk = "T10","T12","T11","T13","","","","","","",
+			       "T6","T9","T32","","","","T8","T7";
+
+		/* ain channel -> what is printed. THE MOST MISLEADING MAP ON THIS
+		 * BOARD: reg IS the hardware ADC input, so silkscreen A0 is channel 7,
+		 * and A1 (in8) cannot be reached at all (AIN_MAX_CH is 8). */
+		box-ain-silk = "A7 (T21)","A10 (T24)","A11 (T25)","(no pin)","(no pin)",
+			       "A5 (T19)","A4 (T18)","A0 (T14)";
+	};
+
 	/* zephyr,console stays on lpuart6 (Teensy pins 0/1) for Zephyr's own printk
 	 * and driver LOG (dev serial adapter); the box CLI shell owns the USB
 	 * console CDC -- separate devices, no conflict. */
