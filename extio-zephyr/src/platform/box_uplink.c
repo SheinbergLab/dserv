@@ -393,16 +393,31 @@ int box_uplink_init(const box_config_t *cfg)
  *
  * The refresh is skipped during an obs: a %match round is several bounded
  * blocking exchanges, and there is no reason to run them next to a sync edge. */
+/* Registration health, for the discovery beacon (box_uplink_reg_health).
+ *
+ * These are the watchdog's OWN variables, not a parallel copy kept in step by
+ * hand: a health field that can disagree with the behaviour it describes is
+ * exactly the failure this codebase keeps re-learning (see state/fw_ver vs
+ * state/ota/updates).
+ *
+ * `reg_down_since_ms` is NOT the retry timer. The retry timer below is reset on
+ * every attempt -- that is what paces the backoff -- so it can only ever say
+ * "recently", never "down for six minutes", which is the one thing a host
+ * deciding whether to re-adopt a box actually needs. Set once when the link
+ * drops, cleared only when it comes back. */
+static int64_t  reg_down_since_ms;
+static uint16_t reg_rereg;
+static bool     reg_ever_up;   /* have we EVER completed a registration? */
+
 static void eth_reg_watchdog(const box_config_t *cfg)
 {
-	static int64_t down_ms, fresh_ms;
-	static uint16_t rereg;
-	static bool ever_up;      /* have we EVER completed a registration? */
+	static int64_t retry_ms, fresh_ms;
 	int64_t now = k_uptime_get();
 
 	if (!box_net_eth_server_up()) {
 		fresh_ms = now;
-		if (!down_ms) { down_ms = now; return; }
+		if (!reg_down_since_ms) { reg_down_since_ms = now; }
+		if (!retry_ms) { retry_ms = now; return; }
 		/* Fast ONLY for the first few attempts, then back off even if we have
 		 * never registered. Gating purely on ever_up was a regression: a box
 		 * whose dserv is unreachable -- a bench box, a wrong target, a box
@@ -411,27 +426,47 @@ static void eth_reg_watchdog(const box_config_t *cfg)
 		 * Observed on box3 as `re-registering (x276)` with the console
 		 * dropping characters. The fast path exists to cover the one
 		 * guaranteed-failed attempt at boot, not to poll a dead host. */
-		int64_t gap = (ever_up || rereg > 20) ? REG_RETRY_MS : REG_FIRST_MS;
+		int64_t gap = (reg_ever_up || reg_rereg > 20) ? REG_RETRY_MS : REG_FIRST_MS;
 
-		if (now - down_ms < gap) { return; }
-		down_ms = now;
+		if (now - retry_ms < gap) { return; }
+		retry_ms = now;
 		reg_request(cfg, 1);
-		if (++rereg <= 3 || (rereg % 12) == 0) {   /* first few, then ~1/min */
-			printk("reg: config link down -> re-registering (x%u)\n", rereg);
+		if (++reg_rereg <= 3 || (reg_rereg % 12) == 0) {  /* first few, then ~1/min */
+			printk("reg: config link down -> re-registering (x%u)\n", reg_rereg);
 		}
 		return;
 	}
-	down_ms = 0;
-	if (!ever_up) {
-		ever_up = true;
+	retry_ms = 0;
+	reg_down_since_ms = 0;
+	if (!reg_ever_up) {
+		reg_ever_up = true;
 		printk("reg: first registration at %lld ms\n", now);
 	}
-	if (rereg) { printk("reg: config link restored\n"); rereg = 0; }
+	if (reg_rereg) { printk("reg: config link restored\n"); reg_rereg = 0; }
 	if (now - fresh_ms >= MATCH_REFRESH_MS) {
 		fresh_ms = now;
 		if (!box_obs_active()) {
 			reg_request(cfg, 0);
 		}
+	}
+}
+
+void box_uplink_reg_health(int *up, uint32_t *down_ms, uint16_t *tries,
+			   int *ever_up)
+{
+	/* `up` is read LIVE rather than from the watchdog's bookkeeping, because
+	 * the watchdog only runs while eth is the active uplink -- on a box that
+	 * selected USB, cached state would age silently. The connect-back socket
+	 * is the honest signal and costs nothing to ask. */
+	int live = box_net_eth_server_up();
+	int64_t since = reg_down_since_ms;
+
+	if (up)      { *up = live; }
+	if (tries)   { *tries = reg_rereg; }
+	if (ever_up) { *ever_up = reg_ever_up ? 1 : 0; }
+	if (down_ms) {
+		*down_ms = (live || !since) ? 0
+			 : (uint32_t) (k_uptime_get() - since);
 	}
 }
 #endif

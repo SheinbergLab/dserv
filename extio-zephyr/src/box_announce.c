@@ -47,7 +47,7 @@
  * `build` is the unique key the on-box updater matches. Collapsing them would let
  * a box fetch an image built for the other core.
  */
-static const char *box_build_key(void)
+const char *box_build_key(void)
 {
 	static char key[48];
 

@@ -35,6 +35,13 @@ void box_announce_manifest(const box_config_t *c);
  * devicetree. Compiled-in hardware facts, NOT the user's editable role labels. */
 void box_announce_silk(const box_config_t *c);
 
+/* The shelf image match key -- CONFIG_BOARD_TARGET with '/' flattened to '_'
+ * (`frdm_mcxn947_mcxn947_cpu0`). Shared rather than recomputed so the manifest's
+ * state/build and the discovery beacon's "build" can never disagree; a host that
+ * matched a box by one and fetched firmware by the other would be picking images
+ * for a different core. */
+const char *box_build_key(void);
+
 /* +31: just the obs role pair (state/obs/mode + state/obs_leader) -- published
  * live when config/obs/mode changes, so a UI's role select reflects the box
  * without a manual re-announce (the same courtesy pin-mode changes get from

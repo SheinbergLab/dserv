@@ -46,6 +46,7 @@
 #endif
 #include "box_net_usb.h"
 #include "box_uplink.h"
+#include "box_beacon.h"                 /* LAN discovery broadcast (UDP :5011) */
 #include "box_pub.h"
 #include "box_event.h"
 #if defined(BOX_HAVE_CPU1)
@@ -2267,6 +2268,12 @@ int main(void)
 	while (1) {
 		box_uplink_service(&cfg);         /* carrier/strap selection + (re)connect */
 		box_console_service(&cfg);        /* two-way CLI (non-blocking, bounded) */
+
+		/* AFTER uplink_service so the health it reports is this pass's, and
+		 * outside every dserv-target gate on purpose: a box with no target is
+		 * precisely the box that most needs to be findable. Self-rate-limited
+		 * to 1.5 s and a no-op without a local IP. */
+		box_beacon_service(&cfg);
 
 		/* No drain call here any more: queued frames leave through the
 		 * publisher thread (box_pub.c), which runs in the gaps this loop

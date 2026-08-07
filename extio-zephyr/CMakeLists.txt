@@ -110,6 +110,7 @@ if(CONFIG_NETWORKING)
 	target_sources(app PRIVATE
 		src/platform/box_net_eth.c     # block #5: Ethernet transport (sockets)
 		src/platform/box_ptp.c         # block #5: ENET IEEE-1588 hardware clock
+		src/platform/box_beacon.c      # LAN discovery broadcast (UDP :5011)
 	)
 endif()
 

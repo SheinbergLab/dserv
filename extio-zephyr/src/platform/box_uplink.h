@@ -87,4 +87,21 @@ const char *box_uplink_active_name(void);
 void box_uplink_set_verbose(int on);
 int  box_uplink_verbose(void);
 
+#if defined(CONFIG_NETWORKING)
+/* Registration health, for the discovery beacon. Any pointer may be NULL.
+ *
+ *   up       1 iff dserv's connect-back is live RIGHT NOW (read live, so it
+ *            cannot go stale when eth is not the active uplink)
+ *   down_ms  how long it has been down; 0 while up. NOT the retry-backoff
+ *            timer -- that resets every attempt and could never say "down for
+ *            six minutes", which is the only thing worth reporting
+ *   tries    re-registration attempts since it went down (0 while up)
+ *   ever_up  1 iff a registration has EVER completed -- separates "never
+ *            reached this dserv" (wrong target, wrong subnet) from "was
+ *            working and stopped", which want different responses from a host
+ */
+void box_uplink_reg_health(int *up, uint32_t *down_ms, uint16_t *tries,
+			   int *ever_up);
+#endif
+
 #endif /* BOX_UPLINK_H */
