@@ -251,6 +251,10 @@ This board is on the **legacy single-port scheme** (see above): box pins are
 GPIO2 *bit indices*, so they have no relationship to the printed pin numbers.
 A DI/DO group config does **not** transfer between a Teensy and an MCXN947 box.
 
+GPIO2 spans **two** pad banks: bits 0–15 are the `B0_n` pads, bits 16–31 are
+`B1_(n-16)`. Both are box pins — `BOX_NPINS` is 30, so box pins 0–29 are
+addressable and the B1 half is easy to overlook.
+
 | box pin | pad | Teensy pin | notes |
 |---|---|---|---|
 | 0  | B0_00 | 10 | |
@@ -266,12 +270,27 @@ A DI/DO group config does **not** transfer between a Teensy and an MCXN947 box.
 | 10 | B0_10 | 6  | |
 | 11 | B0_11 | 9  | |
 | 12 | B0_12 | 32 | bottom pad |
+| 16 | B1_00 | 8  | also UART4 TX |
+| 17 | B1_01 | 7  | also UART4 RX |
+| 18 | B1_02 | 36 | **4.1 only** |
+| 19 | B1_03 | 37 | **4.1 only** |
+| 28 | B1_12 | 35 | **4.1 only** — also UART5 TX |
+| 29 | B1_13 | 34 | **4.1 only** — also UART5 RX |
 
-**On a Teensy 4.0 only box pins 0–3, 10–12 exist.** A 4.0 has pins 0–39; box
-pins 4–9 land on Teensy 40–45, which is 4.1 territory. Zephyr's table lists
-40–45 *above* its "Only Teensy 4.1:" heading, so the doc will not warn you.
-This is why `BTN_PIN` moved from box pin 4 to box pin 1: on a 4.0 the original
-default was an input nothing could reach, floating on an unbonded pad.
+**On a Teensy 4.0 the usable box pins are 0–3, 10–12, 16, 17.** A 4.0 has pins
+0–39, so box pins 4–9 (Teensy 40–45) do not exist there; and the 4.1 reassigns
+its pins 34–37 to B1 pads that are the 4.0's SD_B0 bottom pads, so box pins
+18/19/28/29 are 4.1-only too. Zephyr's table lists 40–45 *above* its "Only
+Teensy 4.1:" heading, so the doc will not warn you — but the 34–37 B1 rows are
+below it, which is the tell.
+
+Conveniently, **eight of the nine 4.0 box pins are a contiguous run of header
+pins, Teensy 6–13** → box pins 10, 17, 16, 11, 0, 2, 1, 3. Only box pin 12
+(Teensy 32) is a bottom pad. That is a whole DI group's worth of buttons
+without leaving the top of the board.
+
+`BTN_PIN` moved from box pin 4 to box pin 1 for this reason: on a 4.0 the
+original default was an input nothing could reach, floating on an unbonded pad.
 
 ## Analog — ain channel *k* IS `ADC1_INk`
 
