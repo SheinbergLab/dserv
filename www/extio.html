@@ -130,6 +130,8 @@
     <label for="cfgsel">configure</label>
     <select id="cfgsel"></select>
     <button id="cfggo" type="button">open</button>
+    <button id="cfgforget" type="button" hidden
+            title="drop this box's retained datapoints. It reappears if it publishes again.">forget</button>
   </span>
   <span id="conn"><span class="dot"></span><span id="conn-msg">connecting</span></span>
 </header>
@@ -300,7 +302,16 @@ let renderQueued = false;
 function scheduleRender() {
     if (renderQueued) return;
     renderQueued = true;
-    requestAnimationFrame(() => { renderQueued = false; render(); });
+    /* rAF DOES NOT FIRE IN A HIDDEN TAB, and renderQueued latches until its
+     * callback clears it -- so a single missed frame wedges the page
+     * permanently: every later scheduleRender() returns immediately and
+     * nothing on screen updates again, including the 1 Hz tick. Seen live as a
+     * populated `boxes` model with zero cards in the DOM. The timeout is a
+     * backstop; whichever arrives first clears the flag and the other becomes
+     * a no-op. */
+    const run = () => { if (!renderQueued) return; renderQueued = false; render(); };
+    requestAnimationFrame(run);
+    setTimeout(run, 1000);
 }
 
 function esc(s) {
@@ -782,6 +793,7 @@ function syncCfgBar() {
     bar.hidden = names.length === 0;
     const keep = sel.value;
     sel.innerHTML = names.map(n => `<option${n === keep ? ' selected' : ''}>${esc(n)}</option>`).join('');
+    syncCfgForget();          /* liveness may have flipped since the last pass */
 }
 
 /* refresh ages + liveness once a second even without updates */
@@ -803,6 +815,31 @@ function initCfgBar() {
         const n = document.getElementById('cfgsel').value;
         if (n) window.open(cfgHref(n), '_blank', 'noopener');
     });
+    document.getElementById('cfgforget').addEventListener('click', () => {
+        const n = document.getElementById('cfgsel').value;
+        if (n) forgetBox(n);
+    });
+    document.getElementById('cfgsel').addEventListener('change', syncCfgForget);
+}
+
+/* `forget` beside the configure picker, shown only when the SELECTED box is
+ * offline. Two reasons this belongs here as well as on the card:
+ *
+ * Configuring a box that is not talking is the one thing this bar cannot do --
+ * the config page needs a live box to answer -- so for an offline selection the
+ * space is otherwise dead, and "forget" is the only action that still means
+ * anything.
+ *
+ * And it is FINDABLE. The per-card button is small, grey and inside a dimmed
+ * card, which is exactly where the eye stops looking once a card reads as
+ * dead. A control in the header is where someone goes when they want to act on
+ * a box rather than read it. */
+function syncCfgForget() {
+    const btn = document.getElementById('cfgforget');
+    if (!btn) return;
+    const n = document.getElementById('cfgsel').value;
+    const b = n ? boxes.get(n) : null;
+    btn.hidden = !(b && Date.now() - b.lastSeen >= 4000);
 }
 
 async function init() {
