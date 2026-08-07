@@ -35,6 +35,101 @@ foreach m { usbio timer } {
 #
 # But the breadcrumb is not optional. A silently absent listener looks identical
 # to a LAN with no boxes on it, so the failure is recorded where it can be read.
+# ---- adoption: pointing a discovered box at a dserv -------------------------
+#
+# The sequence a BOX normally performs on itself at registration
+# (box_uplink.c reg_thread_fn), performed by the host on its behalf -- which is
+# the whole trick, since a box with no reachable dserv never registers and so
+# nobody can be waiting for it to ask.
+#
+# THE ONE CONNECT-BACK SLOT IS THE SAFETY MODEL, and it is firmware, not policy.
+# box_net_eth_server_service() accepts only while srv_conn < 0, so a box that is
+# talking to someone cannot be reached by anyone else -- adoption is possible
+# exactly when the box is stranded or free. The consequence is that a HEALTHY
+# box can only be handed over by its current owner. That is why extio_release
+# exists: it is the owner's half of a handshake, not a convenience.
+#
+# %reg/%match are commands on dserv's TCP command port with no Tcl binding
+# (dservSendClients only LISTS), so we speak to a dserv over a socket. Core Tcl
+# has TCP -- only UDP is missing -- and these are one-shot operator actions, not
+# a hot path, so blocking briefly is fine.
+
+proc extio_dserv_cmd { lines {host 127.0.0.1} {port 4620} } {
+    set s [socket $host $port]
+    fconfigure $s -translation binary -blocking 1
+    foreach l $lines { puts -nonewline $s "$l\n" }
+    flush $s
+    close $s
+}
+
+# Adopt <name> at <boxip>, pointing it at <via> -- the address that reaches US
+# FROM IT (extiodisc's `via`), never a hostname and never a configured constant.
+# dserv is multi-homed and a name resolves to whichever interface it likes; on
+# the wrong one the box ends up configured with an address it cannot route to
+# while looking perfectly healthy.
+#
+# DOES NOT SAVE. Adoption is the reversible act -- an unsaved adopt returns the
+# box to its previous owner on its next reboot, which is what you want for "my
+# rig is down, lend me this for an hour". Making it permanent is a deliberate
+# separate step on the box's config page.
+#
+# DEMOTES obs/mode TO MIRROR, which is the non-obvious part. obs leader is a
+# claim about a particular rig's wiring and clock discipline -- pin N is wired
+# to THIS rig's obs line, and THIS host schedules at_abs on it. Carried across
+# an adoption it is a static IP on a new subnet. Worse than merely stale:
+# main.c suppresses box_gpio_obs_mirror while leader is set, because a
+# leader-owned line must move only at scheduled instants. So a box that keeps
+# leader on a host which never schedules at_abs neither leads NOR mirrors -- it
+# goes silent, and looks configured while doing so. Mirror always works: it
+# follows ess/in_obs. The new owner re-declares leader if its wiring supports it.
+proc extio_adopt { boxip name via {port 4620} {demote_obs 1} } {
+    # 1. make our dserv open a connect-back. The box gives %reg its own
+    #    connection and settles before sending matches; copy that.
+    extio_dserv_cmd [list "%reg $boxip 5010 1"]
+    after 200
+
+    # 2. route the leaves the box actually consumes -- the same two patterns it
+    #    asks for itself. Anything else never reaches its config handler.
+    extio_dserv_cmd [list \
+        "%match $boxip 5010 extio/$name/config/* 1" \
+        "%match $boxip 5010 extio/$name/cmd/* 1"]
+    after 200
+
+    if { $demote_obs } { dservSet extio/$name/config/obs/mode mirror }
+
+    # 3. the retarget itself. Needs box fw >= 0.4.0+51 to take effect on a
+    #    CONNECTED box: before that, config/dserv/ip had no handler and a live
+    #    uplink kept publishing to its old host while every field reported the
+    #    new one.
+    dservSet extio/$name/config/dserv/ip   $via
+    dservSet extio/$name/config/dserv/port $port
+
+    return "adopted $name ($boxip) -> $via:$port[expr {$demote_obs ? {, obs->mirror} : {}}] (not saved)"
+}
+
+# Release a box we own. Two intents, and they differ by one line:
+#
+#   extio_release <ip> <name>        hand-off / let go: free the connect-back
+#                                    slot so another dserv can take the box.
+#   extio_release <ip> <name> 1      release to the pool: also clear the target,
+#                                    so the box reads `unclaimed` to everyone.
+#
+# ORDER MATTERS AND IS NOT INTERCHANGEABLE. %unreg closes the only channel we
+# can send config on, so clearing the target must come FIRST. Doing it the other
+# way leaves the box pointed at us with no way for us to correct it.
+#
+# %unreg closes dserv->box (the command channel) only -- NOT the box's outbound
+# publish socket. Since +51 the box moves that itself when the target changes;
+# on older firmware only a restart of this host would move it.
+proc extio_release { boxip name {to_pool 0} } {
+    if { $to_pool } {
+        dservSet extio/$name/config/dserv/ip 0.0.0.0
+        after 300
+    }
+    extio_dserv_cmd [list "%unreg $boxip 5010"]
+    return "released $name ($boxip)[expr {$to_pool ? { -- now unclaimed} : {}}]"
+}
+
 if { [catch { load ${dspath}/modules/dserv_extiodisc[info sharedlibextension] } msg] } {
     dservSet extio/discover/error "module not loaded: $msg"
     puts stderr "extio: LAN discovery unavailable -- $msg"

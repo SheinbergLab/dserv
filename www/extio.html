@@ -58,6 +58,12 @@
   #disco .chip.other { background: var(--off); color: var(--faint); }
   #disco .chip.lost  { background: #3f1d1d; color: var(--red); }
   #disco .drow.other { opacity: .6; }
+  #disco button { font-size: 11px; padding: 2px 9px; border-radius: 6px;
+                  border: 1px solid var(--card-edge); background: var(--off);
+                  color: var(--ink); cursor: pointer; }
+  #disco button:hover:not(:disabled) { border-color: var(--muted); }
+  #disco button:disabled { opacity: .4; cursor: default; }
+  #disco button.adopt { border-color: #2b6b3f; color: var(--green); }
   .obs { font-size: 11px; font-weight: 700; letter-spacing: 0.06em; padding: 1px 8px;
          border-radius: 9px; background: var(--off); color: var(--faint); transition: all 120ms; }
   .obs.on { background: #14351f; color: var(--green); box-shadow: 0 0 8px rgba(74,222,128,0.5); }
@@ -547,6 +553,42 @@ function cardHtml(b) {
  * routine dserv restarts, which drop the link for a few seconds, do not raise
  * an alarm during ordinary work).
  */
+/* Adoption is a WRITE, on a page that is otherwise a read-only mirror -- so it
+ * confirms first. The thing worth confirming is not "are you sure" but WHICH
+ * address the box will be told to use: `via` is the address that reaches this
+ * dserv FROM THAT BOX, and on a multi-homed host it is not the one a person
+ * would have typed. Showing it is what makes the action checkable. */
+async function adoptBox(ip, name, via) {
+  if (!via) { alert('no route to that box from here — cannot adopt'); return; }
+  if (!confirm(`Adopt "${name}" (${ip})?\n\n`
+             + `It will be told to connect to ${via}.\n`
+             + `obs mode is set to mirror (leader is rig-specific wiring).\n\n`
+             + `Not saved to the box's flash — it returns to its previous `
+             + `owner on reboot until you save it from its config page.`)) return;
+  try {
+    const r = await conn.send(`extio_adopt ${ip} ${name} ${via}`, 'extio');
+    console.log('adopt:', r);
+  } catch (e) { alert(`adopt failed: ${e.message || e}`); }
+}
+
+/* Release has two strengths and they are NOT the same act, so they confirm
+ * differently. Plain release frees our connect-back slot: the box keeps
+ * pointing at us and reconnects, but another dserv can now reach it -- the
+ * handshake half that lets a healthy box be handed over at all. `free` also
+ * clears the target, so the box belongs to nobody. */
+async function releaseBox(ip, name, toPool) {
+  const msg = toPool
+    ? `Release "${name}" (${ip}) to the pool?\n\nIts dserv target is cleared, `
+      + `so it stops talking to us and ANY dserv on this network can adopt it.`
+    : `Release "${name}" (${ip})?\n\nFrees its connect-back slot so another `
+      + `dserv can take it. It stays pointed at us until someone does.`;
+  if (!confirm(msg)) return;
+  try {
+    const r = await conn.send(`extio_release ${ip} ${name} ${toPool ? 1 : 0}`, 'extio');
+    console.log('release:', r);
+  } catch (e) { alert(`release failed: ${e.message || e}`); }
+}
+
 function renderDisco() {
     const el = document.getElementById('disco');
     if (!el) return;
@@ -584,11 +626,36 @@ function renderDisco() {
                  d.ever ? 'lost dserv' : 'never reached'} ${ago(d.down_ms || 0)}</span>`
             : '';
 
+        /* ACTIONS follow ownership, and the omissions are the point.
+         *
+         * free / stranded -> Adopt. Both are reachable: the box's single
+         *   connect-back slot is empty, which is exactly what `link:down`
+         *   reports. Adopting is what that slot being free MEANS.
+         *
+         * mine -> Release, and a second step to hand it to the pool. The
+         *   firmware makes a healthy box unreachable to anyone else, so we are
+         *   the only party who CAN let go of it; that makes release an
+         *   obligation of ownership rather than a courtesy.
+         *
+         * spoken for (and healthy) -> NOTHING. Not a disabled button: there is
+         *   no action to offer. Its owner holds the slot, so an adopt would
+         *   fail at the socket even if we tried, and the failure everyone
+         *   actually fears -- stealing a box out of a running rig -- is
+         *   prevented in firmware rather than by this omission. Showing a
+         *   greyed control would imply we could if we insisted.
+         */
+        const act = (free || d.stranded)
+            ? `<button class="adopt" onclick="adoptBox('${esc(d.ip)}','${esc(d.name)}','${esc(d.via)}')">adopt</button>`
+            : mine
+              ? `<button onclick="releaseBox('${esc(d.ip)}','${esc(d.name)}',0)">release</button>
+                 <button onclick="releaseBox('${esc(d.ip)}','${esc(d.name)}',1)" title="clear its target too, so any dserv can adopt it">free</button>`
+              : '';
+
         return `<div class="drow ${state === 'other' ? 'other' : ''}">
           <span class="dip">${esc(d.ip)}</span>
           <b>${esc(d.name || '?')}</b>
           <span class="chip">${esc(d.board || '?')}</span>
-          ${tgt}${held}${lost}
+          ${tgt}${held}${lost}${act ? `<span style="margin-left:10px">${act}</span>` : ''}
         </div>`;
     }).join('');
 
