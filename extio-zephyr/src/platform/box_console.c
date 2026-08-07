@@ -255,6 +255,36 @@ static void adc_cal(uint8_t ch)
 }
 #endif /* BOX_HAVE_ADC && CONFIG_DAC */
 
+/* Append-into-a-buffer sink for box_cli_dump_to (see box_console.h). */
+static char *dump_buf;
+static int   dump_cap, dump_len, dump_cut;
+
+static void dump_sink(void *ud, const char *line)
+{
+	ARG_UNUSED(ud);
+	int n = (int) strlen(line);
+
+	if (dump_len + n + 2 > dump_cap) {   /* +1 newline, +1 NUL */
+		dump_cut = 1;
+		return;
+	}
+	memcpy(dump_buf + dump_len, line, (size_t) n);
+	dump_len += n;
+	dump_buf[dump_len++] = '\n';
+	dump_buf[dump_len] = '\0';
+}
+
+int box_console_config_dump(const box_config_t *cfg, char *buf, int cap)
+{
+	if (!buf || cap < 2) {
+		return 0;
+	}
+	dump_buf = buf; dump_cap = cap; dump_len = 0; dump_cut = 0;
+	buf[0] = '\0';
+	box_cli_dump_to(cfg, dump_sink, NULL);
+	return dump_cut ? -dump_len : dump_len;
+}
+
 void box_console_set_ain_channels(int n)
 {
 	box_cli_set_ain_channels(n);

@@ -280,6 +280,21 @@ typedef enum {
                      * until the next reconnect -- indistinguishable from the
                      * write having failed. This makes "tell me what you are
                      * now" an explicit, cheap request instead of a wait. */
+    CFG_DUMP,       /* cmd/dump -> publish this box's whole config to state/cfg/dump
+                     * as ONE datapoint: the same replayable CLI text the `dump`
+                     * console verb prints, newline-joined.
+                     *
+                     * The `dump` verb needed a serial cable, which is the wrong
+                     * place for it -- the caller who most wants a snapshot is a
+                     * HOST about to overwrite the config (extio_test renames the
+                     * ain group, repoints its channels and leaves ain disabled;
+                     * it silently ate a joystick bench setup on 2026-08-06).
+                     *
+                     * Sent with the '}' LENGTH-PREFIXED form, not the fixed 128-byte
+                     * '>' frame, so the whole document arrives in one read with no
+                     * reassembly and no "is more coming" question. That bypasses
+                     * box_pub's queue, which is hardcoded to fixed frames -- see
+                     * dserv_msg_var_build(). */
     CFG_STATS_RESET,/* cmd/stats/reset -> zero the SINCE-BOOT diagnostic counters
                      * (ain sweeps/blocks/dropped/late + late gaps, adc
                      * sweep_max_us, eth send_max_us). Rates can be had by
@@ -779,6 +794,7 @@ static inline cfg_result_t dserv_cfg__cmd(const char *k, const dserv_msg_t *m,
         cmd->value = (uint32_t) dserv_msg_as_long(m); return CFG_GPIO;
     }
     if (strcmp(k, "announce") == 0) return CFG_ANNOUNCE;
+    if (strcmp(k, "dump")        == 0) return CFG_DUMP;
     if (strcmp(k, "stats/reset") == 0) return CFG_STATS_RESET;
     if (strcmp(k, "save")    == 0) return CFG_SAVE;
     if (strcmp(k, "reboot")  == 0) return CFG_REBOOT;
@@ -850,6 +866,7 @@ static inline const char *dserv_cfg_result_str(cfg_result_t r)
     case CFG_DSERV_PORT: return "dserv_port";
     case CFG_GPIO:       return "cmd_do";
     case CFG_ANNOUNCE:   return "announce";
+    case CFG_DUMP:       return "dump";
     case CFG_STATS_RESET: return "stats_reset";
     case CFG_SAVE:       return "save";
     case CFG_REBOOT:     return "reboot";

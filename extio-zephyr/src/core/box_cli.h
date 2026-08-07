@@ -29,6 +29,7 @@
 #define BOX_CLI_H
 
 #include "dserv_config.h"
+#include <stdarg.h>          /* box_cli_dump_line's sink takes varargs */
 #include <stdio.h>
 #include <string.h>
 
@@ -162,73 +163,127 @@ static inline void box_cli_show(const box_config_t *c, char *out, int outsz)
         }
 }
 
+/* ---- where a dump's lines go ----
+ *
+ * `dump` was console-only, which made it useless for the case it is best at:
+ * a host wanting to snapshot a box before something overwrites its config, and
+ * put it back afterwards. (extio_test does exactly that -- it renames the ain
+ * group, repoints its channels and leaves ain disabled, which silently ate a
+ * joystick bench setup on 2026-08-06.) Reaching it needed a serial cable.
+ *
+ * So the body emits through DUMPF, which is either printf (the console verb,
+ * unchanged) or a caller's sink (cmd/dump -> datapoints). One line per call,
+ * already newline-terminated -- the sink strips the CRLF. */
+typedef void (*box_cli_emit_fn)(void *ud, const char *line);
+
+static box_cli_emit_fn box_cli_emit;      /* NULL = write to the console */
+static void           *box_cli_emit_ud;
+
+static inline void box_cli_dump_line(const char *fmt, ...)
+{
+	va_list ap;
+
+	va_start(ap, fmt);
+	if (!box_cli_emit) {
+		vprintf(fmt, ap);
+		va_end(ap);
+		return;
+	}
+	char line[128];
+	int n = vsnprintf(line, sizeof line, fmt, ap);
+
+	va_end(ap);
+	if (n < 0) {
+		return;
+	}
+	/* strip the trailing CRLF the console format carries */
+	while (n > 0 && (line[n - 1] == '\n' || line[n - 1] == '\r')) {
+		line[--n] = '\0';
+	}
+	if (n > 0) {
+		box_cli_emit(box_cli_emit_ud, line);
+	}
+}
+#define DUMPF(...) box_cli_dump_line(__VA_ARGS__)
+
 /* Emit the CLI commands that reproduce this config (only the non-default settings), so
  * pasting the output into a fresh box's console clones this setup. Ends with `save`.
  * Uses printf (not `out`) so a big config isn't bounded by the response buffer. Comment
  * (#) lines are ignored by box_cli_exec, so the whole capture pastes back cleanly. */
 static inline void box_cli_dump(const box_config_t *c)
 {
-    printf("# extio box config dump -- paste into a new box's console to clone this setup\r\n");
-    printf("# (uncomment the next line to wipe the target's existing config first)\r\n");
-    printf("#factory\r\n");
-    if (c->name[0])                       printf("name %s\r\n", c->name);
+    DUMPF("# extio box config dump -- paste into a new box's console to clone this setup\r\n");
+    DUMPF("# (uncomment the next line to wipe the target's existing config first)\r\n");
+    DUMPF("#factory\r\n");
+    if (c->name[0])                       DUMPF("name %s\r\n", c->name);
 #ifdef BOX_HAVE_XPORT_POLICY
-    if (c->transport_mode)                printf("mode %s\r\n", dserv_xmode_str(c->transport_mode));
+    if (c->transport_mode)                DUMPF("mode %s\r\n", dserv_xmode_str(c->transport_mode));
 #endif
     if (c->net_mode == NET_MODE_STATIC) {
-        printf("net mode static\r\n");
-        printf("net ip %u.%u.%u.%u\r\n", c->net_ip[0], c->net_ip[1], c->net_ip[2], c->net_ip[3]);
+        DUMPF("net mode static\r\n");
+        DUMPF("net ip %u.%u.%u.%u\r\n", c->net_ip[0], c->net_ip[1], c->net_ip[2], c->net_ip[3]);
         if (c->net_gw[0] || c->net_gw[1] || c->net_gw[2] || c->net_gw[3])
-            printf("net gateway %u.%u.%u.%u\r\n", c->net_gw[0], c->net_gw[1], c->net_gw[2], c->net_gw[3]);
+            DUMPF("net gateway %u.%u.%u.%u\r\n", c->net_gw[0], c->net_gw[1], c->net_gw[2], c->net_gw[3]);
         if (c->net_sn[0] || c->net_sn[1] || c->net_sn[2] || c->net_sn[3])
-            printf("net mask %u.%u.%u.%u\r\n", c->net_sn[0], c->net_sn[1], c->net_sn[2], c->net_sn[3]);
+            DUMPF("net mask %u.%u.%u.%u\r\n", c->net_sn[0], c->net_sn[1], c->net_sn[2], c->net_sn[3]);
     }
     if (c->dserv_ip[0] || c->dserv_ip[1] || c->dserv_ip[2] || c->dserv_ip[3])
-        printf("dserv ip %u.%u.%u.%u\r\n", c->dserv_ip[0], c->dserv_ip[1], c->dserv_ip[2], c->dserv_ip[3]);
-    if (c->dserv_port)                    printf("dserv port %u\r\n", c->dserv_port);
+        DUMPF("dserv ip %u.%u.%u.%u\r\n", c->dserv_ip[0], c->dserv_ip[1], c->dserv_ip[2], c->dserv_ip[3]);
+    if (c->dserv_port)                    DUMPF("dserv port %u\r\n", c->dserv_port);
     for (int i = 0; i < BOX_NPINS; i++) {
-        if (c->pin_mode[i])      printf("pin %d mode %s\r\n",     i, dserv_mode_str(c->pin_mode[i]));
-        if (c->do_pulse_us[i])   printf("pin %d pulse %u\r\n",    i, (unsigned) c->do_pulse_us[i]);
-        if (c->debounce_ms[i])   printf("pin %d debounce %u\r\n", i, c->debounce_ms[i]);
-        if (di_active_low(c, i)) printf("pin %d active_low 1\r\n", i);
-        if (c->pin_label[i][0])  printf("label %d %s\r\n",        i, c->pin_label[i]);
+        if (c->pin_mode[i])      DUMPF("pin %d mode %s\r\n",     i, dserv_mode_str(c->pin_mode[i]));
+        if (c->do_pulse_us[i])   DUMPF("pin %d pulse %u\r\n",    i, (unsigned) c->do_pulse_us[i]);
+        if (c->debounce_ms[i])   DUMPF("pin %d debounce %u\r\n", i, c->debounce_ms[i]);
+        if (di_active_low(c, i)) DUMPF("pin %d active_low 1\r\n", i);
+        if (c->pin_label[i][0])  DUMPF("label %d %s\r\n",        i, c->pin_label[i]);
     }
-    if (c->desc[0])                       printf("desc %s\r\n", c->desc);
-    if (c->channel[0])                    printf("channel %s\r\n", c->channel);
+    if (c->desc[0])                       DUMPF("desc %s\r\n", c->desc);
+    if (c->channel[0])                    DUMPF("channel %s\r\n", c->channel);
     for (int g = 0; g < BOX_NGROUPS; g++)
         if (c->group_pins[g]) {
             char ps[96]; dserv_pins_str(c->group_pins[g], ps, sizeof ps);
-            printf("group %d pins %s\r\n", g, ps);
-            if (c->group_label[g][0])     printf("group %d label %s\r\n",  g, c->group_label[g]);
-            if (c->group_settle_ms[g])    printf("group %d settle %u\r\n", g, c->group_settle_ms[g]);
-            if (c->group_quiet[g])        printf("group %d quiet 1\r\n",   g);
+            DUMPF("group %d pins %s\r\n", g, ps);
+            if (c->group_label[g][0])     DUMPF("group %d label %s\r\n",  g, c->group_label[g]);
+            if (c->group_settle_ms[g])    DUMPF("group %d settle %u\r\n", g, c->group_settle_ms[g]);
+            if (c->group_quiet[g])        DUMPF("group %d quiet 1\r\n",   g);
         }
-    if (obs_mirror_enabled(c))            printf("obs pin %d\r\n", obs_mirror_pin(c));
-    if (c->obs_mode == OBS_MODE_LEADER)   printf("obs mode leader\r\n");
-    if (sync_input_enabled(c))            printf("sync pin %d\r\n", sync_input_pin(c));
-    if (c->wifi_ssid[0])                  printf("wifi ssid %s\r\n", c->wifi_ssid);
-    if (c->wifi_pass[0])                  printf("# wifi pass <re-enter manually; not dumped>\r\n");
-    if (c->wifi_pm)                       printf("wifi pm 1\r\n");
-    if (c->ain_en)                        printf("ain enable 1\r\n");
-    if (c->ain_rate)                      printf("ain rate %u\r\n", c->ain_rate);
+    if (obs_mirror_enabled(c))            DUMPF("obs pin %d\r\n", obs_mirror_pin(c));
+    if (c->obs_mode == OBS_MODE_LEADER)   DUMPF("obs mode leader\r\n");
+    if (sync_input_enabled(c))            DUMPF("sync pin %d\r\n", sync_input_pin(c));
+    if (c->wifi_ssid[0])                  DUMPF("wifi ssid %s\r\n", c->wifi_ssid);
+    if (c->wifi_pass[0])                  DUMPF("# wifi pass <re-enter manually; not dumped>\r\n");
+    if (c->wifi_pm)                       DUMPF("wifi pm 1\r\n");
+    if (c->ain_en)                        DUMPF("ain enable 1\r\n");
+    if (c->ain_rate)                      DUMPF("ain rate %u\r\n", c->ain_rate);
     for (int ag = 0; ag < BOX_NAGROUPS; ag++)
         if (c->ain_group_chans[ag]) {
             char cs[16]; dserv_pins_str(c->ain_group_chans[ag], cs, sizeof cs);
-            printf("ain group %d channels %s\r\n", ag, cs);
-            if (c->ain_group_label[ag][0]) printf("ain group %d label %s\r\n",    ag, c->ain_group_label[ag]);
-            if (c->ain_group_mode[ag])     printf("ain group %d mode continuous\r\n", ag);
-            if (c->ain_group_deadband[ag]) printf("ain group %d deadband %u\r\n", ag, c->ain_group_deadband[ag]);
-            if (c->ain_group_decimate[ag]) printf("ain group %d decimate %u\r\n", ag, c->ain_group_decimate[ag]);
-            if (c->ain_group_batch[ag])    printf("ain group %d batch %u\r\n",    ag, c->ain_group_batch[ag]);
-            if (c->ain_group_flags[ag] & AIN_GROUP_FLAG_AVG) printf("ain group %d average 1\r\n", ag);
+            DUMPF("ain group %d channels %s\r\n", ag, cs);
+            if (c->ain_group_label[ag][0]) DUMPF("ain group %d label %s\r\n",    ag, c->ain_group_label[ag]);
+            if (c->ain_group_mode[ag])     DUMPF("ain group %d mode continuous\r\n", ag);
+            if (c->ain_group_deadband[ag]) DUMPF("ain group %d deadband %u\r\n", ag, c->ain_group_deadband[ag]);
+            if (c->ain_group_decimate[ag]) DUMPF("ain group %d decimate %u\r\n", ag, c->ain_group_decimate[ag]);
+            if (c->ain_group_batch[ag])    DUMPF("ain group %d batch %u\r\n",    ag, c->ain_group_batch[ag]);
+            if (c->ain_group_flags[ag] & AIN_GROUP_FLAG_AVG) DUMPF("ain group %d average 1\r\n", ag);
         }
-    if (dserv_cfg_console_mode(c) == CONSOLE_MODE_UART) printf("console uart\r\n");
-    if (c->oled_en)                       printf("oled enable 1\r\n");
-    if (c->ble_en)                        printf("ble enable 1\r\n");
-    if (c->pipe_en)                       printf("ble pipe 1\r\n");
-    if (c->ble_latency)                   printf("ble latency %u\r\n", c->ble_latency);
-    printf("save\r\n");
-    printf("# reboot   (uncomment / run to apply mode/net changes)\r\n");
+    if (dserv_cfg_console_mode(c) == CONSOLE_MODE_UART) DUMPF("console uart\r\n");
+    if (c->oled_en)                       DUMPF("oled enable 1\r\n");
+    if (c->ble_en)                        DUMPF("ble enable 1\r\n");
+    if (c->pipe_en)                       DUMPF("ble pipe 1\r\n");
+    if (c->ble_latency)                   DUMPF("ble latency %u\r\n", c->ble_latency);
+    DUMPF("save\r\n");
+    DUMPF("# reboot   (uncomment / run to apply mode/net changes)\r\n");
+}
+
+/* Same dump, delivered to a caller's sink instead of the console. Restores the
+ * console target afterwards so the `dump` verb is unaffected. */
+static inline void box_cli_dump_to(const box_config_t *c, box_cli_emit_fn fn, void *ud)
+{
+	box_cli_emit = fn;
+	box_cli_emit_ud = ud;
+	box_cli_dump(c);
+	box_cli_emit = NULL;
+	box_cli_emit_ud = NULL;
 }
 
 #if defined(BOX_NET_DUAL)
@@ -317,7 +372,12 @@ static inline cli_action_t box_cli_exec(box_config_t *c, const char *line,
         if (n < 0 || n >= BOX_NPINS) { snprintf(out, outsz, "ERR bad pin\r\n"); return CLI_ERR; }
         if (!strcmp(w, "off")) w[0] = '\0';
         if (!dserv_label_valid(w)) { snprintf(out, outsz, "ERR label: printable, no '/' or spaces\r\n"); return CLI_ERR; }
-        snprintf(c->pin_label[n], BOX_LABEL_MAX, "%s", w);
+        /* %.*s, not %s: the sscanf above already caps at 15 = BOX_LABEL_MAX-1,
+         * but `w` is the shared 24-byte scratch (other verbs read %23s into it),
+         * so the compiler can only see a possible 23-byte write into 16 and
+         * -Wformat-truncation fails the build. Stating the bound is the same
+         * behaviour, provably. */
+        snprintf(c->pin_label[n], BOX_LABEL_MAX, "%.*s", BOX_LABEL_MAX - 1, w);
         c->applied_count++;
         snprintf(out, outsz, "OK pin%d label=%s\r\n", n, c->pin_label[n][0] ? c->pin_label[n] : "(none)");
         return CLI_GROUP;
@@ -336,7 +396,7 @@ static inline cli_action_t box_cli_exec(box_config_t *c, const char *line,
         if (n < 0 || n >= BOX_NGROUPS) { snprintf(out, outsz, "ERR bad group\r\n"); return CLI_ERR; }
         if (!strcmp(w, "off")) w[0] = '\0';
         if (!dserv_label_valid(w)) { snprintf(out, outsz, "ERR label: printable, no '/' or spaces\r\n"); return CLI_ERR; }
-        snprintf(c->group_label[n], BOX_LABEL_MAX, "%s", w);
+        snprintf(c->group_label[n], BOX_LABEL_MAX, "%.*s", BOX_LABEL_MAX - 1, w);  /* see pin label above */
         c->applied_count++;
         snprintf(out, outsz, "OK group%d label=%s\r\n", n, c->group_label[n][0] ? c->group_label[n] : "(none)");
         return CLI_GROUP;
@@ -378,7 +438,7 @@ static inline cli_action_t box_cli_exec(box_config_t *c, const char *line,
         if (n < 0 || n >= BOX_NAGROUPS) { snprintf(out, outsz, "ERR bad group\r\n"); return CLI_ERR; }
         if (!strcmp(w, "off")) w[0] = '\0';
         if (!dserv_label_valid(w)) { snprintf(out, outsz, "ERR label: printable, no '/' or spaces\r\n"); return CLI_ERR; }
-        snprintf(c->ain_group_label[n], BOX_LABEL_MAX, "%s", w); c->applied_count++;
+        snprintf(c->ain_group_label[n], BOX_LABEL_MAX, "%.*s", BOX_LABEL_MAX - 1, w); c->applied_count++;
         snprintf(out, outsz, "OK ain group%d label=%s\r\n", n,
                  c->ain_group_label[n][0] ? c->ain_group_label[n] : "(none)");
         return CLI_AIN;

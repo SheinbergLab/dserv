@@ -44,6 +44,20 @@ uint64_t box_app_dserv_now_us(void);
  * one includer (see the note in that header). */
 void box_console_set_ain_channels(int n);
 
+/* ---- cmd/dump: the config as a restore document ----
+ *
+ * Runs the same emitter the `dump` console verb uses, into a caller buffer, so
+ * a HOST can snapshot a box without a serial cable -- the caller most likely to
+ * want one is a host about to overwrite the config (extio_test renames the ain
+ * group, repoints its channels and leaves ain disabled). Routed through the
+ * console for the same reason as the two above: box_cli.h keeps one includer.
+ *
+ * Returns bytes written, or NEGATIVE that count if the dump was TRUNCATED --
+ * a clipped restore document that looks complete is worse than none. */
+#define BOX_CONFIG_DUMP_MAX 1536
+int box_console_config_dump(const box_config_t *cfg, char *buf, int cap);
+
+
 /* Tell the CLI which pins this board refuses, so `pin N mode ...` is rejected
  * instead of stored and ignored. Routed through the console for the same reason
  * as the channel count -- box_cli.h keeps one includer. */

@@ -1910,6 +1910,34 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 		 * to cover today's caller. */
 		box_announce_burst(&cfg, groups);
 		box_console_printf("cmd/announce -> full re-announce\n");
+	} else if (r == CFG_DUMP) {
+		/* Publish the config as replayable CLI lines, one datapoint each, then
+		 * the count LAST -- a reader that waits for state/cfg/dump/n knows the
+		 * set is complete, and never has to guess whether more is coming.
+		 *
+		 * Indexed rather than one big datapoint because a frame carries 109
+		 * bytes of name+data total; a whole dump is far past that, and chunking
+		 * into a single leaf would make each write clobber the last. Same burst
+		 * shape as the manifest announce, which box_pub_bulk already paces. */
+		{
+			static char    dtext[BOX_CONFIG_DUMP_MAX];
+			static uint8_t vf[BOX_CONFIG_DUMP_MAX + 128];
+			char nm[80];
+
+			int n = box_console_config_dump(&cfg, dtext, sizeof dtext);
+			dserv_state_name(&cfg, nm, sizeof nm, "cfg/dump");
+			int vlen = dserv_msg_var_string(vf, sizeof vf, nm, 0, dtext);
+
+			/* box_uplink_send returns 0 on success, NOT the byte count
+			 * (box_uplink.h) -- comparing against vlen reported every
+			 * successful send as a failure. */
+			if (vlen > 0 && box_uplink_send(vf, vlen) == 0) {
+				box_console_printf("cmd/dump -> %d bytes to state/cfg/dump%s\n",
+						   n < 0 ? -n : n, n < 0 ? " (TRUNCATED)" : "");
+			} else {
+				box_console_printf("cmd/dump -> send failed (%d)\n", vlen);
+			}
+		}
 	} else if (r == CFG_STATS_RESET) {
 		/* Zero the since-boot diagnostic counters. The periodic publisher
 		 * pushes the new values on its next tick, so the host sees zeros

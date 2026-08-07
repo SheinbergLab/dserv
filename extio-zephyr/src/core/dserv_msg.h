@@ -39,6 +39,8 @@
  * unchanged -- it just accepts this as a frame start too, and the frame handler
  * dispatches on byte 0. See wiznet-io/OTA.md "USB OTA". */
 #define DSERV_OTA_CHAR  'D'
+/* Third start-marker: the length-prefixed datapoint push (see dserv_msg_var_build). */
+#define DSERV_MSG_VAR_CHAR '}'
 #define DSERV_MSG_LEN   128
 /* 128 - 1('>') - 2(varlen) - 8(ts) - 4(type) - 4(len) */
 #define DSERV_MSG_MAX_PAYLOAD (DSERV_MSG_LEN - 19)   /* = 109, for varname+data */
@@ -60,6 +62,56 @@ enum {
 #endif
 
 /* Core builder. `frame` must be at least DSERV_MSG_LEN bytes. */
+/* ---- '}' : the VARIABLE-LENGTH datapoint push ----
+ *
+ * The '>' frame above is fixed at 128 bytes, so name+data must fit 109 -- fine
+ * for a scalar, useless for anything bulky. dserv also accepts a length-prefixed
+ * form with no size cap (src/Datapoint.h DPOINT_BINARY_VAR_MSG_CHAR), same
+ * fire-and-forget model, no '@set' handshake and no base64:
+ *
+ *   0  1   '}'
+ *   1  2   uint16 varlen
+ *   3  4   uint32 datatype
+ *   7  4   uint32 datalen
+ *   11 8   uint64 timestamp     (0 => dserv stamps arrival)
+ *   19 v   varname[varlen]
+ *   .. d   data[datalen]
+ *
+ * NOTE the field order differs from '>' -- lengths and type come BEFORE the
+ * timestamp here, and the name follows the whole header rather than sitting
+ * inside it. Returns the total byte count, or -1 if it will not fit `cap`.
+ *
+ * This does NOT go through box_pub's queue, which is hardcoded to fixed frames
+ * (box_pub.c: uint8_t f[DSERV_MSG_LEN]) -- send it with box_uplink_send(), which
+ * takes a length. Build it whole and send once: dserv reads varlen/datalen bytes
+ * by length, so a partial write desynchronises the connection. */
+static inline int dserv_msg_var_build(uint8_t *buf, int cap,
+                                      const char *name,
+                                      uint64_t timestamp,
+                                      uint32_t datatype,
+                                      const void *data,
+                                      uint32_t datalen)
+{
+    uint16_t varlen = (uint16_t) strlen(name);
+    int total = 1 + 2 + 4 + 4 + 8 + (int) varlen + (int) datalen;
+
+    if (cap < total) return -1;
+
+    uint8_t *p = buf;
+    *p++ = DSERV_MSG_VAR_CHAR;
+    memcpy(p, &varlen,    sizeof varlen);    p += sizeof varlen;
+    memcpy(p, &datatype,  sizeof datatype);  p += sizeof datatype;
+    memcpy(p, &datalen,   sizeof datalen);   p += sizeof datalen;
+    memcpy(p, &timestamp, sizeof timestamp); p += sizeof timestamp;
+    memcpy(p, name, varlen);                 p += varlen;
+    if (datalen) memcpy(p, data, datalen);
+    return total;
+}
+
+static inline int dserv_msg_var_string(uint8_t *buf, int cap, const char *name,
+                                       uint64_t ts, const char *s)
+{ return dserv_msg_var_build(buf, cap, name, ts, DSERV_STRING, s, (uint32_t) strlen(s)); }
+
 static inline int dserv_msg_build(uint8_t *frame,
                                   const char *name,
                                   uint64_t timestamp,
