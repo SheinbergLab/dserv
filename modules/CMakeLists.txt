@@ -311,14 +311,19 @@ set_target_properties(${MODULE} PROPERTIES PREFIX "dserv_")
 target_link_libraries(${MODULE} ${DLSH} ${TCLLIB} ${LIBJANSSON} pthread)
 
 # Install targets - conditionally include camera
+# NB: these lists are EXPLICIT, so a new add_library above is built but never
+# installed until its target is named here too. That failure is quiet -- the
+# build succeeds, the file exists in build/modules/, and only a config that
+# loads it notices, on a machine you are not looking at. extiodisc was added
+# and hit exactly this on the next restart.
 if(BUILD_CAMERA)
     install(TARGETS
         ain juicer gpio_input gpio_output touch input mesh
-        rmt eventlog sound timer usbio ina226 joystick4 camera_capture
+        rmt eventlog sound timer usbio extiodisc ina226 joystick4 camera_capture
         DESTINATION dserv/modules COMPONENT dserv)
 else()
     install(TARGETS
         ain juicer gpio_input gpio_output touch input mesh
-        rmt eventlog sound timer usbio ina226 joystick4
+        rmt eventlog sound timer usbio extiodisc ina226 joystick4
         DESTINATION dserv/modules COMPONENT dserv)
 endif()
