@@ -703,10 +703,21 @@ function renderDisco() {
          *   connect-back slot is empty, which is exactly what `link:down`
          *   reports. Adopting is what that slot being free MEANS.
          *
-         * mine -> Release, and a second step to hand it to the pool. The
-         *   firmware makes a healthy box unreachable to anyone else, so we are
-         *   the only party who CAN let go of it; that makes release an
-         *   obligation of ownership rather than a courtesy.
+         * mine -> Release: clears the target AND frees the slot, in that order.
+         *   The firmware makes a healthy box unreachable to anyone else, so we
+         *   are the only party who CAN let go of it -- release is an obligation
+         *   of ownership, not a courtesy.
+         *
+         *   ONE BUTTON, NOT TWO. A slot-only release used to sit beside this
+         *   one and it was a trap: freeing the slot while the box still points
+         *   at us achieves nothing, because the box's own registration watchdog
+         *   re-registers with its CONFIGURED dserv within ~5 s and we reclaim
+         *   the slot before anyone else can take it. Measured on the rig --
+         *   peer went to 0.0.0.0 and back to the original owner within seconds,
+         *   and the waiting adopter lost the race every time. It read as the
+         *   hand-over action and could never perform one. The to_pool=0 path
+         *   remains in extio_release for a box whose target is already
+         *   elsewhere; it is simply not a button.
          *
          * spoken for (and healthy) -> NOTHING. Not a disabled button: there is
          *   no action to offer. Its owner holds the slot, so an adopt would
@@ -718,8 +729,8 @@ function renderDisco() {
         const act = (free || d.stranded)
             ? `<button class="adopt" onclick="adoptBox('${esc(d.ip)}','${esc(d.name)}','${esc(d.via)}')">adopt</button>`
             : mine
-              ? `<button onclick="releaseBox('${esc(d.ip)}','${esc(d.name)}',0)">release</button>
-                 <button onclick="releaseBox('${esc(d.ip)}','${esc(d.name)}',1)" title="clear its target too, so any dserv can adopt it">free</button>`
+              ? `<button onclick="releaseBox('${esc(d.ip)}','${esc(d.name)}',1)"
+                         title="clear this box's dserv target and free its connect-back slot, so any dserv on this network can adopt it">release</button>`
               : '';
 
         return `<div class="drow ${state === 'other' ? 'other' : ''}">
