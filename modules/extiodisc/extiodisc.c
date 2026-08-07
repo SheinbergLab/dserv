@@ -109,6 +109,7 @@ typedef struct {
     char     build[64];
     char     target[64];
     char     link[8];               /* "up"/"down"; empty for a v1 box */
+    char     peer[46];              /* who holds the connect-back slot */
     char     via[46];               /* our address that reaches this box */
     int      v;
     long     down_ms;
@@ -292,6 +293,23 @@ static int build_json(disc_info_t *info, char *out, size_t osz)
             mine = (strncmp(b.target, b.via, vl) == 0 && b.target[vl] == ':');
         }
 
+        /* HELD BY SOMEONE ELSE. The box has an occupied connect-back slot, but
+         * not from the dserv it is configured for -- so `link:up` is true and
+         * misleading at the same time. It happens after an adoption, when the
+         * previous owner's connection outlives the retarget: the box reads
+         * healthy while its configured host cannot reach it at all. Seen on the
+         * rig during the first adopt/return round trip, and the box cannot flag
+         * it itself (a multi-homed dserv legitimately connects back from a
+         * source that is not its configured address), so the judgement lands
+         * here. Compared against the TARGET rather than our own address,
+         * because the interesting case is a box whose owner is not us. */
+        int held_other = 0;
+        if (b.v >= 2 && configured && b.peer[0] &&
+            strcmp(b.peer, "0.0.0.0") != 0 && !strcmp(b.link, "up")) {
+            size_t pl = strlen(b.peer);
+            held_other = !(strncmp(b.target, b.peer, pl) == 0 && b.target[pl] == ':');
+        }
+
         /* snprintf returns what it WOULD have written, so `w` can run past the
          * buffer on a long entry. Bail the moment it does rather than forming
          * `out + w` past the end -- and report failure to the caller instead of
@@ -310,8 +328,10 @@ static int build_json(disc_info_t *info, char *out, size_t osz)
          * gave, which is the whole failure mode this file is careful about. */
         if (b.v >= 2 && b.link[0]) {
             w += snprintf(out + w, osz - w,
-                ",\"link\":\"%s\",\"down_ms\":%ld,\"tries\":%d,\"ever\":%d",
-                b.link, b.down_ms, b.tries, b.ever);
+                ",\"link\":\"%s\",\"down_ms\":%ld,\"tries\":%d,\"ever\":%d"
+                ",\"peer\":\"%s\",\"heldByOther\":%d",
+                b.link, b.down_ms, b.tries, b.ever,
+                b.peer[0] ? b.peer : "", held_other);
             if (w >= (int) osz) return -1;
         }
         w += snprintf(out + w, osz - w, "}");
@@ -363,6 +383,7 @@ static void absorb(disc_info_t *info, const char *js, const char *from_ip)
     json_str(js, "build",  nb.build,  sizeof nb.build);
     json_str(js, "target", nb.target, sizeof nb.target);
     json_str(js, "link",   nb.link,   sizeof nb.link);
+    json_str(js, "peer",   nb.peer,   sizeof nb.peer);
 
     long v = 1, dm = 0, tr = 0, ev = 0;
     json_num(js, "v", &v);

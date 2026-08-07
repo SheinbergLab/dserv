@@ -570,6 +570,13 @@ function renderDisco() {
 
         /* Health only where the box reports it (v2). A v1 box omits link
          * entirely and its silence must not be drawn as a verdict. */
+        /* Occupied slot, wrong occupant. Distinct from stranded -- the box
+         * reports link:up, so nothing else on this page would show a problem,
+         * and the box that owns it on paper cannot reach it. */
+        const held = d.heldByOther
+            ? `<span class="chip lost" title="connect-back slot is held by ${esc(d.peer || '?')}, not by its configured dserv — usually an adoption whose previous owner never released it">held by ${esc(d.peer || '?')}</span>`
+            : '';
+
         const lost = d.stranded
             ? `<span class="chip lost" title="${d.ever
                  ? 'reached this target before, and cannot now'
@@ -581,7 +588,7 @@ function renderDisco() {
           <span class="dip">${esc(d.ip)}</span>
           <b>${esc(d.name || '?')}</b>
           <span class="chip">${esc(d.board || '?')}</span>
-          ${tgt}${lost}
+          ${tgt}${held}${lost}
         </div>`;
     }).join('');
 

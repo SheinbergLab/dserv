@@ -43,6 +43,7 @@ static int srv_listen = -1;     /* listening socket (BOX_ETH_CFG_PORT)          
  * a property to build a wake path on. Disassembly of v0.4.0+11 was checked and
  * the load was NOT hoisted, so this is insurance, not the bug fix. */
 static volatile int srv_conn = -1;   /* dserv's accepted connect-back           */
+static uint8_t srv_peer[4];          /* who holds it (box_net_eth_server_peer)  */
 static int srv_fresh;           /* one-shot: report BOX_NET_RESET after accept  */
 /* ---- inbound instrumentation ----
  * The split changed meaning at +29, when the reader thread took over recv:
@@ -297,14 +298,54 @@ void box_net_eth_server_service(void)
 	if (srv_conn >= 0) {
 		return;                      /* one connect-back is all dserv makes */
 	}
-	int c = zsock_accept(srv_listen, NULL, NULL);
+	struct sockaddr_in pa;
+	socklen_t pl = sizeof pa;
+	int c = zsock_accept(srv_listen, (struct sockaddr *) &pa, &pl);
 	if (c < 0) {
 		return;                      /* EAGAIN: nobody waiting */
 	}
 	tcp_nodelay(c);                          /* inbound cmd/config, same argument */
 	zsock_fcntl(c, ZVFS_F_SETFL, ZVFS_O_NONBLOCK);
+	/* Remember WHO took the slot. Not used for any decision here -- see
+	 * box_net_eth_server_peer -- but a fact worth reporting. */
+	if (pl >= sizeof pa && pa.sin_family == AF_INET) {
+		memcpy(srv_peer, &pa.sin_addr, 4);
+	} else {
+		memset(srv_peer, 0, 4);
+	}
 	srv_conn = c;
 	srv_fresh = 1;                       /* -> BOX_NET_RESET -> announce burst */
+}
+
+/* The address currently holding the connect-back slot; zeros when nobody does.
+ *
+ * REPORTED, NOT ACTED ON, and the distinction is the whole point. It is
+ * tempting to fold "is the peer my configured dserv" into
+ * box_net_eth_server_up() so `link` means what everyone assumes. That would be
+ * a bug: server_up gates the re-registration watchdog, and a dserv host with
+ * more than one interface connects back from whichever source its routing table
+ * picks -- which need not equal the dserv_ip we were configured with. A strict
+ * check there turns a WORKING link into a permanent "down" and re-registers
+ * every 5 s forever, which is the `re-registering (x276)` pathology already
+ * described above eth_reg_watchdog.
+ *
+ * The box genuinely cannot know whether a given peer "is" its dserv. The host
+ * can: it knows its own addresses. So the box states the fact and the host
+ * applies the policy.
+ *
+ * What this exists to catch: after an adoption the previous owner's connection
+ * can outlive the retarget, so the box holds an occupied slot while its
+ * CONFIGURED dserv cannot reach it at all -- reading perfectly healthy while
+ * being unreachable by the host that believes it owns it. Observed on the rig
+ * 2026-08-07 during the first adopt/return round trip. */
+int box_net_eth_server_peer(uint8_t out[4])
+{
+	if (!box_net_eth_server_up()) {
+		memset(out, 0, 4);
+		return 0;
+	}
+	memcpy(out, srv_peer, 4);
+	return 1;
 }
 
 int box_net_eth_server_up(void)

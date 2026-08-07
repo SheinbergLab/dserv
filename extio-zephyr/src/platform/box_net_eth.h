@@ -86,6 +86,12 @@ void box_net_eth_server_service(void);
  * caller that sees this stay 0 while the client socket is up must re-register. */
 int box_net_eth_server_up(void);
 
+/* Who currently holds the connect-back slot (zeros / 0 when nobody does). A
+ * FACT for the discovery beacon, never a decision input: the peer need not
+ * equal the configured dserv_ip on a multi-homed host, so treating a mismatch
+ * as "down" would re-register forever. See the definition. */
+int box_net_eth_server_peer(uint8_t out[4]);
+
 /* Lifetime count of publishes dropped because the uplink send failed. Non-zero
  * means frames were lost; a jump means the uplink was rebuilt (see the .c). */
 unsigned box_net_eth_uplink_drops(void);

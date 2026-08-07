@@ -110,6 +110,18 @@ void box_beacon_service(const box_config_t *cfg)
 
 	box_uplink_reg_health(&up, &down_ms, &tries, &ever);
 
+	/* WHO holds the connect-back slot. `link` says the slot is taken; it does
+	 * NOT say the taker is the dserv we are configured for, and after an
+	 * adoption those differ: the previous owner's connection can outlive the
+	 * retarget, leaving the box reading healthy while its configured host
+	 * cannot reach it. Reported rather than folded into `link` because the box
+	 * cannot decide it -- a multi-homed dserv connects back from whichever
+	 * source its routing picks, so peer != dserv_ip is not proof of anything.
+	 * The host knows its own addresses; let it judge. */
+	uint8_t peer[4] = { 0, 0, 0, 0 };
+
+	(void) box_net_eth_server_peer(peer);
+
 	/* `fw` must be the version MCUboot ACTUALLY BOOTED, not BOX_FW_VERSION.
 	 *
 	 * On the RP2350 the two are the same thing -- build.sh bakes `git describe`
@@ -136,12 +148,14 @@ void box_beacon_service(const box_config_t *cfg)
 		"{\"t\":\"extio\",\"v\":2,\"name\":\"%s\",\"ip\":\"%u.%u.%u.%u\","
 		"\"fw\":\"%s\",\"board\":\"%s\",\"build\":\"%s\","
 		"\"target\":\"%u.%u.%u.%u:%u\","
-		"\"link\":\"%s\",\"down_ms\":%u,\"tries\":%u,\"ever\":%d}",
+		"\"link\":\"%s\",\"down_ms\":%u,\"tries\":%u,\"ever\":%d,"
+		"\"peer\":\"%u.%u.%u.%u\"}",
 		dserv_cfg_name(cfg), ip[0], ip[1], ip[2], ip[3],
 		fw, BOX_BOARD_ID, box_build_key(),
 		cfg->dserv_ip[0], cfg->dserv_ip[1], cfg->dserv_ip[2], cfg->dserv_ip[3],
 		dserv_cfg_port(cfg),
-		up ? "up" : "down", (unsigned) down_ms, (unsigned) tries, ever);
+		up ? "up" : "down", (unsigned) down_ms, (unsigned) tries, ever,
+		peer[0], peer[1], peer[2], peer[3]);
 
 	/* Truncation would emit invalid JSON, which a listener drops anyway -- but
 	 * silently, and it would look identical to a box that is simply absent.
