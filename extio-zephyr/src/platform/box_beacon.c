@@ -15,6 +15,7 @@
 #include "box_net_eth.h"        /* box_net_eth_get_ip */
 #include "box_uplink.h"         /* box_uplink_reg_health */
 #include "box_announce.h"       /* box_build_key: the same shelf key we announce */
+#include "box_boot.h"           /* box_boot_img_ver: the version MCUboot booted */
 
 #include <zephyr/kernel.h>
 #include <zephyr/net/socket.h>
@@ -109,6 +110,25 @@ void box_beacon_service(const box_config_t *cfg)
 
 	box_uplink_reg_health(&up, &down_ms, &tries, &ever);
 
+	/* `fw` must be the version MCUboot ACTUALLY BOOTED, not BOX_FW_VERSION.
+	 *
+	 * On the RP2350 the two are the same thing -- build.sh bakes `git describe`
+	 * into BOX_FW_VERSION -- but nothing defines it in this build, so it falls
+	 * back to the literal "dev" in every image we produce. A beacon carrying it
+	 * would report "fw dev" for every Zephyr box forever, in a list whose entire
+	 * job is to tell boxes apart, and extio-setup renders that string directly.
+	 *
+	 * This is the state/fw trap (a build-time constant that cannot show an OTA
+	 * taking effect) reproduced in the discovery path, and it has already cost
+	 * two wrong "old firmware" reads on box01. box_boot_img_ver() is what
+	 * state/fw_ver publishes; NULL means no bootloader, where the constant is
+	 * genuinely all there is. */
+	const char *fw = box_boot_img_ver();
+
+	if (fw == NULL || *fw == '\0') {
+		fw = BOX_FW_VERSION;
+	}
+
 	/* Static: this runs on the service loop, one thread, and a ~320-byte frame
 	 * does not belong on that stack next to the rest of a service pass. */
 	static char body[384];
@@ -118,7 +138,7 @@ void box_beacon_service(const box_config_t *cfg)
 		"\"target\":\"%u.%u.%u.%u:%u\","
 		"\"link\":\"%s\",\"down_ms\":%u,\"tries\":%u,\"ever\":%d}",
 		dserv_cfg_name(cfg), ip[0], ip[1], ip[2], ip[3],
-		BOX_FW_VERSION, BOX_BOARD_ID, box_build_key(),
+		fw, BOX_BOARD_ID, box_build_key(),
 		cfg->dserv_ip[0], cfg->dserv_ip[1], cfg->dserv_ip[2], cfg->dserv_ip[3],
 		dserv_cfg_port(cfg),
 		up ? "up" : "down", (unsigned) down_ms, (unsigned) tries, ever);
