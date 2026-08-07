@@ -700,8 +700,17 @@ static void groups_resync(void)
 #define LED_PIN  9    /* D9  = P0_10, RED user LED (active low in DT)   */
 #define BTN_PIN  17   /* A5  = P0_23, also SW2                          */
 #else                 /* Teensy 4.x: board LED is gpio2.3 */
-#define LED_PIN  3    /* gpio2.3 = on-board LED                         */
-#define BTN_PIN  4    /* gpio2.4 = a free pin for a test button         */
+/* box pin n = gpio2.n = pad GPIO_B0_n on this SoC (the legacy single-port
+ * scheme -- box pin numbers here are GPIO2 bit indices, NOT the silkscreen).
+ * LED: B0_03 (ball D8) -> Teensy pin 13, per the PJRC schematic.
+ * BTN: was 4, but B0_04 is not brought out to a pad on the Teensy 4.0 at all
+ * (the low pins expose B0_00/01/02/03/10/11, with EMC_* and AD_B0_* filling
+ * the rest), so the "test button" input floated on a pin nobody could reach.
+ * B0_01 (ball E7) -> Teensy pin 12 is broken out on both the 4.0 and the 4.1,
+ * and sits next to the LED on the header. Pin 12 is also SPI MISO; nothing in
+ * this firmware claims SPI on Teensy, but a build that adds it must move. */
+#define LED_PIN  3    /* gpio2.3 = B0_03 = Teensy pin 13, on-board LED  */
+#define BTN_PIN  1    /* gpio2.1 = B0_01 = Teensy pin 12, header pin    */
 #endif
 
 /* The rig's obs begin/end edge. The host module forwards this to EVERY box

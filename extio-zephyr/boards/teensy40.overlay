@@ -5,6 +5,8 @@
  * a direct A/B against the Pico 2's USB-FS transport (12 Mbps vs 480 Mbps).
  * No radio, so no BLE (see boards/teensy40.conf).
  */
+
+#include <zephyr/dt-bindings/adc/adc.h>   /* ADC_ACQ_TIME_DEFAULT */
 / {
 	aliases {
 		box-gpio-port     = &gpio2;   /* box pin n -> gpio2.n (3 = board LED) */
@@ -60,4 +62,101 @@
 		rx-fifo-size = <8192>;
 		tx-fifo-size = <8192>;
 	};
+};
+
+/*
+ * ---- ANALOG: the RT1062's on-chip 12-bit SAR (adc1) ----
+ *
+ * The Teensy was the USB-transport test system and had no analog at all; this
+ * makes it a desktop analog bench too, so an eye/joystick feed can be developed
+ * on a Mac without occupying the rig's MCXN947 box.
+ *
+ * THE CHANNEL NUMBER IS THE HARDWARE INPUT, and that is the whole constraint
+ * here. Unlike the MCXN947's LPADC -- where `channel_id` indexes a CMD-register
+ * slot and `zephyr,input-positive` picks the pad -- adc_mcux_12b1msps_sar writes
+ * channel_id straight into ADC_HC[ADCH]. So `reg` IS the ADCn_INx number, and
+ * the pad is chosen entirely by which pinmux symbol is in the group below. The
+ * symbol names carry the map (`..._ad_b1_02_adc1_in7`); for this part it is:
+ *
+ *   in0  = AD_B1_11    in4  = AD_B0_15    in8  = AD_B1_03   in12 = AD_B1_07
+ *   in1  = AD_B0_12    in5  = AD_B1_00    in9  = AD_B1_04   in13 = AD_B1_08
+ *   in2  = AD_B0_13    in6  = AD_B1_01    in10 = AD_B1_05   in14 = AD_B1_09
+ *   in3  = AD_B0_14    in7  = AD_B1_02    in11 = AD_B1_06   in15 = AD_B1_10
+ *
+ * WHY ALL EIGHT, 0-7: box_adc_sweep() refuses a mask that references a channel
+ * at or above `nch` (`(mask >> nch) != 0`), and nch is just the number of
+ * channel@N children. Declaring only a pair would hard-limit every future ain
+ * group to channels 0-1 -- and since reg must equal the hardware input, those
+ * two would be forced onto AD_B1_11 and AD_B0_12 whether or not those are the
+ * pads anyone wants. Declaring 0-7 (BOX_ADC_MAX_CH / AIN_MAX_CH is 8, so 8-15
+ * are unreachable by the box regardless) leaves the choice to `ain group`
+ * config at runtime, which is where it belongs.
+ *
+ * No `box-ain-pins` property: on this board box pins are gpio2 bit indices
+ * (the B0 pads), and every ADC pad is an AD_B0 or AD_B1 pad -- a different port
+ * that is not in the box pin map at all. So no pad is ever shared with a
+ * digital box pin,
+ * every channel is a dedicated always-active input, and box_adc.c's "absent
+ * pinmap" path is exactly right.
+ *
+ * DRIVER CONSTRAINTS, all checked in mcux_12b1msps_sar_adc_channel_setup():
+ * gain must be ADC_GAIN_1, reference must be ADC_REF_INTERNAL (the driver
+ * reports ref_internal = 3300, i.e. VREFH/VDDA = 3.3 V), acquisition time must
+ * be ADC_ACQ_TIME_DEFAULT, and differential is rejected. Anything else fails
+ * init outright rather than sampling wrong -- setup_from_dt() treats a refused
+ * channel as a devicetree error and fails the whole init.
+ *
+ * WHICH PHYSICAL PIN each pad is remains a BOARD question -- verify against the
+ * PJRC pinout card before wiring, exactly as with BTN_PIN. The AD_B0_12..15
+ * inputs (in1-in4) are the A10-A13 bottom pads on a 4.0, not header pins.
+ */
+&pinctrl {
+	pinmux_box_ain: pinmux_box_ain {
+		group0 {
+			pinmux = <&iomuxc_gpio_ad_b1_11_adc1_in0>,
+				 <&iomuxc_gpio_ad_b0_12_adc1_in1>,
+				 <&iomuxc_gpio_ad_b0_13_adc1_in2>,
+				 <&iomuxc_gpio_ad_b0_14_adc1_in3>,
+				 <&iomuxc_gpio_ad_b0_15_adc1_in4>,
+				 <&iomuxc_gpio_ad_b1_00_adc1_in5>,
+				 <&iomuxc_gpio_ad_b1_01_adc1_in6>,
+				 <&iomuxc_gpio_ad_b1_02_adc1_in7>;
+			drive-strength = "r0-6";
+			slew-rate = "slow";
+			nxp,speed = "100-mhz";
+		};
+	};
+};
+
+box_adc: &adc1 {
+	status = "okay";
+	pinctrl-0 = <&pinmux_box_ain>;
+	pinctrl-names = "default";
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	channel@0 { reg = <0>; zephyr,gain = "ADC_GAIN_1";
+		zephyr,reference = "ADC_REF_INTERNAL"; zephyr,vref-mv = <3300>;
+		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>; zephyr,resolution = <12>; };
+	channel@1 { reg = <1>; zephyr,gain = "ADC_GAIN_1";
+		zephyr,reference = "ADC_REF_INTERNAL"; zephyr,vref-mv = <3300>;
+		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>; zephyr,resolution = <12>; };
+	channel@2 { reg = <2>; zephyr,gain = "ADC_GAIN_1";
+		zephyr,reference = "ADC_REF_INTERNAL"; zephyr,vref-mv = <3300>;
+		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>; zephyr,resolution = <12>; };
+	channel@3 { reg = <3>; zephyr,gain = "ADC_GAIN_1";
+		zephyr,reference = "ADC_REF_INTERNAL"; zephyr,vref-mv = <3300>;
+		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>; zephyr,resolution = <12>; };
+	channel@4 { reg = <4>; zephyr,gain = "ADC_GAIN_1";
+		zephyr,reference = "ADC_REF_INTERNAL"; zephyr,vref-mv = <3300>;
+		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>; zephyr,resolution = <12>; };
+	channel@5 { reg = <5>; zephyr,gain = "ADC_GAIN_1";
+		zephyr,reference = "ADC_REF_INTERNAL"; zephyr,vref-mv = <3300>;
+		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>; zephyr,resolution = <12>; };
+	channel@6 { reg = <6>; zephyr,gain = "ADC_GAIN_1";
+		zephyr,reference = "ADC_REF_INTERNAL"; zephyr,vref-mv = <3300>;
+		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>; zephyr,resolution = <12>; };
+	channel@7 { reg = <7>; zephyr,gain = "ADC_GAIN_1";
+		zephyr,reference = "ADC_REF_INTERNAL"; zephyr,vref-mv = <3300>;
+		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>; zephyr,resolution = <12>; };
 };

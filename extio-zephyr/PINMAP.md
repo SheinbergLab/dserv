@@ -234,3 +234,71 @@ box pin *n* → `<box-gpio-port>.n` — because they were not on the bench when 
 map landed and silently renumbering an unwatched board is how you never find
 out. `box_gpio.c` supports both; a board gets the map by declaring
 `zephyr,user/box-gpios`. The RP2350 boxes have their own `wiznet-io/PINMAP.md`.
+
+---
+
+# Teensy 4.0 / 4.1 (i.MX RT1062)
+
+The USB-HS test system, and since 2026-08-06 a desktop analog bench as well.
+Both maps below are derived from Zephyr's own board doc
+(`boards/pjrc/teensy4/doc/index.rst`, pin → pad) and the SoC pinctrl header
+(`mimxrt1062dvl6a-pinctrl.dtsi`, pad → ADC input) — **not** from the silkscreen,
+which agrees with neither numbering.
+
+## Digital — box pin *n* IS `gpio2.n` IS pad `B0_n`
+
+This board is on the **legacy single-port scheme** (see above): box pins are
+GPIO2 *bit indices*, so they have no relationship to the printed pin numbers.
+A DI/DO group config does **not** transfer between a Teensy and an MCXN947 box.
+
+| box pin | pad | Teensy pin | notes |
+|---|---|---|---|
+| 0  | B0_00 | 10 | |
+| 1  | B0_01 | 12 | `BTN_PIN` default; also SPI MISO |
+| 2  | B0_02 | 11 | |
+| 3  | B0_03 | 13 | **on-board LED**, `LED_PIN` |
+| 4  | B0_04 | 40 | **4.1 only** — also I2C2 SCL |
+| 5  | B0_05 | 41 | **4.1 only** — also I2C2 SDA |
+| 6  | B0_06 | 42 | **4.1 only** |
+| 7  | B0_07 | 43 | **4.1 only** |
+| 8  | B0_08 | 44 | **4.1 only** — also UART3 TX |
+| 9  | B0_09 | 45 | **4.1 only** — also UART3 RX |
+| 10 | B0_10 | 6  | |
+| 11 | B0_11 | 9  | |
+| 12 | B0_12 | 32 | bottom pad |
+
+**On a Teensy 4.0 only box pins 0–3, 10–12 exist.** A 4.0 has pins 0–39; box
+pins 4–9 land on Teensy 40–45, which is 4.1 territory. Zephyr's table lists
+40–45 *above* its "Only Teensy 4.1:" heading, so the doc will not warn you.
+This is why `BTN_PIN` moved from box pin 4 to box pin 1: on a 4.0 the original
+default was an input nothing could reach, floating on an unbonded pad.
+
+## Analog — ain channel *k* IS `ADC1_INk`
+
+Unlike the MCXN947's LPADC (where `channel_id` indexes a CMD slot and
+`zephyr,input-positive` picks the pad), `adc_mcux_12b1msps_sar` writes
+`channel_id` straight into `ADC_HC[ADCH]`. **`reg` IS the hardware input**, so
+the channel number is fixed by silicon and only the pad is a board choice.
+
+| ain ch | ADC1 input | pad | Teensy pin | silkscreen |
+|---|---|---|---|---|
+| 0 | in0 | AD_B1_11 | 21 | A7 |
+| 1 | in1 | AD_B0_12 | 24 | A10 (bottom pad) |
+| 2 | in2 | AD_B0_13 | 25 | A11 (bottom pad) |
+| 3 | in3 | AD_B0_14 | — | **not bonded out** |
+| 4 | in4 | AD_B0_15 | — | **not bonded out** |
+| 5 | in5 | AD_B1_00 | 19 | A5 — also I2C1 SCL |
+| 6 | in6 | AD_B1_01 | 18 | A4 — also I2C1 SDA |
+| 7 | in7 | AD_B1_02 | 14 | A0 — also UART2 TX |
+
+Channels 8–15 exist in silicon but are unreachable: `AIN_MAX_CH` is 8.
+**Silkscreen A*n* is NOT ain channel *n*** — A0 is channel 7, and A1
+(`AD_B1_03` = `in8`) cannot be used by the box at all.
+
+Channels 3 and 4 are declared in `boards/teensy40.overlay` despite having no
+pin, and must stay: `nch` is just the number of `channel@N` children and
+`box_adc_sweep()` rejects any mask bit ≥ `nch`, so deleting them would make
+channels 5–7 unreachable too.
+
+**For a two-axis joystick use channels 5 and 6 — Teensy pins 19 and 18**,
+adjacent on the header. Cost: I2C1 is muxed away.
