@@ -64,8 +64,16 @@
  * no local IPv4 address yet (USB transport, or DHCP has not answered). */
 void box_beacon_service(const box_config_t *cfg);
 
+/* Transmit ledger, published as dbg/beacon_sent / dbg/beacon_fail /
+ * dbg/beacon_errno. A beacon is fire-and-forget, so without a counter a box
+ * that has never transmitted looks exactly like a box nobody is listening for
+ * -- which is precisely how the SO_BROADCAST bug survived its first test. */
+void box_beacon_stats(uint32_t *sent, uint32_t *fail, int *last_errno);
+
 #else
 static inline void box_beacon_service(const box_config_t *cfg) { (void) cfg; }
+static inline void box_beacon_stats(uint32_t *s, uint32_t *f, int *e)
+{ if (s) { *s = 0; } if (f) { *f = 0; } if (e) { *e = 0; } }
 #endif
 
 #endif /* BOX_BEACON_H */

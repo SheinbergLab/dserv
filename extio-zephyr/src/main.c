@@ -2640,6 +2640,21 @@ int main(void)
 				pub_periodic("dbg/usb_send_us",     ul);
 				pub_periodic("dbg/usb_send_max_us", um);
 				pub_periodic("dbg/usb_drops",       ud);
+				{
+					/* The discovery beacon's transmit ledger. A
+					 * fire-and-forget broadcast has no ack, so
+					 * without this a box that never transmitted
+					 * is indistinguishable from one nobody is
+					 * listening for -- which is how the first
+					 * cut's dead SO_BROADCAST path passed
+					 * review and failed on the wire. */
+					uint32_t bs = 0, bf = 0;
+					int be = 0;
+					box_beacon_stats(&bs, &bf, &be);
+					pub_periodic("dbg/beacon_sent",  bs);
+					pub_periodic("dbg/beacon_fail",  bf);
+					pub_periodic("dbg/beacon_errno", be);
+				}
 				/* the at-schedule ledger (+23): cumulative, so a host
 				 * can delta them over any obs window and classify a
 				 * missing pulse from the datafile alone */

@@ -3,8 +3,9 @@
  * and why the wire contract is not ours to change.
  *
  * Zephyr-native rather than a transliteration of the RP2350's W6300 socket
- * code: one BSD UDP socket, opened lazily, SO_BROADCAST, non-blocking sendto.
- * The PAYLOAD is what must match the Pico byte for byte -- not the plumbing.
+ * code: one UDP socket, opened lazily, non-blocking sendto. The PAYLOAD is what
+ * must match the Pico byte for byte -- not the plumbing, and copying BSD
+ * plumbing on faith is exactly what broke the first cut (see beacon_socket).
  */
 
 #include "box_beacon.h"
@@ -19,6 +20,7 @@
 #include <zephyr/net/socket.h>
 #include <stdio.h>
 #include <string.h>
+#include <errno.h>
 
 #ifndef BOX_FW_VERSION
 #define BOX_FW_VERSION   "dev"
@@ -30,14 +32,17 @@
                                     * entries out at 12 s, so this must stay
                                     * comfortably under that TTL */
 
-static int     sock = -1;
-static int64_t next_ms;
+static int      sock = -1;
+static int64_t  next_ms;
+static uint32_t st_sent, st_fail;
+static int      st_errno;      /* errno of the most recent failure */
 
 /* Open once, lazily. Deliberately NOT at init: on a DHCP box there is no
  * address for seconds after boot, and a socket held open through that window
- * buys nothing. Failure is silent and retried on the next pass -- discovery is
- * an aid, and a box must never fail to do its actual job because it could not
- * advertise itself. */
+ * buys nothing. Failure is retried on the next pass -- discovery is an aid, and
+ * a box must never fail to do its actual job because it could not advertise
+ * itself -- but it is COUNTED (dbg/beacon_*), because a silent best-effort path
+ * is indistinguishable from one that never ran. */
 static int beacon_socket(void)
 {
 	if (sock >= 0) {
@@ -46,16 +51,34 @@ static int beacon_socket(void)
 	int s = zsock_socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
 
 	if (s < 0) {
+		st_fail++;
+		st_errno = errno;
 		return -1;
 	}
+
+	/* SO_BROADCAST is a BSD requirement that Zephyr does NOT share: the
+	 * constant exists in socket.h but no handler does, so setsockopt falls
+	 * through to ENOPROTOOPT and fails. Zephyr's IPv4 path does not gate
+	 * broadcast on it either, so the correct action is to ask and not care.
+	 *
+	 * Treating the failure as fatal is not a hypothetical: it is what the
+	 * first cut of this file did, and it closed the socket on every single
+	 * call, so the beacon never emitted one byte while looking entirely
+	 * healthy from the outside. Left in place (rather than deleted) so the
+	 * call is already correct if a later Zephyr implements it. */
 	int one = 1;
 
-	if (zsock_setsockopt(s, SOL_SOCKET, SO_BROADCAST, &one, sizeof one) < 0) {
-		zsock_close(s);
-		return -1;
-	}
+	(void) zsock_setsockopt(s, SOL_SOCKET, SO_BROADCAST, &one, sizeof one);
+
 	sock = s;
 	return sock;
+}
+
+void box_beacon_stats(uint32_t *sent, uint32_t *fail, int *last_errno)
+{
+	if (sent)       { *sent = st_sent; }
+	if (fail)       { *fail = st_fail; }
+	if (last_errno) { *last_errno = st_errno; }
 }
 
 void box_beacon_service(const box_config_t *cfg)
@@ -114,10 +137,21 @@ void box_beacon_service(const box_config_t *cfg)
 	to.sin_addr.s_addr = htonl(INADDR_BROADCAST);   /* 255.255.255.255, as the
 							 * RP2350 sends it */
 
-	/* Best-effort by design: no retry, no error surfaced. A dropped beacon is
-	 * corrected 1.5 s later by the next one. */
-	(void) zsock_sendto(s, body, n, ZSOCK_MSG_DONTWAIT,
-			    (struct sockaddr *) &to, sizeof to);
+	/* Best-effort: no retry -- a dropped beacon is corrected 1.5 s later by
+	 * the next one -- but counted, so "no boxes found" can be told apart from
+	 * "this box never transmitted". */
+	if (zsock_sendto(s, body, n, ZSOCK_MSG_DONTWAIT,
+			 (struct sockaddr *) &to, sizeof to) < 0) {
+		st_fail++;
+		st_errno = errno;
+		/* A send failure usually means the interface went away underneath
+		 * us; drop the socket so the next pass opens a fresh one against
+		 * whatever the stack has now. */
+		zsock_close(s);
+		sock = -1;
+		return;
+	}
+	st_sent++;
 }
 
 #endif /* CONFIG_NETWORKING */
