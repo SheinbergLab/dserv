@@ -47,6 +47,7 @@ static int srv_listen = -1;     /* listening socket (BOX_ETH_CFG_PORT)          
 static volatile int srv_conn = -1;   /* dserv's accepted connect-back           */
 static uint8_t srv_peer[4];          /* who holds it (box_net_eth_server_peer)  */
 static int srv_fresh;           /* one-shot: report BOX_NET_RESET after accept  */
+static int reannounce;          /* one-shot: retarget -> re-describe ourselves   */
 /* ---- inbound instrumentation ----
  * The split changed meaning at +29, when the reader thread took over recv:
  *   wake_us  queue residence -- frame enqueued at arrival -> service loop
@@ -327,6 +328,7 @@ int box_net_eth_retarget(const uint8_t dserv_ip[4], uint16_t port)
 	sock = -1;
 	connecting = 0;
 	txp_len = 0;                    /* the tail belonged to the old session */
+	reannounce = 1;                 /* the NEW host has never been told who we are */
 	return 1;
 }
 
@@ -758,6 +760,29 @@ int box_net_eth_poll2(uint8_t *buf, int max, int *len, uint64_t *arr_us)
 	 * (Reporting it only on close -- the original behaviour -- fired the
 	 * announce burst into an already-dead socket, so a box on Ethernet never
 	 * published its manifest at all.) */
+	/* A RETARGET also needs the burst, and a connect-back cannot supply it.
+	 * The announce is normally triggered by ACCEPTING a connect-back
+	 * (srv_fresh), which works because a host that has just registered with
+	 * us is a host that does not know us yet. A retarget breaks that: if the
+	 * new owner ALREADY holds our connect-back -- exactly what happens when a
+	 * host adopts us, since it must open that channel to send the retarget at
+	 * all -- there is no new accept, and the manifest we did emit went out
+	 * over the OLD uplink, to the previous owner.
+	 *
+	 * The symptom is partial and therefore quiet: continuously-published
+	 * state (analog blocks, DI edges) arrives at once so the box looks
+	 * healthy, while everything announced ONCE -- pin labels, digital groups,
+	 * obs role -- is simply absent. Seen on the rig as an adopted box with
+	 * live analog bars and no `response` button group.
+	 *
+	 * Gated on the session being UP rather than merely requested: firing
+	 * while the non-blocking connect is still in flight would queue a whole
+	 * manifest against a socket that does not exist yet.
+	 */
+	if (reannounce && sock >= 0 && !connecting) {
+		reannounce = 0;
+		return BOX_UPLINK_RX_RESET;
+	}
 	if (srv_fresh) {
 		srv_fresh = 0;
 		return BOX_UPLINK_RX_RESET;
@@ -838,6 +863,10 @@ uint32_t box_net_eth_inq_fenced(void)
 int box_net_eth_poll(uint8_t *buf, int max)
 {
 	ARG_UNUSED(buf); ARG_UNUSED(max);
+	if (reannounce && sock >= 0 && !connecting) {
+		reannounce = 0;
+		return BOX_NET_RESET;           /* retarget; see poll2's note */
+	}
 	if (srv_fresh) {
 		srv_fresh = 0;
 		return BOX_NET_RESET;
