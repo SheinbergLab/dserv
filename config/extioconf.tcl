@@ -104,6 +104,27 @@ proc extio_adopt { boxip name via {port 4620} {demote_obs 1} } {
     dservSet extio/$name/config/dserv/ip   $via
     dservSet extio/$name/config/dserv/port $port
 
+    # 4. ASK FOR THE MANIFEST, and this step is not optional.
+    #
+    # The box announces on a fresh CONNECT-BACK (srv_fresh -> BOX_NET_RESET),
+    # and step 1 above is what triggers that -- while the box is still pointed
+    # at its OLD host. So the whole manifest goes to the previous owner, and by
+    # the time the box is publishing to US there is no new connect-back to fire
+    # another burst.
+    #
+    # The symptom is nasty because it is partial: continuously-published state
+    # (analog blocks, DI edges) appears at once, so the box looks adopted and
+    # healthy, while everything announced ONCE -- pin labels, digital group
+    # names and membership, obs role -- is simply absent. Observed on the rig:
+    # an adopted box with live analog bars and no `response` button group,
+    # which only appeared when opening the config page happened to force an
+    # announce.
+    #
+    # The wait is for the retarget to complete: the burst must go out over the
+    # NEW uplink, or we reproduce the same bug one step later.
+    after 1500
+    dservSet extio/$name/cmd/announce 1
+
     return "adopted $name ($boxip) -> $via:$port[expr {$demote_obs ? {, obs->mirror} : {}}] (not saved)"
 }
 
