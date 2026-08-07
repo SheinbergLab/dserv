@@ -34,9 +34,15 @@
   .box.offline { opacity: 0.45; }
   /* Offered only on a silent card: a live box has nothing to forget, and the
    * control would read as "remove this box" rather than "remove this record". */
-  .box .forget { float: right; font-size: 11px; padding: 1px 8px; border-radius: 6px;
-                 border: 1px solid var(--card-edge); background: transparent;
-                 color: var(--faint); cursor: pointer; }
+  /* margin-left:auto, NOT float:right -- .title is display:flex and a float is
+   * IGNORED on a flex item, so the button simply wrapped onto its own line
+   * under the box name. Combined with --faint on a dark card it read as a
+   * stray label rather than a control, and was reported as "no forget button"
+   * on a card that was in fact rendering one. */
+  .box .forget { margin-left: auto; font-size: 11px; padding: 1px 8px;
+                 border-radius: 6px; border: 1px solid var(--muted);
+                 background: transparent; color: var(--muted); cursor: pointer;
+                 white-space: nowrap; }
   .box .forget:hover { color: var(--red); border-color: var(--red); }
   .box .title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .box .name { font-size: 16px; font-weight: 600; }
@@ -765,6 +771,11 @@ function render() {
         }
     }
     dirty = new Set();
+    /* Liveness drives this, and liveness changes with the CLOCK, not with the
+     * box list -- so it belongs on the per-second render pass. Wiring it only
+     * to the picker's rebuild meant the button stayed hidden after a box went
+     * quiet, which is the exact moment it becomes the only useful control. */
+    syncCfgForget();
     syncCfgBar();
 }
 
