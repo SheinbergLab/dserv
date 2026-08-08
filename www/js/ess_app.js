@@ -434,7 +434,7 @@ function updateHostnameDisplay() {
             display.textContent = `[${name}] - disconnected`;
             display.classList.add('disconnected');
         }
-        display.title = display.textContent;
+        display.title = `${display.textContent} — click to manage this system`;
     }
 
     updateDocumentTitle();
@@ -465,8 +465,38 @@ function initHostnameDisplay() {
         updateHostnameDisplay();
     });
 
+    // The hostname names the machine you're driving, so clicking it opens
+    // dserv-agent's management panel for that same machine (update software,
+    // restart services, reboot). Stays live while disconnected -- that is
+    // often exactly when you want it.
+    display.classList.add('clickable');
+    display.setAttribute('role', 'button');
+    display.setAttribute('tabindex', '0');
+    display.addEventListener('click', openSystemManagement);
+    display.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            openSystemManagement();
+        }
+    });
+
     updateHostnameDisplay();
     log('Hostname display initialized', 'info');
+}
+
+/**
+ * Open dserv-agent's management panel for the machine this page drives.
+ *
+ * A popup rather than an embed: dserv-agent serves plain http on :80
+ * (--no-tls in dserv-agent.service), so an HTTPS dserv page cannot iframe it.
+ * Named per host so re-clicking focuses the existing window.
+ */
+function openSystemManagement() {
+    window.open(
+        PageNav.agentPanelUrl(),
+        `agent_${PageNav.dservHostname()}`,
+        'width=820,height=900,menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=yes'
+    );
 }
 
 /**

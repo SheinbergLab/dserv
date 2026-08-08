@@ -103,6 +103,18 @@ body.ess-app {
     color: var(--ess-text-muted);
 }
 
+/* Clicking the machine's name opens its dserv-agent management panel */
+.ess-hostname-display.clickable {
+    cursor: pointer;
+}
+
+.ess-hostname-display.clickable:hover,
+.ess-hostname-display.clickable:focus-visible {
+    color: var(--ess-text-primary);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+}
+
 .ess-juice-status {
     display: flex;
     align-items: center;

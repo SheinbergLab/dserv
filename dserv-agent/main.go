@@ -1329,16 +1329,41 @@ func (a *Agent) getStatus() StatusInfo {
 	}
 }
 
+// Whether it's worth asking dserv anything. "unknown" means systemctl couldn't
+// answer -- a host without systemd, where dserv may well be running -- so we
+// ask dserv directly rather than assume it's down. An explicit inactive/failed
+// is taken at its word, which keeps the panel snappy when dserv really is dead.
+func dservReachable(status string) bool {
+	return status == "active" || status == "unknown"
+}
+
+// essctrl runs a script in dserv's main interp and returns its trimmed output.
+//
+// Bounded: a wedged dserv must not hang the status poll. The panel is opened
+// precisely when something looks wrong, so it has to answer even then --
+// missing detail beats a spinner.
+func essctrl(script string) (string, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "essctrl", "-c", script).Output()
+	if err != nil {
+		return "", false
+	}
+	return strings.TrimSpace(string(out)), true
+}
+
 func (a *Agent) getDservStatus() ServiceInfo {
 	info := ServiceInfo{Name: a.cfg.DservService, Status: "unknown"}
 	out, err := exec.Command("systemctl", "is-active", a.cfg.DservService).Output()
 	if err == nil {
 		info.Status = strings.TrimSpace(string(out))
 	}
-	if info.Status == "active" {
-		if out, err := exec.Command("essctrl", "-c", "dservVersion").Output(); err == nil {
-			info.Version = strings.TrimSpace(string(out))
+	if dservReachable(info.Status) {
+		if v, ok := essctrl("dservVersion"); ok {
+			info.Version = v
 		}
+	}
+	if info.Status == "active" {
 		out, _ := exec.Command("systemctl", "show", "-p", "MainPID", "--value", a.cfg.DservService).Output()
 		fmt.Sscanf(strings.TrimSpace(string(out)), "%d", &info.PID)
 	}

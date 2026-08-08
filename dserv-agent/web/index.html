@@ -373,6 +373,17 @@ footer {
     .node-row { padding: 8px 10px; }
     .node-badges .badge.ip { display: none; }
 }
+
+/* Solo mode (?manage=<id>&solo=1): the panel IS the page. Used by the
+   "Manage System" popup from dserv's own GUI, which wants the management
+   panel for one machine and not the whole directory. */
+body.solo .container,
+body.solo .panel-overlay,
+body.solo #expand-btn { display: none; }
+body.solo .agent-panel {
+    width: 100vw; max-width: 100vw; border-left: none;
+    transform: none; transition: none;
+}
     </style>
 </head>
 <body>
@@ -441,7 +452,17 @@ footer {
              this.panelStatus = null;
              this.panelComponents = [];
              this.installWorkflow = null; // Track multi-step install progress
-             
+
+             // Deep link: ?manage=<nodeId|local> opens that node's management
+             // panel straight away; &solo=1 drops the directory so the window
+             // is nothing but the panel. This is how dserv's own GUI hands you
+             // the update panel for the machine you're already driving.
+             const params = new URLSearchParams(location.search);
+             const manage = params.get('manage');
+             this.solo = manage && params.get('solo') === '1';
+             this.pendingManage = manage || null;
+             if (this.solo) document.body.classList.add('solo');
+
              this.el = {
 		 statusDot: document.getElementById('status-dot'),
 		 statusText: document.getElementById('status-text'),
@@ -464,6 +485,12 @@ footer {
 		 this.el.runningFilter.classList.toggle('active', this.runningOnly);
 		 this.renderNodes(); 
              });
+             if (this.solo) {
+		 // The panel is the whole window here, so it must not sit blank
+		 // during the socket handshake that precedes openPanelForNode.
+		 this.el.panelTitle.textContent = this.pendingManage === 'local' ? 'Local System' : this.pendingManage;
+		 this.el.panelContent.innerHTML = '<div class="panel-not-connected"><div class="empty-state-icon">⏳</div><h3>Connecting...</h3></div>';
+             }
              this.el.panelClose.addEventListener('click', () => this.closePanel());
              this.el.panelOverlay.addEventListener('click', () => this.closePanel());
              document.addEventListener('keydown', e => { if (e.key === 'Escape' && this.panelOpen) this.closePanel(); });
@@ -480,6 +507,13 @@ footer {
                      this.connected = true; 
                      this.setStatus('connected', 'Connected'); 
                      this.ws.send(JSON.stringify({type:'mesh_peers'}));
+                     // 'local' needs no directory entry -- open it as soon as
+                     // the socket it will borrow is actually up. A named node
+                     // waits for mesh_peers to describe it (see updateNodes).
+                     if (this.pendingManage === 'local') {
+			 this.pendingManage = null;
+			 this.openLocalPanel();
+                     }
                      this.meshRefreshInterval = setInterval(() => {
 			 if (this.connected) this.ws.send(JSON.stringify({type:'mesh_peers'}));
                      }, 2000);
@@ -529,6 +563,18 @@ footer {
              });
              this.renderNodes();
              this.el.lastUpdate.textContent = new Date().toLocaleTimeString();
+
+             // ?manage=<nodeId>: resolve against the directory now that we have
+             // one. Consumed on the first mesh response either way -- if the id
+             // isn't in the directory we still open a panel for it, and
+             // connectAgent falls back to <id>.local so the user gets a real
+             // connection error rather than a window that silently does nothing.
+             if (this.pendingManage) {
+		 const want = this.pendingManage.toLowerCase();
+		 this.pendingManage = null;
+		 const node = [...this.nodes.values()].find(n => n.id?.toLowerCase() === want);
+		 this.openPanelForNode(node || { id: want, name: want });
+             }
 	 }
 	 
 	 renderNodes() {
@@ -794,6 +840,10 @@ footer {
 	 }
 	 
 	 closePanel() {
+             // In solo mode there is no directory to fall back to -- closing the
+             // panel means closing the window. window.close() only works on a
+             // script-opened window, so leave the panel up if it refuses.
+             if (this.solo) { window.close(); return; }
              this.panelOpen = false;
              this.panelNode = null;
              this.installWorkflow = null;
@@ -932,6 +982,7 @@ footer {
 			 <div class="panel-info-item"><div class="label">Arch</div><div class="value">${sys.arch||'—'}</div></div>
 			 <div class="panel-info-item"><div class="label">Uptime</div><div class="value">${sys.uptime||'—'}</div></div>
 			 <div class="panel-info-item"><div class="label">Load</div><div class="value">${sys.loadAvg||'—'}</div></div>
+			 ${this.renderDservRunning(d, comps)}
                      </div>
 		 </div>
 		 <div class="panel-section">
@@ -965,6 +1016,25 @@ footer {
              `;
 	 }
 	 
+	 // The Software section shows the version of the INSTALLED package. This
+	 // is the version actually running, which the agent already collects. They
+	 // diverge whenever a package lands without a service restart, and that is
+	 // exactly the "did my update take effect?" case.
+	 renderDservRunning(d, comps) {
+             if (!d.version && !d.pid) return '';
+             const norm = v => String(v||'').trim().replace(/^v/, '');
+             const installed = comps.find(c => (c.component||c).id === 'dserv')?.currentVersion;
+             const stale = installed && d.version && norm(installed) !== norm(d.version);
+             const pid = d.pid ? ` <span style="color:#71767b">pid ${d.pid}</span>` : '';
+             const warn = stale
+			? `<div style="color:#fbbf24;font-size:11px;margin-top:4px">${this.esc(installed)} is installed — restart dserv to run it</div>`
+			: '';
+             return `<div class="panel-info-item" style="grid-column:1/-1">
+                 <div class="label">dserv (running)</div>
+                 <div class="value">${this.esc(d.version)||'—'}${pid}</div>${warn}
+             </div>`;
+	 }
+
 	 renderComp(comp, services = {}) {
              const c = comp.component || comp;
              const hasUpd = comp.updateAvailable;
@@ -1072,11 +1142,11 @@ footer {
              }));
              this.showToast(`${action}ing ${service}...`);
 	 }
-	 
+
 	 // Legacy dserv service control (for backward compatibility)
-	 panelCmd(action) { 
-             this.panelWs?.send(JSON.stringify({type:'dserv',action})); 
-             this.showToast(`Sending ${action}...`); 
+	 panelCmd(action) {
+             this.panelWs?.send(JSON.stringify({type:'dserv',action}));
+             this.showToast(`Sending ${action}...`);
 	 }
 	 
 	 loadLogs() { this.panelWs?.send(JSON.stringify({type:'logs'})); }
@@ -1120,8 +1190,8 @@ footer {
              if (countEl) countEl.textContent = `${matches.length} match${matches.length !== 1 ? 'es' : ''}`;
 	 }
 	 
-	 reboot() { 
-             if (!confirm('Reboot this system?')) return; 
+	 reboot() {
+             if (!confirm('Reboot this system?')) return;
              const h = this.panelNode?.isLocal ? 'localhost' : this.panelNode?.ip; 
              fetch(`http://${h}:${CONFIG.agentPort}/api/system/reboot`,{method:'POST'})
 		 .then(()=>{this.showToast('Reboot scheduled','success');this.closePanel();})
@@ -1156,7 +1226,7 @@ footer {
              if (servicesToStop.length > 0) {
 		 confirmMsg = `Install ${a}?\n\nThis will temporarily stop: ${servicesToStop.join(', ')}`;
              }
-             
+
              if (!confirm(confirmMsg)) return;
              
              // Initialize workflow UI

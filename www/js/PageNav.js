@@ -23,6 +23,19 @@ class PageNav {
             category: 'control',
             windowSize: { width: 1200, height: 800 }
         },
+        // Placed second so its group renders near the top: category order
+        // follows first appearance here, and the menu already overflows short
+        // viewports -- an entry in the last group is an entry below the fold.
+        {
+            id: 'agent_manage',
+            title: 'Manage System',
+            desc: 'Update software, services, reboot',
+            icon: '⚙️',
+            href: () => PageNav.agentPanelUrl(),
+            windowName: () => `agent_${PageNav.dservHostname()}`,
+            category: 'system',
+            windowSize: { width: 820, height: 900 }
+        },
         {
             id: 'data_manager',
             title: 'Data Manager',
@@ -104,7 +117,7 @@ class PageNav {
             category: 'tools',
             windowSize: { width: 900, height: 900 }
         }
-	
+
         // Add more pages here as needed:
         // {
         //     id: 'eye_tracker',
@@ -122,9 +135,44 @@ class PageNav {
         control: 'Control',
         viewers: 'Viewers',
         tools: 'Tools',
-        config: 'Configuration'
+        config: 'Configuration',
+        system: 'System'
     };
-    
+
+    /**
+     * The machine this page is driving, without a port.
+     *
+     * Not necessarily the machine serving the page: ess_app.js and extio.html
+     * honour ?host=<host[:port]> so a dev copy of the GUI can drive a remote
+     * dserv, and "this system" has to mean the one at the other end of the
+     * WebSocket, not the one holding the HTML.
+     */
+    static dservHostname() {
+        const qsHost = new URLSearchParams(location.search).get('host');
+        return (qsHost || location.host).replace(/:\d+$/, '');
+    }
+
+    /**
+     * dserv-agent's management panel for that machine, opened solo.
+     *
+     * Always plain http on port 80: dserv-agent.service runs with --no-tls.
+     * That is fine for a popup even when this page is HTTPS (mixed content
+     * doesn't apply to top-level windows) but is exactly why the panel can't
+     * be iframed into a dserv page instead.
+     */
+    static agentPanelUrl() {
+        return `http://${PageNav.dservHostname()}/?manage=local&solo=1`;
+    }
+
+    /**
+     * Resolve an href/windowName that may be declared as a function.
+     * Dynamic entries (the agent panel) can't be baked in at class-definition
+     * time because they depend on the page's query string.
+     */
+    static resolve(value) {
+        return typeof value === 'function' ? value() : value;
+    }
+
     // Default window sizes for popup windows
     static defaultWindowSize = { width: 800, height: 600 };
 
@@ -163,8 +211,9 @@ class PageNav {
         const path = window.location.pathname;
         const filename = path.substring(path.lastIndexOf('/') + 1);
         
-        // Match against page hrefs
+        // Match against page hrefs (dynamic hrefs point off-page, never here)
         for (const page of PageNav.defaultPages) {
+            if (typeof page.href === 'function') continue;
             if (filename === page.href || filename === page.id + '.html') {
                 return page.id;
             }
@@ -268,10 +317,13 @@ class PageNav {
         
         // Store page info as data attributes for click handler
         const size = page.windowSize || PageNav.defaultWindowSize;
-        
+        const href = PageNav.resolve(page.href);
+        const windowName = PageNav.resolve(page.windowName) || page.id;
+
         return `
-            <a href="${page.href}" class="${classes.join(' ')}" role="menuitem" 
+            <a href="${href}" class="${classes.join(' ')}" role="menuitem"
                data-page-id="${page.id}"
+               data-window-name="${windowName}"
                data-window-width="${size.width}"
                data-window-height="${size.height}"
                ${isCurrent ? 'aria-current="page"' : ''}>
@@ -396,8 +448,10 @@ class PageNav {
             'scrollbars=yes'
         ].join(',');
         
-        // Use page ID as window name so reopening focuses existing window
-        const windowName = dataset.pageId || 'ess_popup';
+        // Named window so reopening focuses the existing one instead of
+        // stacking popups. Entries that point at a specific machine name
+        // themselves per host, so two rigs get two windows.
+        const windowName = dataset.windowName || dataset.pageId || 'ess_popup';
         window.open(href, windowName, features);
     }
 
