@@ -117,22 +117,57 @@ iface_phc() {
     return 1
 }
 
+# Which PHC does the KERNEL say this interface timestamps on? This is
+# ETHTOOL_GET_TS_INFO -- literally the question ptp4l asks before it opens a
+# clock -- so it is the authoritative answer, and it is deliberately NOT the same
+# question as iface_phc() above. Empty when ethtool is missing, or when the
+# interface has no clock ("PTP Hardware Clock: none").
+#
+# TWO OUTPUT FORMATS, and the newer one does not merely add a line. Older ethtool
+# prints "PTP Hardware Clock: N". Since the 6.13 timestamp-provider work, newer
+# ethtool prints "Hardware timestamp provider index: N" INSTEAD -- the Pi 5 on
+# 6.18 emits no PTP-Hardware-Clock line at all, so matching only the old form
+# answers "no clock" for the host that has been this rig's grandmaster all along.
+# Both forms, or this check is a coin flip that depends on the distro.
+iface_phc_kernel() {
+    [ -n "$ETHTOOL" ] || return 1
+    _n=$("$ETHTOOL" -T "$1" 2>/dev/null | sed -n \
+         -e 's/^[[:space:]]*PTP Hardware Clock:[[:space:]]*\([0-9]\{1,\}\).*/\1/p' \
+         -e 's/^[[:space:]]*Hardware timestamp provider index:[[:space:]]*\([0-9]\{1,\}\).*/\1/p' \
+         | head -1)
+    [ -n "$_n" ] || return 1
+    echo "ptp$_n"
+}
+
 # Can this interface actually do PTP?
 #
 # A NIC with no PHC will start ptp4l happily and then report offsets of exactly
 # 0 forever, so this has to be checked and not assumed. NOTE the first version
 # returned SUCCESS when ethtool was missing, which listed every interface on the
 # host including a WiFi NIC -- a capability check that cannot run must never
-# answer "capable". PHC presence is necessary and comes from sysfs; ethtool adds
-# the hardware-timestamp detail when it happens to be installed.
+# answer "capable".
+#
+# ASK ETHTOOL FIRST, and do not gate on iface_phc(). Sysfs PHC presence is a
+# proxy for the kernel's answer, and it is not a complete one: it enumerates the
+# clocks an interface OWNS, and a clock can be owned by neither of the two places
+# it looks. On the i.MX95 (fsl_enetc4) the NETC timer is a PCI function of its
+# own -- 0001:00:18.0, shared by every port -- and eth0 is 0001:00:00.0, so the
+# timer is the netdev's SIBLING, under neither .../net/eth0/ptpN nor
+# .../net/eth0/device/ptp/ptpN. That host reported "cannot be a PTP node" while
+# ptp4l on the very same interface held ±40 ns against the rig grandmaster, and
+# preflight refused to configure it. Sysfs stays as the fallback for hosts with
+# no ethtool, where a proxy beats nothing.
 iface_capable() {
     _if=$1
-    iface_phc "$_if" >/dev/null || return 1
-    [ -n "$ETHTOOL" ] || return 0       # PHC present; cannot check hwts, do not block
-    _t=$("$ETHTOOL" -T "$_if" 2>/dev/null) || return 0
-    echo "$_t" | grep -q "hardware-transmit" || return 1
-    echo "$_t" | grep -q "hardware-receive"  || return 1
-    return 0
+    if [ -n "$ETHTOOL" ] && _t=$("$ETHTOOL" -T "$_if" 2>/dev/null); then
+        echo "$_t" | grep -q "hardware-transmit" || return 1
+        echo "$_t" | grep -q "hardware-receive"  || return 1
+        # A clock INDEX must be present: "PTP Hardware Clock: none" is a NIC that
+        # will start ptp4l happily and report offsets of exactly 0 forever.
+        iface_phc_kernel "$_if" >/dev/null || return 1
+        return 0
+    fi
+    iface_phc "$_if" >/dev/null
 }
 
 candidates() {
@@ -143,7 +178,10 @@ candidates() {
         _if=$(basename "$_p")
         case "$_if" in lo) continue ;; esac
         if iface_capable "$_if"; then
-            echo "  $_if  ($(iface_phc "$_if"), link $(cat "$_p/operstate" 2>/dev/null))"
+            # Prefer the interface's OWN clock (what we want it to use); fall
+            # back to the kernel's answer on hosts where it owns none directly.
+            echo "  $_if  ($(iface_phc "$_if" || iface_phc_kernel "$_if" || echo 'phc?'),"\
+                 "link $(cat "$_p/operstate" 2>/dev/null))"
             _found=1
         fi
     done
@@ -257,10 +295,24 @@ status() {
         done
     fi
 
+    # NAME the source, do not just list NTP daemons. On a correctly configured
+    # client this section printed NOTHING -- the client's phc2sys unit Conflicts=
+    # every NTP daemon, so none is active, and a host whose time is arriving over
+    # PTP looked like a host with no time source at all. Silence is the one answer
+    # a status command must never give.
     echo "== time source =="
+    _ts=0
     for _u in systemd-timesyncd.service chrony.service chronyd.service ntp.service ntpsec.service; do
-        [ "$(systemctl is-active "$_u" 2>/dev/null)" = active ] && echo "  NTP active: $_u"
-    done || true
+        [ "$(systemctl is-active "$_u" 2>/dev/null)" = active ] && { echo "  NTP active: $_u"; _ts=1; }
+    done
+    for _u in $(role_instances); do
+        case "$_u" in
+          "$CL_PHC"*) [ "$(systemctl is-active "$_u" 2>/dev/null)" = active ] && {
+                          echo "  PTP: system clock steered from the PHC by $_u"; _ts=1; } ;;
+        esac
+    done
+    [ "$_ts" = 0 ] && echo "  (none -- clock is free-running)"
+    return 0
 }
 
 preflight() {
@@ -336,11 +388,36 @@ enable_pair() {
     fi
     echo
     status
+    # THIS host's own offset, from the local ptp4l over its UDS (-u -b 0), not
+    # from the segment. A setup command's closing number has to be about the
+    # machine you just set up, and the first version's was not: it asked the
+    # NETWORK (-i IFACE -b 1), which every PTP node on the wire answers, and
+    # printed whichever replied first -- on the rig that was an extio box, so
+    # `dserv-ptp-setup grandmaster` ended by reporting a box's offset as this
+    # machine's.
+    #
+    # NO -t 1, and that is not incidental. -t sets the transportSpecific field,
+    # and 1 means 802.1AS/gPTP; a ptp4l running the default 0 silently DISCARDS
+    # such a request instead of answering. So the old line could only ever have
+    # been answered by some OTHER node -- the wrong-host bug and the dead -t flag
+    # were the same mistake wearing two hats.
     if [ -n "$PMC" ]; then
-        echo "== offset from master (pmc via $_if) =="
-        "$PMC" -i "$_if" -b 1 -t 1 "GET CURRENT_DATA_SET" 2>&1 \
-            | grep -E 'offsetFromMaster|RESPONSE' | sed 's/^/  /' || true
+        echo "== offset from master (this host) =="
+        _o=$("$PMC" -u -b 0 "GET CURRENT_DATA_SET" 2>/dev/null \
+             | grep -E 'offsetFromMaster|meanPathDelay|stepsRemoved' | sed 's/^[[:space:]]*/  /')
+        if [ -n "$_o" ]; then
+            echo "$_o"
+            # Role from the unit we were asked to enable, NOT from preflight's
+            # $_role: this script has no `local`, so that variable only survives
+            # into here by accident of shell scoping, which is not a contract.
+            case "$1" in
+              "$GM_PTP") echo "  (a grandmaster is its own reference, so 0 here is correct)" ;;
+            esac
+        else
+            echo "  (no answer from the local ptp4l yet)"
+        fi
     fi
+    return 0
 }
 
 case "${1:-status}" in
