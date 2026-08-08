@@ -7,6 +7,8 @@
 | `dserv-phc2sys@.service` | rate-locks that interface's PHC to the system clock |
 | `dserv-disable-eee@.service` | forces Energy-Efficient Ethernet OFF on an interface at boot |
 | `wifi-powersave-off.conf` | NetworkManager drop-in (not a unit): Wi-Fi power save off + retry-forever |
+| `chrony-grandmaster.conf` | chrony drop-in (not a unit): the grandmaster's time source. **Use this one.** |
+| `timesyncd-grandmaster.conf` | timesyncd drop-in (not a unit): same job, for hosts still on timesyncd |
 
 ## Host power-management pair (every new Linux host)
 
@@ -207,9 +209,9 @@ advantage over NTP. The only value that must match is the domain number (0).
 | `phc2sys`  | `-c IF -s CLOCK_REALTIME` (sys→PHC)| `-s IF -c CLOCK_REALTIME` (PHC→sys) |
 | NTP/chrony | **must keep running** — the source | **must be off** — PTP is the source |
 
-On a grandmaster, `phc2sys` pushes the NTP-disciplined system clock into the PHC;
-stop NTP and the site distributes free-running quartz. On a client the direction
-reverses, so an NTP daemon would steer `CLOCK_REALTIME` against `phc2sys`. Two
+On a grandmaster, `phc2sys` pushes the NTP-disciplined system clock into the PHC.
+On a client the direction reverses, so an NTP daemon would steer `CLOCK_REALTIME`
+against `phc2sys`. Two
 disciplinarians on one clock do not error — they fight, and it reads as drift.
 The client unit declares `Conflicts=` on the usual NTP units so systemd stops
 them rather than relying on anyone remembering.
@@ -217,6 +219,54 @@ them rather than relying on anyone remembering.
 `slaveOnly` on the client is a safety property, not a preference: without it the
 host joins the election and can *win* when the real grandmaster reboots, silently
 re-basing the site's timeline. That is the clock step `ptp/d_delta_us` detects.
+
+### The grandmaster's time source: use chrony, and a BAD NTP daemon is worse than none
+
+This corrects advice that used to be in this file. "Stop NTP and the site
+distributes free-running quartz" is true but reads as a warning, and the ranking
+it implies is wrong. On a grandmaster, `phc2sys` pushes `CLOCK_REALTIME` into the
+PHC and every box follows, so the figure of merit is **short-term stability**, not
+absolute accuracy. A wrong-but-smooth clock costs nothing; a right-but-jumpy one is
+injected into the whole rig.
+
+Measured on the i.MX95 grandmaster, 2026-08-08, 120 samples of its own `phc2sys`
+each time, identical method:
+
+| reference | mean | sd | \|max\| | phc2sys freq span |
+|---|---|---|---|---|
+| **chrony** | −18 ns | **92 ns** | 647 ns | **870 ppb** |
+| systemd-timesyncd | +7383 ns | 53,042 ns | 374 µs | 483,766 ppb |
+| no NTP at all (free-running) | +0.2 ns | 77 ns | 120 ns | — |
+
+So timesyncd was **~690× worse than no time source at all**, and chrony is 577×
+better than timesyncd while costing only ~20% against a free-running crystal.
+timesyncd is a minimal SNTP client with no filtering, so ~15–30 ms of ordinary
+path variation became hundreds of ppm of frequency thrash. Restarting it alone put
+a **207 ms** step through the fleet.
+
+Picking a better *server* does not fix this — that was tried first (stratum 2
+`ntp.aliyun.com` at 326 ms → stratum 1 `time1.google.com` at 30 ms) and changed
+nothing measurable. The server was never the mechanism.
+
+    sudo cp chrony-grandmaster.conf /etc/chrony/conf.d/10-dserv-grandmaster.conf
+    sudo chronyd -p -f /etc/chrony/chrony.conf     # VALIDATE before restarting
+    sudo systemctl restart chrony
+    chronyc sources                                # good ones ^*/^+, bad ones ^-
+
+Notes:
+- **Validate first.** `maxdelay`, `maxdelaydevratio`, `minpoll` and `maxpoll` are
+  PER-SOURCE options and belong on the `server` lines; as standalone directives
+  chronyd exits "Invalid directive at line N" and the service fails to start.
+- Leave Debian's default `pool 2.debian.pool.ntp.org` in `chrony.conf` — extra
+  candidates are what chrony's outlier rejection needs. It works: the pool entries
+  show `^-` at ±185–192 ms while the Google stratum-1s sit at ±13–19 ms.
+- Installing chrony on Debian **removes** systemd-timesyncd (`Conflicts:
+  time-daemon`), so `systemctl is-enabled systemd-timesyncd` then says `not-found`.
+  That is expected, not a fault.
+- `timesyncd-grandmaster.conf` is kept only for hosts still on timesyncd. It pins
+  `NTP=` so timesyncd cannot walk its `FallbackNTP=` list to a far-away server —
+  stock Debian sets no `NTP=` at all, which is exactly how a rig grandmaster ended
+  up steering off `ntp.aliyun.com`. It is a mitigation, not the fix.
 
 ### What the helper refuses to do
 
