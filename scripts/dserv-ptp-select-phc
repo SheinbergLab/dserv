@@ -1,0 +1,101 @@
+#!/bin/sh
+# dserv-ptp-select-phc IFACE -- point IFACE's hardware timestamping at the MAC's
+# OWN PHC, and not at some other clock the kernel happens to prefer.
+#
+# WHY THIS EXISTS. An interface can expose more than one PTP hardware clock, and
+# since Linux 6.13 the one used for timestamping is a per-interface setting (the
+# "hardware timestamp provider") that the kernel picks a default for. On hm-0
+# (CM5, kernel 6.18) that default is the WRONG clock:
+#
+#   ptp0  bcm_phy_ptp     BCM54213PE PHY, on the MDIO bus     <-- kernel default
+#   ptp1  gem-ptp-timer   Cadence GEM MAC, under the netdev
+#
+# and both of our PTP daemons break on it, in ways that do not look like this:
+#
+#   ptp4l   the PHY offers RX filters {none, ptpv2-event} and has no
+#           HWTSTAMP_FILTER_ALL, so `--hwts_filter full` fails with
+#           `ioctl SIOCSHWTSTAMP failed: Numerical result out of range` and the
+#           port goes INITIALIZING -> FAULTY. Note this is the OPPOSITE of the
+#           NICs the units were written against ({none, all}), so the reflex
+#           "drop --hwts_filter full" is wrong: the flag is right, the clock was.
+#   phc2sys PHC reads go over MDIO. Measured 2026-08-03 on hm-0: delay 215463 ns
+#           with offsets swinging +/-30 us, versus delay 55 ns and +/-40 ns on
+#           the MAC clock. That is a 4000x difference that reads as ordinary
+#           drift rather than as an error -- the worst kind of wrong.
+#
+# WHY AT THE INTERFACE AND NOT `ptp4l -p /dev/ptpN`. phc2sys is invoked as
+# `-c %i`, so it resolves the interface through this same provider setting. A -p
+# override on ptp4l alone would leave the two daemons disciplining DIFFERENT
+# clocks, which is worse than either one being wrong.
+#
+# WHICH CLOCK IS "THE MAC'S OWN". Sysfs answers this without a per-host index:
+# the MAC's clock is reachable through the netdev, in one of two layouts --
+#   /sys/class/net/IF/device/ptp/ptpN   PCI NICs   (igc/igb/ixgbe; office-stim)
+#   /sys/class/net/IF/ptpN              platform   (macb; Pi 5 / CM5)
+# -- while a PHY clock hangs off the MDIO bus and appears under NEITHER. So
+# "the PHC you can see from the netdev" is exactly the selection rule we want.
+#
+# KNOWN BLIND SPOT. A clock can also be reachable from neither path without being
+# a PHY: on the i.MX95 (fsl_enetc4) the NETC timer is a PCI function of its own,
+# 0001:00:18.0, SHARED by every port, so it is the netdev's sibling rather than
+# its child. There we bail below and change nothing -- which is the right answer
+# on that SoC, because it has exactly one PHC and there is nothing to choose
+# between. It would be the WRONG answer on a hypothetical host carrying both a
+# shared SoC timer and a PHY clock; if one ever turns up, this rule needs the
+# kernel's own answer (ethtool -T) as a tiebreak, the way dserv-ptp-setup's
+# iface_phc_kernel() does.
+#
+# Idempotent, and a deliberate no-op rather than an error when there is nothing
+# to do: no ethtool, a pre-6.13 kernel with no provider concept (office-stim on
+# 6.12 prints the old `PTP Hardware Clock: 0` and has no provider line at all),
+# one clock, or the setting already correct. It is wired in as `ExecStartPre=-`,
+# so it must never be the reason PTP fails to start.
+set -e
+
+IF=$1
+[ -n "$IF" ] || { echo "usage: $0 IFACE" >&2; exit 2; }
+[ -e "/sys/class/net/$IF" ] || { echo "$0: no such interface: $IF" >&2; exit 2; }
+
+ETHTOOL=
+for e in /usr/sbin/ethtool /sbin/ethtool /usr/bin/ethtool; do
+    [ -x "$e" ] && { ETHTOOL=$e; break; }
+done
+# NOTE the absolute paths. `command -v ethtool` is not enough here: ethtool lives
+# in /usr/sbin, which is absent from a non-login shell's PATH, so it reports
+# "not found" on a host where it is plainly installed. Cost a wrong diagnosis
+# once already.
+[ -n "$ETHTOOL" ] || { echo "$0: no ethtool; leaving $IF timestamping alone"; exit 0; }
+
+# The MAC's own PHC, via the netdev. First match wins; both layouts checked.
+want=
+for d in "/sys/class/net/$IF/device/ptp"/ptp* "/sys/class/net/$IF"/ptp*; do
+    [ -e "$d" ] || continue
+    want=$(basename "$d" | sed 's/^ptp//')
+    break
+done
+[ -n "$want" ] || { echo "$0: $IF has no PHC reachable from the netdev (a shared SoC timer, e.g. i.MX95 NETC, sits elsewhere); leaving timestamping alone"; exit 0; }
+
+# Pre-6.13 kernels have a single provider and no line to parse. Their ethtool
+# output says `PTP Hardware Clock: N` instead, which is not settable and does not
+# need to be.
+have=$("$ETHTOOL" -T "$IF" 2>/dev/null | sed -n 's/.*[Pp]rovider index:[[:space:]]*\([0-9]\{1,\}\).*/\1/p' | head -1)
+[ -n "$have" ] || { echo "$0: $IF has no selectable timestamp provider (pre-6.13 kernel); nothing to do"; exit 0; }
+
+if [ "$have" = "$want" ]; then
+    echo "$0: $IF already timestamping on ptp$want ($(cat "/sys/class/ptp/ptp$want/clock_name" 2>/dev/null))"
+    exit 0
+fi
+
+echo "$0: $IF timestamping on ptp$have ($(cat "/sys/class/ptp/ptp$have/clock_name" 2>/dev/null)) -> ptp$want ($(cat "/sys/class/ptp/ptp$want/clock_name" 2>/dev/null))"
+"$ETHTOOL" --set-hwtimestamp-cfg "$IF" index "$want" qualifier precise >/dev/null 2>&1 || {
+    echo "$0: WARNING: could not select ptp$want on $IF (ethtool too old for --set-hwtimestamp-cfg?)." >&2
+    echo "$0:          ptp4l may fail with SIOCSHWTSTAMP ERANGE, or sync against the wrong clock." >&2
+    exit 0
+}
+
+# Verify rather than assume: the ioctl can be accepted and the provider still not
+# change, and a silent half-success here is indistinguishable from working PTP
+# until someone reads a delay figure three orders of magnitude too big.
+now=$("$ETHTOOL" -T "$IF" 2>/dev/null | sed -n 's/.*[Pp]rovider index:[[:space:]]*\([0-9]\{1,\}\).*/\1/p' | head -1)
+[ "$now" = "$want" ] || echo "$0: WARNING: asked for ptp$want on $IF but it reports ptp$now" >&2
+exit 0
