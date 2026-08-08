@@ -18,10 +18,37 @@ them.
 | `fb-run-all.sh` | build host | builds stock i.MX93 + i.MX95, then the RT i.MX93 |
 | `fb-mkwic.sh` | build host | assembles all-in-one `.wic.zst` SD images |
 | `rt.config` | build host | kernel fragment enabling `PREEMPT_RT` |
+| `patches/linux/` | build host | kernel patches, copied into a tree's `patch/linux/` |
 | `../imx-sdcard.sh` | macOS | fetch images and flash an SD card |
 
 The build host is currently `pogo`, with trees at `/data/flexbuild` (stock) and
 `/data/flexbuild-rt` (RT). These scripts live at `/data/` there.
+
+## Kernel patches
+
+`patches/linux/*.patch` are ours, on top of whatever the SDK tag ships. Copy them
+into **each** tree's `patch/linux/` — the two trees are independent checkouts, and
+a patch in one is not in the other.
+
+Three things about the mechanism, each of which will waste your afternoon:
+
+- flexbuild applies patches **once** and then touches a `.patchdone` sentinel in
+  the source directory. Adding a new patch to an already-built tree is therefore
+  **silently ignored** — apply it by hand as well as dropping the file in.
+- the kernel source is **not a git checkout** (`dl_github.py` extracts a tarball;
+  there is no `.git`), so patches are applied with plain `patch -p1`, not
+  `git am`. Generate them with `diff -u`. Running `git` inside that directory
+  resolves to the *outer* flexbuild repo and fails with "ignored by .gitignore:
+  components_lsdk2606".
+- `make dl-kernel` does **not** clobber hand edits to an existing tree, so it is
+  safe to edit in place and rebuild.
+
+A kernel-only change does **not** need `make all` or a reflash. `make linux`
+alone is incremental (~4 min for one file) and produces
+`build_lsdk2606/linux/linux/arm64/IMX/Image`; copy that to the board's
+`/boot/Image` and reboot, which preserves the installed system that a reflash
+would wipe. Keep the old image (`/boot/Image.pre-*`) and checksum the new one on
+the board *before* moving it into place.
 
 ## Workflow
 

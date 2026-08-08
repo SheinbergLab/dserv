@@ -1,0 +1,61 @@
+From 0000000000000000000000000000000000000006 Mon Sep 17 00:00:00 2001
+From: David Sheinberg <David_Sheinberg@brown.edu>
+Date: Sat, 8 Aug 2026 16:00:00 -0400
+Subject: [PATCH 6/6] ptp: netc: program the clock when scaled_ppm is zero
+
+netc_timer_adjfine() returned success without touching the hardware when
+scaled_ppm was zero.  The adjustment is ABSOLUTE -- new_period is always
+computed from priv->base_period, which is set once at probe and never
+updated -- so scaled_ppm == 0 is a meaningful request meaning "run at the
+nominal rate", not "nothing to do".
+
+Because the call reported success, the PTP core cached the value
+(ptp->dialed_frequency = tx->freq in ptp_clock_adjtime()), so every
+later query answered 0 while NETC_TMR_ADD still held the old period.
+The clock silently ran at the previous rate and every tool reported it
+as nominal.
+
+Measured on FRDM-IMX95-15x15, against CLOCK_MONOTONIC_RAW over 40 s:
+
+  set -150000 ppb  ->  -149.9992 ppm   (correct)
+  set       0      ->  -150.0011 ppm   (ignored, reports 0)
+  set       0      ->  -150.0044 ppm   (still ignored)
+  set      +1 ppb  ->    +0.0022 ppm   (correct -- +1 works, 0 does not)
+
+The practical damage is that the divergence is permanent.  linuxptp
+recovers from a bad read with
+
+    fadj = clockadj_get_freq(); clockadj_set_freq(fadj);
+
+so once the cache reads 0 and the hardware does not, every restart writes
+0 back -- precisely the write that is dropped -- and nothing self-heals.
+phc2sys then hunts against a stale rate instead of locking.
+
+Upstream commit 87a201d ("ptp: netc: add NETC V4 Timer PTP driver
+support") has no such early return, and nxp-imx/linux-imx lf-6.18.y does
+not either; only the older BSP branches (lf-6.6.y, lf-6.12.y) carry it.
+This drops it, matching upstream.
+
+With the clock at nominal, phc2sys locks at +/-28 ns as grandmaster.
+
+Signed-off-by: David Sheinberg <David_Sheinberg@brown.edu>
+---
+ drivers/ptp/ptp_netc.c | 3 ---
+ 1 file changed, 3 deletions(-)
+
+diff --git a/drivers/ptp/ptp_netc.c b/drivers/ptp/ptp_netc.c
+--- a/drivers/ptp/ptp_netc.c
++++ b/drivers/ptp/ptp_netc.c
+@@ -458,9 +458,6 @@
+ 	struct netc_timer *priv = ptp_to_netc_timer(ptp);
+ 	u64 new_period;
+
+-	if (!scaled_ppm)
+-		return 0;
+-
+ 	new_period = adjust_by_scaled_ppm(priv->base_period, scaled_ppm);
+ 	netc_timer_adjust_period(priv, new_period);
+
+--
+2.47.3
+
