@@ -2,6 +2,31 @@
 
 set -e
 
+# Transitional companion to preinst: put the management agent back if this
+# upgrade removed it.
+#
+# dserv used to ship /usr/local/bin/dserv-agent; it is now the dserv-agent
+# package. dpkg deletes files the old version owned and the new one does not,
+# so without this an in-cage box would take a routine dserv update and lose the
+# only thing that can reach it afterwards.
+#
+# Restores the FILE and deliberately does NOT restart dserv-agent.service. On a
+# box updating itself through the panel, the agent is the process running this
+# very transaction -- restarting it here would kill dpkg mid-configure. The
+# running agent keeps its old inode and carries on; the restored binary is
+# simply there for the next start.
+#
+# Only fires when nothing else provides the path, so a box that has already
+# moved to the dserv-agent package is untouched.
+if [ ! -e /usr/local/bin/dserv-agent ] && \
+   [ -e /var/lib/dserv/dserv-agent.preupgrade ]; then
+    if install -m 0755 /var/lib/dserv/dserv-agent.preupgrade \
+                       /usr/local/bin/dserv-agent 2>/dev/null; then
+        echo "dserv: restored /usr/local/bin/dserv-agent (now provided by the dserv-agent package)"
+    fi
+fi
+rm -f /var/lib/dserv/dserv-agent.preupgrade
+
 # Refresh dynamic lib cache for libs installed with package.
 ldconfig
 

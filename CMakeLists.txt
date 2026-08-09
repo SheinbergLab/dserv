@@ -688,32 +688,53 @@ else()
     # Per-group control fields. Package name must be set explicitly or CPack
     # derives it from the group and emits dserv-dserv-agent.
     set(CPACK_DEBIAN_DSERV_PACKAGE_NAME "dserv")
-    set(CPACK_DEBIAN_DSERV_PACKAGE_CONTROL_EXTRA ${CMAKE_CURRENT_SOURCE_DIR}/dpkg/postinst)
+    set(CPACK_DEBIAN_DSERV_PACKAGE_CONTROL_EXTRA
+        "${CMAKE_CURRENT_SOURCE_DIR}/dpkg/preinst;${CMAKE_CURRENT_SOURCE_DIR}/dpkg/postinst")
 
-    # Depends, not Recommends -- and the reason is the upgrade, not the install.
+    # Recommends, NOT Depends -- decided against a hard dependency once the
+    # deployed fleet was accounted for.
     #
-    # dserv used to own /usr/local/bin/dserv-agent. On upgrade to a dserv that
-    # no longer ships it, dpkg deletes every file the old package owned and the
-    # new one does not -- so a box taking this release would have its agent
-    # removed out from under it, by an update the agent itself launched, and
-    # come back unmanageable. Recommends does not prevent that: these are
-    # installed as standalone .deb files (apt-get install /path/foo.deb), never
-    # out of an apt repo, so nothing is there to pull the agent in.
+    # The hazard being defended against is real: dserv used to own
+    # /usr/local/bin/dserv-agent, and dpkg deletes files the old version owned
+    # that the new one does not ship, so an upgrade would remove the agent out
+    # from under a box, by an update the agent itself launched. But a hard
+    # Depends fixes that by making apt REFUSE the upgrade on every box that
+    # does not yet have the agent as a package -- which is every box deployed
+    # today. On an in-cage box in another building, a failed update with a
+    # dependency message is not better than a silent one; it is the same
+    # stranded box plus a support call.
     #
-    # A hard dependency turns that silent loss into apt refusing the upgrade
-    # with a name to fix. It costs the bootstrap nothing because the agent is
-    # now installed BEFORE the components (see main()), so by the time dserv is
-    # unpacked the dependency is already satisfied.
-    set(CPACK_DEBIAN_DSERV_PACKAGE_DEPENDS "libevdev2, libpq5, zlib1g, yajl-tools, fluidsynth, dserv-agent")
+    # dpkg/preinst + dpkg/postinst handle it directly instead: stash the binary
+    # before dpkg can remove it, put it back if nothing else provides it. The
+    # upgrade cannot fail on a dependency it does not declare, and the agent
+    # cannot vanish. Recommends keeps the relationship documented and is never
+    # fatal -- dpkg ignores it, and apt treats it as best-effort.
+    #
+    # Revisit once the fleet actually carries the dserv-agent package: a hard
+    # Depends is the better long-term expression, and is safe to add the moment
+    # it can be satisfied everywhere.
+    set(CPACK_DEBIAN_DSERV_PACKAGE_DEPENDS "libevdev2, libpq5, zlib1g, yajl-tools, fluidsynth")
+    set(CPACK_DEBIAN_DSERV_PACKAGE_RECOMMENDS "dserv-agent")
 
     set(CPACK_DEBIAN_DSERV-AGENT_PACKAGE_NAME "dserv-agent")
-    # The agent's three files used to belong to dserv. Without these, dpkg
+    # The agent's three files used to belong to dserv. Without Replaces, dpkg
     # refuses to unpack ("trying to overwrite ..., which is also in package
-    # dserv") on every box that already has one. `<< PROJECT_VERSION` is right
+    # dserv") on every box that already has one. "<< PROJECT_VERSION" is right
     # because the split ships in a release strictly newer than any monolithic
     # dserv, so every version that owned those files is covered.
     set(CPACK_DEBIAN_DSERV-AGENT_PACKAGE_REPLACES "dserv (<< ${PROJECT_VERSION})")
-    set(CPACK_DEBIAN_DSERV-AGENT_PACKAGE_BREAKS "dserv (<< ${PROJECT_VERSION})")
+
+    # NO Breaks, though the file-move idiom normally pairs it with Replaces.
+    # Breaks would refuse to configure dserv-agent while an older dserv is
+    # installed -- which is every deployed box, and precisely the state the
+    # bootstrap is in when step_install_agent runs FIRST, before the components.
+    # It would block the very path used to migrate a box. Replaces alone lets
+    # the agent package take the file and leaves the old dserv working, which
+    # it does: nothing in dserv executes that binary, the agent is a separate
+    # service. The cost is that reinstalling an OLD dserv over a box that has
+    # the agent package would conflict -- a downgrade, loud, and not a routine
+    # update.
+
 
     # COMPONENT is not optional once component install is on: an untagged
     # install() lands in "Unspecified" and becomes a stray package.

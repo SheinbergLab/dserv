@@ -1,0 +1,33 @@
+#!/bin/sh
+
+set -e
+
+# Transitional: dserv used to ship /usr/local/bin/dserv-agent inside this
+# package. It is now its own dserv-agent package.
+#
+# dpkg deletes, on upgrade, every file the OLD version owned that the NEW one
+# does not ship -- so a box taking this release would lose its management agent
+# to an update the agent itself launched, and come back unreachable. Boxes are
+# deployed in cages elsewhere; there is nobody at the console to notice.
+#
+# Stash the binary here, while it still exists, and let postinst put it back if
+# nothing else has. Deliberately a plain copy and not a dependency: a hard
+# Depends: dserv-agent would make apt REFUSE this upgrade on every box that has
+# not yet got the agent as a package, turning a silent problem into a fleet-wide
+# failed update, which is not an improvement when nobody is watching.
+#
+# Self-limiting: once dserv-agent owns that path (Replaces), it is no longer in
+# this package's file list, dpkg stops removing it, and postinst finds it
+# present and does nothing.
+
+case "$1" in
+    upgrade)
+        if [ -e /usr/local/bin/dserv-agent ]; then
+            mkdir -p /var/lib/dserv
+            cp -a /usr/local/bin/dserv-agent \
+                  /var/lib/dserv/dserv-agent.preupgrade 2>/dev/null || true
+        fi
+        ;;
+esac
+
+exit 0
