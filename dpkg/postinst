@@ -27,28 +27,74 @@ if [ ! -e /usr/local/bin/dserv-agent ] && \
 fi
 rm -f /var/lib/dserv/dserv-agent.preupgrade
 
-# Nudge the agent to re-read its component list.
+# Migrate the box to the dserv-agent PACKAGE, and reload the component list.
 #
-# This package ships /usr/local/dserv/config/components.json, which is how a
-# box that predates the dserv-agent package learns that package exists and can
-# offer it in the panel. But the agent reads that file ONCE, at startup, so a
-# freshly delivered list sits unread -- possibly for months -- and the offer
-# never appears.
+# The agent used to ship inside this package and is now its own. Boxes are
+# deployed across sites, many of them not reachable in person, so "install the
+# new package by hand, once per box" is not a migration plan -- it is a list of
+# machines that quietly never get migrated. This package is the only channel
+# that reaches a box whose agent predates all of this, so it carries the step.
 #
-# Deferred through systemd, not restarted here, for two reasons: dpkg holds its
-# lock until this script returns, and on a box updating through the panel the
-# agent IS the process running this transaction. Restarting it inline would
-# kill dpkg mid-configure. Twenty seconds is long enough for the transaction to
-# finish and for the agent to report the install it just performed.
+# It cannot be done here: dpkg holds its lock until this script returns, so any
+# apt/dpkg call from inside it deadlocks. And on a box updating through the
+# panel the agent IS the process running this transaction, so restarting it
+# inline would kill dpkg mid-configure. Both problems have the same answer as
+# the agent's own self-update -- hand the work to systemd and get out of the
+# way. Twenty seconds is enough for the transaction to finish and for the agent
+# to report the install it just performed.
 #
-# Best-effort throughout: no systemd, no systemd-run, or an agent that is not
-# running are all fine, and none of them are worth failing a dserv install for.
-if command -v systemctl >/dev/null 2>&1 && \
-   command -v systemd-run >/dev/null 2>&1 && \
-   systemctl is-active --quiet dserv-agent 2>/dev/null; then
+# The script is written to disk rather than inlined so a box that fails to
+# migrate can be diagnosed after the fact instead of guessed at.
+#
+# Entirely best-effort. No systemd, no network, an unreachable release: none of
+# them are worth failing a dserv install for, and none of them leave the box
+# worse off -- the preinst/postinst pair above has already guaranteed it still
+# has a working agent binary either way.
+if command -v systemctl >/dev/null 2>&1 && command -v systemd-run >/dev/null 2>&1; then
+    mkdir -p /var/lib/dserv
+    cat > /var/lib/dserv/agent-migrate.sh <<'MIGRATE'
+#!/bin/sh
+# Deferred by dserv's postinst. Installs the dserv-agent package if the box
+# does not have it, then restarts the agent so it picks up both the new binary
+# and the component list this dserv shipped.
+log() { logger -t dserv-agent-migrate "$*" 2>/dev/null || true; }
+
+if dpkg-query -W -f='${Status}' dserv-agent 2>/dev/null | grep -q "install ok installed"; then
+    log "dserv-agent already installed as a package; nothing to migrate"
+else
+    # Version comes from the installed dserv: dpkg has already recorded the new
+    # version by the time postinst runs, so this cannot drift from the release
+    # that scheduled it the way a build-time constant could.
+    VER=$(dpkg-query -W -f='${Version}' dserv 2>/dev/null || echo "")
+    ARCH=$(dpkg --print-architecture 2>/dev/null || echo "")
+    if [ -n "$VER" ] && [ -n "$ARCH" ]; then
+        URL="https://github.com/SheinbergLab/dserv/releases/download/${VER}/dserv-agent_${VER}_${ARCH}.deb"
+        TMP=$(mktemp -d)
+        if curl -fsSL -o "$TMP/dserv-agent.deb" "$URL"; then
+            if apt-get install -y "$TMP/dserv-agent.deb" >/dev/null 2>&1 ||
+               dpkg -i "$TMP/dserv-agent.deb" >/dev/null 2>&1; then
+                log "installed dserv-agent ${VER} (${ARCH})"
+            else
+                log "dserv-agent ${VER} downloaded but would not install"
+            fi
+        else
+            log "could not fetch ${URL}"
+        fi
+        rm -rf "$TMP"
+    else
+        log "could not determine dserv version/arch; skipping"
+    fi
+fi
+
+# Always, even if the install was skipped or failed: the component list this
+# dserv shipped is read only at agent startup, and an unread list is why the
+# panel would not offer the package in the first place.
+systemctl restart dserv-agent 2>/dev/null || true
+MIGRATE
+    chmod 0755 /var/lib/dserv/agent-migrate.sh
     systemd-run --collect --on-active=20 \
-        --unit=dserv-agent-reload-components \
-        systemctl restart dserv-agent >/dev/null 2>&1 || true
+        --unit=dserv-agent-migrate \
+        /var/lib/dserv/agent-migrate.sh >/dev/null 2>&1 || true
 fi
 
 # Refresh dynamic lib cache for libs installed with package.
