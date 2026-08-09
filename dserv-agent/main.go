@@ -1494,6 +1494,36 @@ func (a *Agent) handleService(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]interface{}{"success": true, "service": service, "status": a.getServiceStatus(service)})
 }
 
+// unitLoaded reports whether systemd knows this unit at all, so callers can
+// tell "absent by design" (dserv on a display box) from "failed to stop".
+func unitLoaded(svc string) bool {
+	out, err := exec.Command("systemctl", "show", "-p", "LoadState", "--value", svc).Output()
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(out)) == "loaded"
+}
+
+// unitActive is the ground truth for "is it running", as opposed to "did the
+// command we ran exit 0".
+func unitActive(svc string) bool {
+	return exec.Command("systemctl", "is-active", "--quiet", svc).Run() == nil
+}
+
+// systemctlDo runs one systemctl verb and keeps the output, so a failure can
+// be reported with systemd's own reason instead of a silent no-op.
+func systemctlDo(action, svc string) error {
+	out, err := exec.Command("sudo", "systemctl", action, svc).CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if msg == "" {
+			msg = err.Error()
+		}
+		return fmt.Errorf("systemctl %s %s failed: %s", action, svc, msg)
+	}
+	return nil
+}
+
 // detectSelfService returns the systemd unit name this process is running
 // under (e.g. "dserv-agent.service" or "stim2-agent.service") by parsing
 // /proc/self/cgroup. Falls back to "dserv-agent" when detection fails so
@@ -1917,11 +1947,33 @@ func (a *Agent) installComponent(comp Component, assetName string, stopServices 
 	io.Copy(out, resp.Body)
 	out.Close()
 
-	// Stop services if requested
+	// Stop services if requested.
+	//
+	// Failures here used to be discarded, so an install could proceed straight
+	// over a still-running service and the UI would tick "Stop services" green
+	// regardless. Unpacking a package under the live process is precisely the
+	// corruption this step exists to prevent, so a stop that does not take is
+	// fatal to the install rather than cosmetic.
+	var started []string
 	if len(stopServices) > 0 {
 		a.broadcast(WSResponse{Type: "install_progress", Data: map[string]string{"stage": "stopping"}})
 		for _, svc := range stopServices {
-			exec.Command("sudo", "systemctl", "stop", svc).Run()
+			// A profile's dependents may name units this box never had (dserv
+			// on a display box). Absent is fine; failing to stop is not.
+			if !unitLoaded(svc) {
+				log.Printf("install: skipping stop of %s (no such unit here)", svc)
+				continue
+			}
+			if err := systemctlDo("stop", svc); err != nil {
+				a.broadcast(WSResponse{Type: "install_error", Error: err.Error()})
+				return
+			}
+			if unitActive(svc) {
+				a.broadcast(WSResponse{Type: "install_error",
+					Error: "Refusing to install: " + svc + " is still active after systemctl stop"})
+				return
+			}
+			started = append(started, svc)
 		}
 	}
 
@@ -1977,11 +2029,28 @@ func (a *Agent) installComponent(comp Component, assetName string, stopServices 
 		}
 	}
 
-	// Start services
-	if len(stopServices) > 0 {
+	// Restart exactly what we stopped, and confirm it came back. A package's
+	// own maintainer scripts may have started it already, in which case start
+	// is a no-op -- what matters is the is-active check, not who did it.
+	if len(started) > 0 {
 		a.broadcast(WSResponse{Type: "install_progress", Data: map[string]string{"stage": "starting"}})
-		for _, svc := range stopServices {
-			exec.Command("sudo", "systemctl", "start", svc).Run()
+		var failed []string
+		for _, svc := range started {
+			if err := systemctlDo("start", svc); err != nil {
+				log.Printf("install: %v", err)
+			}
+			if !unitActive(svc) {
+				failed = append(failed, svc)
+			}
+		}
+		if len(failed) > 0 {
+			// The package IS installed; saying so while naming what did not
+			// come back beats a green tick over a dark display.
+			a.broadcast(WSResponse{Type: "install_error",
+				Error: comp.ID + " installed, but did not restart: " +
+					strings.Join(failed, ", ") + " (journalctl -u " + failed[0] + ")"})
+			os.Remove(localPath)
+			return
 		}
 	}
 

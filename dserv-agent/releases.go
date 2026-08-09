@@ -20,9 +20,17 @@ import (
 
 const releaseCacheTTL = 1 * time.Minute
 
-// agentRepo is the dserv-agent source repo, installed by the bootstrap
-// script and allowed through the /api/releases endpoint.
-const agentRepo = "SheinbergLab/dserv-agent"
+// agentRepo is where the bootstrap script fetches the agent binary from, and
+// the one repo besides the components' own that /api/releases will proxy.
+//
+// The agent lives in this tree but does not ship from a repo of its own: it is
+// released as dserv-agent_linux_<arch> assets ON THE DSERV RELEASE. This
+// pointed at SheinbergLab/dserv-agent, which does not exist -- GitHub answers
+// 404 both authenticated and anonymous -- so release resolution failed, the
+// script's github_release_fallback failed the same way, and step_install_agent
+// could only warn "Cannot fetch dserv-agent release" and install nothing. Any
+// box provisioned from scratch came up with no agent at all.
+const agentRepo = "SheinbergLab/dserv"
 
 // repoPattern validates an "owner/repo" string before it is interpolated
 // into a GitHub API URL — guards the unauthenticated /api/releases endpoint

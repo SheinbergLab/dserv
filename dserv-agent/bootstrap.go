@@ -81,6 +81,15 @@ var defaultProfiles = []BootstrapProfile{
 		Components:  []string{"*"},
 	},
 	{
+		// The other half of a split rig: control on one box, display on
+		// another. dlsh is listed explicitly even though resolveWithDeps
+		// would pull it in via stim2's depends -- this profile's whole point
+		// is being read at a glance by someone provisioning a display box.
+		Name:        "stim",
+		Description: "Display box only (stim2 + dlsh, no dserv)",
+		Components:  []string{"stim2", "dlsh"},
+	},
+	{
 		Name:        "server",
 		Description: "Data server only (dserv + dlsh, no stimulus)",
 		Components:  []string{"dserv", "dlsh"},
@@ -256,6 +265,33 @@ run() {
         info "[dry-run] $*"
     else
         "$@" >> "$LOG_FILE" 2>&1
+    fi
+}
+
+# ---- Profile shape ----
+#
+# The profile is already resolved into COMPONENTS_JSON by the registry, so the
+# script never has to know profile NAMES -- it asks what it is actually
+# installing. That keeps a display box (profile=stim: stim2 + dlsh, no dserv)
+# from running the dserv-only steps, and lets a new profile work here for free.
+
+has_component() {
+    echo "$COMPONENTS_JSON" | jq -e --arg id "$1" \
+        '.components[] | select(.id == $id)' &>/dev/null
+}
+
+# Services this box actually runs, in component order (e.g. "dserv", "stim2").
+profile_services() {
+    echo "$COMPONENTS_JSON" | jq -r '.components[].service // empty'
+}
+
+# The unit the agent manages as its primary: dserv where there is one,
+# otherwise the first component that has a service (stim2 on a display box).
+primary_service() {
+    if has_component dserv; then
+        echo "dserv"
+    else
+        profile_services | head -1
     fi
 }
 
@@ -585,6 +621,17 @@ step_configure_agent() {
     info "Configuring dserv-agent for mesh..."
 
     local svc_file="/etc/systemd/system/dserv-agent.service"
+    local svc_primary
+    svc_primary=$(primary_service)
+
+    # Pin the agent to what this box actually has. Without these two flags it
+    # falls back to --service dserv and the built-in component list, so a
+    # display box would report a dserv that isn't there and offer to install
+    # one. The unit name stays dserv-agent everywhere -- the flavour lives in
+    # the flags, not in a second unit to keep in step.
+    mkdir -p /etc/dserv-agent
+    echo "$COMPONENTS_JSON" | jq '.' > /etc/dserv-agent/components.json
+    ok "agent components: $(profile_services | tr '\n' ' ')(primary: ${svc_primary:-none})"
 
     if [[ ! -f "$svc_file" ]]; then
         # No service file (standalone install) — create one
@@ -599,6 +646,8 @@ Type=simple
 ExecStart=/usr/local/bin/dserv-agent \\
     --registry ${REGISTRY_URL} \\
     --workgroup ${WORKGROUP} \\
+    --service ${svc_primary} \\
+    --components /etc/dserv-agent/components.json \\
     --listen 0.0.0.0:80
 Restart=always
 RestartSec=5
@@ -616,6 +665,12 @@ EOF
         else
             ok "dserv-agent service already configured"
         fi
+        # A deb-shipped unit is dserv-flavoured by construction; on a box
+        # without dserv it needs the same pinning as a fresh one.
+        if ! grep -q "\-\-components" "$svc_file"; then
+            sed -i "s|ExecStart=.*dserv-agent|& --service ${svc_primary} --components /etc/dserv-agent/components.json|" "$svc_file"
+            ok "dserv-agent service pinned to ${svc_primary}"
+        fi
     fi
 
     run systemctl daemon-reload
@@ -623,6 +678,11 @@ EOF
 }
 
 step_configure_dserv() {
+    if ! has_component dserv; then
+        info "No dserv in profile ${PROFILE} — skipping dserv config"
+        return
+    fi
+
     info "Configuring dserv..."
     mkdir -p "${DSERV_INSTALL_DIR}/etc"
 
@@ -643,6 +703,12 @@ EOF
 }
 
 step_sync_scripts() {
+    # ESS systems are run by dserv; a display box has nothing to run them with.
+    if ! has_component dserv; then
+        info "No dserv in profile ${PROFILE} — skipping ESS script sync"
+        return
+    fi
+
     info "Syncing ESS scripts from registry..."
 
     # The export endpoint returns a zip of all systems + libs for the workgroup
@@ -769,15 +835,24 @@ step_start_services() {
     if ! $SKIP_AGENT; then
         run systemctl start dserv-agent || warn "dserv-agent failed to start"
     fi
-    run systemctl start dserv || warn "dserv failed to start"
+
+    # Start what this profile installed, not a hardcoded dserv. On a display
+    # box that is stim2; starting (and verifying) dserv there reported a
+    # failure for something that was never meant to exist.
+    local svc
+    for svc in $(profile_services); do
+        run systemctl start "$svc" || warn "${svc} failed to start"
+    done
 
     sleep 2
 
-    if systemctl is-active --quiet dserv 2>/dev/null; then
-        ok "dserv running"
-    else
-        warn "dserv not running (journalctl -u dserv)"
-    fi
+    for svc in $(profile_services); do
+        if systemctl is-active --quiet "$svc" 2>/dev/null; then
+            ok "${svc} running"
+        else
+            warn "${svc} not running (journalctl -u ${svc})"
+        fi
+    done
 
     if ! $SKIP_AGENT; then
         if systemctl is-active --quiet dserv-agent 2>/dev/null; then
