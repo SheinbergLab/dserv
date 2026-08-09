@@ -765,7 +765,12 @@ step_install_agent() {
 
     if [[ -z "$assets_json" || "$assets_json" == "null" ]]; then
         local fallback
-        fallback=$(github_release_fallback "SheinbergLab/dserv-agent")
+        # SheinbergLab/dserv, not SheinbergLab/dserv-agent: the agent has no
+        # repo of its own and ships as an asset of the dserv release. The other
+        # spelling 404s, so this fallback -- the one that runs precisely when
+        # the registry could not resolve the release -- was guaranteed to fail
+        # too. Same defect as the registry-side agentRepo, one layer down.
+        fallback=$(github_release_fallback "SheinbergLab/dserv")
         if [[ -n "$fallback" && "$fallback" != "null" ]]; then
             tag=$(echo "$fallback" | jq -r '.tag // empty')
             assets_json=$(echo "$fallback" | jq -c '.assets')
@@ -778,6 +783,18 @@ step_install_agent() {
     fi
 
     [[ -n "$tag" ]] && info "  Release: ${tag}"
+
+    # Already at this version: nothing to do. Deliberately keyed on the PACKAGE,
+    # so a box still carrying the loose pre-split binary reports nothing here
+    # and gets migrated -- which is the case this step exists for. Only a
+    # properly installed package short-circuits it, for the same reason
+    # install_component checks dpkg status and not just a version string.
+    local have="" want="${tag#v}"
+    have=$(installed_version '{"package":"'"$AGENT_COMPONENT_ID"'"}')
+    if [[ -n "$have" && "$have" == "$want" ]] && ! $REINSTALL; then
+        ok "dserv-agent ${have} already current"
+        return 0
+    fi
 
     local deb_url
     deb_url=$(find_asset "$assets_json" "dserv-agent.*\\.deb$" "$PLATFORM")
@@ -900,6 +917,27 @@ exec /usr/local/stim2/stim2 \
 LAUNCHER
     run chmod 0755 /usr/local/bin/stim2
     ok "stim2 (windowed) -- run 'stim2' from a desktop terminal"
+
+    # Reclassification, not merely installation.
+    #
+    # Every other step here only ever turns things ON: it enables what the new
+    # profile declares and never touches what a previous class left running.
+    # That is fine everywhere except here. Converting an incage box to dev
+    # would otherwise leave the cage unit enabled and holding tty1 with its own
+    # X server, while ALSO installing the windowed launcher -- both display
+    # paths at once, which is the exact confusion this profile exists to end.
+    # Choosing "windowed" is a statement that the cage unit must not run.
+    local stim_svc
+    stim_svc=$(echo "$COMPONENTS_JSON" | jq -r --arg id "$STIM_COMPONENT_ID" \
+        '.components[] | select(.id == $id) | .service // empty')
+    [[ -z "$stim_svc" ]] && return
+
+    if systemctl is-enabled "$stim_svc" &>/dev/null || \
+       systemctl is-active --quiet "$stim_svc" 2>/dev/null; then
+        warn "Disabling ${stim_svc}: it runs fullscreen on its own X server, which a windowed box must not do"
+        run systemctl disable --now "$stim_svc" || \
+            warn "  could not disable ${stim_svc}; do it by hand before using the launcher"
+    fi
 }
 
 step_configure_dserv() {
