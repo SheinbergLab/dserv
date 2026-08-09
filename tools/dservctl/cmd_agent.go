@@ -292,8 +292,35 @@ func runComponentCheck(cfg *Config, client *AgentClient) int {
 	return 0
 }
 
+// agentComponentID is the agent's own entry in the component list -- the one
+// component whose install restarts the thing serving this API.
+const agentComponentID = "dserv-agent"
+
+// agentLast moves the agent to the end of an update order.
+//
+// Updating the agent restarts it, and runComponentInstall aborts the whole run
+// if a request fails -- so anything queued after the agent races its few-second
+// absence and can kill the batch. This already came out last in practice, but
+// only because deps sort first and it happens to sit late in components.json:
+// reordering that file would silently reintroduce the race. Say it explicitly.
+func agentLast(order []string) []string {
+	out := make([]string, 0, len(order))
+	found := false
+	for _, id := range order {
+		if id == agentComponentID {
+			found = true
+			continue
+		}
+		out = append(out, id)
+	}
+	if found {
+		out = append(out, agentComponentID)
+	}
+	return out
+}
+
 // runComponentUpdate updates all components that have available updates,
-// installing dependencies first.
+// installing dependencies first and the agent last.
 func runComponentUpdate(cfg *Config, client *AgentClient) int {
 	result, err := client.Get("/api/components")
 	if err != nil {
@@ -352,7 +379,7 @@ func runComponentUpdate(cfg *Config, client *AgentClient) int {
 		}
 	}
 
-	updateOrder := append(deps, regular...)
+	updateOrder := agentLast(append(deps, regular...))
 	if len(updateOrder) == 0 {
 		fmt.Println("All components are up to date.")
 		return 0
