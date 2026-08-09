@@ -376,10 +376,19 @@ if(GO_EXECUTABLE)
         endif()
         
         # Install components.json config
+        #
+        # COMPONENT dserv, NOT dserv-agent, and deliberately so. This is the
+        # list the panel offers, and the ONLY channel that reaches a box which
+        # does not yet have the agent package is the dserv package it already
+        # has. Shipping it with the agent would mean you needed the agent
+        # package to learn that the agent package exists -- and worse, an
+        # existing box upgrading dserv would LOSE this file (owned by the old
+        # dserv, absent from the new one) and fall back to its stale built-in
+        # list, so the panel could never offer the thing.
         if(EXISTS ${DSERV_AGENT_SOURCE_DIR}/components.json)
             install(FILES ${DSERV_AGENT_SOURCE_DIR}/components.json
                 DESTINATION dserv/config
-                COMPONENT dserv-agent
+                COMPONENT dserv
             )
         endif()
         

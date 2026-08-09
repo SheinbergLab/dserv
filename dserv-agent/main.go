@@ -1572,9 +1572,21 @@ func systemctlDo(action, svc string) error {
 }
 
 // isSelfComponent reports whether this component IS the running agent, so its
-// install can be routed away from this process. Matched on the unit rather than
-// the component id, because the unit is what the install will restart.
+// install can be routed away from this process.
+//
+// Primarily by id, because the agent's entry deliberately declares NO service.
+// That omission is what lets an OLD agent -- one with no self-update path --
+// install this package at all: its UI derives "services to stop" from the
+// service field, so a declared service would have it stop its own unit and be
+// killed by systemd before the install ran. Without one it simply installs the
+// package, which is exactly the migration step a deployed box needs.
+//
+// The service check stays as a fallback for any component that names this
+// unit, so a box whose agent runs as stim2-agent.service is still recognised.
 func (a *Agent) isSelfComponent(comp Component) bool {
+	if comp.ID == agentComponentID {
+		return true
+	}
 	if comp.Service == "" {
 		return false
 	}

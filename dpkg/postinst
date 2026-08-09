@@ -27,6 +27,30 @@ if [ ! -e /usr/local/bin/dserv-agent ] && \
 fi
 rm -f /var/lib/dserv/dserv-agent.preupgrade
 
+# Nudge the agent to re-read its component list.
+#
+# This package ships /usr/local/dserv/config/components.json, which is how a
+# box that predates the dserv-agent package learns that package exists and can
+# offer it in the panel. But the agent reads that file ONCE, at startup, so a
+# freshly delivered list sits unread -- possibly for months -- and the offer
+# never appears.
+#
+# Deferred through systemd, not restarted here, for two reasons: dpkg holds its
+# lock until this script returns, and on a box updating through the panel the
+# agent IS the process running this transaction. Restarting it inline would
+# kill dpkg mid-configure. Twenty seconds is long enough for the transaction to
+# finish and for the agent to report the install it just performed.
+#
+# Best-effort throughout: no systemd, no systemd-run, or an agent that is not
+# running are all fine, and none of them are worth failing a dserv install for.
+if command -v systemctl >/dev/null 2>&1 && \
+   command -v systemd-run >/dev/null 2>&1 && \
+   systemctl is-active --quiet dserv-agent 2>/dev/null; then
+    systemd-run --collect --on-active=20 \
+        --unit=dserv-agent-reload-components \
+        systemctl restart dserv-agent >/dev/null 2>&1 || true
+fi
+
 # Refresh dynamic lib cache for libs installed with package.
 ldconfig
 

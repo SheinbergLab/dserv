@@ -26,7 +26,6 @@
       "description": "Management agent (this program)",
       "repo": "SheinbergLab/dserv",
       "package": "dserv-agent",
-      "service": "dserv-agent",
       "assetPattern": "dserv-agent_.*\\.deb$"
     },
     {
