@@ -648,9 +648,75 @@ elseif(APPLE)
 else()
     set(CPACK_PACKAGING_INSTALL_PREFIX "/usr/local")
     set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
-    set(CPACK_DEBIAN_PACKAGE_DEPENDS "libevdev2, libpq5, zlib1g, yajl-tools, fluidsynth")
-    set(CPACK_DEBIAN_PACKAGE_CONTROL_EXTRA ${CMAKE_CURRENT_SOURCE_DIR}/dpkg/postinst)
-    install(PROGRAMS ${CMAKE_CURRENT_SOURCE_DIR}/dpkg/install-dserv-service.sh DESTINATION bin)
+
+    # Split dserv-agent into its own .deb.
+    #
+    # The agent exists to manage a box when dserv is down or absent, but it
+    # shipped INSIDE dserv's package -- so a display box (stim2 + dlsh, no
+    # dserv) had no way to get one, and no way to update the one it had. That
+    # vacuum is what the hand-rolled stim2-agent.service grew into.
+    #
+    # ONE_PER_GROUP, not one-per-component: only the agent splits out. dservctl
+    # and extio-setup stay inside dserv, because moving files out of a package
+    # makes dpkg delete them on upgrade -- a box that took the new dserv but
+    # declined the merely-Recommended agent would silently lose dservctl, and
+    # with it essctrl, which is a symlink to dservctl in the same component.
+    #
+    # The agent does call dservctl (getDservStatus shells out to `essctrl -c`),
+    # which argues for moving it -- but that call only ever answers when there
+    # is a running dserv to answer it, and a box with a dserv already has
+    # dservctl. On a display box it would be a client with nothing to talk to.
+    set(CPACK_DEB_COMPONENT_INSTALL ON)
+    set(CPACK_COMPONENTS_GROUPING ONE_PER_GROUP)
+    set(CPACK_COMPONENTS_ALL dserv)
+    set(CPACK_COMPONENT_DSERV_GROUP "dserv")
+    if(DSERV_AGENT_FOUND)
+        list(APPEND CPACK_COMPONENTS_ALL dserv-agent)
+        set(CPACK_COMPONENT_DSERV-AGENT_GROUP "dserv-agent")
+    endif()
+    if(DSERVCTL_FOUND)
+        list(APPEND CPACK_COMPONENTS_ALL dservctl)
+        set(CPACK_COMPONENT_DSERVCTL_GROUP "dserv")
+    endif()
+    if(EXTIO_SETUP_FOUND)
+        list(APPEND CPACK_COMPONENTS_ALL extio-setup)
+        set(CPACK_COMPONENT_EXTIO-SETUP_GROUP "dserv")
+    endif()
+
+    # Per-group control fields. Package name must be set explicitly or CPack
+    # derives it from the group and emits dserv-dserv-agent.
+    set(CPACK_DEBIAN_DSERV_PACKAGE_NAME "dserv")
+    set(CPACK_DEBIAN_DSERV_PACKAGE_CONTROL_EXTRA ${CMAKE_CURRENT_SOURCE_DIR}/dpkg/postinst)
+
+    # Depends, not Recommends -- and the reason is the upgrade, not the install.
+    #
+    # dserv used to own /usr/local/bin/dserv-agent. On upgrade to a dserv that
+    # no longer ships it, dpkg deletes every file the old package owned and the
+    # new one does not -- so a box taking this release would have its agent
+    # removed out from under it, by an update the agent itself launched, and
+    # come back unmanageable. Recommends does not prevent that: these are
+    # installed as standalone .deb files (apt-get install /path/foo.deb), never
+    # out of an apt repo, so nothing is there to pull the agent in.
+    #
+    # A hard dependency turns that silent loss into apt refusing the upgrade
+    # with a name to fix. It costs the bootstrap nothing because the agent is
+    # now installed BEFORE the components (see main()), so by the time dserv is
+    # unpacked the dependency is already satisfied.
+    set(CPACK_DEBIAN_DSERV_PACKAGE_DEPENDS "libevdev2, libpq5, zlib1g, yajl-tools, fluidsynth, dserv-agent")
+
+    set(CPACK_DEBIAN_DSERV-AGENT_PACKAGE_NAME "dserv-agent")
+    # The agent's three files used to belong to dserv. Without these, dpkg
+    # refuses to unpack ("trying to overwrite ..., which is also in package
+    # dserv") on every box that already has one. `<< PROJECT_VERSION` is right
+    # because the split ships in a release strictly newer than any monolithic
+    # dserv, so every version that owned those files is covered.
+    set(CPACK_DEBIAN_DSERV-AGENT_PACKAGE_REPLACES "dserv (<< ${PROJECT_VERSION})")
+    set(CPACK_DEBIAN_DSERV-AGENT_PACKAGE_BREAKS "dserv (<< ${PROJECT_VERSION})")
+
+    # COMPONENT is not optional once component install is on: an untagged
+    # install() lands in "Unspecified" and becomes a stray package.
+    install(PROGRAMS ${CMAKE_CURRENT_SOURCE_DIR}/dpkg/install-dserv-service.sh
+        DESTINATION bin COMPONENT dserv)
 endif()
 
 include(CPack)

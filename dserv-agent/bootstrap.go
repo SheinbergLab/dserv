@@ -81,6 +81,15 @@ var defaultProfiles = []BootstrapProfile{
 		Components:  []string{"*"},
 	},
 	{
+		// Alias for incage: a development box wants all three components too.
+		// Kept as its own entry rather than a name-matching special case so it
+		// shows up in /setup/profiles and reads as a deliberate choice at the
+		// call site (?profile=dev) instead of "the in-cage one, on my desk".
+		Name:        "dev",
+		Description: "Development box (dserv + stim2 + dlsh; same set as incage)",
+		Components:  []string{"*"},
+	},
+	{
 		// The other half of a split rig: control on one box, display on
 		// another. dlsh is listed explicitly even though resolveWithDeps
 		// would pull it in via stim2's depends -- this profile's whole point
@@ -565,12 +574,11 @@ step_install_agent() {
         return
     fi
 
-    # If dserv package already installed the agent binary, skip
-    if command -v dserv-agent &>/dev/null; then
-        ok "dserv-agent already installed (via dserv package)"
-        return
-    fi
-
+    # No early-out on an existing binary. That check dated from when the agent
+    # rode inside the dserv package, where "already there" meant "as new as
+    # dserv is". It ships as its own dserv-agent deb now, so an agent already
+    # on the box is exactly the one that may be stale -- skipping it is how a
+    # display box ends up years behind with no way forward.
     info "Installing dserv-agent..."
 
     # Pre-resolved by the registry; falls back to GitHub if absent.
@@ -833,7 +841,12 @@ step_start_services() {
     info "Starting services..."
 
     if ! $SKIP_AGENT; then
-        run systemctl start dserv-agent || warn "dserv-agent failed to start"
+        # restart, not start: we just replaced /usr/local/bin/dserv-agent, and
+        # start is a no-op on a unit that is already running -- which would
+        # leave the OLD binary serving from an unlinked inode, so a bootstrap
+        # re-run to update the agent would appear to work and change nothing.
+        # restart also starts a stopped unit, so it covers the fresh case.
+        run systemctl restart dserv-agent || warn "dserv-agent failed to start"
     fi
 
     # Start what this profile installed, not a hardcoded dserv. On a display
@@ -899,9 +912,13 @@ main() {
     echo ""
 
     step_prerequisites
-    step_install_components
+    # Management plane first. The dserv package now Depends on dserv-agent, so
+    # unpacking dserv before the agent exists would fail outright -- and even
+    # without that, an agent that is already up is what lets you reach a box
+    # whose component install went wrong.
     step_install_agent
     step_configure_agent
+    step_install_components
     step_configure_dserv
     step_sync_scripts
     step_power_mgmt
