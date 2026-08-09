@@ -881,9 +881,15 @@ step_start_services() {
     # Start what this profile installed, not a hardcoded dserv. On a display
     # box that is stim2; starting (and verifying) dserv there reported a
     # failure for something that was never meant to exist.
+    #
+    # enable --now, not start. A package install deliberately does not enable
+    # daemons (see dpkg/postinst), but provisioning a box is the opposite
+    # decision: the whole point is that it comes back by itself after a power
+    # cut. Starting without enabling is how the display box ended up one
+    # reboot away from coming up dark -- running, but only until it wasn't.
     local svc
     for svc in $(profile_services); do
-        run systemctl start "$svc" || warn "${svc} failed to start"
+        run systemctl enable --now "$svc" || warn "${svc} failed to enable/start"
     done
 
     sleep 2
