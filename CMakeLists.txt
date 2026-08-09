@@ -615,6 +615,24 @@ set(CPACK_PACKAGE_CONTACT SheinbergLab)
 set(CPACK_PACKAGE_VENDOR SheinbergLab)
 
 set(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS ${LIBTCL})
+
+# This module generates an install() rule of its own, and without a component
+# it lands in "Unspecified" -- which, once CPACK_DEB_COMPONENT_INSTALL is on,
+# is not packaged at all. That is exactly how 0.51.0 shipped a dserv deb with
+# an empty /usr/local/lib: libtcl9.0.so silently vanished and the installed
+# binary could not start ("error while loading shared libraries: libtcl9.0.so").
+#
+# Worth remembering the shape of the miss: the audit that preceded the split
+# checked every install() call written in these files and found only one
+# untagged. This rule is not written in these files -- the module emits it --
+# so no amount of reading install( lines would have found it. Component
+# packaging turns "untagged" from harmless into "silently absent from the
+# package", which makes any implicitly-generated install rule a hazard.
+# NOTE the name: CMAKE_INSTALL_SYSTEM_RUNTIME_COMPONENT, with no LIBS. The
+# variable that NAMES the libraries has LIBS in it, the one that assigns their
+# component does not, and a wrong guess here fails exactly like no setting at
+# all -- silently, in the package rather than at configure time.
+set(CMAKE_INSTALL_SYSTEM_RUNTIME_COMPONENT dserv)
 include(InstallRequiredSystemLibraries)
 
 if(WIN32)
