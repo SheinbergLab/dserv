@@ -348,6 +348,38 @@ primary_service() {
     fi
 }
 
+# ---- Agent unit reconciliation ----
+#
+# The declared configuration wins. These used to be add-if-absent only, which
+# meant a unit that already had --registry was pronounced "already configured"
+# and a WRONG value survived every future bootstrap -- a workgroup typo, or the
+# unsubstituted --service __STIM2_SERVICE__ we found on a deployed display box.
+# Re-running the provisioner should converge the box, not ratify its drift.
+
+# The current value of one ExecStart flag, or empty. Handles both layouts we
+# ship: the multi-line continuation form this script writes, and a single-line
+# ExecStart from a packaged unit. Values never contain spaces, so stopping at
+# whitespace also stops safely before a trailing line-continuation.
+agent_flag_value() {
+    sed -nE "s|^.*[[:space:]]$1[[:space:]]+([^[:space:]]+).*$|\1|p" "$2" | head -1
+}
+
+# Set one ExecStart flag to the declared value: replace in place if present,
+# append after the binary if not, and say so either way. Silent when it already
+# matches -- the common case, and not worth a line of output.
+set_agent_flag() {
+    local f="$1" flag="$2" want="$3" have
+    have=$(agent_flag_value "$flag" "$f")
+    [[ "$have" == "$want" ]] && return 0
+    if [[ -z "$have" ]]; then
+        run sed -i "s|ExecStart=.*dserv-agent|& ${flag} ${want}|" "$f"
+        ok "  ${flag} ${want} (added)"
+    else
+        run sed -i -E "s|([[:space:]]${flag}[[:space:]]+)[^[:space:]]+|\1${want}|" "$f"
+        ok "  ${flag}: ${have} -> ${want}"
+    fi
+}
+
 check_not_registry() {
     [[ "${DSERV_BOOTSTRAP_FORCE:-}" == "1" ]] && return 0
     local status
@@ -716,19 +748,21 @@ WantedBy=multi-user.target
 EOF
         ok "dserv-agent service created"
     else
-        # Service file exists (from deb) — patch in registry/workgroup if not present
-        if ! grep -q "\-\-registry" "$svc_file"; then
-            run sed -i "s|ExecStart=.*dserv-agent|& --registry ${REGISTRY_URL} --workgroup ${WORKGROUP}|" "$svc_file"
-            ok "dserv-agent service patched (registry: ${REGISTRY_URL})"
-        else
-            ok "dserv-agent service already configured"
+        # Unit already exists (deb-shipped, hand-rolled, or a previous run).
+        # Converge its four managed flags on what this run declares, leaving
+        # every other flag alone -- --no-tls, --allow-reboot and --listen are
+        # site decisions this script has no business overwriting.
+        #
+        # Backed up first: a unit this script mangles is a box that cannot
+        # start its own agent, which is the failure with no way back in.
+        if ! $DRY_RUN; then
+            cp -a "$svc_file" "${svc_file}.bootstrap-bak" 2>/dev/null || true
         fi
-        # A deb-shipped unit is dserv-flavoured by construction; on a box
-        # without dserv it needs the same pinning as a fresh one.
-        if ! grep -q "\-\-components" "$svc_file"; then
-            run sed -i "s|ExecStart=.*dserv-agent|& --service ${svc_primary} --components /etc/dserv-agent/components.json|" "$svc_file"
-            ok "dserv-agent service pinned to ${svc_primary}"
-        fi
+        ok "dserv-agent service exists — reconciling"
+        set_agent_flag "$svc_file" --registry   "${REGISTRY_URL}"
+        set_agent_flag "$svc_file" --workgroup  "${WORKGROUP}"
+        set_agent_flag "$svc_file" --service    "${svc_primary}"
+        set_agent_flag "$svc_file" --components /etc/dserv-agent/components.json
     fi
 
     run systemctl daemon-reload
