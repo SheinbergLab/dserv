@@ -426,16 +426,66 @@ case "${1:-status}" in
   grandmaster)
       need_root "$@"; deps_present; units_present; preflight grandmaster "$2"
       # The grandmaster's phc2sys pushes the SYSTEM clock into the PHC, so NTP
-      # here is the site's actual time source and must KEEP running. This is the
-      # exact reverse of the client role, and the asymmetry is the easiest thing
-      # to get backwards.
-      _ntp=0
-      for _u in systemd-timesyncd.service chrony.service chronyd.service ntp.service ntpsec.service; do
-          [ "$(systemctl is-active "$_u" 2>/dev/null)" = active ] && _ntp=1
+      # here is the site's actual time source. This is the exact reverse of the
+      # client role, and the asymmetry is the easiest thing to get backwards.
+      #
+      # WHICH daemon matters more than WHETHER one is running, and this used to
+      # say the opposite. Measured on the i.MX95 grandmaster 2026-08-08, 120
+      # samples of its own phc2sys each:
+      #
+      #   chrony              sd     92 ns   |max|   647 ns
+      #   systemd-timesyncd   sd 53,042 ns   |max| 374,000 ns
+      #   no NTP at all       sd     77 ns   |max|   120 ns
+      #
+      # timesyncd was ~690x WORSE THAN NO TIME SOURCE AT ALL -- it is an SNTP
+      # client with no filtering, so ordinary path variation becomes hundreds of
+      # ppm of frequency thrash, and phc2sys pushes every bit of it into the PHC
+      # and out to every box. Picking a better SERVER does not fix that; it was
+      # tried first and changed nothing measurable.
+      _ntp_daemon=
+      for _u in chrony.service chronyd.service systemd-timesyncd.service ntp.service ntpsec.service; do
+          if [ "$(systemctl is-active "$_u" 2>/dev/null)" = active ]; then
+              _ntp_daemon=$_u; break                # chrony first: it wins if both
+          fi
       done
-      [ "$_ntp" = 1 ] || echo "WARNING: no NTP daemon active. A grandmaster's phc2sys pushes the SYSTEM
-         clock into the PHC, so with no NTP this site will distribute
-         free-running quartz. Do NOT stop NTP on a grandmaster."
+      case "$_ntp_daemon" in
+        chrony.service|chronyd.service) : ;;       # the good case, say nothing
+        "")
+          echo "NOTE: no NTP daemon active. The clock will free-run -- which is"
+          echo "      MUCH better than a bad one (see above), but it drifts in"
+          echo "      absolute terms. Install chrony for accuracy at no cost in"
+          echo "      stability:  apt install chrony"
+          echo "      then:  cp chrony-grandmaster.conf /etc/chrony/conf.d/10-dserv-grandmaster.conf" ;;
+        *)
+          echo "WARNING: $_ntp_daemon is this grandmaster's time source, and it"
+          echo "         will inject its jitter into every box on the rig."
+          echo "         Measured: timesyncd sd 53 us vs chrony sd 92 ns here."
+          echo "         Replace it:  apt install chrony   (removes timesyncd)"
+          echo "         then:  cp chrony-grandmaster.conf /etc/chrony/conf.d/10-dserv-grandmaster.conf" ;;
+      esac
+
+      # ORDER MATTERS, and getting it wrong strands phc2sys in a way that still
+      # reports "locked". phc2sys spends its ONE-TIME start-up step allowance
+      # (-F, 20 us) when it starts. If an NTP daemon completes its initial sync
+      # AFTERWARDS and steps CLOCK_REALTIME, phc2sys faces a huge offset with no
+      # step allowance left, and -S 1.0 refuses to step anything under a second
+      # -- so it can only slew, rails at max_adj, and the error GROWS. Seen on
+      # the rpi5 2026-08-09: freq pinned at -64000000 ppb (the Pi PHC's max_adj)
+      # while the offset walked out at ~18 ms/s, servo state still reading s2.
+      # Recovery is `systemctl restart dserv-phc2sys@<iface>`, which restores the
+      # allowance and steps straight back to +/-57 ns.
+      if [ -n "$_ntp_daemon" ] && [ "$(systemctl show -p ActiveEnterTimestampMonotonic --value "$_ntp_daemon" 2>/dev/null || echo 0)" -gt 0 ] 2>/dev/null; then
+          _up_s=$(( ( $(cut -d' ' -f1 /proc/uptime | cut -d. -f1) ) - \
+                    ( $(systemctl show -p ActiveEnterTimestampMonotonic --value "$_ntp_daemon" 2>/dev/null) / 1000000 ) ))
+          if [ "${_up_s:-999}" -lt 300 ]; then
+              echo "NOTE: $_ntp_daemon started ${_up_s}s ago and may not have stepped the"
+              echo "      clock yet. If it steps AFTER phc2sys starts, phc2sys cannot"
+              echo "      recover on its own (it rails at max_adj and still reports s2)."
+              echo "      Let it settle first, or afterwards run:"
+              echo "        systemctl restart $GM_PHC$2.service"
+          fi
+      fi
+
       echo "Making this host the PTP GRANDMASTER on $2."
       enable_pair "$GM_PTP" "$GM_PHC" "$2"
       ;;
