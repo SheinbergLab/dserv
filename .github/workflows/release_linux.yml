@@ -121,7 +121,10 @@ jobs:
       - name: Build dserv-agent
         run: |
           cd dserv-agent
-          CGO_ENABLED=1 GOOS=linux GOARCH=${{ matrix.goarch }} go build -ldflags="-s -w" -o dserv-agent_linux_${{ matrix.goarch }} .
+          # -X main.version stamps the release tag; without it every agent in
+          # the fleet reports the fallback literal and /api/status cannot tell
+          # you which build a box is on. Requires main.version to be a var.
+          CGO_ENABLED=1 GOOS=linux GOARCH=${{ matrix.goarch }} go build -ldflags="-s -w -X main.version=${{ github.ref_name }}" -o dserv-agent_linux_${{ matrix.goarch }} .
 
       - name: Upload dserv-agent binary
         env:

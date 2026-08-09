@@ -45,8 +45,20 @@ var webContent embed.FS
 //go:embed components.json
 var defaultComponentsJSON []byte
 
+// version is reported by /api/status and the management panel, and is how you
+// answer "did that deploy take" and "how stale is that box".
+//
+// It MUST stay a var: the Go linker's -X can only patch string variables, so
+// while this sat in the const block below every -ldflags "-X main.version=..."
+// was silently a no-op -- the Makefile had carried one for ages. The whole
+// fleet reported 0.6.0 no matter what it was actually running, which is why a
+// box's agent age had to be inferred from its start time and its served HTML.
+//
+// Overridden at build time by the Makefile, CMake and the release workflow.
+// This literal is only the fallback for a bare `go build`.
+var version = "dev"
+
 const (
-	version    = "0.6.0"
 	githubAPI  = "https://api.github.com/repos"
 	maxMsgSize = 512 * 1024
 	wsGUID     = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"

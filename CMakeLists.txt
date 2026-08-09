@@ -347,7 +347,9 @@ if(GO_EXECUTABLE)
                 GOOS=${GOOS}
                 GOARCH=${GOARCH}
                 CGO_ENABLED=0
-                ${GO_EXECUTABLE} build -o ${DSERV_AGENT_BINARY} .
+                ${GO_EXECUTABLE} build
+                    -ldflags "-X main.version=${PROJECT_VERSION}"
+                    -o ${DSERV_AGENT_BINARY} .
             WORKING_DIRECTORY ${DSERV_AGENT_SOURCE_DIR}
             DEPENDS
                 ${DSERV_AGENT_GO_FILES}
