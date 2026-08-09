@@ -123,7 +123,22 @@ proc process_trialdg { dpoint data } {
 
 proc process_ess { dpoint data } {
     global last_load_time
-    set host [dservGet system/hostaddr]
+
+    # This proc is registered on the GLOB `ess/*`, which also catches
+    # ess/em_pos -- published at the EYE SAMPLE RATE (250 Hz today) and doing
+    # nothing here but falling through every branch. Measured in the db interp
+    # on a Pi 5: 8.1 us per call, of which the dservGet below was 1.9 us and
+    # each of the three string compares 1.16 us. ~2 ms/s of CPU spent reaching
+    # three conditions that are all false.
+    #
+    # Bail before any of that. IF YOU ADD A HANDLER BELOW, ADD ITS DATAPOINT
+    # HERE TOO -- otherwise it silently never fires, which is a worse bug than
+    # the one this guard fixes.
+    switch -exact -- $dpoint {
+        ess/subject - ess/last_load_time - ess/trialinfo {}
+        default { return }
+    }
+
     set domain ess
 
     # Track subject changes for session stats
@@ -149,6 +164,10 @@ proc process_ess { dpoint data } {
     }
 
     if { [string equal $dpoint ess/trialinfo] } {
+        # hostaddr is read HERE, not at proc entry: this is the only branch that
+        # uses it, and at proc entry it cost a datapoint read on every ess/*
+        # update (see the note above).
+        set host [dservGet system/hostaddr]
         set key [file tail $dpoint]
         db eval { INSERT INTO status (host, status_source, status_type, status_value, sys_time)
             VALUES($host, $domain, $key, $data, current_timestamp)
