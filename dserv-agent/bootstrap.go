@@ -28,6 +28,13 @@ type BootstrapProfile struct {
 	Name        string   `json:"name"`
 	Description string   `json:"description"`
 	Components  []string `json:"components"` // component IDs; empty or ["*"] means all
+
+	// StimMode is how the display program should RUN, as opposed to which
+	// components get installed -- the first thing a profile has needed to say
+	// that is not a component list. "windowed" means a desktop development box:
+	// leave the cage unit (own X server on tty1) disabled and install a
+	// launcher instead. Empty means the cage default, fullscreen via systemd.
+	StimMode string `json:"stimMode,omitempty"`
 }
 
 // BootstrapConfig holds parameters for generating the bootstrap script
@@ -38,6 +45,7 @@ type BootstrapConfig struct {
 	ComponentsJSON   string // filtered component list as JSON, with resolved release assets
 	AgentReleaseJSON string // dserv-agent release {tag, assets:[{name,url}]} as JSON
 	ProfileName      string
+	StimMode         string // "" = cage default (fullscreen service); "windowed" = dev
 }
 
 // bootstrapAsset is a release asset pre-resolved to a direct download URL.
@@ -86,8 +94,9 @@ var defaultProfiles = []BootstrapProfile{
 		// shows up in /setup/profiles and reads as a deliberate choice at the
 		// call site (?profile=dev) instead of "the in-cage one, on my desk".
 		Name:        "dev",
-		Description: "Development box (dserv + stim2 + dlsh; same set as incage)",
+		Description: "Development box (dserv + stim2 + dlsh; stim2 windowed)",
 		Components:  []string{"*"},
+		StimMode:    "windowed",
 	},
 	{
 		// The other half of a split rig: control on one box, display on
@@ -108,6 +117,19 @@ var defaultProfiles = []BootstrapProfile{
 		Description: "Minimal install (dserv + dlsh, agent only)",
 		Components:  []string{"dserv", "dlsh"},
 	},
+}
+
+// profileStimMode reports how this profile wants the display program to run.
+// Unknown or unnamed profiles get the cage default, which is the safe answer:
+// a box that should have been windowed merely runs fullscreen, whereas the
+// reverse would leave a cage box with no display at all.
+func (a *Agent) profileStimMode(profileName string) string {
+	for _, p := range a.getProfiles() {
+		if strings.EqualFold(p.Name, profileName) {
+			return p.StimMode
+		}
+	}
+	return ""
 }
 
 // getProfiles returns the active profile list.
@@ -218,6 +240,7 @@ set -euo pipefail
 REGISTRY_URL="{{.ServerURL}}"
 DEFAULT_WORKGROUP="{{.DefaultWG}}"
 PROFILE="{{.ProfileName}}"
+STIM_MODE="{{.StimMode}}"
 DSERV_INSTALL_DIR="/usr/local/dserv"
 LOG_FILE="/tmp/dserv-bootstrap-$(date +%Y%m%d-%H%M%S).log"
 
@@ -334,6 +357,11 @@ write_file() {
 # filter it out rather than doing the work twice.
 AGENT_COMPONENT_ID="dserv-agent"
 
+# The display program. Named here rather than matched inline because two
+# separate decisions key off it: whether its service is enabled, and whether a
+# windowed launcher is installed in its place.
+STIM_COMPONENT_ID="stim2"
+
 has_component() {
     echo "$COMPONENTS_JSON" | jq -e --arg id "$1" \
         '.components[] | select(.id == $id)' &>/dev/null
@@ -344,8 +372,18 @@ has_component() {
 # managed, and pinning --service to it would have the panel report the agent
 # where the box's actual payload service belongs.
 profile_services() {
-    echo "$COMPONENTS_JSON" | jq -r --arg self "$AGENT_COMPONENT_ID" \
-        '.components[] | select(.id != $self) | .service // empty'
+    local exclude="$AGENT_COMPONENT_ID"
+    # A windowed (development) box must NOT have stim2.service enabled. That
+    # unit starts its OWN X server on tty1 as user stim and conflicts with
+    # getty -- correct in a cage, a fight on a desktop already running a
+    # compositor on graphical.target. Excluding it here keeps it out of both
+    # the enable/start loop and the verify loop, so a bootstrap re-run stops
+    # switching back on what someone deliberately turned off.
+    if [[ "$STIM_MODE" == "windowed" ]]; then
+        exclude="${exclude}|${STIM_COMPONENT_ID}"
+    fi
+    echo "$COMPONENTS_JSON" | jq -r --arg ex "$exclude" \
+        '.components[] | select(.id | test("^(" + $ex + ")$") | not) | .service // empty'
 }
 
 # The unit the agent manages as its primary: dserv where there is one,
@@ -826,6 +864,44 @@ EOF
     run systemctl enable dserv-agent
 }
 
+step_stim_launcher() {
+    if [[ "$STIM_MODE" != "windowed" ]] || ! has_component "$STIM_COMPONENT_ID"; then
+        return
+    fi
+
+    info "Installing windowed stim2 launcher (development box)..."
+
+    # Deliberately a command, not a service. stim2 is an X11 program, so on a
+    # labwc desktop it runs through XWayland -- a system unit would have to
+    # guess DISPLAY and XAUTHORITY out of a user session's runtime dir and
+    # would break on the next logout. A script inherits all of that from
+    # whoever runs it, and matches how development actually goes: stim2 stopped
+    # and restarted constantly, with its output in front of you.
+    #
+    # No -F, and no xrandr --rate: forcing 120 Hz is right for a cage display
+    # and wrong for whatever monitor is on a desk.
+    write_file /usr/local/bin/stim2 <<'LAUNCHER'
+#!/bin/sh
+# Windowed stim2 for a development box (installed by the dserv bootstrap).
+#
+# Runs in the session that invokes it, so DISPLAY / XWayland come from your
+# desktop. The cage unit stim2.service -- which starts its own X server on
+# tty1 -- is deliberately left disabled on this kind of box.
+#
+#   stim2                          1024x768 window
+#   STIM2_WIDTH=1280 STIM2_HEIGHT=1024 stim2
+#   stim2 -F                       fullscreen anyway; extra args win
+#
+# For ESS to drive this rather than a remote display, point ess/rmt_host at
+# localhost -- that is a per-session choice, so provisioning does not set it.
+exec /usr/local/stim2/stim2 \
+    -w "${STIM2_WIDTH:-1024}" -h "${STIM2_HEIGHT:-768}" \
+    -f /usr/local/stim2/config/linux.cfg "$@"
+LAUNCHER
+    run chmod 0755 /usr/local/bin/stim2
+    ok "stim2 (windowed) -- run 'stim2' from a desktop terminal"
+}
+
 step_configure_dserv() {
     if ! has_component dserv; then
         info "No dserv in profile ${PROFILE} — skipping dserv config"
@@ -1086,6 +1162,7 @@ main() {
     step_install_agent
     step_configure_agent
     step_install_components
+    step_stim_launcher
     step_configure_dserv
     step_sync_scripts
     step_power_mgmt
@@ -1184,6 +1261,7 @@ func (a *Agent) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 		ComponentsJSON:   string(compJSON),
 		AgentReleaseJSON: string(agentJSON),
 		ProfileName:      profileName,
+		StimMode:         a.profileStimMode(profileName),
 	}
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
