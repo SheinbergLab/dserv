@@ -347,6 +347,32 @@ body.ess-app {
 
 .ess-stim-status.connected .ess-stim-dot { background: var(--ess-success); }
 
+/* Only on a split rig: the chip then names another machine, and clicking it
+   opens that machine's dserv-agent panel. Underline the host rather than the
+   whole chip -- the host is the part that identifies what you're about to
+   manage, and "STIM: not connected" underlined reads like a broken link. */
+.ess-stim-status.clickable {
+    cursor: pointer;
+}
+
+.ess-stim-status.clickable:hover,
+.ess-stim-status.clickable:focus-visible {
+    color: var(--ess-text-primary);
+}
+
+.ess-stim-status.clickable:hover .ess-stim-host,
+.ess-stim-status.clickable:focus-visible .ess-stim-host {
+    text-decoration: underline;
+    text-underline-offset: 3px;
+}
+
+/* the disconnected chip keeps its red text on hover -- it is still an alarm */
+.ess-stim-status.clickable.disconnected:hover,
+.ess-stim-status.clickable.disconnected:focus-visible {
+    color: var(--ess-error);
+    background: rgba(248, 113, 113, 0.2);
+}
+
 .ess-stim-status.disconnected {
     color: var(--ess-error);
     background: rgba(248, 113, 113, 0.12);

@@ -153,15 +153,36 @@ class PageNav {
     }
 
     /**
-     * dserv-agent's management panel for that machine, opened solo.
+     * dserv-agent's management panel for a machine, opened solo.
+     *
+     * Defaults to the machine this page drives; pass a host to reach another
+     * one (the stim2 display, which on a split rig is a different box with its
+     * own agent). Always `manage=local`, never `manage=<nodeId>`: we go to that
+     * host's OWN agent and ask it about itself, rather than asking the local
+     * agent to resolve a node id it may never have heard of -- a stim-only box
+     * runs an agent but no dserv, so it is absent from the mesh directory.
      *
      * Always plain http on port 80: dserv-agent.service runs with --no-tls.
      * That is fine for a popup even when this page is HTTPS (mixed content
      * doesn't apply to top-level windows) but is exactly why the panel can't
      * be iframed into a dserv page instead.
      */
-    static agentPanelUrl() {
-        return `http://${PageNav.dservHostname()}/?manage=local&solo=1`;
+    static agentPanelUrl(host) {
+        const target = PageNav.stripPort(host) || PageNav.dservHostname();
+        return `http://${target}/?manage=local&solo=1`;
+    }
+
+    /**
+     * Drop a trailing :port, leaving bare IPv6 literals alone.
+     *
+     * ess/rmt_host may carry stim2's port; the agent is always on :80.
+     */
+    static stripPort(host) {
+        const s = String(host || '').trim();
+        if (s.startsWith('[')) return s.replace(/^(\[[^\]]*\]):\d+$/, '$1');
+        // a bare IPv6 literal has several colons and no port to strip
+        if ((s.match(/:/g) || []).length > 1) return s;
+        return s.replace(/:\d+$/, '');
     }
 
     /**

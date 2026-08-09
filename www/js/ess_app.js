@@ -155,7 +155,7 @@ function requestInitialData() {
           em/settings mesh/peers
           openephys/status
           ess/rmt_connected ess/rmt_host ess/stim_required
-          system/hostname system/os
+          system/hostname system/hostaddr system/os
           powermon/pct powermon/charging powermon/hrs_remaining powermon/v powermon/a powermon/w
           juicer/juice_level juicer/reward_mls juicer/reward_number
           configs/list configs/tags configs/quick_picks configs/current
@@ -339,6 +339,48 @@ function initOpenEphysStatus() {
 let stimConnected = null;      // null = not yet reported
 let stimHost = '';
 let stimRequired = false;
+let localHostname = '';        // system/hostname, raw (not the display form)
+let localHostaddr = '';        // system/hostaddr: this box's LAN IPv4
+
+/**
+ * Host spellings that can only ever mean "the machine dserv runs on".
+ */
+const LOCAL_HOST_ALIASES = new Set([
+    '', 'localhost', 'localhost.localdomain', '127.0.0.1', '0.0.0.0',
+    '::1', '[::1]'
+]);
+
+/**
+ * Canonical form for comparing two spellings of a host.
+ *
+ * Drops the port, case, a trailing root dot, and the mDNS `.local` suffix, so
+ * `Rig1.local:4610`, `rig1` and `RIG1.` all collapse together.
+ */
+function canonicalHost(host) {
+    return PageNav.stripPort(host)
+        .toLowerCase()
+        .replace(/\.$/, '')
+        .replace(/\.local$/, '');
+}
+
+/**
+ * Is the stimulus display on a different machine than dserv?
+ *
+ * A split rig points ess/rmt_host at another box; a self-contained one leaves
+ * it at `localhost` (the ess-2.0.tm default) -- but not always, since a rig may
+ * name itself by hostname or by its own LAN IP. So "local" is anything that
+ * matches a loopback alias, system/hostname, system/hostaddr, or the host this
+ * page is talking to. Ambiguity resolves to local, i.e. to offering nothing:
+ * a missing button is a smaller wrong than one pointing at the wrong machine.
+ */
+function stimHostIsRemote() {
+    const stim = canonicalHost(stimHost);
+    if (LOCAL_HOST_ALIASES.has(stim)) return false;
+
+    return ![localHostname, localHostaddr, PageNav.dservHostname()]
+        .filter(Boolean)
+        .some(h => canonicalHost(h) === stim);
+}
 
 /**
  * Update the stim connection chip in the status bar
@@ -377,9 +419,32 @@ function updateStimStatus() {
             ? 'ess-stim-status disconnected required'
             : 'ess-stim-status disconnected';
         label.textContent = 'STIM: not connected';
+        // Name the dark machine when it is not this one. Locally it would only
+        // ever say "localhost", but on a split rig it is the box you have to go
+        // fix -- and, below, the one the chip hands you a panel for.
+        if (stimHostIsRemote()) hostEl.textContent = stimHost;
         container.title = stimRequired
             ? `No stimulus display at ${stimHost || 'configured host'} — stim is REQUIRED, so the system will refuse to start`
             : `No stimulus display at ${stimHost || 'configured host'} — stimulus commands are being silently discarded`;
+    }
+
+    // On a split rig the chip is the only thing on this page that names the
+    // display machine, so it is where its "Manage System" panel belongs -- the
+    // hostname display next to it manages dserv's box, not this one.
+    //
+    // Deliberately NOT gated on stimConnected. A dark remote display is the
+    // case where you most want to reach across and restart stim2, and
+    // ess/rmt_host is configuration, so it still names the box while the link
+    // is down.
+    const remote = stimHostIsRemote();
+    container.classList.toggle('clickable', remote);
+    if (remote) {
+        container.setAttribute('role', 'button');
+        container.setAttribute('tabindex', '0');
+        container.title += ` — click to manage ${PageNav.stripPort(stimHost)}`;
+    } else {
+        container.removeAttribute('role');
+        container.removeAttribute('tabindex');
     }
 }
 
@@ -391,7 +456,31 @@ function updateStimStatus() {
  * not just what was true when the system loaded.
  */
 function initStimStatus() {
-    if (!document.getElementById('stim-status')) return;
+    const container = document.getElementById('stim-status');
+    if (!container) return;
+
+    // Listeners live on the container, which survives updateStimStatus's
+    // innerHTML rewrite; openStimManagement re-checks remoteness itself, so a
+    // chip that has gone back to local can't be clicked through to nowhere.
+    container.addEventListener('click', openStimManagement);
+    container.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            openStimManagement();
+        }
+    });
+
+    // Local identity: what "not the host" is measured against. Both are set
+    // once at dserv startup (dsconf.tcl set_hostinfo), so no re-render race.
+    dpManager.subscribe('system/hostname', (data) => {
+        localHostname = String(data.value ?? data.data ?? '');
+        updateStimStatus();
+    });
+
+    dpManager.subscribe('system/hostaddr', (data) => {
+        localHostaddr = String(data.value ?? data.data ?? '');
+        updateStimStatus();
+    });
 
     dpManager.subscribe('ess/rmt_connected', (data) => {
         const raw = data.value ?? data.data ?? '';
@@ -495,6 +584,27 @@ function openSystemManagement() {
     window.open(
         PageNav.agentPanelUrl(),
         `agent_${PageNav.dservHostname()}`,
+        'width=820,height=900,menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=yes'
+    );
+}
+
+/**
+ * Open dserv-agent's management panel for the remote stimulus display.
+ *
+ * Same panel, same popup geometry as openSystemManagement -- only the machine
+ * differs -- and named per host, so the stim window and the dserv window are
+ * two distinct popups rather than one that keeps getting reused.
+ *
+ * No-op unless the display really is on another box: the local case is already
+ * covered by the hostname display, which shows stim2's own version and update
+ * state along with everything else on that machine.
+ */
+function openStimManagement() {
+    if (!stimHostIsRemote()) return;
+    const host = PageNav.stripPort(stimHost);
+    window.open(
+        PageNav.agentPanelUrl(host),
+        `agent_${host}`,
         'width=820,height=900,menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=yes'
     );
 }
