@@ -234,6 +234,7 @@ ROLE=""
 WORKGROUP="${DEFAULT_WORKGROUP}"
 DRY_RUN=false
 SKIP_AGENT=false
+SKIP_SCRIPTS=false
 ESS_USER_ARG=""
 
 while [[ $# -gt 0 ]]; do
@@ -243,6 +244,7 @@ while [[ $# -gt 0 ]]; do
         --user)        ESS_USER_ARG="$2"; shift 2 ;;
         --dry-run)     DRY_RUN=true; shift ;;
         --skip-agent)  SKIP_AGENT=true; shift ;;
+        --skip-scripts) SKIP_SCRIPTS=true; shift ;;
         --help|-h)
             echo "dserv bootstrap - provision a data acquisition box"
             echo ""
@@ -255,6 +257,10 @@ while [[ $# -gt 0 ]]; do
             echo "                       (default: the user invoking sudo, else 'lab')"
             echo "  --dry-run            Show what would be done without making changes"
             echo "  --skip-agent         Skip dserv-agent install (components only)"
+            echo "  --skip-scripts       Do not sync ESS scripts from the registry."
+            echo "                       Use on any box with local work in"
+            echo "                       ~/systems/ess: the sync unzips OVER that"
+            echo "                       tree and the registry copy wins."
             echo "  --help               Show this help"
             echo ""
             echo "Profiles (set via URL, e.g. /setup?profile=server):"
@@ -399,6 +405,11 @@ check_root() {
             [[ -n "$ESS_USER_ARG" ]] && args="$args --user $ESS_USER_ARG"
             $DRY_RUN              && args="$args --dry-run"
             $SKIP_AGENT           && args="$args --skip-agent"
+            # Must be forwarded, like every other flag here: this branch
+            # re-fetches and re-runs the script as root, so anything missed
+            # is silently dropped -- and the one being dropped here protects
+            # a tree of local work.
+            $SKIP_SCRIPTS         && args="$args --skip-scripts"
             exec sudo bash -c "$(curl -sSL "${REGISTRY_URL}/setup?profile=${PROFILE}")" -- $args
         else
             fail "This script must be run as root"
@@ -794,6 +805,17 @@ EOF
 }
 
 step_sync_scripts() {
+    # This step unzips the registry's export OVER ~/systems/ess with -o, so the
+    # registry copy wins every collision. That is right for a box being
+    # provisioned and wrong for one already in service: the .sync_base.json
+    # files in that tree exist because a 3-way conflict-detecting sync owns it,
+    # and this step knows nothing about them. --skip-scripts is what makes a
+    # bootstrap re-run safe on a box with local work.
+    if $SKIP_SCRIPTS; then
+        info "Skipping ESS script sync (--skip-scripts)"
+        return
+    fi
+
     # ESS systems are run by dserv; a display box has nothing to run them with.
     if ! has_component dserv; then
         info "No dserv in profile ${PROFILE} — skipping ESS script sync"
@@ -837,6 +859,16 @@ step_sync_scripts() {
         return
     fi
     local dest="${user_home}/systems/ess"
+
+    # Say what is about to be replaced. unzip -o is silent about collisions, so
+    # without this the log of a destructive step looks identical to a first
+    # install -- and "how many scripts were already there" is the one number
+    # you want when someone asks what happened to their edits.
+    local existing
+    existing=$(find "$dest" -type f \( -name "*.tcl" -o -name "*.tm" \) 2>/dev/null | wc -l)
+    if [[ "$existing" -gt 0 ]]; then
+        warn "Overwriting ${existing} existing scripts in ${dest} (--skip-scripts to keep them)"
+    fi
 
     run mkdir -p "$dest"
     run unzip -o "$zip_file" -d "$dest"
