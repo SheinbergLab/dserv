@@ -235,6 +235,7 @@ WORKGROUP="${DEFAULT_WORKGROUP}"
 DRY_RUN=false
 SKIP_AGENT=false
 SKIP_SCRIPTS=false
+REINSTALL=false
 ESS_USER_ARG=""
 
 while [[ $# -gt 0 ]]; do
@@ -245,6 +246,7 @@ while [[ $# -gt 0 ]]; do
         --dry-run)     DRY_RUN=true; shift ;;
         --skip-agent)  SKIP_AGENT=true; shift ;;
         --skip-scripts) SKIP_SCRIPTS=true; shift ;;
+        --reinstall)   REINSTALL=true; shift ;;
         --help|-h)
             echo "dserv bootstrap - provision a data acquisition box"
             echo ""
@@ -261,6 +263,8 @@ while [[ $# -gt 0 ]]; do
             echo "                       Use on any box with local work in"
             echo "                       ~/systems/ess: the sync unzips OVER that"
             echo "                       tree and the registry copy wins."
+            echo "  --reinstall          Reinstall components even when already at the"
+            echo "                       target version (repairs a broken install)"
             echo "  --help               Show this help"
             echo ""
             echo "Profiles (set via URL, e.g. /setup?profile=server):"
@@ -410,6 +414,7 @@ check_root() {
             # is silently dropped -- and the one being dropped here protects
             # a tree of local work.
             $SKIP_SCRIPTS         && args="$args --skip-scripts"
+            $REINSTALL            && args="$args --reinstall"
             exec sudo bash -c "$(curl -sSL "${REGISTRY_URL}/setup?profile=${PROFILE}")" -- $args
         else
             fail "This script must be run as root"
@@ -503,6 +508,33 @@ find_asset() {
     echo "$url"
 }
 
+# What is installed right now, or empty. Mirrors how the agent reports a
+# component's current version: a versionFile if the component declares one
+# (dlsh), otherwise dpkg.
+#
+# For a dpkg component the STATUS matters as much as the version. A package can
+# sit at the right version and still be half-configured -- the display box was
+# found with "iF stim2 0.23.9", a failed postinst, and reinstalling is exactly
+# what repaired it. Reporting a version for that state would make the skip
+# below step over the one box that needed the work.
+installed_version() {
+    local comp_json="$1"
+    local vfile pkg status_version
+    vfile=$(echo "$comp_json" | jq -r '.versionFile // empty')
+    pkg=$(echo "$comp_json" | jq -r '.package // empty')
+
+    if [[ -n "$vfile" ]]; then
+        [[ -f "$vfile" ]] && head -1 "$vfile" | tr -d '[:space:]'
+        return 0
+    fi
+    if [[ -n "$pkg" ]]; then
+        status_version=$(dpkg-query -W -f='${Status}|${Version}' "$pkg" 2>/dev/null || true)
+        case "$status_version" in
+            "install ok installed|"*) echo "${status_version#*|}" ;;
+        esac
+    fi
+}
+
 install_component() {
     local comp_json="$1"
     local comp_id=$(echo "$comp_json" | jq -r '.id')
@@ -539,6 +571,20 @@ install_component() {
     fi
 
     [[ -n "$tag" ]] && info "  Release: ${tag}"
+
+    # Already at the target version: do nothing. Without this, re-running the
+    # bootstrap to pick up a fix reinstalls every component, which stops and
+    # starts their services -- on a display box that is a visible interruption
+    # for no gain, and it is the only reason a re-run was disruptive rather
+    # than merely idempotent. --reinstall forces the work anyway, which is the
+    # escape hatch for a package that is present, correctly versioned, and
+    # nonetheless broken.
+    local have="" want="${tag#v}"
+    have=$(installed_version "$comp_json")
+    if [[ -n "$have" && "$have" == "$want" ]] && ! $REINSTALL; then
+        ok "${comp_name} ${have} already current"
+        return 0
+    fi
 
     if [[ -z "$asset_pattern" ]]; then
         warn "${comp_id}: no assetPattern, skipping"
