@@ -453,7 +453,27 @@ check_root() {
             # a tree of local work.
             $SKIP_SCRIPTS         && args="$args --skip-scripts"
             $REINSTALL            && args="$args --reinstall"
-            exec sudo bash -c "$(curl -sSL "${REGISTRY_URL}/setup?profile=${PROFILE}")" -- $args
+
+            # Re-fetch into a variable and CHECK IT, rather than substituting
+            # the download straight into bash -c.
+            #
+            # Inline, a failed second fetch expands to the empty string and the
+            # whole thing becomes "sudo bash -c '' -- args": does nothing,
+            # exits 0. The operator sees "Re-running with sudo..." then silence
+            # and a success status, having installed nothing. -sSL without -f
+            # made that likelier still -- an HTTP 502 from the registry is
+            # delivered as a body, so bash would have been handed an error page
+            # to execute.
+            #
+            # -f turns an HTTP error into a curl failure; the shebang test
+            # rejects anything that came back but is not this script (proxy
+            # interstitial, captive portal, error page).
+            local script=""
+            script=$(curl -fsSL "${REGISTRY_URL}/setup?profile=${PROFILE}") || script=""
+            if [[ -z "$script" || "${script:0:2}" != '#!' ]]; then
+                fail "Could not re-fetch the installer from ${REGISTRY_URL} to run as root — re-run this command under sudo yourself"
+            fi
+            exec sudo bash -c "$script" -- $args
         else
             fail "This script must be run as root"
         fi
