@@ -1217,18 +1217,25 @@ body.solo .agent-panel {
              const a = sel?.value; 
              if (!a) { this.showToast('Select an asset','error'); return; }
              
-             // Check for dependencies that need service stops
-             const servicesToStop = this.getServicesToStop(id);
+             // Updating the agent is not like updating anything else: the agent
+             // hands the install to systemd and is restarted BY it, so we must
+             // not ask it to stop its own unit first (that would kill the
+             // install) and must not promise a "Restart services" step we will
+             // not be alive to report on.
+             const isSelf = (id === 'dserv-agent');
+             const servicesToStop = isSelf ? [] : this.getServicesToStop(id);
              const comp = this.panelComponents.find(c => (c.component || c).id === id);
              const compName = comp ? (comp.component || comp).name : id;
-             
+
              let confirmMsg = `Install ${a}?`;
-             if (servicesToStop.length > 0) {
+             if (isSelf) {
+		 confirmMsg = `Install ${a}?\n\nThis updates the management agent itself. It will restart and this panel will reconnect on its own.`;
+             } else if (servicesToStop.length > 0) {
 		 confirmMsg = `Install ${a}?\n\nThis will temporarily stop: ${servicesToStop.join(', ')}`;
              }
 
              if (!confirm(confirmMsg)) return;
-             
+
              // Initialize workflow UI
              const steps = [];
              if (servicesToStop.length > 0) {
@@ -1236,7 +1243,9 @@ body.solo .agent-panel {
              }
              steps.push('Download update');
              steps.push('Install package');
-             if (servicesToStop.length > 0) {
+             if (isSelf) {
+		 steps.push('Agent restarts — reconnecting');
+             } else if (servicesToStop.length > 0) {
 		 steps.push(`Restart services`);
              }
              
@@ -1264,6 +1273,11 @@ body.solo .agent-panel {
 		 'stopping': 0,
 		 'downloading': this.installWorkflow.steps.findIndex(s => s.includes('Download')),
 		 'installing': this.installWorkflow.steps.findIndex(s => s.includes('Install')),
+		 // The agent has handed its own install to systemd and is about to
+		 // be restarted by it. This is the last word we get -- the socket
+		 // drops next -- so land on the final step rather than leaving the
+		 // workflow parked on "Download update" while the panel reconnects.
+		 'self-update': this.installWorkflow.steps.length - 1,
 		 'starting': this.installWorkflow.steps.length - 1
              };
              

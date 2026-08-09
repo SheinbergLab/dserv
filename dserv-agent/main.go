@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"html"
 	"io"
 	"io/fs"
 	"log"
@@ -777,23 +778,27 @@ func (a *Agent) handleLandingPage(w http.ResponseWriter, r *http.Request) {
 	}
 	base := fmt.Sprintf("%s://%s", scheme, r.Host)
 
-	// The extio card is only meaningful when this registry actually serves the
-	// firmware shelf that /extio/setup pulls from.
+	// The RP2350/WIZnet extio card is deliberately not advertised: that board
+	// is being retired in favour of the NXP parts, and pointing new boxes at a
+	// line we are winding down is worse than saying nothing. /extio/setup still
+	// works for the boards already in service -- this only stops promoting it.
+	// Restore from git history (or write the NXP equivalent) when there is a
+	// board bootstrap worth sending people to.
 	extioCard := ""
-	if a.cfg.FirmwareDir != "" {
-		extioCard = `
-        <div class="card">
-          <div class="card-head">
-            <h3>Provision an extio I/O board</h3>
-            <span class="platform">RP2350 · WIZnet / Pico 2</span>
-          </div>
-          <p class="card-desc">Flash a standalone digital-I/O box that talks to dserv over Ethernet or USB. After the first flash it updates over the air.</p>
-          <div class="cmd">
-            <code>curl -fsSL __BASE__/extio/setup | bash</code>
-            <button class="copy" data-cmd="curl -fsSL __BASE__/extio/setup | bash">Copy</button>
-          </div>
-          <p class="note">Requires <code>picotool</code> on your PATH and the board in BOOTSEL. Pick a board with <code>?build=pico2</code> (or <code>dual</code>, <code>w6300</code>); pick a channel with <code>?channel=stable</code>.</p>
-        </div>`
+
+	// Profiles, straight from the same list the bootstrap resolves against, so
+	// this page cannot advertise a profile that does not exist. incage is the
+	// default and gets its own card above; the rest are named here.
+	otherProfiles := ""
+	for _, p := range a.getProfiles() {
+		if p.Name == "incage" || p.Name == "stim" {
+			continue
+		}
+		otherProfiles += fmt.Sprintf(
+			"<li><code>?profile=%s</code> — %s</li>", p.Name, html.EscapeString(p.Description))
+	}
+	if otherProfiles != "" {
+		otherProfiles = "<ul class=\"profiles\">" + otherProfiles + "</ul>"
 	}
 
 	html := `<!DOCTYPE html>
@@ -855,6 +860,13 @@ func (a *Agent) handleLandingPage(w http.ResponseWriter, r *http.Request) {
         .copy:hover { background: #244056; border-color: #3b82f6; }
         .copy.done { color: #34d399; border-color: #34d399; background: #14261d; }
         .note { font-size: 12.5px; color: #71767b; margin-top: 12px; }
+        .lede { font-size: 14px; color: #a1a6ab; margin: -6px 0 16px; }
+        .profiles { list-style: none; margin: 0; padding: 0; }
+        .profiles li {
+            font-size: 13.5px; color: #a1a6ab; padding: 7px 0;
+            border-bottom: 1px solid #1f2327;
+        }
+        .profiles li:last-child { border-bottom: 0; }
         .note code {
             font-family: 'SF Mono', ui-monospace, Menlo, monospace; font-size: 11.5px;
             color: #a9c7e0; background: #16202a; padding: 1px 5px; border-radius: 4px;
@@ -889,7 +901,29 @@ func (a *Agent) handleLandingPage(w http.ResponseWriter, r *http.Request) {
             </div>
             <p class="note">Preview first with <code>| bash -s -- --dry-run</code>, or set the workgroup with <code>--workgroup mylab</code>.</p>
           </div>
+
+          <div class="card">
+            <div class="card-head">
+              <h3>Set up a display box</h3>
+              <span class="platform">Linux · stim2 only</span>
+            </div>
+            <p class="card-desc">The other half of a split rig: stim2 and dlsh with no dserv, for a machine that drives the stimulus display while control runs elsewhere.</p>
+            <div class="cmd">
+              <code>curl -sSL __BASE__/setup?profile=stim | bash</code>
+              <button class="copy" data-cmd="curl -sSL __BASE__/setup?profile=stim | bash">Copy</button>
+            </div>
+            <p class="note">Point the control box at it with <code>ESS_RMT_HOST</code>; its STIM chip then links straight here for updates.</p>
+          </div>
           __EXTIO_CARD__
+        </div>
+
+        <h2>Other profiles</h2>
+        <p class="lede">Same command, different component set — append to <code>__BASE__/setup</code>:</p>
+        <div class="cards">
+          <div class="card">
+            __OTHER_PROFILES__
+            <p class="note">List them at any time with <code>curl -sSL __BASE__/setup/profiles</code>.</p>
+          </div>
         </div>
 
         <footer>
@@ -916,6 +950,7 @@ func (a *Agent) handleLandingPage(w http.ResponseWriter, r *http.Request) {
 </html>`
 
 	html = strings.ReplaceAll(html, "__EXTIO_CARD__", extioCard)
+	html = strings.ReplaceAll(html, "__OTHER_PROFILES__", otherProfiles)
 	html = strings.ReplaceAll(html, "__BASE__", base)
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -1524,6 +1559,76 @@ func systemctlDo(action, svc string) error {
 	return nil
 }
 
+// isSelfComponent reports whether this component IS the running agent, so its
+// install can be routed away from this process. Matched on the unit rather than
+// the component id, because the unit is what the install will restart.
+func (a *Agent) isSelfComponent(comp Component) bool {
+	if comp.Service == "" {
+		return false
+	}
+	self := strings.TrimSuffix(detectSelfService(), ".service")
+	return strings.TrimSuffix(comp.Service, ".service") == self
+}
+
+// selfUpdate installs the agent's own package from a transient systemd unit.
+//
+// systemd-run (a transient SERVICE, not --scope) reparents the work to PID 1,
+// so it survives this process being stopped and restarted by its own dpkg run.
+// A --scope would stay in our cgroup and die with us, which is the whole thing
+// we are avoiding. --collect garbage-collects the unit when it exits, or a
+// failed run would linger and the next attempt would fail on a name clash.
+//
+// Nothing here waits: by design this function's caller is about to be killed.
+// The client sees the socket drop and reconnects to the new build, which is
+// also how the panel's own restart button already behaves.
+func (a *Agent) selfUpdate(comp Component, localPath, version string) {
+	unit := strings.TrimSuffix(detectSelfService(), ".service")
+
+	install := fmt.Sprintf(
+		"apt-get install -y -o Dpkg::Options::=--force-confold %s", shellQuote(localPath))
+	if comp.InstallCmd != "" {
+		install = strings.ReplaceAll(comp.InstallCmd, "{file}", localPath)
+		install = strings.ReplaceAll(install, "{version}", strings.TrimPrefix(version, "v"))
+	}
+	// The restart is what replaces the running binary; the rm keeps UploadDir
+	// from accreting one .deb per update. Sequenced with && so a failed install
+	// leaves the old agent running rather than restarting into a broken one.
+	script := fmt.Sprintf("%s && systemctl restart %s; rm -f %s",
+		install, shellQuote(unit), shellQuote(localPath))
+
+	cmd := exec.Command("sudo", "systemd-run",
+		"--collect",
+		"--unit", unit+"-selfupdate",
+		"--description", "dserv-agent self-update",
+		"--setenv=DEBIAN_FRONTEND=noninteractive",
+		"/bin/sh", "-c", script)
+
+	if out, err := cmd.CombinedOutput(); err != nil {
+		msg := strings.TrimSpace(string(out))
+		if msg == "" {
+			msg = err.Error()
+		}
+		a.broadcast(WSResponse{Type: "install_error",
+			Error: "Could not hand off self-update to systemd: " + msg})
+		os.Remove(localPath)
+		return
+	}
+
+	log.Printf("self-update to %s handed off to %s-selfupdate.service", version, unit)
+	a.broadcast(WSResponse{Type: "install_progress", Data: map[string]string{
+		"stage":   "self-update",
+		"version": version,
+		"unit":    unit,
+	}})
+}
+
+// shellQuote makes a value safe inside the single-quoted `sh -c` string we
+// hand to systemd-run. Paths here are assembled from a release asset name, so
+// this is belt-and-braces rather than a known hole.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
 // detectSelfService returns the systemd unit name this process is running
 // under (e.g. "dserv-agent.service" or "stim2-agent.service") by parsing
 // /proc/self/cgroup. Falls back to "dserv-agent" when detection fails so
@@ -1946,6 +2051,15 @@ func (a *Agent) installComponent(comp Component, assetName string, stopServices 
 	}
 	io.Copy(out, resp.Body)
 	out.Close()
+
+	// Updating ourselves cannot run in this process: the install restarts the
+	// very unit executing it, so dpkg would be killed mid-transaction and the
+	// box left with a half-configured management plane -- the one package you
+	// cannot recover remotely. Hand the rest to systemd and get out of the way.
+	if a.isSelfComponent(comp) {
+		a.selfUpdate(comp, localPath, release.TagName)
+		return
+	}
 
 	// Stop services if requested.
 	//

@@ -21,6 +21,15 @@
       "depends": ["dlsh"]
     },
     {
+      "id": "dserv-agent",
+      "name": "dserv-agent",
+      "description": "Management agent (this program)",
+      "repo": "SheinbergLab/dserv",
+      "package": "dserv-agent",
+      "service": "dserv-agent",
+      "assetPattern": "dserv-agent_.*\\.deb$"
+    },
+    {
       "id": "dlsh",
       "name": "dlsh",
       "description": "Tcl zipfs library (shared runtime)",

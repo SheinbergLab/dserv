@@ -160,7 +160,19 @@ func (a *Agent) filterComponents(profileName string, explicitComponents string) 
 
 // resolveWithDeps takes a set of wanted component IDs and adds any
 // components they depend on (from the full component list).
+//
+// The agent is always added, whatever the profile asked for. step_install_agent
+// puts one on every box by construction, so a profile that omitted it would be
+// describing a box that does not exist -- and, worse, the filtered list is what
+// lands in /etc/dserv-agent/components.json, so omitting it is precisely what
+// would deny a display box the ability to update its own management plane.
 func (a *Agent) resolveWithDeps(wanted map[string]bool) []Component {
+	// By stable id, NOT isSelfComponent: that asks "is this the unit I am
+	// running under", which is the right question when routing an install away
+	// from this process, and the wrong one here -- a registry generates these
+	// lists for other boxes, and its own unit name says nothing about theirs.
+	wanted[agentComponentID] = true
+
 	// Expand dependencies
 	changed := true
 	for changed {
@@ -284,14 +296,24 @@ run() {
 # installing. That keeps a display box (profile=stim: stim2 + dlsh, no dserv)
 # from running the dserv-only steps, and lets a new profile work here for free.
 
+# The agent is in EVERY profile's component list, so the panel on any box can
+# update its own management plane. It is not installed or started like the
+# others, though: step_install_agent owns it and runs first, so the steps below
+# filter it out rather than doing the work twice.
+AGENT_COMPONENT_ID="dserv-agent"
+
 has_component() {
     echo "$COMPONENTS_JSON" | jq -e --arg id "$1" \
         '.components[] | select(.id == $id)' &>/dev/null
 }
 
 # Services this box actually runs, in component order (e.g. "dserv", "stim2").
+# Excludes the agent: it is the thing doing the managing, not a thing being
+# managed, and pinning --service to it would have the panel report the agent
+# where the box's actual payload service belongs.
 profile_services() {
-    echo "$COMPONENTS_JSON" | jq -r '.components[].service // empty'
+    echo "$COMPONENTS_JSON" | jq -r --arg self "$AGENT_COMPONENT_ID" \
+        '.components[] | select(.id != $self) | .service // empty'
 }
 
 # The unit the agent manages as its primary: dserv where there is one,
@@ -543,7 +565,13 @@ step_install_components() {
             done
 
             if $deps_met; then
-                install_component "$comp_json" && installed+=("$comp_id") || warn "Failed: ${comp_id}"
+                if [[ "$comp_id" == "$AGENT_COMPONENT_ID" ]]; then
+                    # Already handled by step_install_agent. Counted as installed
+                    # so the tally is honest and anything depending on it resolves.
+                    installed+=("$comp_id")
+                else
+                    install_component "$comp_json" && installed+=("$comp_id") || warn "Failed: ${comp_id}"
+                fi
                 progress=true
             else
                 next_remaining+=($i)
@@ -558,6 +586,7 @@ step_install_components() {
             for i in "${remaining[@]}"; do
                 local comp_json=$(echo "$COMPONENTS_JSON" | jq ".components[$i]")
                 local comp_id=$(echo "$comp_json" | jq -r '.id')
+                [[ "$comp_id" == "$AGENT_COMPONENT_ID" ]] && { installed+=("$comp_id"); continue; }
                 install_component "$comp_json" && installed+=("$comp_id") || warn "Failed: ${comp_id}"
             done
             break

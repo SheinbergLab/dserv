@@ -32,6 +32,10 @@ const releaseCacheTTL = 1 * time.Minute
 // box provisioned from scratch came up with no agent at all.
 const agentRepo = "SheinbergLab/dserv"
 
+// agentComponentID is the agent's own entry in components.json -- the package
+// it updates itself from, and the one component every profile carries.
+const agentComponentID = "dserv-agent"
+
 // repoPattern validates an "owner/repo" string before it is interpolated
 // into a GitHub API URL — guards the unauthenticated /api/releases endpoint
 // against path traversal and SSRF.
