@@ -61,6 +61,17 @@ button.danger  { background:#5b2c29; border-color:#7a3a36; }
 #dirty { margin:14px 0; padding:9px 12px; border-radius:6px;
          background:#3a3115; border:1px solid #5b4a1e; color:var(--warn); font-size:13px; }
 #dirty.hide { display:none; }
+/* The server-clock banner is an ERROR, not a warning, and it sits ABOVE main
+   rather than inside it. While it is up, every age and every liveness pill on
+   this page is measured against the wrong zero and none of them can be
+   believed -- so it displaces the layout on purpose. Being unmissable is the
+   entire point: the failure it reports is otherwise indistinguishable from
+   "the whole rig is offline". */
+#clockwarn { margin:0; padding:10px 16px; font-size:13px; line-height:1.5;
+             background:#4a1f1c; border-bottom:1px solid #7a3a36; color:#ffb3ab; }
+#clockwarn.hide { display:none; }
+#clockwarn b { color:#fff; }
+#clockwarn code { background:#2c1210; color:#ffd9d4; }
 .note { color:var(--dim); font-size:12px; margin:6px 0 0; max-width:760px; }
 .empty { color:var(--dim); padding:40px 0; text-align:center; }
 input.wo { border-style:dashed; color:var(--warn); }
@@ -81,6 +92,8 @@ code { background:#141720; padding:1px 5px; border-radius:3px; font-size:12px; }
   <span style="flex:1"></span>
   <span class="age" id="hint">config applies live · Save persists it</span>
 </header>
+
+<div id="clockwarn" class="hide"></div>
 
 <main>
   <div id="fleet"><div class="empty">looking for boxes…</div></div>
@@ -118,6 +131,70 @@ let sel = null, fetched = new Set(), pendingSelect = null;
 
 const now = () => Date.now() * 1000;   /* dserv timestamps are microseconds */
 
+/* ---- is dserv's clock the same clock as ours? ----
+ *
+ * EVERY AGE ON THIS PAGE IS A SUBTRACTION ACROSS TWO MACHINES: liveness() ages
+ * a dserv timestamp against Date.now() in this browser. That is only meaningful
+ * while the two clocks agree, and nothing here used to check.
+ *
+ * On 2026-08-09 the rig Pi was put into the PTP client role on a segment with
+ * no real grandmaster, its system clock was dragged to 1970, and dserv -- which
+ * captures its epoch constant ONCE at startup, by design -- ended up stamping
+ * every datapoint ~29 h in the past. This page then reported every box as
+ * "offline 29h" while the whole rig was healthy and the boxes were publishing
+ * watchdogs at 1 Hz. The symptom pointed at the boxes and the network; the
+ * fault was a clock. That hour is what this banner exists to give back.
+ *
+ * THE ESTIMATOR IS A MIN OVER A ROLLING WINDOW, and both halves are load-bearing.
+ *   - MIN, not mean or latest: `now() - msg.timestamp` is (clock skew) +
+ *     (how stale that datapoint already was) + (transport delay). Only the
+ *     first term is wanted, and the other two are strictly non-negative, so the
+ *     minimum over recent arrivals is the tightest available bound on the skew.
+ *     A mean would be dragged arbitrarily by the retained backlog that lands on
+ *     every subscribe -- dserv retains forever, so that backlog can be days old.
+ *   - ROLLING, not all-time: an all-time minimum can never recover from a
+ *     server clock that steps BACKWARD. The older, smaller sample would stand
+ *     for the life of the page and the banner would stay silent through exactly
+ *     the fault it is meant to catch. */
+const SKEW_WINDOW_MS = 60000;
+const SKEW_WARN_US   = 60 * 1e6;   /* same 60 s threshold as ptpconf's ptp/clock_error */
+let skewSamples = [];
+
+function noteServerClock(ts) {
+  if (!ts) return;                 /* no server timestamp = nothing to compare */
+  const at = Date.now();
+  skewSamples.push({ at, d: at * 1000 - ts });
+  const cutoff = at - SKEW_WINDOW_MS;
+  while (skewSamples.length && skewSamples[0].at < cutoff) skewSamples.shift();
+}
+
+function serverSkewUs() {
+  if (!skewSamples.length) return null;
+  let m = Infinity;
+  for (const s of skewSamples) if (s.d < m) m = s.d;
+  return m;
+}
+
+function renderClockWarn() {
+  const el = document.getElementById('clockwarn');
+  const sk = serverSkewUs();
+  if (sk === null || Math.abs(sk) < SKEW_WARN_US) { el.className = 'hide'; return; }
+  el.className = '';
+  /* sk > 0 means dserv's timestamps are OLDER than our clock, i.e. dserv is
+     behind -- which is the direction that makes everything read as offline. */
+  const dir = sk > 0 ? 'behind' : 'ahead of';
+  const html =
+    `<b>dserv's clock is ${fmtDur(Math.abs(sk))} ${dir} this browser's.</b> ` +
+    `Every age and liveness state below is measured against it, so boxes may ` +
+    `read <b>offline</b> while they are in fact healthy — check the watchdog ` +
+    `counter itself, not the pill.<br>` +
+    `Fix the host clock (its NTP daemon, and <code>dserv-ptp-setup status</code> — ` +
+    `a PTP client following a grandmaster that was never set will do this), then ` +
+    `<b>restart dserv</b>: its epoch anchor is captured once at startup and is ` +
+    `never recomputed.`;
+  if (el.innerHTML !== html) el.innerHTML = html;   /* memoized: this ticks at 1 Hz */
+}
+
 function setConn(up, msg) {
   const el = document.getElementById('conn');
   el.className = up ? 'up' : 'down';
@@ -143,6 +220,7 @@ function onExtio(msg) {
   if (!boxes.has(box)) boxes.set(box, {});
   /* dserv's timestamp is microseconds; fall back to arrival time so a value
    * without one still ages rather than appearing frozen at zero. */
+  noteServerClock(msg.timestamp);
   boxes.get(box)[leaf] = { v, t: msg.timestamp || now() };
   if (pendingSelect && box === pendingSelect) { pendingSelect = null; selectBox(box); return; }
   renderFleet();
@@ -981,7 +1059,8 @@ async function init() {
    * honest even while renderPanel() is deferring because the user is in the
    * panel -- staleness must stay visible exactly then. The render calls after
    * it only touch the DOM when a VALUE or liveness bucket changed. */
-  setInterval(() => { tickAges(document); renderFleet(); if (sel) renderPanel(); }, 1000);
+  setInterval(() => { tickAges(document); renderClockWarn(); renderFleet();
+                      if (sel) renderPanel(); }, 1000);
 
   /* ?host=<host[:port]> and ?ssl=1|0 -- the standard three lines every page here
    * needs (www/CLAUDE.md). ssl matters when the page and dserv disagree on

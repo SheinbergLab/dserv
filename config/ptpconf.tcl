@@ -80,9 +80,38 @@ if { ![info exists ::ptp_period_s] } { set ::ptp_period_s 300 }
 # nothing else would say so until someone compared timestamps across it.
 if { ![info exists ::ptp_step_warn_us] } { set ::ptp_step_warn_us 1000 }
 
+# How far dserv's own timeline may sit from the host's wall clock before that is
+# an ERROR rather than drift.
+#
+# THE FAILURE THIS CATCHES (rig Pi, 2026-08-09). The host was put into the PTP
+# CLIENT role on a segment with no real grandmaster, so phc2sys steered
+# CLOCK_REALTIME down to a from-zero PHC and the machine ran in 1970 with chrony
+# stopped. dserv, correctly, did not care -- it stamps from CLOCK_MONOTONIC and
+# never steps. But its epoch constant had been captured 13 s after boot from the
+# stale clock systemd restored from /var/lib/systemd/timesync/clock, so every
+# datapoint carried a timestamp ~29 h in the past. The extio config page ages
+# datapoints against the BROWSER's clock, so every box on the rig read
+# "offline 29h" while being perfectly healthy, and the whole investigation went
+# to the box and the network before the clock.
+#
+# Nothing anywhere reported this. It is invisible precisely BECAUSE dserv's
+# timebase is internally consistent -- which is the property you want, and is
+# exactly why the inconsistency has to be published rather than inferred.
+#
+# 60 s is unambiguous and cannot false-positive: dserv's epoch constant is
+# system_us() - steady_us() captured once, and those two clocks are slewed
+# together by NTP and diverge only across a STEP, so normal skew is milliseconds
+# over a long session.
+if { ![info exists ::ptp_clock_skew_max_us] } { set ::ptp_clock_skew_max_us 60000000 }
+
+# Below this a clock has never been SET -- it is counting from zero, not merely
+# wrong. Same floor and same reasoning as dserv-ptp-setup's PLAUSIBLE_EPOCH.
+if { ![info exists ::ptp_epoch_floor_us] } { set ::ptp_epoch_floor_us 1735689600000000 }
+
 set ::ptp_timer   ""
 set ::ptp_d_us    ""
 set ::ptp_lasterr ""
+set ::ptp_clock_lasterr ""
 
 proc ptp_pub {leaf val} { catch { dservSet ptp/$leaf $val } }
 
@@ -140,6 +169,65 @@ proc ptp_measure_d {} {
     return [expr {[dservClockEpochOffset] - ($ns / 1000)}]
 }
 
+# Is dserv's timeline still anchored to real time?
+#
+# This subprocess is the only thing in the system that already holds both halves
+# of the answer, which is why the check belongs here and not in a shell script on
+# a timer: dserv's epoch constant is a dserv-internal fact, and comparing it to
+# CLOCK_REALTIME costs two clock reads and no wire traffic.
+#
+# TWO DISTINCT FAULTS, DELIBERATELY REPORTED DIFFERENTLY, because they have
+# opposite fixes and confusing them costs an evening:
+#
+#   wall clock implausible -> the HOST lost its time source. Fix the clock
+#     (chrony, or the PTP role -- a client following a from-zero grandmaster is
+#     the way this happens). dserv's timestamps are stale as a consequence.
+#
+#   wall clock fine, skew large -> the host clock was fixed but dserv still
+#     holds the epoch it captured at STARTUP. Nothing self-heals this:
+#     clock_epoch_offset_us() is a static const, captured once and never
+#     recomputed (Dataserver.cpp), which is correct for an acquisition timebase
+#     and precisely why it needs saying out loud. dserv must be RESTARTED.
+proc ptp_check_wall_clock {} {
+    set dserv_us [now]
+    set wall_us  [clock microseconds]
+    set skew     [expr {$dserv_us - $wall_us}]
+    ptp_pub clock_skew_us $skew
+
+    # Signed skew is what gets published (a consumer can want the direction),
+    # but the human-readable message says "behind"/"ahead" -- "dserv timestamps
+    # are -104761 s from the wall clock" makes the reader do sign arithmetic at
+    # the exact moment they are already confused about which clock is wrong.
+    set mag  [expr {abs($skew) / 1000000}]
+    set dir  [expr {$skew < 0 ? "behind" : "ahead of"}]
+
+    set err ""
+    if { $wall_us < $::ptp_epoch_floor_us } {
+        set err "host wall clock is not set (reads\
+                 [clock format [expr {$wall_us / 1000000}] -format {%Y-%m-%dT%H:%M:%SZ} -gmt 1]).\
+                 dserv timestamps are ${mag} s ${dir} it. Fix the host clock\
+                 (check the PTP role and the NTP daemon), then RESTART dserv."
+    } elseif { abs($skew) > $::ptp_clock_skew_max_us } {
+        set err "dserv timestamps are ${mag} s ${dir} the wall clock.\
+                 The epoch anchor was captured at startup from a clock that was wrong;\
+                 it is never recomputed, so RESTART dserv to pick up the corrected time."
+    }
+
+    # Log a NEW fault once, not every sweep -- same discipline as ptp_lasterr.
+    # Recovery is logged too: a fault that goes quiet is indistinguishable from a
+    # fault nobody noticed.
+    if { $err ne $::ptp_clock_lasterr } {
+        if { $err ne "" } {
+            puts "ptp: CLOCK $err"
+        } else {
+            puts "ptp: clock skew back within [expr {$::ptp_clock_skew_max_us / 1000000}] s of the wall clock"
+        }
+        set ::ptp_clock_lasterr $err
+    }
+    ptp_pub clock_error $err
+    return $err
+}
+
 # ---- box side --------------------------------------------------------------
 
 # Every live box publishes state/watchdog once a second, so it is the cheapest
@@ -194,6 +282,13 @@ proc ptp_anchor_box {box d} {
 # Measure D ONCE and fan it out. Deliberately not per-box: the measurement is a
 # ~2 s blocking exec, and D is a property of this host, not of any box.
 proc ptp_anchor_all {{why sweep}} {
+    # FIRST, and outside the measurement's early-return path. The wall-clock
+    # check needs no PHC and must still be published on a host whose PHC read
+    # just failed -- those two faults travel together (a host that has lost its
+    # time source is exactly the host whose PTP is unhappy), and the clock is the
+    # one that explains the symptom you will actually see.
+    ptp_check_wall_clock
+
     if { [catch { ptp_measure_d } d] } {
         if { $d ne $::ptp_lasterr } {          ;# log a NEW fault once, not every sweep
             puts "ptp: $d"
