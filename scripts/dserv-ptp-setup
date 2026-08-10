@@ -401,10 +401,59 @@ disable_role() {
 # host that now DEFINES the site's time -- with no time source at all. This is
 # the second half of the 2026-08-09 failure: chrony was found `enabled` and
 # `inactive`, stopped hours earlier by a role change nobody connected to it.
-# $1 = "wait" to block until the clock has actually been stepped. Only the
-# grandmaster path needs that: it is about to start a phc2sys whose one-time step
-# allowance a later NTP step would strand. `disable` starts no phc2sys, so making
-# it sit through a 30 s convergence wait would be latency for nothing.
+# Block until chrony has actually stepped the clock, and do not treat this as
+# politeness. phc2sys spends its ONE-TIME step allowance when it starts; an NTP
+# step landing AFTERWARDS leaves it facing a huge offset with no allowance left,
+# so it rails at max_adj and the error GROWS while the servo still reports s2
+# (seen on the rpi5 2026-08-09: -64000000 ppb, offset walking out at ~18 ms/s).
+# Every caller here runs BEFORE enable_pair for exactly that reason.
+wait_for_chrony() {
+    have chronyc || return 0
+    # ALL FOUR arguments. waitsync's interval defaults to 10 s, so the obvious
+    # `waitsync 30 0.1` is a 300 s stall, not a 30 s one; the trailing `0 1`
+    # sets max-skew unchecked and the poll to 1 s.
+    echo "waiting for chrony to converge (up to 30 s)..."
+    chronyc waitsync 30 0.1 0 1 >/dev/null 2>&1 \
+        || echo "NOTE: chrony has not converged yet -- if phc2sys ends up railed," \
+                "restart it: systemctl restart $GM_PHC$1.service"
+    return 0
+}
+
+# The grandmaster tuning drop-in, laid down by the command that MAKES a host a
+# grandmaster -- so the role and the tuning that role requires land together
+# instead of the tuning being a `cp` line printed in a NOTE that someone has to
+# remember. rpi500 ran as a grandmaster on stock chrony for exactly that reason.
+#
+# INSTALL-IF-ABSENT, NEVER OVERWRITE. The shipped server list is site-MEASURED --
+# the file's own header says "lowest measured delay from this host (30.4 ms)" --
+# so a rig on a different network may legitimately have edited it to servers that
+# are actually near it. Silently restoring our copy over that would replace a
+# measurement with a guess.
+install_gm_chrony_conf() {
+    _src=/usr/local/dserv/systemd/chrony-grandmaster.conf
+    _dst=/etc/chrony/conf.d/10-dserv-grandmaster.conf
+    [ -f "$_src" ] || return 0            # source checkout, not a packaged install
+    [ -d /etc/chrony/conf.d ] || return 0 # chrony not installed; the survey below says so
+    if [ -f "$_dst" ]; then
+        echo "chrony grandmaster tuning already present ($_dst) -- left as is."
+        return 0
+    fi
+    cp "$_src" "$_dst" 2>/dev/null || { echo "NOTE: could not write $_dst"; return 0; }
+    chmod 0644 "$_dst" 2>/dev/null || true
+    echo "installed chrony grandmaster tuning -> $_dst"
+    # It only takes effect on a reload, and the restart re-arms makestep -- which
+    # is precisely why this must happen here, ahead of enable_pair, rather than
+    # being left for the operator to do afterwards with phc2sys already running.
+    if [ "$(systemctl is-active chrony.service 2>/dev/null)" = active ]; then
+        systemctl restart chrony.service 2>/dev/null || true
+        wait_for_chrony "$1"
+    fi
+    return 0
+}
+
+# $1 = "wait" to block until the clock has actually been stepped, $2 = iface.
+# Only the grandmaster path needs the wait; `disable` starts no phc2sys, so
+# making it sit through a 30 s convergence wait would be latency for nothing.
 revive_ntp() {
     _wait=$1
     for _u in chrony.service chronyd.service systemd-timesyncd.service ntp.service ntpsec.service; do
@@ -415,24 +464,7 @@ revive_ntp() {
         echo "starting $_u -- a PTP client role had stopped it, and this host needs a time source."
         systemctl start "$_u" 2>/dev/null || continue
         [ "$_wait" = wait ] || return 0
-
-        # WAIT for it to converge, and do not treat this as politeness. phc2sys
-        # spends its ONE-TIME step allowance when it starts; an NTP step landing
-        # afterwards leaves it facing a huge offset with no allowance left, so
-        # it rails at max_adj and the error GROWS while the servo still reports
-        # s2 (seen on the rpi5 2026-08-09: -64000000 ppb, offset walking out at
-        # ~18 ms/s). Stepping BEFORE enable_pair is what makes that unreachable.
-        if [ "$_u" = chrony.service ] || [ "$_u" = chronyd.service ]; then
-            if have chronyc; then
-                # ALL FOUR arguments. waitsync's interval defaults to 10 s, so
-                # the obvious `waitsync 30 0.1` is a 300 s stall, not a 30 s one;
-                # the trailing `0 1` sets max-skew unchecked and the poll to 1 s.
-                echo "waiting for chrony to step the clock (up to 30 s)..."
-                chronyc waitsync 30 0.1 0 1 >/dev/null 2>&1 \
-                    || echo "NOTE: chrony has not converged yet -- if phc2sys ends up railed," \
-                            "restart it: systemctl restart $GM_PHC<iface>"
-            fi
-        fi
+        case "$_u" in chrony.service|chronyd.service) wait_for_chrony "$2" ;; esac
         return 0
     done
     return 0
@@ -622,7 +654,8 @@ case "${1:-status}" in
       # right there, enabled. Retire the old role and restore its time source
       # first, then ask what the time source is.
       disable_role "$CL_PTP" "$CL_PHC"
-      revive_ntp wait
+      install_gm_chrony_conf "$2"
+      revive_ntp wait "$2"
       # The grandmaster's phc2sys pushes the SYSTEM clock into the PHC, so NTP
       # here is the site's actual time source. This is the exact reverse of the
       # client role, and the asymmetry is the easiest thing to get backwards.
