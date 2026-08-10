@@ -90,6 +90,9 @@
   .meta { color: var(--faint); font-size: 12px; margin-top: 4px;
           font-variant-numeric: tabular-nums; }
   .meta b { color: var(--muted); font-weight: 500; }
+  /* An unanchored box is not a degraded box -- it refuses scheduled actions
+     outright -- so it must not read like just another grey status word. */
+  .meta .unsync { color: var(--red); font-weight: 600; }
   .meta .mono, .name + .mono { font-family: ui-monospace, Menlo, monospace; }
   .desc { color: var(--muted); font-size: 12px; margin-top: 3px; font-style: italic; }
 
@@ -546,13 +549,41 @@ function cardHtml(b) {
      * number with no human meaning. */
     let sync = '';
     if (b.syncSource) {
-        const parts = [b.syncSource];
-        if (b.syncTransport != null) parts.push(b.syncTransport + 'µs');
-        if (b.syncRate != null) parts.push((b.syncRate / 1000).toFixed(0) + 'ppm');
+        /* "none" IS THE ONE VALUE THAT MEANS TROUBLE. The box publishes hw / sw /
+         * ptp while it is on dserv's timeline and "none" when it is not
+         * (extio-zephyr main.c: `ptp_offset_valid ? "ptp" : "none"`), and an
+         * unanchored box does not degrade -- it REFUSES every at_abs.
+         *
+         * It used to render in the same grey as a healthy "sync ptp", so a box
+         * that could not schedule anything looked identical to a working one at a
+         * glance. That is precisely how 2026-08-09 went: this page showed the box
+         * as fine, which made dserv not being paired with it a surprise. The
+         * header chip counts anchored/boxes; this line says WHICH box. */
+        const unsynced = b.syncSource === 'none';
+        /* Transport delay and drift are measurements from when the box WAS
+         * anchored. Showing "NOT ANCHORED 47µs 12ppm" dresses a dead anchor in
+         * healthy-looking numbers -- the same retained-value trap this page
+         * exists to defeat. */
+        const parts = unsynced ? ['NOT ANCHORED'] : [b.syncSource];
+        if (!unsynced && b.syncTransport != null) parts.push(b.syncTransport + 'µs');
+        if (!unsynced && b.syncRate != null) parts.push((b.syncRate / 1000).toFixed(0) + 'ppm');
         const ssilk = sk && b.syncPin >= 0 ? sk.pin(b.syncPin) : null;
-        const stip = b.syncPin >= 0 ? `TTL sync input on pin ${b.syncPin}${ssilk ? ` (${ssilk})` : ''}`
-                   : b.syncSource === 'hw' ? 'hardware-synced' : 'software-synced (frame arrival)';
-        sync = ` · <b title="${stip}">sync</b> ${parts.join(' ')} (${fmtAge(Date.now() - b.syncAt)})`;
+        /* The old ternary special-cased only 'hw', so EVERY other value -- "none"
+         * included -- claimed "software-synced (frame arrival)". A tooltip that
+         * confidently describes an unanchored box as synced is worse than no
+         * tooltip: it answers the question you came to ask, wrongly. */
+        const stip =
+              unsynced ? `NOT anchored to dserv's timeline: this box refuses scheduled `
+                       + `(at_abs) actions. An anchor never survives a box reboot or `
+                       + `reflash; ptpconf re-pushes on connect and on every sweep, so this `
+                       + `should clear within seconds — if it does not, check the PTP chip.`
+            : b.syncPin >= 0        ? `TTL sync input on pin ${b.syncPin}${ssilk ? ` (${ssilk})` : ''}`
+            : b.syncSource === 'hw'  ? 'hardware-synced'
+            : b.syncSource === 'ptp' ? `anchored via PTP (the box's own 1588 clock plus the `
+                                     + `dserv epoch offset ptpconf pushed it)`
+                                     : 'software-synced (frame arrival)';
+        const val = unsynced ? `<span class="unsync">${parts.join(' ')}</span>` : parts.join(' ');
+        sync = ` · <b title="${esc(stip)}">sync</b> ${val} (${fmtAge(Date.now() - b.syncAt)})`;
     }
     const bat = b.battery != null ? ` · <b>batt</b> ${b.battery}%` : '';
     /* host-counted uplink connects since THIS dserv started: a steady box
