@@ -155,7 +155,7 @@ static void graceful_shutdown(void) {
  * typically the one with no RTC either, and so the one most likely to boot with
  * a wrong clock. Here it cannot be gated off.
  *
- * WHAT IT CATCHES (rig Pi, 2026-08-09). The host was put into the PTP client
+ * WHAT IT CATCHES A host was put into the PTP client
  * role on a segment with no real grandmaster; phc2sys steered CLOCK_REALTIME
  * down to a from-zero PHC and the machine ran in 1970 with chrony stopped. dserv
  * was immune -- it stamps from CLOCK_MONOTONIC and never steps -- but it had
@@ -166,13 +166,9 @@ static void graceful_shutdown(void) {
  *
  * NOTE THE SKEW IS ZERO AT STARTUP, BY CONSTRUCTION: the offset is captured as
  * system_us() - steady_us(), so now() == system_us() at that instant. This can
- * only ever detect a LATER divergence -- which is exactly the failure. Both
- * halves of 2026-08-09 are later divergences: the clock being dragged to 1970
- * after dserv started, and then chrony correcting it while dserv went on holding
- * the stale anchor. So it must be periodic, not a startup check.
+ * only ever detect a LATER divergence -- which is exactly the failure.
  *
- * TWO FAULTS, REPORTED DIFFERENTLY, because their fixes are opposite and
- * confusing them costs an evening.
+ * TWO FAULTS, REPORTED DIFFERENTLY, because their fixes are opposite.
  */
 static const int64_t CLOCK_SKEW_WARN_US   = 60LL * 1000000;           /* 60 s */
 static const int64_t CLOCK_EPOCH_FLOOR_US = 1735689600LL * 1000000;   /* 2025-01-01Z */
