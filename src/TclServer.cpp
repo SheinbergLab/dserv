@@ -1,5 +1,6 @@
 #include "TclServer.h"
 #include "TclCommands.h"
+#include "TclInterpInit.h"
 #include "ObjectRegistry.h"
 #include "dserv.h"
 #include "dservConfig.h"
@@ -3399,7 +3400,12 @@ static int Tcl_DservAppInit(Tcl_Interp *interp, TclServer *tserv)
 static Tcl_Interp *setup_tcl(TclServer *tserv)
 {
   Tcl_Interp *interp;
-  
+
+  /* One interpreter under construction at a time, process-wide. dsconf starts
+     its subprocesses in sequence, so this serialises nothing that was actually
+     running in parallel. See TclInterpInit.h. */
+  std::lock_guard<std::mutex> tcl_init_guard(tcl_interp_init_lock());
+
   Tcl_FindExecutable(tserv->argv[0]);
   interp = Tcl_CreateInterp();
   if (!interp) {

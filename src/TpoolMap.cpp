@@ -31,6 +31,7 @@
  */
 
 #include "TclServer.h"
+#include "TclInterpInit.h"
 #include <vector>
 #include <string>
 #include <thread>
@@ -65,30 +66,39 @@ struct tpool_worker_t {
  */
 static void tpool_worker_func(tpool_worker_t *w)
 {
-    /* Create interpreter */
-    Tcl_Interp *interp = Tcl_CreateInterp();
-    if (!interp) {
-        w->error = "failed to create Tcl interpreter";
-        return;
-    }
+    /* Construction only -- released before the work script runs, so workers
+     * still execute in parallel. Every worker otherwise reaches
+     * Tcl_CreateInterp() at the same instant, which is exactly the race
+     * TclInterpInit.h describes. */
+    Tcl_Interp *interp = NULL;
+    {
+        std::lock_guard<std::mutex> tcl_init_guard(tcl_interp_init_lock());
 
-    /* Initialize Tcl core (sets up auto_path etc) */
-    if (Tcl_Init(interp) != TCL_OK) {
-        w->error = std::string("Tcl_Init failed: ")
-                   + Tcl_GetStringResult(interp);
-        Tcl_DeleteInterp(interp);
-        Tcl_FinalizeThread();
-        return;
-    }
+        /* Create interpreter */
+        interp = Tcl_CreateInterp();
+        if (!interp) {
+            w->error = "failed to create Tcl interpreter";
+            return;
+        }
 
-    /* Bootstrap auto_path for dlsh packages.
-     * Note: zipfs is already mounted by the main thread at startup;
-     * we just need to set auto_path so the worker can find packages. */
-    const char *bootstrap = R"(
-        set _base [file join [zipfs root] dlsh]
-        set ::auto_path [linsert $::auto_path 0 ${_base}/lib]
-    )";
-    Tcl_Eval(interp, bootstrap);
+        /* Initialize Tcl core (sets up auto_path etc) */
+        if (Tcl_Init(interp) != TCL_OK) {
+            w->error = std::string("Tcl_Init failed: ")
+                       + Tcl_GetStringResult(interp);
+            Tcl_DeleteInterp(interp);
+            Tcl_FinalizeThread();
+            return;
+        }
+
+        /* Bootstrap auto_path for dlsh packages.
+         * Note: zipfs is already mounted by the main thread at startup;
+         * we just need to set auto_path so the worker can find packages. */
+        const char *bootstrap = R"(
+            set _base [file join [zipfs root] dlsh]
+            set ::auto_path [linsert $::auto_path 0 ${_base}/lib]
+        )";
+        Tcl_Eval(interp, bootstrap);
+    }
 
     /* Evaluate the combined setup + work script */
     int rc = Tcl_Eval(interp, w->script.c_str());

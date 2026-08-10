@@ -12,6 +12,7 @@
 #include "sharedqueue.h"
 #include "Dataserver.h"
 #include "TclServer.h"
+#include "TclInterpInit.h"
 #include "ObjectRegistry.h"
 #include "cxxopts.hpp"
 #include "dserv.h"
@@ -291,10 +292,16 @@ int main(int argc, char *argv[])
   std::signal(SIGTERM, signalHandler);	/* systemd stop: same clean path */
 
   if (mlockall(MCL_CURRENT | MCL_FUTURE) == -1) {
-    std::cerr << "mlockall failed: " << strerror(errno) 
+    std::cerr << "mlockall failed: " << strerror(errno)
               << " (continuing without memory locking)" << std::endl;
   }
-  
+
+  /* Allocate Tcl's process-global mutexes while we are still single-threaded.
+     Must stay ahead of the Dataserver and TclServer constructions below, each
+     of which starts a thread that immediately builds an interpreter. See
+     TclInterpInit.h for why Tcl cannot be left to do this itself. */
+  tcl_interp_global_init(argv[0]);
+
   // Create core dserv components
   dserver = new Dataserver(argc, argv);
 

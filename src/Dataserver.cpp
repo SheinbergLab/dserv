@@ -1,5 +1,6 @@
 #include "sharedqueue.h"
 #include "Dataserver.h"
+#include "TclInterpInit.h"
 #include "dpoint_process.h"
 #include "socket_keepalive.h"
 
@@ -1259,7 +1260,10 @@ static int Tcl_StimAppInit(Tcl_Interp *interp, Dataserver *dserv)
 static Tcl_Interp *setup_tcl(Dataserver *dserv)
 {
   Tcl_Interp *interp;
-  
+
+  /* One interpreter under construction at a time, process-wide (TclInterpInit.h) */
+  std::lock_guard<std::mutex> tcl_init_guard(tcl_interp_init_lock());
+
   Tcl_FindExecutable(dserv->argv[0]);
   interp = Tcl_CreateInterp();
   if (!interp) {
