@@ -49,7 +49,8 @@
 struct tpool_worker_t {
     int         argc;
     char      **argv;
-    std::string script;       // setup + work combined
+    std::string prelude;      // worker variables + setup script (package loads)
+    std::string work;         // the work script -- the parallel payload
     std::string result;       // serialized dg on success
     std::string error;        // non-empty on failure
     int         batch_n;      // work units assigned
@@ -60,16 +61,23 @@ struct tpool_worker_t {
  * Worker thread function.
  *
  * Creates a bare Tcl_Interp, initializes just enough for dlsh
- * and package loading (via zipfs), evals the combined script,
- * captures the result or error, and cleans up.  No TclServer,
+ * and package loading (via zipfs), evals the setup and then the work
+ * script, captures the result or error, and cleans up.  No TclServer,
  * no Dataserver interaction.
  */
 static void tpool_worker_func(tpool_worker_t *w)
 {
-    /* Construction only -- released before the work script runs, so workers
-     * still execute in parallel. Every worker otherwise reaches
-     * Tcl_CreateInterp() at the same instant, which is exactly the race
-     * TclInterpInit.h describes. */
+    /*
+     * Everything that can allocate a Tcl global mutex for the first time runs
+     * under the lock: interpreter construction AND the setup script, because
+     * `package require` is where a package's own Tcl_Mutexes get created and
+     * every worker would otherwise reach the same one simultaneously. See
+     * TclInterpInit.h for why Tcl cannot be trusted with that first touch.
+     *
+     * Serialising the setup costs one package-load per worker in sequence,
+     * once per tpool_map call. The work script -- the reason the pool exists --
+     * runs after the lock is dropped, fully in parallel.
+     */
     Tcl_Interp *interp = NULL;
     {
         std::lock_guard<std::mutex> tcl_init_guard(tcl_interp_init_lock());
@@ -98,10 +106,20 @@ static void tpool_worker_func(tpool_worker_t *w)
             set ::auto_path [linsert $::auto_path 0 ${_base}/lib]
         )";
         Tcl_Eval(interp, bootstrap);
+
+        /* Worker variables + setup script, still serialised */
+        if (Tcl_Eval(interp, w->prelude.c_str()) != TCL_OK) {
+            const char *err = Tcl_GetStringResult(interp);
+            w->error = err ? err : "unknown error";
+            w->result.clear();
+            Tcl_DeleteInterp(interp);
+            Tcl_FinalizeThread();
+            return;
+        }
     }
 
-    /* Evaluate the combined setup + work script */
-    int rc = Tcl_Eval(interp, w->script.c_str());
+    /* The parallel payload, with no lock held */
+    int rc = Tcl_Eval(interp, w->work.c_str());
 
     if (rc == TCL_OK) {
         /* Get result as byte array to preserve binary dg_toString data.
@@ -222,10 +240,16 @@ static int tpool_map_command(ClientData data, Tcl_Interp *interp,
         workers[i].argv      = tclserver->argv;
 
         /*
-         * Build the combined script for this worker.
-         * Variables are set via [set] with list-quoted values,
-         * then the setup script runs, then the work script is
-         * stored in a variable and eval'd.
+         * Build this worker's two scripts.
+         *
+         * The prelude -- variables plus the setup script -- runs while the
+         * worker still holds the interpreter-construction lock, because that
+         * is where `package require` first touches a package's Tcl globals.
+         * The work script is kept separate so it can run unlocked, in
+         * parallel, which is the whole point of the pool.
+         *
+         * Variables are set via [set] with list-quoted values, then the setup
+         * script runs, then the work script is stored in a variable and eval'd.
          */
         std::ostringstream ss;
 
@@ -256,20 +280,23 @@ static int tpool_map_command(ClientData data, Tcl_Interp *interp,
                << "}\n";
         }
 
+        workers[i].prelude = ss.str();
+
         /* Work script — stored in variable and eval'd to avoid
          * quoting issues with direct embedding */
+        std::ostringstream ws;
         {
             Tcl_Obj *tmp = Tcl_NewStringObj(work_script.c_str(), -1);
             Tcl_IncrRefCount(tmp);
             Tcl_Obj *listed = Tcl_NewListObj(1, &tmp);
             Tcl_IncrRefCount(listed);
-            ss << "set _tpool_work " << Tcl_GetString(listed) << "\n";
+            ws << "set _tpool_work " << Tcl_GetString(listed) << "\n";
             Tcl_DecrRefCount(listed);
             Tcl_DecrRefCount(tmp);
         }
-        ss << "eval $_tpool_work\n";
+        ws << "eval $_tpool_work\n";
 
-        workers[i].script = ss.str();
+        workers[i].work = ws.str();
     }
 
     /* --- launch worker threads --- */

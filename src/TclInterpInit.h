@@ -55,9 +55,13 @@
  *
  *   2. Every remaining interpreter is built under tcl_interp_init_lock(), which
  *      covers the mutexes rule 1 cannot reach -- the ones a package first
- *      touches when it is loaded. Held only across construction, never across
- *      script execution, so it costs nothing at run time: dsconf starts its
- *      subprocesses in sequence anyway.
+ *      touches when it is loaded. So the lock spans construction AND whatever
+ *      script does the package loading: for a TclServer that is the built-in
+ *      init script, for a tpool_map worker it is the caller's setup script.
+ *      It is never held across the work a thread actually exists to do --
+ *      tpool_map workers run their work script unlocked and stay parallel --
+ *      and on the startup path it serialises nothing that was really
+ *      concurrent, since dsconf starts its subprocesses in sequence anyway.
  */
 
 #include <mutex>
