@@ -147,6 +147,16 @@ static void announce_ident(const box_config_t *c)
 		pub_int(c, "ota/rejects",     box_boot_rejects());
 		pub_int(c, "ota/updates",     box_boot_updates());
 		pub_str(c, "ota/last_arm_ver", box_boot_last_arm_ver());
+		/* +56: can this box PULL an image itself (cmd/ota/fetch, the '<'
+		 * binary-get)? Per-connect because it rides the ACTIVE transport:
+		 * eth yes, usb no. The host picks its transfer front-end off this
+		 * leaf, so absence (older firmware) safely means the chunk path. */
+#if defined(CONFIG_NETWORKING)
+		pub_int(c, "ota/fetch_ok",
+			strcmp(box_uplink_active_name(), "eth") == 0 ? 1 : 0);
+#else
+		pub_int(c, "ota/fetch_ok", 0);
+#endif
 	}
 	pub_str(c, "build",     box_build_key());     /* shelf image match key   */
 	pub_str(c, "board",     BOX_BOARD_ID);       /* OTA compat filter       */

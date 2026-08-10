@@ -62,6 +62,9 @@
 #if defined(BOX_HAVE_OTA_SLOT)
 #include "box_ota_flash.h"
 #include "box_ota.h"
+#if defined(CONFIG_NETWORKING)
+#include "box_fetch.h"
+#endif
 #endif
 #if defined(CONFIG_MCUBOOT_IMG_MANAGER)
 #include <zephyr/dfu/mcuboot.h>
@@ -213,20 +216,27 @@ static int32_t  ota_dbg_verify, ota_dbg_rc;
 static int64_t  ota_dbg_until;
 
 /* ---- OTA receive state (step 3) ----
- * cmd/ota/begin "<sha256-hex> <size>" opens a transfer into slot1; cmd/ota/chunk
- * carries the image as a strictly sequential byte stream; state/ota/ack reports
- * the contiguous cursor so the host paces and resumes. See box_ota.h.
+ * Two front-ends, one sink (box_ota.h):
  *
- * Delivery rides ORDINARY DATAPOINTS rather than the RP2350's raw 'D' frames.
- * The framer here does accept DSERV_OTA_CHAR, but on an Ethernet box there is no
- * host path that can inject raw bytes into the box's link: dserv owns the single
- * connect-back socket on BOX_ETH_CFG_PORT, and a second connection would displace
- * it -- taking the downlink down for the duration of the OTA, i.e. exactly when
- * we need it. A datapoint costs payload (name "extio/<box>/cmd/ota/chunk" eats
- * 24 of the 109-byte budget, leaving 85 -> 77 after the chunk header, vs 117 for
- * a 'D' frame) and buys a path that already works, unchanged, on both eth and
- * USB. The sink behind it is front-end agnostic, so a 'D'-frame or pull path can
- * be added later without touching box_ota.h. */
+ *   cmd/ota/fetch "<sha256-hex> <size>"  -- +56, Ethernet: the box PULLS.
+ *   box_fetch's worker '<'-gets extio/<name>/ota/image from dserv and streams
+ *   it in, self-paced by TCP backpressure -- transfer time is flash-bound
+ *   (~3 s for ~286 KB on this board). Announced via state/ota/fetch_ok so the
+ *   host can pick this path without version guessing.
+ *
+ *   cmd/ota/begin + cmd/ota/chunk        -- the datapoint stream, kept for
+ *   USB carriers and pre-+56 hosts/firmware. Strictly sequential;
+ *   state/ota/ack is the contiguous cursor the host paces and resumes by.
+ *   A chunk datapoint costs payload (name "extio/<box>/cmd/ota/chunk" eats
+ *   24 of the 109-byte budget, leaving 85 -> 77 after the chunk header) but
+ *   rides both carriers unchanged. The host side must respect eth_inq's
+ *   64-frame drop-on-overflow depth: its ack-clocked window does (measured
+ *   2026-08-10 -- the open-loop drip before it collapsed 13x under its own
+ *   rate on exactly that queue).
+ *
+ * The framer also accepts DSERV_OTA_CHAR ('D' raw frames), still with no
+ * eth-side injector: dserv owns the single connect-back socket, and the pull
+ * made a second raw path moot. */
 #define BOX_OTA_ACK_EVERY   8192u   /* ack the cursor at least this often */
 #define BOX_OTA_CHUNK_HDR   8u      /* seq u32 LE + crc32 u32 LE */
 
@@ -489,6 +499,143 @@ static void ota_pub_done(void)
 	ota_pub_int("ota/ack", (int32_t) g_ota.received);
 	ota_res_until = k_uptime_get() + 6000;
 }
+
+/* Open slot1 for a transfer -- the front half shared by BOTH front-ends,
+ * cmd/ota/begin (host-pushed chunks) and cmd/ota/fetch (box-side pull): obs
+ * gate, "<sha256-hex> <size>" parse, slot open + geometry, trailer/lead
+ * hygiene, stats reset, and the staging announce. Returns 0 with the transfer
+ * OPEN (g_ota staging, g_ota_active set), or -1 with the refusal already
+ * published. `who` is the command name, for the console only. */
+static int ota_open_slot(const char *who, const char *arg)
+{
+	uint8_t  sha[BOX_OTA_SHA_BYTES];
+	uint32_t size = 0;
+
+	/* An OTA blocks the service loop in ~60 ms slices for the whole
+	 * image (PORTING.md), so it must never overlap a trial. */
+	if (box_obs_active()) {
+		g_ota.state = BOX_OTA_DONE_FAIL;
+		g_ota.err   = BOX_OTA_ERR_STATE;
+		ota_pub_done();
+		box_console_printf("%s -> refused, in_obs\n", who);
+		return -1;
+	}
+	ota_ain_yield();      /* begin erases the trailer -- that is flash work */
+	if (strlen(arg) < 65 || box_ota_parse_sha(arg, sha) != 0) {
+		g_ota.state = BOX_OTA_DONE_FAIL;
+		g_ota.err   = BOX_OTA_ERR_SHA_INIT;
+		ota_pub_done();
+		box_console_printf("%s -> bad sha argument\n", who);
+		return -1;
+	}
+	size = (uint32_t) strtoul(arg + 64, NULL, 0);
+
+	int rc = box_ota_flash_open();
+	if (rc != 0) {
+		g_ota.state = BOX_OTA_DONE_FAIL;
+		g_ota.err   = BOX_OTA_ERR_FLASH;
+		ota_pub_done();
+		box_console_printf("%s -> slot open failed (%d)\n", who, rc);
+		return -1;
+	}
+	/* Start where MCUboot will LOOK, not at the slot's first byte --
+	 * swap-using-offset reserves the first sector. box_ota's offsets are
+	 * slot-relative, so shift the base and shrink the usable capacity to
+	 * match, or a full-size image would run off the end. */
+	g_ota_base = box_ota_flash_image_base();
+
+	if (box_ota_begin(&g_ota, &g_ota_flash_ops,
+			  box_ota_flash_size() - g_ota_base,
+			  box_ota_flash_sector(), sha, size) != 0) {
+		g_ota_active = 0;
+		ota_pub_done();
+		box_console_printf("%s -> refused (%s)\n",
+				   who, box_ota_err_str(g_ota.err));
+		return -1;
+	}
+	/* Clear the trailer NOW rather than at arm time: it is an erase, and
+	 * begin is already the point where we are allowed to touch flash
+	 * (obs-gated above). Failing here is worth reporting but not fatal to
+	 * the transfer -- the image is still worth staging, and arm will say so. */
+	{
+		int trc = box_ota_flash_clear_trailer();
+
+		ota_pub_int("ota/trailer_rc", trc);
+		if (trc != 0) {
+			box_console_printf("%s -> WARNING trailer clear failed (%d);"
+					   " arm will fail until it is erased\n", who, trc);
+		}
+	}
+	/* ...and the LEAD sector, which staging never touches (the update
+	 * starts one sector in under swap-using-offset) but a completed
+	 * swap leaves holding the outgoing image's header. Skipping this
+	 * cost every post-swap OTA one rejected boot -- MCUboot: "Secondary
+	 * header magic detected in first sector, wrong upload address?" --
+	 * with only the repush landing (box02, 2026-08-01). */
+	{
+		int lrc = box_ota_flash_clear_lead();
+
+		if (lrc != 0) {
+			ota_pub_int("ota/lead_rc", lrc);
+			box_console_printf("%s -> WARNING lead-sector clear failed (%d);"
+					   " MCUboot will reject this stage once\n", who, lrc);
+		}
+	}
+
+	box_ota_flash_stats_reset();
+	g_ota_size    = size;
+	g_ota_ack_at  = BOX_OTA_ACK_EVERY;
+	g_ota_active  = 1;
+	ota_res_until = 0;
+
+	ota_pub_str("ota/state", box_ota_state_str(g_ota.state));
+	ota_pub_int("ota/progress", 0);
+	ota_pub_int("ota/ack", 0);
+	box_console_printf("%s -> staging %u B into slot1 (cap %u, sector %u)\n",
+			   who, size, box_ota_flash_size(), box_ota_flash_sector());
+	return 0;
+}
+
+#if defined(CONFIG_NETWORKING)
+/* ---- fetch (pull) front-end: box_fetch's worker -> the same sink --------
+ * Both callbacks run ON THE WORKER THREAD, and everything they touch is safe
+ * there: g_ota is exclusively this transfer's while the fetch is busy (the
+ * chunk handler bows out, see cmd/ota/chunk), box_ain_hold is atomic, and
+ * every publish is a memcpy into box_pub's k_msgq. */
+static int ota_fetch_sink(void *ud, const uint8_t *data, uint32_t len)
+{
+	ARG_UNUSED(ud);
+	/* Refreshed per span, so the analog hold lasts exactly as long as the
+	 * stream keeps moving -- the chunk path's rule, kept. */
+	ota_ain_yield();
+	if (box_ota_sink(&g_ota, data, len) != 0) {
+		return -1;
+	}
+	if (g_ota.received >= g_ota_ack_at) {
+		g_ota_ack_at = g_ota.received + BOX_OTA_ACK_EVERY;
+		ota_pub_int("ota/ack", (int32_t) g_ota.received);
+		ota_pub_int("ota/progress", box_ota_progress_pct(&g_ota));
+	}
+	return 0;
+}
+
+static void ota_fetch_done(void *ud, int rc)
+{
+	uint32_t e_max = 0, p_max = 0, e_n = 0, p_n = 0;
+
+	ARG_UNUSED(ud);
+	g_ota_active = 0;
+	box_ota_finish(&g_ota, rc < 0 ? -1 : 0);
+	box_ota_flash_stats(&e_max, &p_max, &e_n, &p_n);
+	ota_pub_int("ota/fetch_rc", rc);     /* <0 disambiguates transport death */
+	ota_pub_done();
+	box_console_printf("cmd/ota/fetch -> %s (%s), %u B, "
+			   "erase_max %u us, prog_max %u us\n",
+			   box_ota_state_str(g_ota.state),
+			   box_ota_err_str(g_ota.err), g_ota.received,
+			   e_max, p_max);
+}
+#endif /* CONFIG_NETWORKING */
 #endif /* BOX_HAVE_OTA_SLOT */
 
 #if defined(CONFIG_PTP_CLOCK)
@@ -1428,97 +1575,67 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 		return;
 	}
 
-	/* <prefix>/cmd/ota/begin "<sha256-hex> <size>" -- open a transfer into slot1. */
+	/* <prefix>/cmd/ota/begin "<sha256-hex> <size>" -- open a transfer into slot1
+	 * for the CHUNK front-end (the image then arrives as cmd/ota/chunk). */
 	if (leaf && strcmp(leaf, "cmd/ota/begin") == 0) {
-		char     arg[96];
-		uint8_t  sha[BOX_OTA_SHA_BYTES];
-		uint32_t size = 0;
+		char arg[96];
 
 		dserv_msg_copy_cstr(&m, arg, sizeof arg);
+#if defined(CONFIG_NETWORKING)
+		if (box_fetch_busy()) {
+			box_console_printf("cmd/ota/begin -> refused, a fetch is running\n");
+			return;
+		}
+#endif
+		(void) ota_open_slot("cmd/ota/begin", arg);
+		return;
+	}
 
-		/* An OTA blocks the service loop in ~60 ms slices for the whole
-		 * image (PORTING.md), so it must never overlap a trial. */
-		if (box_obs_active()) {
+	/* <prefix>/cmd/ota/fetch "<sha256-hex> <size>" -- open slot1 and PULL the
+	 * image ourselves: box_fetch's worker '<'-gets extio/<name>/ota/image
+	 * (staged by the host as a binary datapoint, RP2350-style) and streams it
+	 * into the same sink. Self-paced by TCP -- the worker not reading during
+	 * a sector erase IS the flow control -- so there are no windows, no
+	 * probes, and nothing to resend. The host only fires this at boxes that
+	 * announced state/ota/fetch_ok; refusals here are the belt to that brace. */
+	if (leaf && strcmp(leaf, "cmd/ota/fetch") == 0) {
+#if defined(CONFIG_NETWORKING)
+		static const uint8_t ip0[4];
+		char arg[96];
+		char key[64];
+
+		dserv_msg_copy_cstr(&m, arg, sizeof arg);
+		if (strcmp(box_uplink_active_name(), "eth") != 0 ||
+		    memcmp(cfg.dserv_ip, ip0, 4) == 0) {
 			g_ota.state = BOX_OTA_DONE_FAIL;
 			g_ota.err   = BOX_OTA_ERR_STATE;
 			ota_pub_done();
-			box_console_printf("cmd/ota/begin -> refused, in_obs\n");
+			box_console_printf("cmd/ota/fetch -> refused (uplink %s, "
+					   "dserv ip %s)\n", box_uplink_active_name(),
+					   memcmp(cfg.dserv_ip, ip0, 4) ? "set" : "unset");
 			return;
 		}
-		ota_ain_yield();      /* begin erases the trailer -- that is flash work */
-		if (strlen(arg) < 65 || box_ota_parse_sha(arg, sha) != 0) {
-			g_ota.state = BOX_OTA_DONE_FAIL;
-			g_ota.err   = BOX_OTA_ERR_SHA_INIT;
-			ota_pub_done();
-			box_console_printf("cmd/ota/begin -> bad sha argument\n");
+		if (box_fetch_busy()) {
+			box_console_printf("cmd/ota/fetch -> refused, already running\n");
 			return;
 		}
-		size = (uint32_t) strtoul(arg + 64, NULL, 0);
+		if (ota_open_slot("cmd/ota/fetch", arg) != 0) {
+			return;
+		}
+		int n = dserv_cfg_prefix(&cfg, key, sizeof key);
 
-		int rc = box_ota_flash_open();
-		if (rc != 0) {
-			g_ota.state = BOX_OTA_DONE_FAIL;
-			g_ota.err   = BOX_OTA_ERR_FLASH;
-			ota_pub_done();
-			box_console_printf("cmd/ota/begin -> slot open failed (%d)\n", rc);
-			return;
-		}
-		/* Start where MCUboot will LOOK, not at the slot's first byte --
-		 * swap-using-offset reserves the first sector. box_ota's offsets are
-		 * slot-relative, so shift the base and shrink the usable capacity to
-		 * match, or a full-size image would run off the end. */
-		g_ota_base = box_ota_flash_image_base();
-
-		if (box_ota_begin(&g_ota, &g_ota_flash_ops,
-				  box_ota_flash_size() - g_ota_base,
-				  box_ota_flash_sector(), sha, size) != 0) {
+		snprintf(key + n, sizeof key - (size_t) n, "/ota/image");
+		if (box_fetch_start(cfg.dserv_ip, dserv_cfg_port(&cfg), key,
+				    ota_fetch_sink, ota_fetch_done, NULL) != 0) {
 			g_ota_active = 0;
+			g_ota.state  = BOX_OTA_DONE_FAIL;
+			g_ota.err    = BOX_OTA_ERR_STATE;
 			ota_pub_done();
-			box_console_printf("cmd/ota/begin -> refused (%s)\n",
-					   box_ota_err_str(g_ota.err));
-			return;
+			box_console_printf("cmd/ota/fetch -> worker refused, aborted\n");
 		}
-		/* Clear the trailer NOW rather than at arm time: it is an erase, and
-		 * begin is already the point where we are allowed to touch flash
-		 * (obs-gated above). Failing here is worth reporting but not fatal to
-		 * the transfer -- the image is still worth staging, and arm will say so. */
-		{
-			int trc = box_ota_flash_clear_trailer();
-
-			ota_pub_int("ota/trailer_rc", trc);
-			if (trc != 0) {
-				box_console_printf("cmd/ota/begin -> WARNING trailer clear failed (%d);"
-						   " arm will fail until it is erased\n", trc);
-			}
-		}
-		/* ...and the LEAD sector, which staging never touches (the update
-		 * starts one sector in under swap-using-offset) but a completed
-		 * swap leaves holding the outgoing image's header. Skipping this
-		 * cost every post-swap OTA one rejected boot -- MCUboot: "Secondary
-		 * header magic detected in first sector, wrong upload address?" --
-		 * with only the repush landing (box02, 2026-08-01). */
-		{
-			int lrc = box_ota_flash_clear_lead();
-
-			if (lrc != 0) {
-				ota_pub_int("ota/lead_rc", lrc);
-				box_console_printf("cmd/ota/begin -> WARNING lead-sector clear failed (%d);"
-						   " MCUboot will reject this stage once\n", lrc);
-			}
-		}
-
-		box_ota_flash_stats_reset();
-		g_ota_size    = size;
-		g_ota_ack_at  = BOX_OTA_ACK_EVERY;
-		g_ota_active  = 1;
-		ota_res_until = 0;
-
-		ota_pub_str("ota/state", box_ota_state_str(g_ota.state));
-		ota_pub_int("ota/progress", 0);
-		ota_pub_int("ota/ack", 0);
-		box_console_printf("cmd/ota/begin -> staging %u B into slot1 "
-				   "(cap %u, sector %u)\n",
-				   size, box_ota_flash_size(), box_ota_flash_sector());
+#else
+		box_console_printf("cmd/ota/fetch -> no networking on this build\n");
+#endif
 		return;
 	}
 
@@ -1534,6 +1651,13 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 		if (!g_ota_active) {
 			return;                       /* stray frame, no transfer open */
 		}
+#if defined(CONFIG_NETWORKING)
+		/* A pull owns the sink: a chunk landing mid-fetch is a confused
+		 * host, and sinking it here would race the worker thread. */
+		if (box_fetch_busy()) {
+			return;
+		}
+#endif
 		/* A trial started mid-transfer: hold, do not abort. Re-acking the
 		 * cursor lets the host retry and make progress once the obs ends,
 		 * which is friendlier than throwing away a part-written image. */

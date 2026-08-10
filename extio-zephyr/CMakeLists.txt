@@ -111,6 +111,7 @@ if(CONFIG_NETWORKING)
 		src/platform/box_net_eth.c     # block #5: Ethernet transport (sockets)
 		src/platform/box_ptp.c         # block #5: ENET IEEE-1588 hardware clock
 		src/platform/box_beacon.c      # LAN discovery broadcast (UDP :5011)
+		src/platform/box_fetch.c       # OTA pull worker ('<' binary-get)
 	)
 endif()
 
