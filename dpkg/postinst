@@ -54,42 +54,70 @@ if command -v systemctl >/dev/null 2>&1 && command -v systemd-run >/dev/null 2>&
     mkdir -p /var/lib/dserv
     cat > /var/lib/dserv/agent-migrate.sh <<'MIGRATE'
 #!/bin/sh
-# Deferred by dserv's postinst. Installs the dserv-agent package if the box
-# does not have it, then restarts the agent so it picks up both the new binary
-# and the component list this dserv shipped.
+# Deferred by dserv's postinst. Brings the dserv-agent package into step with
+# the dserv just installed, then restarts the agent so it picks up both the new
+# binary and the component list this dserv shipped.
+#
+# In step, not merely present. The two ship from one tag and nobody chooses to
+# run an old agent against a new dserv -- but they will neglect to update it,
+# and there is one failure that guarantees they cannot: a broken self-updater.
+# The agent is the component that performs updates, so it is the one component
+# whose breakage removes its own route to a fix. 0.51.1 shipped exactly that,
+# handing a PrivateTmp path to a transient unit that could not see it, and
+# every affected box needed hands. This is the path that does not go through
+# the agent, so it is the one that can heal it.
 log() { logger -t dserv-agent-migrate "$*" 2>/dev/null || true; }
 
-if dpkg-query -W -f='${Status}' dserv-agent 2>/dev/null | grep -q "install ok installed"; then
-    log "dserv-agent already installed as a package; nothing to migrate"
+# From the installed dserv: dpkg has already recorded the new version by the
+# time postinst runs, so this cannot drift from the release that scheduled it
+# the way a build-time constant could.
+VER=$(dpkg-query -W -f='${Version}' dserv 2>/dev/null || echo "")
+ARCH=$(dpkg --print-architecture 2>/dev/null || echo "")
+
+# Only a properly installed package counts as a version -- half-configured or
+# unpacked reports nothing and gets reinstalled, the same rule the bootstrap
+# uses, and for the same reason: a package can sit at the right version and
+# still be broken.
+AGENT_VER=""
+case "$(dpkg-query -W -f='${Status}|${Version}' dserv-agent 2>/dev/null)" in
+    "install ok installed|"*) AGENT_VER=$(dpkg-query -W -f='${Version}' dserv-agent 2>/dev/null) ;;
+esac
+
+WANT=""
+if [ -z "$VER" ] || [ -z "$ARCH" ]; then
+    log "could not determine dserv version/arch; skipping"
+elif [ -z "$AGENT_VER" ]; then
+    WANT="$VER"; log "dserv-agent not installed; fetching ${VER}"
+elif dpkg --compare-versions "$AGENT_VER" lt "$VER"; then
+    WANT="$VER"; log "dserv-agent ${AGENT_VER} older than dserv ${VER}; upgrading"
 else
-    # Version comes from the installed dserv: dpkg has already recorded the new
-    # version by the time postinst runs, so this cannot drift from the release
-    # that scheduled it the way a build-time constant could.
-    VER=$(dpkg-query -W -f='${Version}' dserv 2>/dev/null || echo "")
-    ARCH=$(dpkg --print-architecture 2>/dev/null || echo "")
-    if [ -n "$VER" ] && [ -n "$ARCH" ]; then
-        URL="https://github.com/SheinbergLab/dserv/releases/download/${VER}/dserv-agent_${VER}_${ARCH}.deb"
-        TMP=$(mktemp -d)
-        if curl -fsSL -o "$TMP/dserv-agent.deb" "$URL"; then
-            if apt-get install -y "$TMP/dserv-agent.deb" >/dev/null 2>&1 ||
-               dpkg -i "$TMP/dserv-agent.deb" >/dev/null 2>&1; then
-                log "installed dserv-agent ${VER} (${ARCH})"
-            else
-                log "dserv-agent ${VER} downloaded but would not install"
-            fi
-        else
-            log "could not fetch ${URL}"
-        fi
-        rm -rf "$TMP"
-    else
-        log "could not determine dserv version/arch; skipping"
-    fi
+    # Equal, or NEWER. Newer is deliberate and left alone: a hand-installed
+    # agent ahead of dserv is how a box gets rescued when self-update breaks,
+    # and dragging it backwards would undo the rescue.
+    log "dserv-agent ${AGENT_VER} in step with dserv ${VER}; nothing to do"
 fi
 
-# Always, even if the install was skipped or failed: the component list this
-# dserv shipped is read only at agent startup, and an unread list is why the
-# panel would not offer the package in the first place.
+if [ -n "$WANT" ]; then
+    URL="https://github.com/SheinbergLab/dserv/releases/download/${WANT}/dserv-agent_${WANT}_${ARCH}.deb"
+    TMP=$(mktemp -d)
+    if curl -fsSL -o "$TMP/dserv-agent.deb" "$URL"; then
+        if apt-get install -y "$TMP/dserv-agent.deb" >/dev/null 2>&1 ||
+           dpkg -i "$TMP/dserv-agent.deb" >/dev/null 2>&1; then
+            log "installed dserv-agent ${WANT} (${ARCH})"
+        else
+            log "dserv-agent ${WANT} downloaded but would not install"
+        fi
+    else
+        log "could not fetch ${URL}"
+    fi
+    rm -rf "$TMP"
+fi
+
+# Always, even when nothing was installed: the component list this dserv
+# shipped is read only at agent startup, and an unread list is why the panel
+# would not offer the package in the first place.
 systemctl restart dserv-agent 2>/dev/null || true
+
 MIGRATE
     chmod 0755 /var/lib/dserv/agent-migrate.sh
     systemd-run --collect --on-active=20 \
