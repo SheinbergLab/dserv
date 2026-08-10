@@ -670,7 +670,7 @@ install_component() {
         run bash -c "$expanded"
     elif [[ "$asset_name" == *.deb ]]; then
         info "  Installing .deb..."
-        run dpkg -i "$download_path" || run apt-get install -f -y -qq
+        run dpkg -i "$download_path" || run apt-get install -f -y -qq -o DPkg::Lock::Timeout=300
     else
         warn "${comp_id}: no installCmd and not a .deb (${asset_name})"
         rm -f "$download_path"
@@ -822,7 +822,7 @@ step_install_agent() {
     if [[ -n "$deb_url" && "$deb_url" != "null" ]]; then
         local deb_file="/tmp/dserv-agent-${tag}.deb"
         run curl -sSL -o "$deb_file" "$deb_url"
-        run dpkg -i "$deb_file" || run apt-get install -f -y -qq
+        run dpkg -i "$deb_file" || run apt-get install -f -y -qq -o DPkg::Lock::Timeout=300
         rm -f "$deb_file"
     else
         local bin_url

@@ -101,7 +101,10 @@ if [ -n "$WANT" ]; then
     URL="https://github.com/SheinbergLab/dserv/releases/download/${WANT}/dserv-agent_${WANT}_${ARCH}.deb"
     TMP=$(mktemp -d)
     if curl -fsSL -o "$TMP/dserv-agent.deb" "$URL"; then
-        if apt-get install -y "$TMP/dserv-agent.deb" >/dev/null 2>&1 ||
+        # Lock::Timeout so this waits for a concurrent install rather than
+    # failing: this unit fires 20s after a dserv install, which is exactly
+    # when someone may be installing something else from the panel.
+    if apt-get install -y -o DPkg::Lock::Timeout=300 "$TMP/dserv-agent.deb" >/dev/null 2>&1 ||
            dpkg -i "$TMP/dserv-agent.deb" >/dev/null 2>&1; then
             log "installed dserv-agent ${WANT} (${ARCH})"
         else

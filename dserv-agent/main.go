@@ -1620,7 +1620,7 @@ trap 'rm -rf "$d"' EXIT
 echo "self-update %s: fetching"
 curl -fsSL -o "$d/agent.deb" %s
 echo "self-update %s: installing"
-apt-get install -y -o Dpkg::Options::=--force-confold "$d/agent.deb"
+apt-get install -y -o Dpkg::Options::=--force-confold -o DPkg::Lock::Timeout=300 "$d/agent.deb"
 echo "self-update %s: restarting %s"
 systemctl restart %s`,
 		version, shellQuote(downloadURL),
@@ -2160,8 +2160,17 @@ func (a *Agent) installComponent(comp Component, assetName string, stopServices 
 		// half-configured and requires a manual `apt --fix-broken install`.
 		// --force-confold preserves admin-edited conffiles; DEBIAN_FRONTEND
 		// keeps any maintainer-script debconf prompts non-interactive.
+		// DPkg::Lock::Timeout makes a concurrent install WAIT for the dpkg
+		// lock instead of failing on it. apt's default is to fail at once,
+		// and these paths genuinely overlap: a dserv install schedules a
+		// deferred agent migration 20s later, so an operator clicking in the
+		// panel meanwhile collides with it. That happened on the first real
+		// run -- the migration won the lock and this install died on it,
+		// while the CLI still reported success because the version had moved
+		// underneath it.
 		cmd := exec.Command("sudo", "apt-get", "install", "-y",
 			"-o", "Dpkg::Options::=--force-confold",
+			"-o", "DPkg::Lock::Timeout=300",
 			localPath)
 		cmd.Env = append(os.Environ(), "DEBIAN_FRONTEND=noninteractive")
 		if output, err := cmd.CombinedOutput(); err != nil {
