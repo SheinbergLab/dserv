@@ -47,7 +47,39 @@ static int srv_listen = -1;     /* listening socket (BOX_ETH_CFG_PORT)          
 static volatile int srv_conn = -1;   /* dserv's accepted connect-back           */
 static uint8_t srv_peer[4];          /* who holds it (box_net_eth_server_peer)  */
 static int srv_fresh;           /* one-shot: report BOX_NET_RESET after accept  */
+static int64_t srv_fresh_at;    /* when it latched (bounds the announce hold)   */
 static int reannounce;          /* one-shot: retarget -> re-describe ourselves   */
+
+/* Raised by the registration thread around its %reg+%match sequence: dserv's
+ * %reg reply arrives only after its connect-back is ACCEPTED, so the
+ * accept-fired burst otherwise outruns the %match lines by design -- and
+ * whatever the burst provokes from the host (measured 2026-08-10: the OTA
+ * lifecycle's confirm, fired off fw_ver) lands in a send-client with no
+ * match patterns yet and silently goes nowhere. While held, srv_fresh stays
+ * LATCHED rather than dropped; the burst fires on release -- or after 5 s
+ * regardless, so a wedged registration can only delay the announce, never
+ * eat it. Host-initiated %reg (adoption) never raises the hold and keeps
+ * burst-on-accept unchanged. */
+static atomic_t srv_announce_hold;
+
+void box_net_eth_announce_hold(int on)
+{
+	atomic_set(&srv_announce_hold, on ? 1 : 0);
+}
+
+/* Consume srv_fresh iff the burst may fire now (see srv_announce_hold). */
+static int srv_fresh_take(void)
+{
+	if (!srv_fresh) {
+		return 0;
+	}
+	if (atomic_get(&srv_announce_hold) &&
+	    (k_uptime_get() - srv_fresh_at) < 5000) {
+		return 0;
+	}
+	srv_fresh = 0;
+	return 1;
+}
 /* ---- inbound instrumentation ----
  * The split changed meaning at +29, when the reader thread took over recv:
  *   wake_us  queue residence -- frame enqueued at arrival -> service loop
@@ -395,6 +427,7 @@ void box_net_eth_server_service(void)
 	}
 	srv_conn = c;
 	srv_fresh = 1;                       /* -> BOX_NET_RESET -> announce burst */
+	srv_fresh_at = k_uptime_get();       /* for the announce-hold cap */
 }
 
 /* The address currently holding the connect-back slot; zeros when nobody does.
@@ -783,8 +816,7 @@ int box_net_eth_poll2(uint8_t *buf, int max, int *len, uint64_t *arr_us)
 		reannounce = 0;
 		return BOX_UPLINK_RX_RESET;
 	}
-	if (srv_fresh) {
-		srv_fresh = 0;
+	if (srv_fresh_take()) {
 		return BOX_UPLINK_RX_RESET;
 	}
 
@@ -867,8 +899,7 @@ int box_net_eth_poll(uint8_t *buf, int max)
 		reannounce = 0;
 		return BOX_NET_RESET;           /* retarget; see poll2's note */
 	}
-	if (srv_fresh) {
-		srv_fresh = 0;
+	if (srv_fresh_take()) {
 		return BOX_NET_RESET;
 	}
 	return 0;

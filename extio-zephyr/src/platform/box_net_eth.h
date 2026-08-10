@@ -91,6 +91,12 @@ void box_net_eth_server_service(void);
  * caller that sees this stay 0 while the client socket is up must re-register. */
 int box_net_eth_server_up(void);
 
+/* Hold (1) / release (0) the fresh-connect-back announce: raised by the
+ * registration sequence so the burst cannot outrun its %match lines -- the
+ * host reacts to the burst with commands, and a send-client with no matches
+ * drops them silently. Capped at 5 s in case the registration wedges. */
+void box_net_eth_announce_hold(int on);
+
 /* Who currently holds the connect-back slot (zeros / 0 when nobody does). A
  * FACT for the discovery beacon, never a decision input: the peer need not
  * equal the configured dserv_ip on a multi-homed host, so treating a mismatch

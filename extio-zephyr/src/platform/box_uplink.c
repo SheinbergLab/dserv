@@ -230,8 +230,15 @@ static void reg_thread_fn(void *a, void *b, void *cc)
 
 			snprintf(rcmd, sizeof rcmd, "%%reg %u.%u.%u.%u %u 1\n",
 				 bip[0], bip[1], bip[2], bip[3], BOX_ETH_CFG_PORT);
-			/* %reg is its own connection: it makes dserv connect BACK to us,
-			 * so let that settle before the matches follow. */
+			/* HOLD THE ANNOUNCE until the matches below have landed. %reg
+			 * makes dserv connect BACK to us and replies only once that
+			 * connect resolves -- so the accept (and with it the burst)
+			 * happens BEFORE this thread has sent a single %match line,
+			 * and everything the burst provokes from the host went down a
+			 * send-client with no patterns (the lost OTA confirm,
+			 * 2026-08-10). Latched, not dropped: the burst fires at the
+			 * release below, matches in place. */
+			box_net_eth_announce_hold(1);
 			if (reg_send_retry(dip, port, rcmd) != 0) fails++;
 			k_msleep(150);
 		}
@@ -263,6 +270,11 @@ static void reg_thread_fn(void *a, void *b, void *cc)
 				fails += bad;
 			}
 			k_msleep(150);
+		}
+		if (full) {
+			/* Matches are in (or exhausted their retries -- the watchdog
+			 * owns that case): let the latched burst fire. */
+			box_net_eth_announce_hold(0);
 		}
 
 		/* Say something only when there IS something to say.
