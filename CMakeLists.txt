@@ -604,7 +604,19 @@ install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/db/README   DESTINATION dserv/db COMPO
 install(DIRECTORY local DESTINATION dserv COMPONENT dserv)
 install(DIRECTORY systems DESTINATION dserv COMPONENT dserv)
 install(DIRECTORY systemd DESTINATION dserv COMPONENT dserv)
-install(DIRECTORY scripts DESTINATION dserv COMPONENT dserv)
+# USE_SOURCE_PERMISSIONS, and it is not cosmetic. install(DIRECTORY) defaults
+# every file to 644, so `make install` strips the executable bit off every script
+# in here -- boot_soak.sh, certify.sh, export-docs.sh, the PTP helpers, all of
+# them. The .deb never showed it because dpkg/postinst chmod 0755's the two PTP
+# scripts by hand, so the packaged path worked and the from-source path did not.
+#
+# Found 2026-08-09 after `sudo make install` on two rigs: dserv-ptp-setup
+# answered "Permission denied" on both. The quieter half is worse --
+# dserv-ptp-select-phc runs from the ptp4l units' ExecStartPre with a `-` prefix,
+# so a non-executable copy is SKIPPED SILENTLY and ptp4l binds whatever clock the
+# kernel offers first, which is the wrong-PHC failure that script exists to
+# prevent. git carries the bit; honour it.
+install(DIRECTORY scripts DESTINATION dserv COMPONENT dserv USE_SOURCE_PERMISSIONS)
 install(DIRECTORY www DESTINATION dserv COMPONENT dserv)
 install(DIRECTORY ssl DESTINATION dserv COMPONENT dserv)
 install(DIRECTORY soundfonts DESTINATION dserv COMPONENT dserv)
