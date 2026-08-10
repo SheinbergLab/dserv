@@ -143,6 +143,92 @@ static void graceful_shutdown(void) {
   std::_Exit(0);
 }
 
+/*
+ * Is dserv's timeline still anchored to real time?
+ *
+ * WHY THIS IS IN THE CORE and not in a subprocess. The fact being checked is a
+ * property of clock_epoch_offset_us() -- a dserv fact, not a PTP one. It lived
+ * briefly in config/ptpconf.tcl because that is where both clocks were already
+ * being read, but dsconf.tcl gates that subprocess on /sys/class/ptp/ptp*
+ * existing, so the check ran ONLY on PTP-capable hosts. That is backwards
+ * relative to the risk: a host with no PHC (a Pi 4, a Realtek NIC, a VM) is
+ * typically the one with no RTC either, and so the one most likely to boot with
+ * a wrong clock. Here it cannot be gated off.
+ *
+ * WHAT IT CATCHES (rig Pi, 2026-08-09). The host was put into the PTP client
+ * role on a segment with no real grandmaster; phc2sys steered CLOCK_REALTIME
+ * down to a from-zero PHC and the machine ran in 1970 with chrony stopped. dserv
+ * was immune -- it stamps from CLOCK_MONOTONIC and never steps -- but it had
+ * captured its epoch constant 13 s after boot from the stale clock systemd
+ * restored, so every datapoint carried a timestamp ~29 h in the past. The extio
+ * config page, which ages datapoints against the browser's clock, then showed
+ * EVERY box as "offline 29h" while the rig was healthy. Nothing reported it.
+ *
+ * NOTE THE SKEW IS ZERO AT STARTUP, BY CONSTRUCTION: the offset is captured as
+ * system_us() - steady_us(), so now() == system_us() at that instant. This can
+ * only ever detect a LATER divergence -- which is exactly the failure. Both
+ * halves of 2026-08-09 are later divergences: the clock being dragged to 1970
+ * after dserv started, and then chrony correcting it while dserv went on holding
+ * the stale anchor. So it must be periodic, not a startup check.
+ *
+ * TWO FAULTS, REPORTED DIFFERENTLY, because their fixes are opposite and
+ * confusing them costs an evening.
+ */
+static const int64_t CLOCK_SKEW_WARN_US   = 60LL * 1000000;           /* 60 s */
+static const int64_t CLOCK_EPOCH_FLOOR_US = 1735689600LL * 1000000;   /* 2025-01-01Z */
+
+static void publishClockHealth(Dataserver *ds)
+{
+  struct timespec ts;
+  if (clock_gettime(CLOCK_REALTIME, &ts) != 0) return;
+  int64_t wall_us = (int64_t) ts.tv_sec * 1000000 + (int64_t) ts.tv_nsec / 1000;
+  int64_t skew    = Dataserver::now() - wall_us;
+
+  /* 60 s cannot false-positive. The two clocks behind the constant are slewed
+     TOGETHER by NTP and diverge only across a STEP, so ordinary skew over a long
+     session is milliseconds. */
+  char buf[32];
+  snprintf(buf, sizeof buf, "%lld", (long long) skew);
+
+  std::string err;
+  if (wall_us < CLOCK_EPOCH_FLOOR_US) {
+    /* Not merely wrong -- never SET. A clock counting from zero is what a host
+       with no RTC and no time source looks like, and what phc2sys copies out of
+       a free-running PHC. */
+    err = "host wall clock is not set; dserv timestamps are " +
+          std::to_string(std::llabs(skew) / 1000000) + " s " +
+          (skew < 0 ? "behind" : "ahead of") + " it. Fix the host clock "
+          "(check its NTP daemon and dserv-ptp-setup status), then RESTART dserv.";
+  } else if (std::llabs(skew) > CLOCK_SKEW_WARN_US) {
+    /* The clock has been corrected since startup and dserv is still on the old
+       anchor. clock_epoch_offset_us() is a static const, captured once and never
+       recomputed -- correct for an acquisition timebase, and precisely why this
+       has to be said out loud rather than inferred. */
+    err = "dserv timestamps are " + std::to_string(std::llabs(skew) / 1000000) +
+          " s " + (skew < 0 ? "behind" : "ahead of") + " the wall clock. The epoch "
+          "anchor was captured at startup from a clock that was wrong; it is never "
+          "recomputed, so RESTART dserv to pick up the corrected time.";
+  }
+
+  /* dpoint_new() strdup()s the name and memcpy()s the value, so these casts hand
+     over nothing the datapoint keeps a pointer into. */
+  ds->set((char *) "system/clock_skew_us", buf);
+  ds->set((char *) "system/clock_error", const_cast<char *>(err.c_str()));
+
+  /* Log a NEW fault once, not every minute -- and log the RECOVERY too: a fault
+     that simply goes quiet is indistinguishable from a fault nobody noticed.
+     Only ever touched from the park loop (the main thread), so the static needs
+     no synchronisation. */
+  static std::string last_err;
+  if (err != last_err) {
+    if (!err.empty()) std::cerr << "dserv: CLOCK " << err << std::endl;
+    else              std::cerr << "dserv: clock skew back within "
+                                << (CLOCK_SKEW_WARN_US / 1000000)
+                                << " s of the wall clock" << std::endl;
+    last_err = err;
+  }
+}
+
 void setVersionInfo(TclServer* tclserver) {
     std::string version_str = dserv_VERSION;
     
@@ -247,8 +333,20 @@ int main(int argc, char *argv[])
 
   /* park until a signal requests shutdown, then tear down from the
      main thread (not from signal context) */
+  //
+  // The park loop doubles as the clock-health timer: no extra thread, and so
+  // nothing extra for graceful_shutdown() to have to reason about. 600 ticks =
+  // 60 s, which is far tighter than it needs to be -- the fault it reports
+  // persists until dserv is restarted, so detection latency is irrelevant. The
+  // counter starts at the trigger so the datapoints exist from the first tick
+  // rather than a minute in, where a consumer would see them as missing.
+  int clock_check_ticks = 600;
   while (!shutdownRequested.load()) {
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    if (++clock_check_ticks >= 600) {
+      clock_check_ticks = 0;
+      publishClockHealth(dserver);
+    }
   }
   graceful_shutdown();
 }

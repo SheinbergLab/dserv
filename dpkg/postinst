@@ -159,6 +159,40 @@ for h in dserv-ptp-setup dserv-ptp-select-phc; do
     ln -sf "/usr/local/dserv/scripts/$h" "/usr/local/bin/$h" 2>/dev/null || true
 done
 
+# Time-source advisory. SAY, do not ACT: which NTP daemon a host runs is a site
+# decision of the same class as the PTP role above, and installing chrony removes
+# systemd-timesyncd -- not something `apt install dserv` should do behind your
+# back. The package Recommends chrony, which is the right amount of force.
+#
+# Worth saying because both consequences are invisible. dserv's
+# clock_epoch_offset_us() is captured ONCE at startup, so a host that boots with
+# a wrong clock stamps every datapoint wrong for the life of the process and
+# nothing self-heals it (rig Pi, 2026-08-09: 29 h of skew, every extio box read
+# "offline" in the GUI while the rig was healthy). And on a PTP GRANDMASTER the
+# choice of daemon is not academic -- measured on the i.MX95 GM 2026-08-08, 120
+# samples of its own phc2sys: chrony sd 92 ns, systemd-timesyncd sd 53,042 ns,
+# no NTP at all sd 77 ns. timesyncd is ~690x worse than having NO time source,
+# because phc2sys pushes its frequency thrash into the PHC and out to every box.
+if command -v systemctl >/dev/null 2>&1; then
+    if [ "$(systemctl is-active chrony.service 2>/dev/null)" != active ] && \
+       [ "$(systemctl is-active chronyd.service 2>/dev/null)" != active ]; then
+        if [ "$(systemctl is-active systemd-timesyncd.service 2>/dev/null)" = active ]; then
+            echo "NOTE: this host's time source is systemd-timesyncd. chrony is strongly"
+            echo "      preferred -- 53 us vs 92 ns of jitter measured on a PTP grandmaster,"
+            echo "      where it is pushed out to every extio box:"
+            echo "          apt install chrony"
+            echo "      On a grandmaster, also install the tuning drop-in:"
+            echo "          cp /usr/local/dserv/systemd/chrony-grandmaster.conf \\"
+            echo "             /etc/chrony/conf.d/10-dserv-grandmaster.conf"
+        else
+            echo "NOTE: no NTP daemon is active. dserv captures its wall-clock epoch ONCE at"
+            echo "      startup, so a host that boots with a wrong clock timestamps everything"
+            echo "      wrong until dserv is RESTARTED -- and nothing self-heals it:"
+            echo "          apt install chrony"
+        fi
+    fi
+fi
+
 # Bootstrap dlsh if not already installed
 if [ ! -f /usr/local/dlsh/dlsh.zip ]; then
     echo "dlsh not found, installing..."

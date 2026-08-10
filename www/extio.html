@@ -878,7 +878,24 @@ function syncCfgBar() {
  * js/clock_skew.js for why this page deliberately does not age against
  * msg.timestamp. */
 const ptp = { seen: false, at: 0, boxes: null, anchored: null,
-              error: '', clockError: '', skewUs: null, periodS: 300, dUs: null };
+              error: '', periodS: 300, dUs: null };
+
+/* Kept SEPARATE from ptp, because it has a different source and a different
+ * lifetime. system/clock_* comes from the dserv core (dserv.cpp
+ * publishClockHealth), not from the ptp subprocess, so it exists on every host
+ * -- including the ones with no PHC, where dsconf.tcl never starts ptpconf at
+ * all. Those are exactly the hosts most likely to have a bad clock (no PHC
+ * usually means no RTC either), which is why this must not hang off ptp.seen. */
+const clk = { error: '', skewUs: null };
+
+function onSystemClock(msg) {
+    let v = msg.data !== undefined ? msg.data : msg.value;
+    if (typeof v === 'string') v = v.split('\x00')[0];
+    if (msg.name === 'system/clock_error')        clk.error  = String(v);
+    else if (msg.name === 'system/clock_skew_us') clk.skewUs = Number(v);
+    else return;
+    renderPtp();
+}
 
 /* Microseconds spanning nine orders of magnitude -- a healthy clock skew is
  * single-digit µs, a broken one is hours -- so the unit has to follow the value. */
@@ -905,8 +922,6 @@ function onPtp(msg) {
       case 'boxes':        ptp.boxes = Number(v); break;
       case 'anchored':     ptp.anchored = Number(v); break;
       case 'error':        ptp.error = String(v); break;
-      case 'clock_error':  ptp.clockError = String(v); break;
-      case 'clock_skew_us': ptp.skewUs = Number(v); break;
       case 'period_s':     ptp.periodS = Number(v) || 300; break;
       case 'd_us':         ptp.dUs = Number(v); break;
       default: return;                                       /* freshness only */
@@ -917,10 +932,12 @@ function onPtp(msg) {
 function renderPtp() {
     const el = document.getElementById('ptp');
     if (!el) return;
-    /* No ptp/* keys at all = this host has no PTP. dsconf.tcl gates ptpconf on
-     * /sys/class/ptp/ptp* existing, so such a host publishes nothing here and
-     * must not grow a permanently-unknown chip. */
-    if (!ptp.seen) { el.hidden = true; return; }
+    /* TWO independent reasons to appear, and the clock one is not gated on PTP.
+     * No ptp/* keys at all = this host has no PTP (dsconf.tcl gates ptpconf on
+     * /sys/class/ptp/ptp* existing), and such a host must not grow a
+     * permanently-unknown chip -- but it CAN still have a broken clock, and that
+     * is worth showing on its own. */
+    if (!ptp.seen && !clk.error) { el.hidden = true; return; }
     el.hidden = false;
 
     const n = ptp.anchored, b = ptp.boxes;
@@ -932,8 +949,10 @@ function renderPtp() {
     const staleLimit = Math.max(ptp.periodS * 2500, 60000);
 
     let cls, txt, tip;
-    if (ptp.clockError) {
-        cls = 'bad'; txt = 'PTP clock skew'; tip = ptp.clockError;
+    if (clk.error) {
+        /* Labelled "clock skew", not "PTP clock skew": it is a dserv fact, and
+         * on a host with no PTP this is the only thing the chip is here to say. */
+        cls = 'bad'; txt = 'clock skew'; tip = clk.error;
     } else if (ptp.error) {
         cls = 'bad'; txt = `PTP ${count} error`; tip = ptp.error;
     } else if (n != null && b != null && n < b) {
@@ -951,8 +970,8 @@ function renderPtp() {
          * not an error term), so a fixed ms unit prints an unreadable -37000.0.
          * Same for skew, which is microseconds when healthy and hours when not. */
         tip = `${n} of ${b} live box(es) anchored to dserv's timeline`
-            + (ptp.dUs   != null ? ` · D ${fmtUs(ptp.dUs)}` : '')
-            + (ptp.skewUs != null ? ` · clock ${fmtUs(ptp.skewUs)} vs wall` : '')
+            + (ptp.dUs    != null ? ` · D ${fmtUs(ptp.dUs)}` : '')
+            + (clk.skewUs != null ? ` · clock ${fmtUs(clk.skewUs)} vs wall` : '')
             + ` · updated ${fmtAge(stale)}`;
     }
     if (el.className !== 'chip ' + cls) el.className = 'chip ' + cls;
@@ -1032,6 +1051,10 @@ async function init() {
     dp = new DatapointManager(conn, { autoGetKeys: false });
     dp.subscribe('extio/*', onExtio);          /* live stream, all boxes */
     dp.subscribe('ptp/*', onPtp);              /* host-side PTP health (the chip) */
+    /* Named exactly, not system/*: that tree carries a dozen unrelated keys
+     * (hostname, version, os, webport, boot_stage...) this page has no use for. */
+    dp.subscribe('system/clock_error',   onSystemClock);
+    dp.subscribe('system/clock_skew_us', onSystemClock);
     /* Subscriptions fire on CHANGE only, and the discovery set changes rarely
      * once a rig is settled -- without seeding the retained value the panel
      * stays empty until a box appears or leaves, which on a stable rig could be
@@ -1050,7 +1073,7 @@ async function init() {
              * 300 s, so a page opened between sweeps would otherwise sit blank
              * for five minutes -- while a host with no PTP has no ptp/* keys at
              * all, asks for nothing, and correctly never shows the chip. */
-            if (k.startsWith('ptp/')) {
+            if (k.startsWith('ptp/') || k.startsWith('system/clock_')) {
                 if (!fetched.has(k)) { fetched.add(k); dp.sendGet(k); }
                 continue;
             }

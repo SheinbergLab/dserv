@@ -753,7 +753,23 @@ else()
     # Depends is the better long-term expression, and is safe to add the moment
     # it can be satisfied everywhere.
     set(CPACK_DEBIAN_DSERV_PACKAGE_DEPENDS "libevdev2, libpq5, zlib1g, yajl-tools, fluidsynth")
-    set(CPACK_DEBIAN_DSERV_PACKAGE_RECOMMENDS "dserv-agent")
+    # chrony is RECOMMENDS and deliberately not DEPENDS. Every dserv host needs a
+    # correct wall clock -- not for acquisition (timestamps ride CLOCK_MONOTONIC)
+    # but because clock_epoch_offset_us() is captured ONCE at startup, so a host
+    # that boots with a wrong clock poisons every timestamp for the life of the
+    # process and nothing self-heals it.
+    #
+    # WHICH daemon, not whether. Measured on the i.MX95 grandmaster 2026-08-08,
+    # 120 samples of its own phc2sys: chrony sd 92 ns, systemd-timesyncd sd
+    # 53,042 ns, no NTP at all sd 77 ns -- timesyncd is ~690x worse than having
+    # NO time source, because it is an SNTP client with no filtering and phc2sys
+    # pushes its frequency thrash straight into the PHC and out to every box.
+    #
+    # Not DEPENDS because installing chrony REMOVES systemd-timesyncd, and
+    # rearranging a host's time configuration is exactly the class of decision
+    # dpkg/postinst refuses to make for PTP roles. Recommends is installed by
+    # default and stays overridable with --no-install-recommends.
+    set(CPACK_DEBIAN_DSERV_PACKAGE_RECOMMENDS "dserv-agent, chrony")
 
     set(CPACK_DEBIAN_DSERV-AGENT_PACKAGE_NAME "dserv-agent")
     # The agent's three files used to belong to dserv. Without Replaces, dpkg
