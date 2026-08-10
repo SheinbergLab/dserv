@@ -103,6 +103,7 @@ code { background:#141720; padding:1px 5px; border-radius:3px; font-size:12px; }
 <script src="js/ws_manager.js"></script>
 <script src="js/DatapointManager.js"></script>
 <script src="js/PageNav.js"></script>
+<script src="js/clock_skew.js"></script>
 <script src="js/extio_silk.js"></script>
 <script src="js/extio_ain.js"></script>
 <script>
@@ -131,69 +132,12 @@ let sel = null, fetched = new Set(), pendingSelect = null;
 
 const now = () => Date.now() * 1000;   /* dserv timestamps are microseconds */
 
-/* ---- is dserv's clock the same clock as ours? ----
- *
- * EVERY AGE ON THIS PAGE IS A SUBTRACTION ACROSS TWO MACHINES: liveness() ages
- * a dserv timestamp against Date.now() in this browser. That is only meaningful
- * while the two clocks agree, and nothing here used to check.
- *
- * On 2026-08-09 the rig Pi was put into the PTP client role on a segment with
- * no real grandmaster, its system clock was dragged to 1970, and dserv -- which
- * captures its epoch constant ONCE at startup, by design -- ended up stamping
- * every datapoint ~29 h in the past. This page then reported every box as
- * "offline 29h" while the whole rig was healthy and the boxes were publishing
- * watchdogs at 1 Hz. The symptom pointed at the boxes and the network; the
- * fault was a clock. That hour is what this banner exists to give back.
- *
- * THE ESTIMATOR IS A MIN OVER A ROLLING WINDOW, and both halves are load-bearing.
- *   - MIN, not mean or latest: `now() - msg.timestamp` is (clock skew) +
- *     (how stale that datapoint already was) + (transport delay). Only the
- *     first term is wanted, and the other two are strictly non-negative, so the
- *     minimum over recent arrivals is the tightest available bound on the skew.
- *     A mean would be dragged arbitrarily by the retained backlog that lands on
- *     every subscribe -- dserv retains forever, so that backlog can be days old.
- *   - ROLLING, not all-time: an all-time minimum can never recover from a
- *     server clock that steps BACKWARD. The older, smaller sample would stand
- *     for the life of the page and the banner would stay silent through exactly
- *     the fault it is meant to catch. */
-const SKEW_WINDOW_MS = 60000;
-const SKEW_WARN_US   = 60 * 1e6;   /* same 60 s threshold as ptpconf's ptp/clock_error */
-let skewSamples = [];
-
-function noteServerClock(ts) {
-  if (!ts) return;                 /* no server timestamp = nothing to compare */
-  const at = Date.now();
-  skewSamples.push({ at, d: at * 1000 - ts });
-  const cutoff = at - SKEW_WINDOW_MS;
-  while (skewSamples.length && skewSamples[0].at < cutoff) skewSamples.shift();
-}
-
-function serverSkewUs() {
-  if (!skewSamples.length) return null;
-  let m = Infinity;
-  for (const s of skewSamples) if (s.d < m) m = s.d;
-  return m;
-}
-
-function renderClockWarn() {
-  const el = document.getElementById('clockwarn');
-  const sk = serverSkewUs();
-  if (sk === null || Math.abs(sk) < SKEW_WARN_US) { el.className = 'hide'; return; }
-  el.className = '';
-  /* sk > 0 means dserv's timestamps are OLDER than our clock, i.e. dserv is
-     behind -- which is the direction that makes everything read as offline. */
-  const dir = sk > 0 ? 'behind' : 'ahead of';
-  const html =
-    `<b>dserv's clock is ${fmtDur(Math.abs(sk))} ${dir} this browser's.</b> ` +
-    `Every age and liveness state below is measured against it, so boxes may ` +
-    `read <b>offline</b> while they are in fact healthy — check the watchdog ` +
-    `counter itself, not the pill.<br>` +
-    `Fix the host clock (its NTP daemon, and <code>dserv-ptp-setup status</code> — ` +
-    `a PTP client following a grandmaster that was never set will do this), then ` +
-    `<b>restart dserv</b>: its epoch anchor is captured once at startup and is ` +
-    `never recomputed.`;
-  if (el.innerHTML !== html) el.innerHTML = html;   /* memoized: this ticks at 1 Hz */
-}
+/* Server-clock check lives in js/clock_skew.js -- it is page-agnostic, and any
+ * page that ages against msg.timestamp (as this one deliberately does) needs it.
+ * See that file for why the estimator is a rolling minimum. */
+const clockSkew = ClockSkew.create({ elementId: 'clockwarn' });
+const noteServerClock = ts => clockSkew.note(ts);
+const renderClockWarn = () => clockSkew.render();
 
 function setConn(up, msg) {
   const el = document.getElementById('conn');

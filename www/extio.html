@@ -24,6 +24,14 @@
                background: var(--off); margin-right: 6px; }
   #conn.ok .dot { background: var(--green); }
   #conn.bad .dot { background: var(--red); }
+  /* Host-side PTP health. Sits AFTER #conn in the DOM on purpose: #conn owns the
+     `margin-left:auto` that pushes the right-hand group over, and moving that
+     onto a chip that is `hidden` on any non-PTP host would collapse the header
+     layout on exactly those hosts. */
+  #ptp { margin-left: 10px; cursor: default; }
+  #ptp.ok   { background: #14351f; color: var(--green); }
+  #ptp.warn { background: #3a2c10; color: var(--amber); }
+  #ptp.bad  { background: #3f1d1d; color: var(--red); }
   #grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
           gap: 16px; padding: 20px; }
   #empty { color: var(--faint); padding: 60px 24px; text-align: center; }
@@ -140,6 +148,7 @@
             title="drop this box's retained datapoints. It reappears if it publishes again.">forget</button>
   </span>
   <span id="conn"><span class="dot"></span><span id="conn-msg">connecting</span></span>
+  <span id="ptp" class="chip" hidden></span>
 </header>
 <div id="disco" hidden></div>
 <div id="grid"></div>
@@ -818,8 +827,110 @@ function syncCfgBar() {
     syncCfgForget();          /* liveness may have flipped since the last pass */
 }
 
+/* ---- host-side PTP health ----
+ *
+ * The per-box rows already show `sync <source> <transport> <ppm>` -- whether
+ * THAT box is on dserv's timeline. What no box row can show is the AGGREGATE,
+ * and the aggregate is where the interesting failure lives:
+ *
+ *     ptp/anchored < ptp/boxes   =   a LIVE box is not anchored
+ *
+ * config/ptpconf.tcl publishes those two together, from the same box list at
+ * the same instant, specifically so something can compare them (they used to be
+ * published at different times and could disagree for five minutes purely from
+ * staleness). Until now the only consumer was rig_check -- so on 2026-08-09 the
+ * numbers were sitting there, correct, and nobody looked. A chip you cannot help
+ * seeing is the entire point; a page you have to remember to open would have
+ * failed the same way.
+ *
+ * Ages here use LOCAL arrival time, like everything else on this page -- see
+ * js/clock_skew.js for why this page deliberately does not age against
+ * msg.timestamp. */
+const ptp = { seen: false, at: 0, boxes: null, anchored: null,
+              error: '', clockError: '', skewUs: null, periodS: 300, dUs: null };
+
+/* Microseconds spanning nine orders of magnitude -- a healthy clock skew is
+ * single-digit µs, a broken one is hours -- so the unit has to follow the value. */
+function fmtUs(us) {
+    const a = Math.abs(us);
+    if (a < 1000)    return `${us} µs`;
+    if (a < 1000000) return `${(us / 1000).toFixed(1)} ms`;
+    if (a < 90000000) return `${(us / 1e6).toFixed(2)} s`;
+    return fmtAge(a / 1000).replace(' ago', '');
+}
+
+function onPtp(msg) {
+    const m = /^ptp\/(.+)$/.exec(msg.name);
+    if (!m) return;
+    let v = msg.data !== undefined ? msg.data : msg.value;
+    if (typeof v === 'string') v = v.split('\x00')[0];      /* trailing C NUL */
+
+    /* ANY ptp/* leaf proves the subprocess is alive, so freshness is stamped
+     * before the switch -- ptp/stdout and the diagnostic leaves are just as good
+     * evidence as the ones drawn. */
+    ptp.seen = true;
+    ptp.at = Date.now();
+    switch (m[1]) {
+      case 'boxes':        ptp.boxes = Number(v); break;
+      case 'anchored':     ptp.anchored = Number(v); break;
+      case 'error':        ptp.error = String(v); break;
+      case 'clock_error':  ptp.clockError = String(v); break;
+      case 'clock_skew_us': ptp.skewUs = Number(v); break;
+      case 'period_s':     ptp.periodS = Number(v) || 300; break;
+      case 'd_us':         ptp.dUs = Number(v); break;
+      default: return;                                       /* freshness only */
+    }
+    renderPtp();
+}
+
+function renderPtp() {
+    const el = document.getElementById('ptp');
+    if (!el) return;
+    /* No ptp/* keys at all = this host has no PTP. dsconf.tcl gates ptpconf on
+     * /sys/class/ptp/ptp* existing, so such a host publishes nothing here and
+     * must not grow a permanently-unknown chip. */
+    if (!ptp.seen) { el.hidden = true; return; }
+    el.hidden = false;
+
+    const n = ptp.anchored, b = ptp.boxes;
+    const count = (n != null && b != null) ? `${n}/${b}` : '—';
+    const stale = Date.now() - ptp.at;
+    /* Two sweeps plus slack. ptp/* is republished every ptp/period_s (300 s by
+     * default), so anything approaching that is normal and only a missed sweep
+     * is evidence. */
+    const staleLimit = Math.max(ptp.periodS * 2500, 60000);
+
+    let cls, txt, tip;
+    if (ptp.clockError) {
+        cls = 'bad'; txt = 'PTP clock skew'; tip = ptp.clockError;
+    } else if (ptp.error) {
+        cls = 'bad'; txt = `PTP ${count} error`; tip = ptp.error;
+    } else if (n != null && b != null && n < b) {
+        cls = 'bad'; txt = `PTP ${count} anchored`;
+        tip = `${b - n} live box(es) NOT anchored to dserv's timeline — they will refuse `
+            + `scheduled (at_abs) actions. An anchor never survives a box reboot; ptpconf `
+            + `re-pushes on connect and every ${ptp.periodS}s.`;
+    } else if (stale > staleLimit) {
+        cls = 'warn'; txt = `PTP ${count} stale`;
+        tip = `last ptp/* update ${fmtAge(stale)} — sweep is every ${ptp.periodS}s. `
+            + `These numbers are retained, so they stay plausible after the publisher stops.`;
+    } else {
+        cls = 'ok'; txt = `PTP ${count}`;
+        /* D is tens of SECONDS (it is the offset between two unrelated epochs,
+         * not an error term), so a fixed ms unit prints an unreadable -37000.0.
+         * Same for skew, which is microseconds when healthy and hours when not. */
+        tip = `${n} of ${b} live box(es) anchored to dserv's timeline`
+            + (ptp.dUs   != null ? ` · D ${fmtUs(ptp.dUs)}` : '')
+            + (ptp.skewUs != null ? ` · clock ${fmtUs(ptp.skewUs)} vs wall` : '')
+            + ` · updated ${fmtAge(stale)}`;
+    }
+    if (el.className !== 'chip ' + cls) el.className = 'chip ' + cls;
+    if (el.textContent !== txt) el.textContent = txt;
+    if (el.title !== tip) el.title = tip;
+}
+
 /* refresh ages + liveness once a second even without updates */
-setInterval(() => { for (const n of boxes.keys()) dirty.add(n); scheduleRender(); }, 1000);
+setInterval(() => { for (const n of boxes.keys()) dirty.add(n); scheduleRender(); renderPtp(); }, 1000);
 
 /* after the initial burst of one-shot gets settles, live presses start counting */
 function markReadySoon() {
@@ -889,6 +1000,7 @@ async function init() {
 
     dp = new DatapointManager(conn, { autoGetKeys: false });
     dp.subscribe('extio/*', onExtio);          /* live stream, all boxes */
+    dp.subscribe('ptp/*', onPtp);              /* host-side PTP health (the chip) */
     /* Subscriptions fire on CHANGE only, and the discovery set changes rarely
      * once a rig is settled -- without seeding the retained value the panel
      * stays empty until a box appears or leaves, which on a stable rig could be
@@ -902,6 +1014,15 @@ async function init() {
     dp.on('keys:update', ({ keys }) => {
         const present = new Set();
         for (const k of keys) {
+            /* ptp/* is seeded from @keys rather than a fixed sendGet list, and
+             * that is what makes the chip self-gating: ptpconf sweeps every
+             * 300 s, so a page opened between sweeps would otherwise sit blank
+             * for five minutes -- while a host with no PTP has no ptp/* keys at
+             * all, asks for nothing, and correctly never shows the chip. */
+            if (k.startsWith('ptp/')) {
+                if (!fetched.has(k)) { fetched.add(k); dp.sendGet(k); }
+                continue;
+            }
             /* host/ = extioconf's per-box voice (connect counter): seed it too,
              * else the count only appears after the NEXT live announce */
             const m = /^extio\/([^/]+)\/(?:state|host)\//.exec(k);
