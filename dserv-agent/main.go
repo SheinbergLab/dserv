@@ -1605,20 +1605,26 @@ func (a *Agent) isSelfComponent(comp Component) bool {
 // Nothing here waits: by design this function's caller is about to be killed.
 // The client sees the socket drop and reconnects to the new build, which is
 // also how the panel's own restart button already behaves.
-func (a *Agent) selfUpdate(comp Component, localPath, version string) {
+func (a *Agent) selfUpdate(comp Component, downloadURL, version string) {
 	unit := strings.TrimSuffix(detectSelfService(), ".service")
 
-	install := fmt.Sprintf(
-		"apt-get install -y -o Dpkg::Options::=--force-confold %s", shellQuote(localPath))
-	if comp.InstallCmd != "" {
-		install = strings.ReplaceAll(comp.InstallCmd, "{file}", localPath)
-		install = strings.ReplaceAll(install, "{version}", strings.TrimPrefix(version, "v"))
-	}
-	// The restart is what replaces the running binary; the rm keeps UploadDir
-	// from accreting one .deb per update. Sequenced with && so a failed install
-	// leaves the old agent running rather than restarting into a broken one.
-	script := fmt.Sprintf("%s && systemctl restart %s; rm -f %s",
-		install, shellQuote(unit), shellQuote(localPath))
+	// Fetch and install entirely inside the transient unit, into a directory it
+	// makes itself, so nothing has to cross the PrivateTmp boundary. -f so an
+	// HTTP error is a failure rather than an error page written to disk and
+	// handed to dpkg. `set -e` stops before the restart if any step fails, so a
+	// bad download leaves the old agent running rather than restarting into a
+	// broken one; the log line names which step gave up.
+	script := fmt.Sprintf(`set -e
+d=$(mktemp -d)
+trap 'rm -rf "$d"' EXIT
+echo "self-update %s: fetching"
+curl -fsSL -o "$d/agent.deb" %s
+echo "self-update %s: installing"
+apt-get install -y -o Dpkg::Options::=--force-confold "$d/agent.deb"
+echo "self-update %s: restarting %s"
+systemctl restart %s`,
+		version, shellQuote(downloadURL),
+		version, version, unit, shellQuote(unit))
 
 	cmd := exec.Command("sudo", "systemd-run",
 		"--collect",
@@ -1634,7 +1640,6 @@ func (a *Agent) selfUpdate(comp Component, localPath, version string) {
 		}
 		a.broadcast(WSResponse{Type: "install_error",
 			Error: "Could not hand off self-update to systemd: " + msg})
-		os.Remove(localPath)
 		return
 	}
 
@@ -2055,6 +2060,29 @@ func (a *Agent) installComponent(comp Component, assetName string, stopServices 
 		return
 	}
 
+	// Updating ourselves is handed to systemd BEFORE the download, and gets the
+	// URL rather than a file.
+	//
+	// The install restarts the very unit executing it, so it cannot run in this
+	// process -- dpkg would be killed mid-transaction and the box left with a
+	// half-configured management plane, the one package that cannot be
+	// recovered remotely. But downloading here first does not work either: the
+	// agent unit sets PrivateTmp=true, so UploadDir lives in a per-service
+	// namespace that the transient unit -- a different service, with its own
+	// /tmp -- cannot see. That is exactly how the first real self-update failed:
+	//
+	//   E: Unsupported file /tmp/dserv-uploads/dserv-agent_0.51.2_arm64.deb
+	//
+	// Choosing a different directory does not fix it (PrivateTmp covers
+	// /var/tmp too) and a fixed path outside it is not portable either -- the
+	// registry unit runs ProtectSystem=strict with only two writable paths. So
+	// do not move a file across the boundary at all: hand over the URL and let
+	// the detached unit fetch it in its own namespace.
+	if a.isSelfComponent(comp) {
+		a.selfUpdate(comp, downloadURL, release.TagName)
+		return
+	}
+
 	a.broadcast(WSResponse{Type: "install_progress", Data: map[string]string{"stage": "downloading", "version": release.TagName}})
 
 	// Download
@@ -2075,15 +2103,6 @@ func (a *Agent) installComponent(comp Component, assetName string, stopServices 
 	}
 	io.Copy(out, resp.Body)
 	out.Close()
-
-	// Updating ourselves cannot run in this process: the install restarts the
-	// very unit executing it, so dpkg would be killed mid-transaction and the
-	// box left with a half-configured management plane -- the one package you
-	// cannot recover remotely. Hand the rest to systemd and get out of the way.
-	if a.isSelfComponent(comp) {
-		a.selfUpdate(comp, localPath, release.TagName)
-		return
-	}
 
 	// Stop services if requested.
 	//
