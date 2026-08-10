@@ -144,8 +144,39 @@ namespace eval viz {
 	setbackground 0
         setwindow -10 -10 10 10
         update_display
-        
+
         log info "Visualization framework initialized - awaiting configuration"
+
+	# Replay configuration published before this subprocess existed.
+	#
+	# dsconf starts ess -- and with it essconf.tcl's ess::load_system --
+	# well before viz, so the first system's ess/viz_config and stimdg have
+	# already come and gone by the time the handlers above are installed.
+	# Nothing redelivers them, which is why the system dserv booted with had
+	# no visualization until someone re-loaded it by hand.
+	#
+	# Deliberately NOT fixed by moving load_system later in dsconf: that
+	# makes startup order load-bearing and only helps whoever happens to be
+	# last. Catching up on current state at init is what the event tables
+	# above already do, and what meshconf and trialsyncconf do.
+	#
+	# Replay order matches the order variant_init publishes in -- viz_config
+	# first, since it installs the handlers that the stimdg arrival feeds --
+	# and this sits AFTER the graphics init above so that clearwin/setwindow
+	# cannot wipe what the config script just drew. Guarded because a bare
+	# dservGet on an absent datapoint RAISES, and this runs synchronously at
+	# boot where an uncaught error truncates the rest of dsconf.
+	if {[dservExists ess/viz_config]} {
+	    if {[catch {on_viz_config_received \
+			    ess/viz_config [dservGet ess/viz_config]} err]} {
+		log error "Error replaying ess/viz_config at init: $err"
+	    }
+	}
+	if {[dservExists stimdg]} {
+	    if {[catch {on_stimdg_received stimdg [dservGet stimdg]} err]} {
+		log error "Error replaying stimdg at init: $err"
+	    }
+	}
     }
     
     #########################################################################
