@@ -637,7 +637,9 @@ proc extio_ota_dp_chunk {box} {
 proc extio_ota_push_dp {box file sha size} {
     set fp [open $file rb]; fconfigure $fp -translation binary
     set ::extio_ota_img($box)  [read $fp]; close $fp
-    set ::extio_ota_size($box) $size
+    set ::extio_ota_size($box)   $size
+    set ::extio_ota_cursor($box) 0
+    set ::extio_ota_head($box)   0
     extio_ota_cancel ::extio_ota_timer $box
 
     catch { dservClear extio/$box/state/ota/ack }
@@ -648,64 +650,105 @@ proc extio_ota_push_dp {box file sha size} {
 
     dservSet extio/$box/cmd/ota/begin "$sha $size"
     exec sleep 1                                    ;# let the box open the slot
-    extio_ota_dp_blast $box 0
+    extio_ota_dp_send $box
     if { [info exists ::extio_ota_img($box)] } { extio_ota_usb_deadline $box }
     return "ota dp $box: streaming $size B (sha $sha) in [extio_ota_dp_chunk $box] B chunks -- watch state/ota"
 }
 
-# WINDOWED, self-pacing drip -- not one giant blast. Over eth the chunks ride
-# dserv's native socket push and a full blast is fine; over USB every chunk
-# datapoint must re-enter the extio interp as a usbio_forward CALLBACK, and a
-# blast from inside one blocking command floods that queue -- observed
-# 2026-08-02 (first MCXN947-over-USB OTA): exactly ~42 chunks arrived, the
-# rest silently dropped, every attempt. So send a bounded window, then
-# schedule the next with dservAfter; per-frame write_all backpressure paces
-# each window to the box's drain rate, and the ack-driven stall-resend below
-# remains the loss-recovery net (a resend just restarts the drip from the
-# box's true cursor).
-# window 32 / 40 ms (~60 KB/s, ~5 s per image). Fw < +21 clipped any burst
-# past ~8 frames (the box's own 8-frame CDC rings -- see the +19..+21 hunt
-# in the extio-zephyr log), which forced a 4-frame crawl here (~37 s per
-# image). Against pre-+21 firmware the ack-driven stall-resend still makes
-# transfers complete, just slowly -- drop the window back to 4 if an old
-# box must be updated urgently.
-set ::extio_ota_dp_window 32
+# ACK-CLOCKED WINDOW, not an open-loop drip. Measured 2026-08-10 (box02,
+# MCXN947, eth, 285 KB image): the old 32-chunk/40 ms drip took 62.9 s at
+# ~10x send redundancy. The box's eth inbound queue is 64 frames deep and
+# LOSSY (k_msgq drop-on-overflow, box_net_eth.c inq_drop) with the chunk
+# handler -- flash erases included -- draining it from the service loop, so
+# TCP backpressure never engages. One overflow rejected everything in flight
+# (chunks are strictly sequential), and the old stall-resend then re-blasted
+# the ENTIRE remainder into the same queue: 38,609 acks for 3,751 chunks.
+# The USB carrier has the same shape with an 8-frame CDC ring (2026-08-02:
+# ~42 chunks arrived, rest dropped; the +19..+21 ring hunt). The cure is the
+# same for both: never hold more than one queue's worth in flight.
+#
+#   - send at most [extio_ota_dp_win] chunks beyond the box's last-acked
+#     cursor, then STOP;
+#   - follow every burst with a PROBE (header-only chunk): the box re-acks
+#     its cursor unconditionally on it (main.c datalen<=HDR branch; on
+#     firmware without it the probe is either a dup -> same re-ack, or a
+#     0-byte in-sequence no-op that the stall clock covers). The probe rides
+#     FIFO behind the burst, so its re-ack reports the cursor AFTER the
+#     burst drained -- our window clock. Needed because accepted-progress
+#     acks only come every 8192 B (~108 chunks), a longer stride than any
+#     queue-safe window;
+#   - 400 ms with no ack at all means the tail after the cursor (data AND
+#     probe) is gone: rewind and send ONE window from the cursor. Dups
+#     re-ack instantly, so a lost frame costs one bounded round, never a
+#     tail restart.
+#
+# Rate self-paces to the box's true drain (one window per round trip)
+# instead of a tuned constant, so there is no fixed ceiling to fall from
+# and no livelock to fall into.
+set ::extio_ota_dp_window     48   ;# eth: in-flight budget, < the 64-slot inq
+set ::extio_ota_dp_window_usb 32   ;# usb: the +21-validated CDC burst bound
 
-proc extio_ota_dp_blast {box from} {
+proc extio_ota_dp_win {box} {
+    if { [dservExists extio/$box/state/transport]
+         && [dservGet extio/$box/state/transport] eq "usb" } {
+        return $::extio_ota_dp_window_usb
+    }
+    return $::extio_ota_dp_window
+}
+
+# Header-only chunk = cursor probe (see the block comment above).
+proc extio_ota_dp_probe {box} {
+    dservSetData extio/$box/cmd/ota/chunk 0 0 [binary format ii 0 0]
+}
+
+# Top the window up to cursor+WINDOW, probe behind it, re-arm the stall
+# clock. Called from every ack and from the stall path; a full window makes
+# it a timer re-arm and nothing else.
+proc extio_ota_dp_send {box} {
     if { ![info exists ::extio_ota_img($box)] } return
-    extio_ota_cancel ::extio_ota_drip $box
-    set data  $::extio_ota_img($box)
-    set size  $::extio_ota_size($box)
-    set chunk [extio_ota_dp_chunk $box]
-    set stop  [expr {min($from + $::extio_ota_dp_window * $chunk, $size)}]
-    for { set off $from } { $off < $stop } { incr off $chunk } {
+    set data   $::extio_ota_img($box)
+    set size   $::extio_ota_size($box)
+    set chunk  [extio_ota_dp_chunk $box]
+    set head   $::extio_ota_head($box)
+    set target [expr {min($::extio_ota_cursor($box) + [extio_ota_dp_win $box] * $chunk, $size)}]
+    for { set off $head } { $off < $target } { incr off $chunk } {
         set end [expr {min($off + $chunk, $size)}]
         set d   [string range $data $off [expr {$end - 1}]]
         set crc [expr {[zlib crc32 $d] & 0xffffffff}]
         dservSetData extio/$box/cmd/ota/chunk 0 0 [binary format ii $off $crc]$d
     }
-    if { $stop < $size } {
-        set ::extio_ota_drip($box) \
-            [dservAfter 40 [list extio_ota_dp_blast $box $stop]]
+    if { $target > $head } {
+        set ::extio_ota_head($box) $target
+        extio_ota_dp_probe $box
     }
+    extio_ota_dp_arm_stall $box
 }
 
-# Same debounced, ack-driven tail-resend as the USB path: the box's cursor is the
-# only truth about what landed, and a resend only fires once it has been stuck.
+proc extio_ota_dp_arm_stall {box} {
+    extio_ota_cancel ::extio_ota_timer $box
+    set ::extio_ota_timer($box) [dservAfter 400 [list extio_ota_dp_stall $box]]
+}
+
+# True silence (no ack of any kind for 400 ms): rewind to the cursor and send
+# one bounded window again. Every ack -- including no-progress reject re-acks
+# -- re-arms the clock via dp_send, so this only fires when nothing at all is
+# coming back, never as a second sender racing a live drain.
+proc extio_ota_dp_stall {box} {
+    if { ![info exists ::extio_ota_img($box)] } return
+    set ::extio_ota_head($box) $::extio_ota_cursor($box)
+    extio_ota_dp_send $box
+}
+
+# The box's cursor is the only truth about what landed: progress slides the
+# window forward; a no-progress re-ack still proves the link is draining and
+# re-arms the stall clock.
 proc extio_ota_dp_on_ack {dp data} {
     if { ![regexp {^extio/([^/]+)/state/ota/ack$} $dp -> box] } return
     if { ![info exists ::extio_ota_size($box)] } return
     if { $data >= $::extio_ota_size($box) } { extio_ota_usb_cleanup $box; return }
     extio_ota_usb_deadline $box
-    # While the drip chain is still delivering, progress is ITS job: a
-    # debounced resend here cancels the drip and re-sends data the box
-    # already holds (dupes -> rejects -> re-acks -> another resend), a
-    # livelock that crawls ~one window per round (observed 2026-08-02,
-    # ~40 B/s). Only once the drip has sent its tail does the stall-resend
-    # own recovery of whatever the box still reports missing.
-    if { [info exists ::extio_ota_drip($box)] } return
-    extio_ota_cancel ::extio_ota_timer $box
-    set ::extio_ota_timer($box) [dservAfter 400 [list extio_ota_dp_blast $box $data]]
+    if { $data > $::extio_ota_cursor($box) } { set ::extio_ota_cursor($box) $data }
+    extio_ota_dp_send $box
 }
 
 proc extio_ota_usb_deadline {box} {
@@ -741,7 +784,8 @@ proc extio_ota_usb_cleanup {box} {
     extio_ota_cancel ::extio_ota_timer $box
     extio_ota_cancel ::extio_ota_dead  $box
     extio_ota_cancel ::extio_ota_drip  $box
-    unset -nocomplain ::extio_ota_img($box) ::extio_ota_size($box)
+    unset -nocomplain ::extio_ota_img($box) ::extio_ota_size($box) \
+        ::extio_ota_cursor($box) ::extio_ota_head($box)
 }
 
 # Free a staged image by hand (auto-freed on ok|fail; this is for an aborted run).
@@ -1137,11 +1181,33 @@ proc extio_await {box label reply predicate timeout_ms on_ok on_fail {clear {}}}
     return $id
 }
 
-# ...and the common case: send a command, then wait for its reply.
-proc extio_request {box label cmd value reply predicate timeout_ms on_ok on_fail {clear {}}} {
+# ...and the common case: send a command, then wait for its reply. resend_ms > 0
+# re-sets the command on that period until the reply lands or the deadline
+# fires. For IDEMPOTENT commands whose delivery can race a link coming up --
+# and one does, every time (measured 2026-08-10): after the trial reboot the
+# box's announce burst fires on the connect-back ACCEPT, BEFORE the box has
+# re-sent its %match lines, so a confirm fired off fw_ver is set while the
+# box's send-client has no match patterns and silently goes nowhere. There is
+# no host-observable "matches registered" signal; retrying the command IS the
+# probe. Only pass it for commands that are safe to deliver twice (confirm is:
+# boot_write_img_confirmed just re-writes a flag).
+proc extio_request {box label cmd value reply predicate timeout_ms on_ok on_fail {clear {}} {resend_ms 0}} {
     set id [extio_await $box $label $reply $predicate $timeout_ms $on_ok $on_fail $clear]
     catch { dservSet extio/$box/cmd/$cmd $value }
+    if { $resend_ms > 0 } {
+        set ::extio_req($box,resend) \
+            [dservAfter $resend_ms [list extio_req_resend $box $id $cmd $value $resend_ms]]
+    }
     return $id
+}
+
+proc extio_req_resend {box id cmd value ms} {
+    # Only while THIS request is still in flight: the id check makes a late
+    # timer racing a resolved (or replaced) request a no-op.
+    if { ![info exists ::extio_req($box,id)] || $::extio_req($box,id) != $id } return
+    catch { dservSet extio/$box/cmd/$cmd $value }
+    set ::extio_req($box,resend) \
+        [dservAfter $ms [list extio_req_resend $box $id $cmd $value $ms]]
 }
 
 # Drop whatever this box has in flight. Both elements are ROUTINELY absent (no
@@ -1149,8 +1215,9 @@ proc extio_request {box label cmd value reply predicate timeout_ms on_ok on_fail
 # silence -- errormon traces every raised error even when caught -- so test
 # first rather than catching the expected case.
 proc extio_req_clear {box} {
-    if { [info exists ::extio_req($box,when)] }  { catch { dservWhenCancel $::extio_req($box,when) } }
-    if { [info exists ::extio_req($box,timer)] } { catch { dservAfterCancel $::extio_req($box,timer) } }
+    if { [info exists ::extio_req($box,when)] }   { catch { dservWhenCancel $::extio_req($box,when) } }
+    if { [info exists ::extio_req($box,timer)] }  { catch { dservAfterCancel $::extio_req($box,timer) } }
+    if { [info exists ::extio_req($box,resend)] } { catch { dservAfterCancel $::extio_req($box,resend) } }
     array unset ::extio_req $box,*
 }
 
@@ -1323,9 +1390,12 @@ proc extio_ota_lc_booted {box value} {
     }
     extio_ota_lc_pub $box confirming "trial image $value is live -- confirming"
     # The command ARRIVING is itself the liveness proof: a "publishing but deaf"
-    # image cannot ack it, and the deadline catches precisely that.
+    # image cannot ack it, and the deadline catches precisely that. Resent every
+    # 2 s: fw_ver (which got us here) lands ms BEFORE the box re-registers its
+    # %match lines, so the first send reliably loses that race -- see
+    # extio_request.
     extio_request $box "confirm" ota/confirm 1 ota/confirm {in {confirmed failed}} 30000 \
-        extio_ota_lc_confirmed extio_ota_lc_fail {ota/confirm ota/confirm_rc}
+        extio_ota_lc_confirmed extio_ota_lc_fail {ota/confirm ota/confirm_rc} 2000
 }
 
 proc extio_ota_lc_confirmed {box value} {
@@ -1412,7 +1482,7 @@ proc extio_ota_arm_done {box value} {
 
 proc extio_ota_confirm {box} {
     extio_request $box "confirm" ota/confirm 1 ota/confirm {in {confirmed failed}} 30000 \
-        extio_ota_confirm_done extio_ota_step_fail {ota/confirm ota/confirm_rc}
+        extio_ota_confirm_done extio_ota_step_fail {ota/confirm ota/confirm_rc} 2000
     return "confirm sent to $box"
 }
 proc extio_ota_confirm_done {box value} {
