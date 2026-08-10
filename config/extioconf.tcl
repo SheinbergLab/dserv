@@ -456,12 +456,28 @@ proc extio_ota_push {box file} {
 
     set sha [sha256 -file $file]             ;# hex over the exact file bytes = what the box computes
 
-    # The Zephyr boxes (frdm_* and teensy*) do not implement the `<`-get pull OR
-    # the 'D'-frame blast: they take the image as a sequence of cmd/ota/chunk
-    # DATAPOINTS whatever the carrier -- over USB the chunks ride usbio_forward
-    # exactly as they ride the socket push over eth (extio-zephyr main.c:
-    # "a path that already works, unchanged, on both eth and USB"). This check
-    # must come BEFORE the transport==usb branch: a Zephyr box in USB mode
+    # A Zephyr box that announces state/ota/fetch_ok (fw +56, eth uplink live)
+    # PULLS the image itself: stage it as a binary datapoint and fire
+    # cmd/ota/fetch -- the box '<'-gets extio/<box>/ota/image straight into its
+    # slot, self-paced by TCP backpressure. No chunks, no windows, no resends.
+    # This is the RP2350 eth pull (bottom of this proc) arriving on the Zephyr
+    # boards; the dp-chunk path below remains for USB carriers and older
+    # firmware. The transport check matters because fetch_ok is per-connect
+    # truth about the uplink it ANNOUNCED on -- a dual box that reconnected
+    # over USB has no socket path even if an old eth announce is retained.
+    if { [dservExists extio/$box/state/ota/fetch_ok]
+         && [dservGet extio/$box/state/ota/fetch_ok] == 1
+         && [dservExists extio/$box/state/transport]
+         && [dservGet extio/$box/state/transport] eq "eth" } {
+        return [extio_ota_push_fetch $box $file $sha $size]
+    }
+
+    # The pre-+56 Zephyr boxes (frdm_* and teensy*) do not implement the `<`-get
+    # pull OR the 'D'-frame blast: they take the image as a sequence of
+    # cmd/ota/chunk DATAPOINTS whatever the carrier -- over USB the chunks ride
+    # usbio_forward exactly as they ride the socket push over eth (extio-zephyr
+    # main.c: "a path that already works, unchanged, on both eth and USB"). This
+    # check must come BEFORE the transport==usb branch: a Zephyr box in USB mode
     # otherwise gets the RP2350 'D'-frame blast it ignores (observed 2026-08-02,
     # first MCXN947-over-USB OTA -- ack never moved, host_io after 10 s).
     if { [dservExists extio/$box/state/board] &&
@@ -632,6 +648,22 @@ proc extio_ota_dp_chunk {box} {
     set n [expr {109 - [string length "extio/$box/cmd/ota/chunk"] - 8}]
     if { $n < 16 } { error "extio_ota_push_dp: box name '$box' leaves only $n B per chunk" }
     return $n
+}
+
+# ---- fetch (pull) delivery: stage extio/<box>/ota/image + fire cmd/ota/fetch.
+# The box pulls, so there is NO host resender to wire: the box's own recv
+# timeouts fail the transfer (it publishes state=fail + fetch_rc<0), and the
+# lifecycle's 180 s transfer deadline is the outer net. state/ota/ack and
+# progress arrive as plain telemetry. The staged image is freed by
+# extio_ota_on_state at ok|armed|fail -- the same hook the RP2350 pull uses.
+proc extio_ota_push_fetch {box file sha size} {
+    set fp [open $file rb]; fconfigure $fp -translation binary
+    set bytes [read $fp]; close $fp
+    foreach k {ack state result} { catch { dservClear extio/$box/state/ota/$k } }
+    dservSetData extio/$box/ota/image 0 0 $bytes
+    dservSet extio/$box/cmd/ota/fetch "$sha $size"
+    puts "extio ota\[$box\]: staged $size B (sha $sha) -> extio/$box/ota/image; fetch fired"
+    return "ota fetch $box: $size B (sha $sha); box is pulling -- watch state/ota"
 }
 
 proc extio_ota_push_dp {box file sha size} {
