@@ -24,8 +24,8 @@ class PageNav {
             windowSize: { width: 1200, height: 800 }
         },
         // Placed second so its group renders near the top: category order
-        // follows first appearance here, and the menu already overflows short
-        // viewports -- an entry in the last group is an entry below the fold.
+        // follows first appearance here. The menu scrolls now, so this is a
+        // prominence choice rather than the reachability fix it once was.
         {
             id: 'agent_manage',
             title: 'Manage System',
@@ -197,6 +197,10 @@ class PageNav {
     // Default window sizes for popup windows
     static defaultWindowSize = { width: 800, height: 600 };
 
+    // Floor for the open menu on very short viewports: below this the list is
+    // too small to browse, and letting it spill is the lesser evil.
+    static MIN_MENU_HEIGHT = 200;
+
     constructor(containerId, options = {}) {
         this.container = typeof containerId === 'string' 
             ? document.getElementById(containerId) 
@@ -266,7 +270,10 @@ class PageNav {
                     <span class="page-nav-arrow">▼</span>
                 </button>
                 <div class="page-nav-menu" role="menu">
-                    ${this.renderMenu()}
+                    <div class="page-nav-scroll">
+                        ${this.renderMenu()}
+                    </div>
+                    ${this.renderFooter()}
                 </div>
             </div>
         `;
@@ -274,10 +281,28 @@ class PageNav {
         this.navEl = this.container.querySelector('.page-nav');
         this.toggleBtn = this.container.querySelector('.page-nav-toggle');
         this.menuEl = this.container.querySelector('.page-nav-menu');
+        this.scrollEl = this.container.querySelector('.page-nav-scroll');
     }
 
     /**
-     * Render menu contents
+     * Cap the menu to the space actually below the toggle.
+     *
+     * page_nav.css carries a calc(100vh - ...) fallback, but that assumes the
+     * toggle sits in a top bar. Measuring at open time is correct wherever the
+     * host page puts it, and re-measures after a window resize for free.
+     */
+    fitToViewport() {
+        const rect = this.toggleBtn.getBoundingClientRect();
+        const avail = window.innerHeight - rect.bottom - 16;  // 4px gap + margin
+        this.menuEl.style.maxHeight = `${Math.max(PageNav.MIN_MENU_HEIGHT, avail)}px`;
+    }
+
+    /**
+     * Render the scrolling page list.
+     *
+     * Only pages live here. Home and Reconnect are in the footer: they are the
+     * escape hatches, and the escape hatch must not be the thing that scrolls
+     * out of reach.
      */
     renderMenu() {
         let html = '';
@@ -298,7 +323,19 @@ class PageNav {
             html = this.options.pages.map(page => this.renderMenuItem(page)).join('');
         }
 
-        // Add home link
+        return html;
+    }
+
+    /**
+     * Render the pinned action footer (Home, Reconnect).
+     *
+     * Sits outside .page-nav-scroll so it stays visible however long the page
+     * list grows. Both are still descendants of .page-nav-menu, so the click
+     * and arrow-key handlers pick them up unchanged.
+     */
+    renderFooter() {
+        let html = '';
+
         if (this.options.showHome) {
             html += `
                 <a href="${this.options.homeHref}" class="page-nav-item home" role="menuitem" data-open-mode="tab">
@@ -310,8 +347,7 @@ class PageNav {
                 </a>
             `;
         }
-        
-        // Add reconnect action
+
         if (this.options.showReconnect) {
             html += `
                 <div class="page-nav-divider"></div>
@@ -325,7 +361,8 @@ class PageNav {
             `;
         }
 
-        return html;
+        if (!html) return '';
+        return `<div class="page-nav-footer">${html}</div>`;
     }
 
     /**
@@ -436,6 +473,11 @@ class PageNav {
             this.handleKeydown(e);
         });
 
+        // Keep the cap honest if the window is resized with the menu open
+        window.addEventListener('resize', () => {
+            if (this.isOpen) this.fitToViewport();
+        });
+
         // Close on escape
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape' && this.isOpen) {
@@ -528,6 +570,8 @@ class PageNav {
      */
     open() {
         this.isOpen = true;
+        this.fitToViewport();
+        if (this.scrollEl) this.scrollEl.scrollTop = 0;
         this.navEl.classList.add('open');
         this.toggleBtn.classList.add('active');
         this.toggleBtn.setAttribute('aria-expanded', 'true');

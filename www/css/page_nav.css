@@ -62,9 +62,50 @@
     opacity: 0;
     visibility: hidden;
     transform: translateY(-8px);
-    transition: all 0.15s ease-out;
+    transition: opacity 0.15s ease-out, visibility 0.15s ease-out, transform 0.15s ease-out;
     z-index: 1000;
-    overflow: hidden;
+    /* The page list scrolls; the footer doesn't. Host pages set body {overflow:
+       hidden}, so anything clipped here is unreachable, not merely off-screen.
+       PageNav.fitToViewport() overrides max-height from the toggle's real
+       position -- this calc is the fallback for a toggle in a top bar. */
+    max-height: calc(100vh - 60px);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;  /* also what rounds the corners of the first/last rows */
+}
+
+/* Scrolling page list */
+.page-nav-scroll {
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    min-height: 0;  /* without this the flex item refuses to shrink */
+    scrollbar-width: thin;
+    scrollbar-color: var(--ess-border, #3d3d4d) transparent;
+}
+
+.page-nav-scroll::-webkit-scrollbar {
+    width: 8px;
+}
+
+.page-nav-scroll::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.page-nav-scroll::-webkit-scrollbar-thumb {
+    background: var(--ess-border, #3d3d4d);
+    border-radius: 4px;
+}
+
+.page-nav-scroll::-webkit-scrollbar-thumb:hover {
+    background: var(--ess-text-muted, #707080);
+}
+
+/* Pinned actions (Home, Reconnect) -- never scrolls away */
+.page-nav-footer {
+    flex-shrink: 0;
+    border-top: 1px solid var(--ess-border, #3d3d4d);
+    padding: 4px 0;
+    background: var(--ess-bg-secondary, #2d2d3d);
 }
 
 .page-nav.open .page-nav-menu {
@@ -87,6 +128,7 @@
 
 /* Menu Items */
 .page-nav-item {
+    position: relative;  /* anchors the .current accent bar to the row */
     display: flex;
     align-items: center;
     gap: 10px;
@@ -180,13 +222,7 @@
     color: var(--ess-text-muted, #707080);
 }
 
-/* Back to home link styling */
-.page-nav-item.home {
-    border-top: 1px solid var(--ess-border, #3d3d4d);
-    margin-top: 4px;
-    padding-top: 10px;
-}
-
+/* Back to home link styling (the separating rule is .page-nav-footer's) */
 .page-nav-item.home .page-nav-item-icon {
     color: var(--ess-text-muted, #707080);
 }
