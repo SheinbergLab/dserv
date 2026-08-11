@@ -66,6 +66,9 @@
 #include "box_fetch.h"
 #endif
 #endif
+#if defined(CONFIG_BOX_ADC_STREAM)
+#include "box_adc_stream.h"
+#endif
 #if defined(CONFIG_MCUBOOT_IMG_MANAGER)
 #include <zephyr/dfu/mcuboot.h>
 #endif
@@ -1469,6 +1472,58 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 #endif /* BOX_HAVE_DAC0 */
 
 #if defined(BOX_HAVE_OTA_SLOT)
+#if defined(CONFIG_BOX_ADC_STREAM)
+	/* <prefix>/cmd/ain/streamtest "<trig_hz> <ms> ?<avgs>?" -- Stage-0 probe
+	 * of the hardware-paced pipeline (box_adc_stream.h): run CTIMER-triggered,
+	 * DMA-drained acquisition for a bounded window and publish the hardware's
+	 * own ledgers. The flashtest of the analog world: BLOCKS the service loop
+	 * for <ms> (bench instrument, not a service), parks the polled sampler
+	 * via the ordinary hold first, and the polled driver reprograms its own
+	 * trigger/commands on the next sweep, so nothing needs restoring.
+	 * Healthy = rc 0, words == expected, no FIFO-overflow bits in adc_stat. */
+	if (leaf && strcmp(leaf, "cmd/ain/streamtest") == 0) {
+		char arg[64];
+		unsigned hz = 16000, tms = 250, avgs = 4;
+		box_adc_stream_result_t sr;
+
+		dserv_msg_copy_cstr(&m, arg, sizeof arg);
+		(void) sscanf(arg, "%u %u %u", &hz, &tms, &avgs);
+		if (box_obs_active()) {
+			box_console_printf("cmd/ain/streamtest -> refused, in_obs\n");
+			return;
+		}
+		box_ain_hold(tms + 3000u);   /* park the polled sampler for the run */
+		k_msleep(50);                /* let an in-flight sweep drain out    */
+		(void) box_adc_stream_test(&cfg, hz, avgs, tms, &sr);
+
+		pub_periodic("ain/stream/rc",       (uint32_t) sr.rc);
+		pub_periodic("ain/stream/stage",    sr.stage);
+		pub_periodic("ain/stream/nch",      sr.nch);
+		pub_periodic("ain/stream/avgs",     sr.avgs);
+		pub_periodic("ain/stream/expected", sr.expected);
+		pub_periodic("ain/stream/words",    sr.words);
+		pub_periodic("ain/stream/majors",   sr.majors);
+		pub_periodic("ain/stream/adc_stat", sr.adc_stat);
+		pub_periodic("ain/stream/r0",       sr.ring0[0]);
+		pub_periodic("ain/stream/r1",       sr.ring0[1]);
+		pub_periodic("ain/stream/r2",       sr.ring0[2]);
+		pub_periodic("ain/stream/tc_end",   sr.tc_end);
+		pub_periodic("ain/stream/mr3",      sr.mr3);
+		pub_periodic("ain/stream/tctrl0",   sr.tctrl0);
+		pub_periodic("ain/stream/fcount",   sr.fcount);
+		pub_periodic("ain/stream/sw_words", sr.sw_words);
+		pub_periodic("ain/stream/sw_stat",  sr.sw_stat);
+		pub_periodic("ain/stream/imux0",    sr.imux0);
+		pub_periodic("ain/stream/emr",      sr.emr);
+		pub_periodic("ain/stream/spill",    sr.spill);
+		box_console_printf("cmd/ain/streamtest -> rc %d stage %u: "
+				   "%u/%u words (%u ch, %ux avg, %u majors), stat 0x%08x\n",
+				   sr.rc, sr.stage, sr.words, sr.expected,
+				   sr.nch, sr.avgs, sr.majors, sr.adc_stat);
+		return;
+	}
+#endif /* CONFIG_BOX_ADC_STREAM */
+
 	/* <prefix>/cmd/ota/flashtest <kb> -- OTA step 2's execute-while-write probe.
 	 *
 	 * The hazard: slot1 writes hit the same FlexSPI device slot0 is XIP-ing

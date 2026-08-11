@@ -19,4 +19,16 @@
 # one that amplifies. If an interactive console ever misbehaves again, check this
 # symbol before suspecting the terminal or the host OS.
 
+config BOX_ADC_STREAM
+	bool "Hardware-paced ADC stream pipeline (CTIMER -> LPADC -> eDMA ring)"
+	default n
+	depends on DMA && NXP_INPUTMUX && ADC_MCUX_LPADC
+	help
+	  Timer-triggered LPADC acquisition with eDMA moving results into a
+	  cyclic SRAM ring: the CPU leaves the sample path, and sample times
+	  become trigger-clock arithmetic instead of thread wakeups. Stage 0
+	  ships only the cmd/ain/streamtest bring-up instrument; the polled
+	  sampler is untouched. MCXN947-class parts (needs the CTIMER->ADC
+	  INPUTMUX route and the FIFO DMA request line).
+
 source "Kconfig.zephyr"

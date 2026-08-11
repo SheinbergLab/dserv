@@ -105,6 +105,13 @@ if(CONFIG_ADC)
 	target_compile_definitions(app PRIVATE BOX_HAVE_ADC=1)
 endif()
 
+# Hardware-paced ADC streaming (Stage 0: the streamtest instrument).
+if(CONFIG_BOX_ADC_STREAM)
+	target_sources(app PRIVATE
+		src/platform/box_adc_stream.c  # CTIMER -> INPUTMUX -> LPADC -> eDMA ring
+	)
+endif()
+
 # Ethernet + PTP: frdm_rw612 and teensy41 (teensy40 has no PHY).
 if(CONFIG_NETWORKING)
 	target_sources(app PRIVATE
