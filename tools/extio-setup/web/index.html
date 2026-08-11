@@ -94,6 +94,19 @@
         <button id="ainEnable" title="ain enable 1">Enable</button>
         <button id="ainDisable" title="ain enable 0">Disable</button>
       </div>
+      <div class="grid2">
+        <label title="Box-wide base scan rate; groups decimate from it.">base rate Hz</label>
+        <input id="ainRate" class="mono" type="number" min="1" max="65535" placeholder="50">
+        <label title="LPADC hardware averaging: N conversions averaged in silicon per trigger. The noise tool that does NOT cost sweep rate — prefer base 1000 + oversample 16 over base 10000 + decimate 10 + avg. LPADC boards (MCXN947/RW612), firmware >= 0.4.0+62.">oversample &times;</label>
+        <select id="ainOvs" class="mono">
+          <option value="">&mdash;</option>
+          <option>1</option><option>2</option><option>4</option><option>8</option>
+          <option>16</option><option>32</option><option>64</option><option>128</option>
+        </select>
+      </div>
+      <div class="row gap">
+        <button id="ainTuneApply" title="ain rate N / ain oversample N">Apply rate + oversample</button>
+      </div>
       <div id="ainMsg" class="mono muted"></div>
       <div class="hint">MCP3204 SPI ADC on <b>GP2&ndash;5</b> (CH0=X, CH1=Y). Claims those pins &mdash;
         <b>Save to flash</b> + reboot to apply. Publishes analog groups as <code>state/ain/&lt;label&gt;</code>.</div>

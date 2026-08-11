@@ -169,6 +169,8 @@ const SerialDriver = {
   async testPulse(n, us) { await execChecked(`do ${n} pulse ${us}`); },
   async setBoxField(field, v) { await execChecked(`${field} ${v}`); }, // name|desc
   async setFeature(name, on) { await execChecked(`${name} enable ${on ? 1 : 0}`); }, // ain/oled
+  async setAinRate(hz)      { await execChecked(`ain rate ${hz}`); },
+  async setAinOversample(n) { await execChecked(`ain oversample ${n}`); }, // fw >= +62; older CLIs ERR
   async applyGroup(slot, g) {
     if (!g.pins) { await execChecked(`group ${slot} off`); return; }
     await execChecked(`group ${slot} pins ${g.pins}`);
@@ -223,6 +225,8 @@ const DservDriver = {
   },
 
   async setFeature(name, on) { await this.set(`config/${name}/enable`, on ? 1 : 0); }, // ain/oled
+  async setAinRate(hz)      { await this.set("config/ain/rate", hz); },
+  async setAinOversample(n) { await this.set("config/ain/oversample", n); }, // fw >= +62 applies it
   async applyGroup(slot, g) {
     if (!g.pins) { await this.set(`config/group/${slot}/pins`, "off"); return; }
     await this.set(`config/group/${slot}/pins`, g.pins);
@@ -345,6 +349,7 @@ function cfgFromState(box, st) {
     }
   }
   c.ainrate = +st["ain/rate"] || 0;
+  c.ainovs  = +st["ain/oversample"] || 0;   /* 0 = not announced (pre-+62 fw) */
   const rekey = (byName, dst, pfx) => {
     for (const g of Object.values(byName)) {
       const auto = g.name.match(new RegExp("^" + pfx + "(\\d+)$"));  // g2 / a1 = unlabeled
@@ -449,7 +454,32 @@ function renderAin() {
   $("ainStatus").textContent = cfg.ain ? "enabled — GP2-5 claimed" : "disabled";
   $("ainEnable").disabled = cfg.ain;
   $("ainDisable").disabled = !cfg.ain;
+  /* Prefill ONLY when idle: clobbering a half-typed value on the periodic
+   * re-read is the eaten-click bug's keyboard cousin. */
+  const rateEl = $("ainRate"), ovsEl = $("ainOvs");
+  if (document.activeElement !== rateEl && cfg.ainrate) rateEl.value = cfg.ainrate;
+  if (document.activeElement !== ovsEl && cfg.ainovs) ovsEl.value = String(cfg.ainovs);
 }
+
+/* Apply rate + oversample together (whichever are set). Both are LIVE
+ * config -- Save to flash to keep them. Oversample needs fw >= 0.4.0+62 and
+ * an LPADC board; older firmware answers ERR (serial) or ignores the leaf
+ * (dserv), and the message says which value was refused. */
+async function ainTuneApply() {
+  const rate = +($("ainRate").value || 0);
+  const ovs  = +($("ainOvs").value || 0);
+  const done = [];
+  try {
+    if (rate >= 1 && rate <= 65535) { await drv.setAinRate(rate); done.push(`rate ${rate} Hz`); }
+    if (ovs) { await drv.setAinOversample(ovs); done.push(`oversample ${ovs}x`); }
+    $("ainMsg").textContent = done.length
+      ? `${done.join(" + ")} — LIVE; Save to flash to keep`
+      : "nothing to apply";
+  } catch (e) {
+    $("ainMsg").textContent = `err after [${done.join(", ") || "none"}]: ${e.message}`;
+  }
+}
+$("ainTuneApply").onclick = ainTuneApply;
 
 async function ainSet(on) {
   try {
