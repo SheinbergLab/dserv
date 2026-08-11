@@ -181,3 +181,48 @@ dservctl -c "dservSet extio/box01/cmd/dac/0 2048"    # counts 0..4095 (clamped)
   D1 -> A1) for a mid-scale ADC certification path.
 * Silicon caveat: codes below ~700 clamp at ~517 mV (documented in
   PORTING.md) — certify the floor, don't pretend it isn't there.
+
+## Analog throughput budget (what "feasible" means; 2026-08-11)
+
+For a continuous group: base rate **B** Hz, decimate **D**, batch **K**,
+channels **N** (per group), union channels **U** (all groups):
+
+    scan rate   G  = B / D                 (scans reaching the group)
+    batch_eff   K' = min(K, floor(24 / N)) (24 = AIN_BLOCK_MAX int16 slots;
+                                            batch silently shrinks to fit ONE
+                                            128-B frame -- ain_group_batch_eff)
+    block rate  F  = G / K'                (frames/s this group puts on the wire)
+
+Every stage and its failure mode -- all COUNTED, none silent, but counted
+is not the same as delivered:
+
+    stage               budget                   overrun symptom
+    sampler (coop -2)   B x sweep(U) < ~60% CPU  st_late (ain/dbg/late)
+                        sweep(U) ~ 20 + 12xU us    [>= +61 the saturation
+                        (LPADC, polled)            guard yields; earlier fw
+                                                   SEIZES THE BOX -- the +59
+                                                   bench wedge]
+    on-change groups    200 blocks/s ceiling     ain/dbg/throttled
+                        (AIN_MAX_BLOCKS_PER_S;     (continuous mode is EXEMPT
+                        noise-driven mode only)     by design -- 2026-08-06)
+    ain_q               64 blocks burst          st_dropped (ain/dbg/dropped)
+    pub bulk queue      96 frames burst          bulk_dropped (dbg/pub_*)
+    eth uplink          ~140 us/frame peak       backs up into bulk queue
+                        (dbg/send_us); plan
+                        SUM(F) <= ~500/s sustained
+
+Feasibility rules of thumb (MCXN947 LPADC):
+  * B <= ~5000/U-channels-worth: 6 ch union at 10 kHz is OVER budget (the
+    wedge config); 6 ch at 1-2 kHz is comfortable.
+  * Per group keep F = (B/D)/K' at or under ~250/s (the proven eye feed);
+    lift K (batching) before lifting F -- batch is the tool that buys rate.
+  * If G/floor(24/N) still exceeds ~500/s the config is infeasible at ANY
+    batch: raise D (decimate) or drop channels.
+  * After any analog edit, read ain/dbg/{late,dropped,throttled} + dbg/pub
+    drops for a minute. Zero across the board = lossless in fact, not hope.
+
+NOT YET ENFORCED at config time: the firmware clamps batch to the frame and
+throttles on-change mode, but an infeasible continuous (rate, decimate,
+batch) is accepted and bleeds into the counters. Planned: firmware publishes
+per-group effective numbers (G, K', F, feasible) so extio-config.html can
+show red at edit time, and refuses applies that break the sampler budget.

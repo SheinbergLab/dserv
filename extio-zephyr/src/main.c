@@ -2261,6 +2261,18 @@ int main(void)
 	dserv_framer_reset(&rx_framer);
 	k_msleep(2000);              /* let the host enumerate + open the console */
 
+#if defined(BOX_HAVE_ADC)
+	/* Re-arm the analog boot hold ON THE WAY OUT of that sleep. The hold
+	 * armed above (BOX_AIN_BOOT_HOLD_STEP_MS, 1500 ms) EXPIRED mid-sleep,
+	 * and ain_boot_gate -- the thing that keeps re-arming it until PTP
+	 * locks -- lives in the service loop we still have not reached. In that
+	 * gap, a box whose configured rate saturates the sampler handed the
+	 * whole machine to a cooperative thread before the console said a word
+	 * (+59 trial wedge, 2026-08-11; box_ain.c's saturation guard is the
+	 * other half of this fix). */
+	box_ain_hold(BOX_AIN_BOOT_HOLD_STEP_MS);
+#endif
+
 	box_console_printf("\n=== extio core smoke test (Zephyr %s) ===\n", KERNEL_VERSION_STRING);
 
 	/* config datapoint: set pin 5 to output */
@@ -2933,6 +2945,17 @@ int main(void)
 				ota_pub_str("ota/result", box_ota_err_str(g_ota.err));
 				ota_pub_int("ota/progress", box_ota_progress_pct(&g_ota));
 				ota_pub_int("ota/ack", (int32_t) g_ota.received);
+			}
+
+			/* THE TRIAL STATE IS A STANDING SIGNAL, not a single shot.
+			 * Between arm and confirm, any reset silently loses the
+			 * update -- and until now that state was announced exactly
+			 * once, in a burst that is allowed to drop frames, so the
+			 * page whose whole job is "make the operator confirm" could
+			 * simply never hear about it. While unconfirmed, say so every
+			 * pass; cmd/ota/confirm publishes the closing trial=0. */
+			if (box_boot_on_trial()) {
+				pub_periodic("ota/trial", 1);
 			}
 
 			if (ota_dbg_until && k_uptime_get() < ota_dbg_until) {

@@ -83,6 +83,7 @@ static uint8_t  union_mask;          /* channels any active group wants */
 static uint32_t period_us;
 
 static uint32_t st_sweeps, st_blocks, st_dropped, st_late, st_throttled;
+static uint32_t sat_run;   /* consecutive cadence syncs that never parked */
 /* +26 stall ledger: how LONG each starvation was, not just that one
  * happened -- (fired-1)*period is the floor of the gap. A 1-2 ms gap
  * indicts thread-level theft; sub-period gaps never count; if gaps
@@ -263,6 +264,7 @@ static void ain_thread_fn(void *a, void *b, void *c)
 		 * duration forever. The return value is expirations since the last
 		 * call, so >1 means we did not keep up; count it rather than
 		 * pretending the cadence held. */
+		uint32_t sync_cyc = k_cycle_get_32();
 		uint32_t fired = k_timer_status_sync(&tick);
 
 		if (fired > 1) {
@@ -271,6 +273,33 @@ static void ain_thread_fn(void *a, void *b, void *c)
 			if (st_late_gap_last_us > st_late_gap_max_us) {
 				st_late_gap_max_us = st_late_gap_last_us;
 			}
+		}
+
+		/* SATURATION GUARD (2026-08-11, the wedged bench box). This thread
+		 * is COOPERATIVE: once one sweep costs >= the period, status_sync
+		 * returns WITHOUT BLOCKING on every pass -- often with fired == 1,
+		 * so the late counter alone cannot see it -- and a -2 thread that
+		 * never blocks owns the machine outright: console, net, the service
+		 * loop and every preemptible thread starve, only ISRs run, and the
+		 * box seizes (10 kHz x 6-ch LPADC, +59 trial boot; recovered only
+		 * by power-cycle + MCUboot revert). A sync that returns in under
+		 * 2 us never parked (a parked one costs a context switch; the only
+		 * false hit is arriving within 2 us of the period boundary, which
+		 * is saturation to the tolerance that matters). After 4 in a row,
+		 * sleep one period: the rest of the system keeps ~20% of the CPU,
+		 * sampling degrades to "as fast as possible, still breathing", and
+		 * st_late says so. A paced sampler parks every pass and never takes
+		 * this branch. */
+		if (k_cyc_to_us_floor32(k_cycle_get_32() - sync_cyc) < 2) {
+			if (fired <= 1) {
+				st_late++;      /* exact saturation: cadence missed */
+			}
+			if (++sat_run >= 4) {
+				sat_run = 0;
+				k_sleep(K_USEC(running_period ? running_period : 100));
+			}
+		} else {
+			sat_run = 0;
 		}
 
 		/* A hold or a config edit can land while we are parked in
