@@ -34,6 +34,12 @@ static uint8_t  ready;
 static uint8_t  powered;
 static uint32_t sweep_max_us, sweep_n;
 static uint32_t pm_suspends, pm_resumes;
+static uint8_t  ovs_exp;      /* hw-average exponent (0..7 -> 1x..128x); v24 */
+
+void box_adc_set_oversample(uint8_t exp)
+{
+	ovs_exp = (uint8_t) (exp & 7);
+}
 
 /* How many channels the fitted part has.
  *
@@ -297,7 +303,11 @@ int box_adc_sweep(uint8_t mask, uint16_t *out, uint8_t max, uint64_t *when_us)
 		.buffer      = buf,
 		.buffer_size = sizeof buf,
 		.resolution  = res,
-		.oversampling = 0,
+		/* LPADC hardware averaging (AVGS): 2^ovs_exp conversions per
+		 * trigger, one already-averaged result back. Averaging in silicon
+		 * instead of oversweeping in software is what keeps the sampler
+		 * off its saturation edge -- see dserv_config.h ain_ovs. */
+		.oversampling = ovs_exp,
 		.calibrate   = false,
 	};
 

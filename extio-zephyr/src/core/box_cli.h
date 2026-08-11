@@ -255,6 +255,7 @@ static inline void box_cli_dump(const box_config_t *c)
     if (c->wifi_pm)                       DUMPF("wifi pm 1\r\n");
     if (c->ain_en)                        DUMPF("ain enable 1\r\n");
     if (c->ain_rate)                      DUMPF("ain rate %u\r\n", c->ain_rate);
+    if (c->ain_ovs)                       DUMPF("ain oversample %u\r\n", 1u << c->ain_ovs);
     for (int ag = 0; ag < BOX_NAGROUPS; ag++)
         if (c->ain_group_chans[ag]) {
             char cs[16]; dserv_pins_str(c->ain_group_chans[ag], cs, sizeof cs);
@@ -418,6 +419,16 @@ static inline cli_action_t box_cli_exec(box_config_t *c, const char *line,
         snprintf(out, outsz, "OK group%d off\r\n", n); return CLI_GROUP;
     }
     /* ---- analog (MCP3204) groups: base scan rate + per-group channel-set policy ---- */
+    if (sscanf(line, "ain oversample %d", &v) == 1) {
+        uint8_t e = 0;
+        while ((1 << e) < v && e < 7) e++;
+        if (v < 1 || (1 << e) != v) {
+            snprintf(out, outsz, "ERR ain oversample 1|2|4|8|16|32|64|128\r\n"); return CLI_ERR;
+        }
+        c->ain_ovs = e;
+        snprintf(out, outsz, "OK ain oversample=%dx (hw average per trigger)\r\n", v);
+        return CLI_AIN;
+    }
     if (sscanf(line, "ain rate %d", &v) == 1) {
         if (v < 1 || v > 65535) { snprintf(out, outsz, "ERR ain rate 1-65535 Hz\r\n"); return CLI_ERR; }
         c->ain_rate = (uint16_t) v; c->applied_count++;
@@ -667,7 +678,7 @@ static inline cli_action_t box_cli_exec(box_config_t *c, const char *line,
             "      sync pin N | sync off |\r\n"
             "      group G pins 2,3,4,5 | group G label NAME | group G settle MS |\r\n"
             "      group G quiet 0|1 | group G off |\r\n"
-            "      ain enable 0|1 | ain rate HZ | oled enable 0|1 |\r\n"
+            "      ain enable 0|1 | ain rate HZ | ain oversample N | oled enable 0|1 |\r\n"
             "      ain group G channels 0,1 | ain group G label NAME | ain group G mode onchange|continuous |\r\n"
             "      ain group G deadband N | ain group G decimate N | ain group G batch N | ain group G average 0|1 | ain group G off |\r\n"
             "      ble enable 0|1 | " BOX_CLI_HELP_BLE "\r\n"

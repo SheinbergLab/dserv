@@ -77,6 +77,10 @@ int box_adc_ready(void);
  * CALL THESE FROM THE SAMPLING THREAD AND NOWHERE ELSE. They are not serialised
  * against box_adc_sweep() -- see the -EAGAIN note there for why that matters
  * more than it sounds. box_ain.c owns this device; nothing else may touch it. */
+/* LPADC hardware averaging: 2^exp conversions per trigger averaged in
+ * silicon (exp 0..7 -> 1x..128x). Takes effect on the next sweep. */
+void box_adc_set_oversample(uint8_t exp);
+
 int box_adc_suspend(void);   /* 0, or -ENOTSUP where the driver has no PM hook */
 int box_adc_resume(void);    /* 0, or -ENOTSUP; safe to call when already up   */
 int box_adc_powered(void);   /* 1 = converting is possible right now           */

@@ -180,6 +180,7 @@ static void ain_thread_fn(void *a, void *b, void *c)
 		if (gen != applied_gen) {
 			applied_gen = gen;
 			recompute();
+			box_adc_set_oversample(cfg->ain_ovs);   /* v24 hw averaging */
 			running_period = 0;       /* force the re-arm below */
 		}
 
@@ -378,6 +379,7 @@ int box_ain_init(const box_config_t *c)
 	}
 
 	recompute();
+	box_adc_set_oversample(cfg->ain_ovs);   /* persisted value, before any sweep */
 	atomic_set(&generation, 1);
 	applied_gen = 1;
 

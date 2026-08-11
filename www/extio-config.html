@@ -1019,6 +1019,9 @@ function renderPanel() {
               <option value="0" ${ainOn ? '' : 'selected'}>off</option>
             </select></td>
           <th>base rate Hz</th><td>${field(b, 'ain/rate', 'ain/rate')} ${ageSpan(b, 'ain/rate')}</td></tr>
+      <tr><th title="LPADC hardware averaging: N conversions averaged in silicon per trigger (1,2,4,...,128). The noise tool that does NOT cost sweep rate — prefer base 1000 + oversample 16 over base 10000 + decimate 10 + avg.">oversample ×</th>
+          <td>${field(b, 'ain/oversample', 'ain/oversample')} ${ageSpan(b, 'ain/oversample')}</td>
+          <th></th><td></td></tr>
       <tr><th>running</th><td>${dbg('running')}</td><th>powered</th><td>${dbg('powered')}</td></tr>
       <tr><th>sweeps</th><td>${dbg('sweeps')}</td><th>throttled</th><td>${dbg('throttled')}</td></tr>
     </table>

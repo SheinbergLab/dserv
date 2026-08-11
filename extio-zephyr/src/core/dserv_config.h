@@ -217,6 +217,13 @@ typedef struct {
      * persisted leader is announced (manifest obs_leader) so hosts can
      * DISCOVER the box that may lead: ::ess::obs_schedule_bind auto. */
     uint8_t  obs_mode;
+    /* v24: LPADC hardware averaging, stored as the EXPONENT (0..7 -> 1x..128x
+     * conversions averaged in silicon per trigger). This is the noise tool
+     * that does NOT cost sweep rate: base 10 kHz + software boxcar to get a
+     * quiet 1 kHz saturated the cooperative sampler (the +59 wedge); base
+     * 1 kHz + 16x here delivers MORE averaging at ~1/5 the CPU and a tenth
+     * of the wakeups. 0 = off = exactly what an older blob loads as. */
+    uint8_t  ain_ovs;
 } box_config_t;
 
 #define OBS_MODE_MIRROR 0
@@ -332,6 +339,10 @@ static inline int dserv_cfg_prefix(const box_config_t *c, char *buf, int sz)
 /* base scan rate: 0 => 50 Hz default. */
 static inline int dserv_cfg_ain_rate(const box_config_t *c)
 { return c->ain_rate ? c->ain_rate : 50; }
+
+/* The hardware-average COUNT (1..128) the exponent encodes. */
+static inline int dserv_cfg_ain_ovs_count(const box_config_t *c)
+{ return 1 << (c->ain_ovs & 7); }
 
 /* number of active analog groups (chans mask non-zero). */
 static inline int dserv_ain_active_count(const box_config_t *c)
@@ -643,6 +654,13 @@ static inline cfg_result_t dserv_cfg__config(box_config_t *c, const char *k,
     if (strcmp(k, "ain/rate") == 0) {      /* box-wide base SCAN rate Hz (groups decimate from it) */
         long v = dserv_msg_as_long(m); if (v < 1) v = 1; if (v > 65535) v = 65535;
         c->ain_rate = (uint16_t) v; c->applied_count++; return CFG_AIN;
+    }
+    if (strcmp(k, "ain/oversample") == 0) { /* hw conversions averaged per trigger: 1,2,4,...,128 */
+        long v = dserv_msg_as_long(m);
+        uint8_t e = 0;
+        while ((1 << e) < v && e < 7) e++;
+        if (v < 1 || (1 << e) != v) return CFG_UNKNOWN;   /* exact powers of two only */
+        c->ain_ovs = e; c->applied_count++; return CFG_AIN;
     }
     /* Analog groups: ain/group/<g>/{channels,label,mode,deadband,decimate,batch,average,off} */
     { int ng = -1; int npos = -1;

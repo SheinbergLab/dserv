@@ -361,6 +361,7 @@ void box_announce_manifest(const box_config_t *c)
 		pub_str(c, "dserv/ip",   ip);
 		pub_int(c, "dserv/port", c->dserv_port);
 		pub_int(c, "ain/rate",   dserv_cfg_ain_rate(c));
+		pub_int(c, "ain/oversample", dserv_cfg_ain_ovs_count(c));
 		pub_str(c, "net/mode",   c->net_mode ? "static" : "dhcp");
 	}
 
