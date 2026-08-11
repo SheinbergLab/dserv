@@ -52,6 +52,15 @@
                  background: transparent; color: var(--muted); cursor: pointer;
                  white-space: nowrap; }
   .box .forget:hover { color: var(--red); border-color: var(--red); }
+  /* Unconfirmed trial image: the one state where any reset silently loses an
+   * update, so it gets the loudest treatment a card can carry. */
+  .trialbar { margin: 7px 0 2px; padding: 6px 9px; border: 1px solid #7a3a36;
+              border-radius: 7px; background: #3a1f15; color: #ffb4a8;
+              font-size: 12px; display: flex; align-items: center; gap: 9px;
+              flex-wrap: wrap; }
+  .trialbar button { background: #7a3a36; color: #fff; border: 0; border-radius: 5px;
+                     padding: 3px 10px; cursor: pointer; font-size: 12px; }
+  .trialbar button:hover { filter: brightness(1.25); }
   .box .title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .box .name { font-size: 16px; font-weight: 600; }
   .live { width: 9px; height: 9px; border-radius: 50%; background: var(--off); }
@@ -327,6 +336,11 @@ function onExtio(msg) {
         b.ident[leaf] = String(v);
     } else if (leaf === 'obs_leader') {
         b.obsLeader = num == 1;      /* +31: announced obs-onset authority */
+    } else if (leaf === 'ota/trial') {
+        /* Standing 1 Hz signal from fw >= +61 while an update is unconfirmed
+         * (earlier firmware announced it once per connect, in a burst allowed
+         * to drop frames -- which is how a trial could sit invisible). */
+        b.trial = num == 1;
     }
     /* watchdog/link/timer/sync raw parts: liveness only (lastSeen above) */
     dirty.add(b.name);
@@ -626,11 +640,30 @@ function cardHtml(b) {
         : '';
     const desc = b.desc ? `<div class="desc">${esc(b.desc)}</div>` : '';
 
+    /* Between arm and confirm ANY reset silently reverts the update -- the one
+     * state a fleet page must never let sit invisible. Mirrors the box's own
+     * state/ota/trial. Confirm rides extio_ota_confirm, the same request-layer
+     * path the lifecycle and the CLI (dservctl extio "extio_ota_confirm <box>")
+     * use; the box publishes trial=0 on success and the bar clears itself. */
+    const trial = b.trial
+        ? `<div class="trialbar"><b>TRIAL — unconfirmed.</b> ${esc(fwv || '?')} reverts on any reset.` +
+          `<button title='Make the running image permanent (extio_ota_confirm ${esc(b.name)})'` +
+          ` onclick="confirmTrial('${esc(b.name)}')">Confirm — keep it</button></div>`
+        : '';
+
     return `<div class="title"><span class="live ${alive ? 'on' : ''}"></span>` +
            `<span class="name">${esc(b.name)}</span>${obs}${xchip}${fw}${bchip}${lchip}${ip}${forget}` +
-           `</div>` + desc +
+           `</div>` + trial + desc +
            `<div class="meta"><b>up</b> ${upStr} · <b>seen</b> ${fmtAge(age)}${connSeg}${target}${sync}${bat}</div>` +
            di + groups + dout + aingrps + ain;
+}
+
+async function confirmTrial(name) {
+    try {
+        alert(String(await conn.send(`extio_ota_confirm ${name}`, 'extio')));
+    } catch (e) {
+        alert('confirm failed: ' + e.message);
+    }
 }
 
 /* ---- THE THREE OWNERSHIP STATES ----

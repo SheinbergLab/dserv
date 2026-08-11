@@ -104,6 +104,16 @@ proc extio_adopt { boxip name via {port 4620} {demote_obs 1} } {
     dservSet extio/$name/config/dserv/ip   $via
     dservSet extio/$name/config/dserv/port $port
 
+    # These are LIVE, UNSAVED edits exactly like an extio_cfg_set -- a power
+    # cycle un-adopts the box -- but they were invisible to the dirty ledger
+    # (raw dservSet, and extio_cfg_set's has-announced guard can't pass at
+    # adopt time: the box hasn't published to US yet). Record them by hand, so
+    # extio-config.html shows the unsaved banner and an ENABLED Save the moment
+    # the adopted box is opened -- "adopt, open, Save" becomes the whole flow.
+    lappend ::extio_cfg_dirty($name) dserv/ip dserv/port
+    if { $demote_obs } { lappend ::extio_cfg_dirty($name) obs/mode }
+    set ::extio_cfg_dirty($name) [lsort -unique $::extio_cfg_dirty($name)]
+
     # 4. ASK FOR THE MANIFEST, and this step is not optional.
     #
     # The box announces on a fresh CONNECT-BACK (srv_fresh -> BOX_NET_RESET),

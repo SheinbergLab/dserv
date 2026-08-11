@@ -162,6 +162,7 @@ function onExtio(msg) {
   if (msg.name === 'extio/renamed') {
     const v = String(msg.data !== undefined ? msg.data : msg.value || '').split('\x00')[0];
     const [old, neu] = v.trim().split(/\s+/);
+    renamingTo = null;                    /* in-flight banner: the event answers it */
     if (old && boxes.delete(old)) {
       fleetHtml = null;
       if (sel === old) {
@@ -336,6 +337,7 @@ function askAnnounce(box) {
   }, 400);
 }
 let dirty = new Set();
+let renamingTo = null;   /* {from, to} while a rename is in flight -- panel banner */
 async function doSave(box) {
   await conn.send(`extio_cfg_save ${box}`, 'extio');
   dirty.clear(); updateDirtyUi(); renderPanel();
@@ -444,14 +446,18 @@ async function renameBox(box) {
   /* Success is EVENT-DRIVEN from here: once the box is live + saved under the
    * new name, extio_rename publishes the extio/renamed tombstone and onExtio
    * reacts on THIS page exactly as on every bystander page -- ghost dropped,
-   * selection follows. No initiator-only smarts. The one page-local job left
-   * is failure UX: if the tombstone never lands, say what state the box is
-   * really in rather than leaving a silent stall. */
+   * selection follows. No initiator-only smarts. What IS page-local: the
+   * in-flight banner (the box takes ~1-3 s to re-register, and a silent panel
+   * under the old name reads as "nothing happened"), and the failure UX if
+   * the tombstone never lands. */
+  renamingTo = { from: box, to: name };
+  panelHtml = null; renderPanel();
   const t0 = Date.now();
   const tick = setInterval(() => {
     if (!boxes.has(box)) { clearInterval(tick); return; }   /* tombstone landed */
     if (Date.now() - t0 > 25000) {
       clearInterval(tick);
+      renamingTo = null; panelHtml = null; renderPanel();
       alert(`No rename event for '${name}' yet. On pre-+59 firmware the box HAS renamed live ` +
             `but cannot confirm: wait ~30 s, then Save from its panel -- or reboot it to revert.`);
     }
@@ -628,7 +634,8 @@ function fwSection(b) {
       <b>TRIAL BOOT — not yet permanent.</b> ${get(b, 'fw_ver', '?')} is running unconfirmed.
       Any reset reverts it to the previous image.
       <button class="primary" style="margin-left:10px" onclick="otaConfirm('${b}')">Confirm</button>
-      <span class="age" style="margin-left:8px">to reject: do not confirm — power cycle</span>
+      <span class="age" style="margin-left:8px">to reject: do not confirm — power cycle ·
+        CLI: <code>dservctl extio "extio_ota_confirm ${b}"</code></span>
     </div>` : '';
 
   /* lifecycle is published only by extio_ota_update. A box driven by hand has
@@ -913,6 +920,11 @@ function renderPanel() {
       <span class="pill ${L.cls}">${L.txt}</span>
       <span class="age">watchdog ${ageSpan(b, 'watchdog')}</span>
     </div>
+
+    ${renamingTo && renamingTo.from === b ? `<div style="margin:14px 0;padding:9px 12px;
+        border:1px solid #6a5a2a;border-radius:6px;background:#332b12;color:#ffd98a">
+        renaming to <b>${renamingTo.to}</b> — the box is re-registering; the panel follows
+        automatically when it announces…</div>` : ''}
 
     <div id="dirty" class="${dirty.size ? '' : 'hide'}">${dirtyText()}</div>
 
