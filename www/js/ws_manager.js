@@ -301,10 +301,23 @@ class DservConnection {
         const isDatapoint = typeof data === 'object' && data.name &&
                            (data.data !== undefined || data.value !== undefined);
 
+        // Control acks must not resolve pending requests either. Subscribes are
+        // fire-and-forget on this side (send() returns before the server
+        // answers) but TclServer still replies {"status":"ok","action":
+        // "subscribed",...} with no requestId — so the FIFO below would hand
+        // that ack to the oldest pending command as its "result". Seen
+        // 2026-08-10: a reconnect's re-subscribe burst raced extio-config's
+        // `extio_cfg_dirty`, and the ack JSON showed up in the unsaved-changes
+        // banner as a config leaf. Legit FIFO replies are strings or carry
+        // `result`; anything with an `action` and no `result` is protocol
+        // bookkeeping and falls through to the event emitters only.
+        const isControlAck = typeof data === 'object' && data !== null &&
+                             data.action !== undefined && data.result === undefined;
+
         // Only resolve pending requests for non-datapoint messages.
         // requestId-keyed entries (evalAsync, string keys) are excluded —
         // they resolve only via the requestId match above.
-        if (this.pendingRequests.size > 0 && !isDatapoint) {
+        if (this.pendingRequests.size > 0 && !isDatapoint && !isControlAck) {
             const fifo = [...this.pendingRequests.entries()].find(([k]) => typeof k === 'number');
             if (fifo) {
                 const [id, req] = fifo;
