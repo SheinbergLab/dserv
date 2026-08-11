@@ -1635,6 +1635,83 @@ proc extio_cfg_reboot {box} {
     return "reboot sent to $box -- unsaved changes are lost by definition"
 }
 
+# ============================================================================
+# RENAME -- one committed operation, not a config edit
+# ============================================================================
+# `name` stays writable via extio_cfg_set for bench/CLI use, but a bare rename
+# is the worst possible "applies live" edit: the instant the box takes it, its
+# datapoint prefix changes -- the page's selection, the dirty ledger, and
+# every cmd/* forward are keyed to a name that no longer answers. Worse, a
+# Save clicked under the old name is silently dropped by the box's dispatcher
+# while extio_cfg_save clears the ledger anyway: the UI reports saved, and the
+# next reboot reverts the name.
+#
+# extio_rename makes it one operation with an observable outcome:
+#   1. refuse while the old name has unsaved edits (the ledger cannot
+#      straddle identities) or a non-terminal OTA lifecycle;
+#   2. clear + watch extio/<new>/state/build -- the announce burst under the
+#      NEW name. Firmware >= +59 does a full re-registration on rename, and
+#      the announce hold guarantees that burst follows the new %match lines,
+#      so build appearing MEANS the box is already commandable under <new>;
+#   3. set config/name;
+#   4. on the burst: cmd/save under <new> (an unsaved rename reverts on
+#      reboot -- exactly the confusion this proc exists to kill), then
+#      extio_clear <old> purges the ghost identity.
+# On pre-+59 firmware nothing re-registers and no burst fires: the await
+# times out and the failure text says what state the box is really in.
+proc extio_rename {old new} {
+    if { $new eq $old } { return "extio_rename: already named '$old'" }
+    # Stricter than the firmware's dserv_name_valid (any printable but '/'):
+    # names ride whitespace-split %match lines and web UIs, so keep them
+    # word-shaped. 15 chars = BOX_NAME_MAX 16 minus the terminator.
+    if { ![regexp {^[A-Za-z0-9][A-Za-z0-9._-]*$} $new] || [string length $new] > 15 } {
+        error "extio_rename: bad name '$new' -- letters/digits/._- (leading\
+               alphanumeric), at most 15 chars"
+    }
+    if { ![dservExists extio/$old/state/build] } {
+        error "extio_rename: no box '$old' has announced itself"
+    }
+    if { [info exists ::extio_known($new)] } {
+        error "extio_rename: a live box is already named '$new'"
+    }
+    if { [llength [extio_cfg_dirty $old]] } {
+        error "extio_rename: $old has unsaved changes ([extio_cfg_dirty $old])\
+               -- Save or reboot first, so the ledger doesn't straddle identities"
+    }
+    if { [info exists ::extio_ota_lc($old,phase)]
+         && $::extio_ota_lc($old,phase) ni {idle done failed} } {
+        error "extio_rename: $old has an OTA in '$::extio_ota_lc($old,phase)' -- not while that runs"
+    }
+    # Arm the watch under the NEW name BEFORE firing (the burst can beat a
+    # late registration), and clear build first: a retained value from some
+    # earlier box that once held this name would satisfy the level check
+    # instantly and fake success.
+    extio_await $new "rename from $old" build {ne ""} 20000 \
+        [list extio_rename_up $old] extio_rename_fail {build}
+    dservSet extio/$old/config/name $new
+    return "rename $old -> $new: box re-registering; watch extio/$new/state/build"
+}
+
+proc extio_rename_up {old box value} {
+    dservSet extio/$box/cmd/save 1   ;# persist NOW: an unsaved rename reverts on reboot
+    catch { extio_clear $old }       ;# forwards + retained datapoints + tracking
+    unset -nocomplain ::extio_cfg_dirty($old)
+    # Tombstone for BYSTANDER pages. extio_clear removed the old identity from
+    # the table, but dserv never pushes deletions -- so every open page EXCEPT
+    # the one that clicked Rename keeps a ghost card (and a frozen panel)
+    # under the old name until reload (observed 2026-08-10). One retained key
+    # that all pages mirror: drop <old>, follow to <new> if it was selected.
+    # Set AFTER the clear, so it cannot be swept with the old subtree.
+    dservSet extio/renamed "$old $box"
+    puts "extio rename: $old -> $box live + saved; old identity cleared"
+}
+
+proc extio_rename_fail {box why} {
+    puts "extio rename\[$box\]: no announce under the new name -- $why. On pre-+59\
+          firmware the box HAS renamed live but cannot say so: wait ~30 s (match\
+          refresh) then extio_cfg_save $box -- or reboot it to revert the rename."
+}
+
 proc extio_wire_common {} {                 ;# device-independent: sync + obs_pin
     dservAddMatch ess/in_obs
     dpointSetScript ess/in_obs usbio_forward

@@ -227,6 +227,24 @@ function onExtio(msg) {
      * rejects it and it would otherwise be dropped on the floor. */
     if (msg.name === 'extio/discovered') { onDiscovered(msg); return; }
 
+    /* Rename tombstone (extio/renamed = "<old> <new>"): extio_rename purged
+     * the old identity server-side, but deletions are never pushed -- without
+     * this the old card lingers here forever as a phantom offline box. The
+     * card's DOM node must go too: render() only ever ADDS nodes. The new
+     * name's card builds itself from the burst. Retained-value safe: deleting
+     * an unknown name is a no-op. */
+    if (msg.name === 'extio/renamed') {
+        let tv = msg.data !== undefined ? msg.data : msg.value;
+        if (typeof tv === 'string') tv = tv.split('\x00')[0];
+        const [oldName] = String(tv || '').trim().split(/\s+/);
+        if (oldName && boxes.delete(oldName)) {
+            const el = document.getElementById('box-' + oldName);
+            if (el) el.remove();
+            scheduleRender();
+        }
+        return;
+    }
+
     const m = /^extio\/([^/]+)\/(state|host)\/(.+)$/.exec(msg.name);
     if (!m) return;
     const b = boxModel(m[1]);

@@ -153,6 +153,26 @@ function setConn(up, msg) {
  * while the socket is plainly connected. Signature copied from extio.html,
  * which is the working reference. */
 function onExtio(msg) {
+  /* Rename tombstone (extio/renamed = "<old> <new>"): the publisher purged
+   * the old identity server-side, but deletions are never pushed -- without
+   * this, every page EXCEPT the one that clicked Rename keeps a ghost card
+   * and a frozen panel under the old name. Retained-value safe: deleting an
+   * unknown name is a no-op, and selection only moves when it is actually
+   * parked on the ghost. */
+  if (msg.name === 'extio/renamed') {
+    const v = String(msg.data !== undefined ? msg.data : msg.value || '').split('\x00')[0];
+    const [old, neu] = v.trim().split(/\s+/);
+    if (old && boxes.delete(old)) {
+      fleetHtml = null;
+      if (sel === old) {
+        if (neu && boxes.has(neu)) { selectBox(neu); }
+        else { sel = null; panelHtml = null; renderFleet(); renderPanel(); }
+      } else {
+        renderFleet();
+      }
+    }
+    return;
+  }
   const m = /^extio\/([^/]+)\/state\/(.+)$/.exec(msg.name);
   if (!m) return;
   const [, box, leaf] = m;
@@ -396,6 +416,46 @@ async function refreshDirty(box) {
     dirty = new Set(r.trim().split(/\s+/).filter(Boolean));
     updateDirtyUi(); renderPanel();
   } catch (e) { /* interp may predate the helper; the page still works read-only */ }
+}
+
+/* Rename is deliberately NOT a live-apply config field. Editing config/name
+ * in place swaps the box's datapoint prefix under this page's feet: the
+ * selection, dirty ledger, and every command target a name that no longer
+ * answers, and a Save clicked afterwards is silently dropped by the box while
+ * the ledger clears anyway -- the UI reports saved, and the next reboot
+ * reverts the name. extio_rename (extioconf.tcl) runs the whole choreography
+ * instead -- re-register, announce under the new name, save, purge the old
+ * identity -- and this just follows along: the burst lands in `boxes` via our
+ * ordinary subscription, at which point the ghost is dropped and the panel
+ * switches. */
+async function renameBox(box) {
+  const to = prompt(`Rename ${box} to:`, box);
+  if (to === null) return;
+  const name = to.trim();
+  if (!name || name === box) return;
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,14}$/.test(name)) {
+    alert('Names are letters/digits/._- with a leading alphanumeric, at most 15 chars.');
+    return;
+  }
+  let r;
+  try { r = String(await conn.send(`extio_rename ${box} ${name}`, 'extio')); }
+  catch (e) { alert(`rename refused: ${e.message}`); return; }
+  if (r.startsWith('!TCL_ERROR')) { alert(`rename refused: ${r.slice(11).trim()}`); return; }
+  /* Success is EVENT-DRIVEN from here: once the box is live + saved under the
+   * new name, extio_rename publishes the extio/renamed tombstone and onExtio
+   * reacts on THIS page exactly as on every bystander page -- ghost dropped,
+   * selection follows. No initiator-only smarts. The one page-local job left
+   * is failure UX: if the tombstone never lands, say what state the box is
+   * really in rather than leaving a silent stall. */
+  const t0 = Date.now();
+  const tick = setInterval(() => {
+    if (!boxes.has(box)) { clearInterval(tick); return; }   /* tombstone landed */
+    if (Date.now() - t0 > 25000) {
+      clearInterval(tick);
+      alert(`No rename event for '${name}' yet. On pre-+59 firmware the box HAS renamed live ` +
+            `but cannot confirm: wait ~30 s, then Save from its panel -- or reboot it to revert.`);
+    }
+  }, 500);
 }
 
 /* ---- per-box panel ---- */
@@ -858,7 +918,9 @@ function renderPanel() {
 
     <h2>identity</h2>
     <table>
-      <tr><th>name</th><td>${field(b, '\u0000none', 'name', { wide: 1, fallback: b })}</td>
+      <tr><th>name</th><td><code>${b}</code>
+            <button onclick="renameBox('${b}')"
+              title="One committed operation: the box re-registers and re-announces under the new name, the rename is saved to flash, and the old identity is purged.">Rename…</button></td>
           <th>board</th><td>${get(b, 'board', '?')}</td></tr>
       <tr><th>desc</th><td>${field(b, 'desc', 'desc', { wide: 1 })}</td>
           <th>build</th><td>${get(b, 'build', '?')}</td></tr>
