@@ -546,6 +546,26 @@ void box_uplink_service(const box_config_t *cfg)
 	k_mutex_unlock(&uplink_lock);
 }
 
+/* Re-run the active transport's dserv registration with the CURRENT config --
+ * the rename hook (CFG_NAME). A name change swaps the datapoint prefix in
+ * place: dserv still holds only the OLD %match patterns (the box is
+ * command-deaf under both names until the 30 s refresh) and nothing announces
+ * the new identity. self_register re-%regs; dserv tears down and reopens the
+ * connect-back (add_new_send_client), so the fresh accept re-arms the burst,
+ * which the announce hold then defers until the new-prefix matches land.
+ * Net effect: the box re-emerges under its new name, complete and immediately
+ * commandable. No-op on transports without a registration (USB has no matches
+ * to refresh -- the host discovers a rename from telemetry). Cheap under the
+ * lock: self_register only queues for the reg thread. */
+void box_uplink_reregister(const box_config_t *cfg)
+{
+	k_mutex_lock(&uplink_lock, K_FOREVER);
+	if (active && active->self_register) {
+		active->self_register(cfg);
+	}
+	k_mutex_unlock(&uplink_lock);
+}
+
 int box_uplink_poll(uint8_t *buf, int max)
 {
 	k_mutex_lock(&uplink_lock, K_FOREVER);

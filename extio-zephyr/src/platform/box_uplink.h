@@ -63,6 +63,10 @@ void box_uplink_service(const box_config_t *cfg);
  * previous host while every status field reports the new one. */
 void box_uplink_retarget(const box_config_t *cfg);
 
+/* Re-run the active transport's dserv registration with the current config --
+ * the rename (CFG_NAME) hook; see box_uplink.c for the full why. */
+void box_uplink_reregister(const box_config_t *cfg);
+
 /* Inbound bytes from the active uplink (BOX_NET_RESET on a fresh session). */
 int box_uplink_poll(uint8_t *buf, int max);
 

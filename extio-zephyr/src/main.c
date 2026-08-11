@@ -2044,6 +2044,18 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 		 * No-op when the target is unchanged, so a host reasserting the address
 		 * a box already has costs nothing. */
 		box_uplink_retarget(&cfg);
+	} else if (r == CFG_NAME) {
+		/* The prefix just changed in place: dserv still holds only the OLD
+		 * %match patterns (this box is now command-deaf under both names
+		 * until the 30 s refresh) and nothing announces the new identity.
+		 * A full re-registration fixes both at once: dserv reopens the
+		 * connect-back (fresh accept), the new-prefix matches follow, and
+		 * the announce hold releases the burst only after they land -- so
+		 * the box re-emerges under its new name complete and commandable.
+		 * extio_rename (extioconf.tcl) drives this end to end. */
+		box_uplink_reregister(&cfg);
+		box_console_printf("config/name -> now '%s'; re-registering\n",
+				   dserv_cfg_name(&cfg));
 	} else if (r == CFG_ANNOUNCE) {
 		/* Everything, not just the manifest: identity and the OTA counters
 		 * live in the burst, and a UI asking "what are you now" wants the
