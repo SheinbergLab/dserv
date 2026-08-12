@@ -283,6 +283,50 @@ typedef struct {
     int16_t  ain_clk_ppm;
 } box_config_t;
 
+/* Max int16 samples in one analog block: 12B header + 48B of samples, and a
+ * long "extio/<name>/ain/<label>" varname must still fit the 128B frame
+ * (varlen+datalen <= 109). At 8 channels this caps batch at 3 (24/8).
+ *
+ * DEFINED HERE, not beside the block struct, because the CONFIG layer is where
+ * an over-large batch has to be refused -- and box_ain_group.h cannot be the
+ * home for that constant when it is this header's dependent, not its provider. */
+#define AIN_BLOCK_MAX  24
+
+/* Largest batch group `g` may use, given the channels it currently has.
+ *
+ * A block carries count*nchan samples, so the two settings are coupled and the
+ * sampler has always clamped silently (ain_group_batch_eff). Silently is the
+ * problem: a group configured batch 20 on 2 channels read back 20 and sampled
+ * 12, which is the config-field-that-lies shape from the inside. With no
+ * channels set yet there is nothing to bound, so the write is allowed and
+ * re-checked when channels arrive. */
+static inline int ain_batch_cap(const box_config_t *c, int g)
+{
+    int n = 0;
+
+    if (g < 0 || g >= BOX_NAGROUPS) return 1;
+    for (uint8_t m = c->ain_group_chans[g]; m; m >>= 1) n += (m & 1u);
+    if (n <= 0) return AIN_BLOCK_MAX;
+    int cap = AIN_BLOCK_MAX / n;
+    return cap < 1 ? 1 : cap;
+}
+
+/* Re-clamp a group's batch after its CHANNEL SET changed. Widening a group is
+ * the one edit that can invalidate an already-accepted batch, and refusing the
+ * channel change over a secondary field would be the wrong thing to reject --
+ * so batch yields, and the announce republishes the value that will actually be
+ * used. Returns 1 if it had to change something. */
+static inline int ain_batch_reclamp(box_config_t *c, int g)
+{
+    int cap = ain_batch_cap(c, g);
+
+    if (c->ain_group_batch[g] > cap) {
+        c->ain_group_batch[g] = (uint8_t) cap;
+        return 1;
+    }
+    return 0;
+}
+
 /* box_config_t.ain_pace */
 enum { AIN_PACE_AUTO = 0, AIN_PACE_POLLED = 1, AIN_PACE_STREAM = 2 };
 /* box_config_t.dbg_level */
@@ -783,7 +827,9 @@ static inline cfg_result_t dserv_cfg__config(box_config_t *c, const char *k,
              * ignored rather than refused -- the driver is the authority on
              * channel count, not this parser. */
             if (dserv_parse_pins(w, &mask) < 0 || (mask & ~0xFFu)) return CFG_UNKNOWN;
-            c->ain_group_chans[ng] = (uint8_t) mask; c->applied_count++; return CFG_AIN;
+            c->ain_group_chans[ng] = (uint8_t) mask;
+            (void) ain_batch_reclamp(c, ng);
+            c->applied_count++; return CFG_AIN;
         }
         if (strcmp(sub, "label") == 0) {
             char w[BOX_LABEL_MAX]; dserv_msg_copy_cstr(m, w, sizeof w);
@@ -809,6 +855,7 @@ static inline cfg_result_t dserv_cfg__config(box_config_t *c, const char *k,
         }
         if (strcmp(sub, "batch") == 0) {
             long v = dserv_msg_as_long(m); if (v < 1) v = 1; if (v > 255) v = 255;
+            if (v > ain_batch_cap(c, ng)) return CFG_UNKNOWN;   /* batch*nchan <= AIN_BLOCK_MAX */
             c->ain_group_batch[ng] = (uint8_t) v; c->applied_count++; return CFG_AIN;
         }
         if (strcmp(sub, "average") == 0) {

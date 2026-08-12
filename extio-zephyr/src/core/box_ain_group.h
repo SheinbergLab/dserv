@@ -49,13 +49,9 @@
  * so eight channels was already representable and a host decodes it with no
  * change. Costs a few bytes of per-group RAM on a 4-channel box. */
 #define AIN_MAX_CH     8
-#define AIN_BLOCK_MAX  24   /* max int16 samples per block: 12B header + 48B + a
-                             * long "extio/<name>/ain/<label>" varname must fit
-                             * the 128B frame (varlen+datalen <= 109).
-                             * UNCHANGED at 8 channels, so batch caps at 3 there
-                             * (24/8) instead of 6 -- ain_group_batch_eff()
-                             * already clamps it, which is why widening the part
-                             * needs no arithmetic here. */
+/* AIN_BLOCK_MAX now lives in dserv_config.h: the CONFIG layer has to refuse a
+ * batch that would not fit, and it cannot include this header (this one
+ * includes it). Same constant, one definition. */
 #define AIN_BLOCK_VER  0x01
 
 /* One packed block handed from the SAMPLING THREAD to the service loop (box_ain's

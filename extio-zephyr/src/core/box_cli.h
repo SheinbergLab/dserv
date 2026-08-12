@@ -499,7 +499,17 @@ static inline cli_action_t box_cli_exec(box_config_t *c, const char *line,
             return CLI_ERR;
         }
         c->ain_group_chans[n] = (uint8_t) mask; c->applied_count++;
-        snprintf(out, outsz, "OK ain group%d channels=%s\r\n", n, w); return CLI_AIN;
+        /* Widening a group is the one edit that can invalidate an already
+         * accepted batch. Refusing the CHANNEL change over a secondary field
+         * would reject the wrong thing, so batch yields -- but say so, or it
+         * is the same silent clamp from a different direction. */
+        if (ain_batch_reclamp(c, n)) {
+            snprintf(out, outsz, "OK ain group%d channels=%s (batch reduced to %d to fit)\r\n",
+                     n, w, c->ain_group_batch[n]);
+        } else {
+            snprintf(out, outsz, "OK ain group%d channels=%s\r\n", n, w);
+        }
+        return CLI_AIN;
     }
     if (sscanf(line, "ain group %d label %15s", &n, w) == 2) {
         if (n < 0 || n >= BOX_NAGROUPS) { snprintf(out, outsz, "ERR bad group\r\n"); return CLI_ERR; }
@@ -530,8 +540,18 @@ static inline cli_action_t box_cli_exec(box_config_t *c, const char *line,
         snprintf(out, outsz, "OK ain group%d decimate=%d\r\n", n, v); return CLI_AIN;
     }
     if (sscanf(line, "ain group %d batch %d", &n, &v) == 2) {
-        if (n < 0 || n >= BOX_NAGROUPS || v < 1 || v > 255) {
-            snprintf(out, outsz, "ERR ain batch 1-255\r\n"); return CLI_ERR; }
+        if (n < 0 || n >= BOX_NAGROUPS) { snprintf(out, outsz, "ERR bad group\r\n"); return CLI_ERR; }
+        /* REFUSE rather than store-and-clamp. The sampler has always clamped
+         * (ain_group_batch_eff), which meant a group set to batch 20 on 2
+         * channels read back 20 and sampled 12 -- the operator believing a
+         * setting that never took. Name the cap so the next attempt is right. */
+        int cap = ain_batch_cap(c, n);
+        if (v < 0 || v > cap) {
+            snprintf(out, outsz,
+                     "ERR ain group %d batch 0-%d (batch x %d channels must fit %d samples/block)\r\n",
+                     n, cap, (cap > 0 ? AIN_BLOCK_MAX / cap : 0), AIN_BLOCK_MAX);
+            return CLI_ERR;
+        }
         c->ain_group_batch[n] = (uint8_t) v; c->applied_count++;
         snprintf(out, outsz, "OK ain group%d batch=%d\r\n", n, v); return CLI_AIN;
     }
