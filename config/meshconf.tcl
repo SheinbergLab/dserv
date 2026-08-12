@@ -121,6 +121,623 @@ proc mesh_init_current_values {} {
 mesh_init_current_values
 
 #################################################################
+# Registry path / network status
+#################################################################
+
+# Classify a Linux netdev as wifi vs ethernet (wireless sysfs wins).
+proc mesh_iface_type { iface } {
+    if {$iface eq ""} { return "" }
+    if {[file isdirectory "/sys/class/net/$iface/wireless"]} {
+        return wifi
+    }
+    return ethernet
+}
+
+# Resolve hostname -> IPv4 via getent (no packets). Returns "" on failure.
+proc mesh_resolve_ipv4 { host } {
+    if {$host eq ""} { return "" }
+    # Already an IPv4 literal?
+    if {[regexp {^\d+\.\d+\.\d+\.\d+$} $host]} { return $host }
+    set out ""
+    if {[catch { set out [exec getent ahostsv4 $host] }]} {
+        return ""
+    }
+    # First field of first line is the address
+    set line [lindex [split [string trim $out] \n] 0]
+    set addr [lindex $line 0]
+    if {[regexp {^\d+\.\d+\.\d+\.\d+$} $addr]} { return $addr }
+    return ""
+}
+
+# Kernel route lookup toward $dest (hostname or IPv4). Returns
+# {ip iface} or empty list. Sends no packets.
+proc mesh_route_lookup { dest } {
+    if {$dest eq "" || $::tcl_platform(os) ne "Linux"} {
+        return [list]
+    }
+    set target [mesh_resolve_ipv4 $dest]
+    if {$target eq ""} {
+        # Literal IPv4 already, or unresolvable hostname
+        if {[regexp {^\d+\.\d+\.\d+\.\d+$} $dest]} {
+            set target $dest
+        } else {
+            return [list]
+        }
+    }
+    set out ""
+    if {[catch { set out [exec ip -4 route get $target] }]} {
+        return [list]
+    }
+    set ip ""
+    set iface ""
+    regexp {src (\S+)} $out -> ip
+    regexp {dev (\S+)} $out -> iface
+    if {$ip eq "" || $iface eq ""} {
+        return [list]
+    }
+    return [list $ip $iface]
+}
+
+# Extract host from registry URL (https://dserv.net:443/path -> dserv.net).
+proc mesh_registry_host {} {
+    global mesh_registry
+    if {$mesh_registry eq ""} { return "" }
+    if {[regexp {^https?://\[([^\]]+)\]} $mesh_registry -> host]} {
+        return $host
+    }
+    if {[regexp {^https?://([^/:]+)} $mesh_registry -> host]} {
+        return $host
+    }
+    return ""
+}
+
+# Map RSSI (dBm) to 0..4 bars for the status-bar icon.
+proc mesh_wifi_bars_from_dbm { dbm } {
+    if {![string is integer -strict $dbm]} { return 0 }
+    if {$dbm >= -50} { return 4 }
+    if {$dbm >= -60} { return 3 }
+    if {$dbm >= -70} { return 2 }
+    if {$dbm >= -80} { return 1 }
+    return 0
+}
+
+# Clear wifi association datapoints (ethernet path, or iw failed).
+proc mesh_clear_wifi_info {} {
+    catch { dservSet system/net/wifi/ssid "" }
+    catch { dservSet system/net/wifi/bssid "" }
+    catch { dservSet system/net/wifi/signal_dbm "" }
+    catch { dservSet system/net/wifi/bars "" }
+}
+
+# Current association only (iw link) — no scan. Publishes ssid/bssid/signal/bars.
+proc mesh_refresh_wifi_info { iface } {
+    if {$iface eq "" || $::tcl_platform(os) ne "Linux"} {
+        mesh_clear_wifi_info
+        return
+    }
+
+    set out ""
+    if {[catch { set out [exec iw dev $iface link] }]} {
+        mesh_clear_wifi_info
+        return
+    }
+
+    # Not associated
+    if {[string match "*Not connected*" $out] || $out eq ""} {
+        mesh_clear_wifi_info
+        return
+    }
+
+    set bssid ""
+    set ssid ""
+    set dbm ""
+    regexp -nocase {Connected to ([0-9a-f:]+)} $out -> bssid
+    # [^\n]+ — plain .+ can span lines in this Tcl build
+    regexp {SSID:\s*([^\n]+)} $out -> ssid
+    regexp {signal:\s*(-?\d+)\s*dBm} $out -> dbm
+    set ssid [string trim $ssid]
+
+    if {$ssid eq "" && $bssid eq "" && $dbm eq ""} {
+        mesh_clear_wifi_info
+        return
+    }
+
+    set bars [mesh_wifi_bars_from_dbm $dbm]
+    catch { dservSet system/net/wifi/ssid $ssid }
+    catch { dservSet system/net/wifi/bssid [string toupper $bssid] }
+    catch { dservSet system/net/wifi/signal_dbm $dbm }
+    catch { dservSet system/net/wifi/bars $bars }
+}
+
+# Refresh mesh_hostaddr + system/net/* from the path used toward the
+# registry (fallback: default-route lookup via 1.1.1.1). Safe to call
+# often; all execs are caught.
+proc mesh_refresh_registry_path {} {
+    global mesh_hostaddr mesh_registry
+
+    set ip ""
+    set iface ""
+
+    set host [mesh_registry_host]
+    if {$host ne "" && $host ne "localhost" && $host ne "127.0.0.1"
+        && $host ne "::1"} {
+        set route [mesh_route_lookup $host]
+        if {[llength $route] == 2} {
+            lassign $route ip iface
+        }
+    }
+
+    if {$ip eq ""} {
+        set route [mesh_route_lookup 1.1.1.1]
+        if {[llength $route] == 2} {
+            lassign $route ip iface
+        }
+    }
+
+    if {$ip eq "" || $iface eq ""} {
+        return
+    }
+
+    set type [mesh_iface_type $iface]
+    set mesh_hostaddr $ip
+    catch { dservSet system/hostaddr $ip }
+    catch { dservSet system/net/ip $ip }
+    catch { dservSet system/net/iface $iface }
+    catch { dservSet system/net/type $type }
+
+    if {$type eq "wifi"} {
+        mesh_refresh_wifi_info $iface
+    } else {
+        mesh_clear_wifi_info
+    }
+}
+
+#################################################################
+# Net status modal (on-demand choices — not on the mesh tick)
+#################################################################
+
+# Split nmcli -t fields (\: is a literal colon).
+proc mesh_nmcli_split { line } {
+    set tmp [string map {\\: <<COLON>>} $line]
+    set parts [split $tmp :]
+    set out {}
+    foreach p $parts {
+        lappend out [string map {<<COLON>> :} $p]
+    }
+    return $out
+}
+
+# Saved Wi-Fi connection names (SSID / profile name).
+proc mesh_net_known_ssids {} {
+    set known {}
+    set out ""
+    if {[catch { set out [exec nmcli -t -f NAME,TYPE connection show] }]} {
+        return $known
+    }
+    foreach line [split [string trimright $out \n] \n] {
+        if {$line eq ""} { continue }
+        set parts [mesh_nmcli_split $line]
+        if {[llength $parts] < 2} { continue }
+        set name [lindex $parts 0]
+        set typ [lindex $parts 1]
+        if {$typ eq "802-11-wireless" && $name ne ""} {
+            lappend known $name
+        }
+    }
+    return $known
+}
+
+# Current association for one wifi iface: {ssid bssid} or empty.
+proc mesh_net_iw_assoc { iface } {
+    set ssid ""
+    set bssid ""
+    set out ""
+    if {[catch { set out [exec iw dev $iface link] }]} {
+        return [list]
+    }
+    if {[string match "*Not connected*" $out] || $out eq ""} {
+        return [list]
+    }
+    regexp -nocase {Connected to ([0-9a-f:]+)} $out -> bssid
+    regexp {SSID:\s*([^\n]+)} $out -> ssid
+    set ssid [string trim $ssid]
+    if {$ssid eq "" && $bssid eq ""} { return [list] }
+    return [list $ssid [string toupper $bssid]]
+}
+
+# Interfaces with a global IPv4 (excludes lo).
+# Returns list of dicts: iface type ip ssid bssid
+proc mesh_net_interfaces {} {
+    set rows {}
+    set out ""
+    if {[catch { set out [exec ip -4 -o addr show scope global] }]} {
+        return $rows
+    }
+    foreach line [split [string trimright $out \n] \n] {
+        if {$line eq ""} { continue }
+        # "3: wlan0    inet 10.14.17.221/24 ..."
+        if {![regexp {^\d+:\s+(\S+)\s+inet\s+(\d+\.\d+\.\d+\.\d+)} $line -> iface ip]} {
+            continue
+        }
+        if {$iface eq "lo"} { continue }
+        set type [mesh_iface_type $iface]
+        set ssid ""
+        set bssid ""
+        if {$type eq "wifi"} {
+            set assoc [mesh_net_iw_assoc $iface]
+            if {[llength $assoc] == 2} {
+                lassign $assoc ssid bssid
+            }
+        }
+        lappend rows [dict create \
+            iface $iface type $type ip $ip ssid $ssid bssid $bssid]
+    }
+    return $rows
+}
+
+# Scan APs; keep only SSIDs in $known (list). Returns list of dicts.
+proc mesh_net_scan_aps { known } {
+    set rows {}
+    if {[llength $known] == 0} { return $rows }
+
+    set out ""
+    if {[catch {
+        set out [exec nmcli -t -f IN-USE,SSID,BSSID,SIGNAL,DEVICE device wifi list --rescan yes]
+    } err]} {
+        error "wifi scan failed: $err"
+    }
+
+    foreach line [split [string trimright $out \n] \n] {
+        if {$line eq ""} { continue }
+        set parts [mesh_nmcli_split $line]
+        if {[llength $parts] < 5} { continue }
+        lassign $parts in_use ssid bssid signal device
+        if {$ssid eq "" || [lsearch -exact $known $ssid] < 0} { continue }
+        set in_use_bool [expr {$in_use eq "*"}]
+        if {![string is integer -strict $signal]} { set signal 0 }
+        lappend rows [dict create \
+            ssid $ssid \
+            bssid [string toupper $bssid] \
+            signal $signal \
+            device $device \
+            in_use $in_use_bool]
+    }
+
+    # Sort by SSID asc, then signal desc
+    set rows [lsort -command mesh_net_ap_sort $rows]
+    return $rows
+}
+
+proc mesh_net_ap_sort { a b } {
+    set sa [dict get $a ssid]
+    set sb [dict get $b ssid]
+    set c [string compare $sa $sb]
+    if {$c != 0} { return $c }
+    set qa [dict get $a signal]
+    set qb [dict get $b signal]
+    if {$qa > $qb} { return -1 }
+    if {$qa < $qb} { return 1 }
+    return 0
+}
+
+# Current registry-path fields from datapoints.
+proc mesh_net_current_info {} {
+    set cur [dict create iface "" type "" ip "" ssid "" bssid ""]
+    catch {
+        if {[dservExists system/net/iface]} {
+            dict set cur iface [dservGet system/net/iface]
+        }
+        if {[dservExists system/net/type]} {
+            dict set cur type [dservGet system/net/type]
+        }
+        if {[dservExists system/net/ip]} {
+            dict set cur ip [dservGet system/net/ip]
+        }
+        if {[dservExists system/net/wifi/ssid]} {
+            dict set cur ssid [dservGet system/net/wifi/ssid]
+        }
+        if {[dservExists system/net/wifi/bssid]} {
+            dict set cur bssid [dservGet system/net/wifi/bssid]
+        }
+    }
+    return $cur
+}
+
+# Encode modal payload. $aps is a list of AP dicts.
+proc mesh_net_choices_json { cur ifaces aps error } {
+    set cur_iface [dict get $cur iface]
+
+    set json [yajl create #auto]
+    $json map_open
+
+    $json string current map_open
+    $json string iface string [dict get $cur iface]
+    $json string type string [dict get $cur type]
+    $json string ip string [dict get $cur ip]
+    $json string ssid string [dict get $cur ssid]
+    $json string bssid string [dict get $cur bssid]
+    $json map_close
+
+    $json string interfaces array_open
+    foreach row $ifaces {
+        set iface [dict get $row iface]
+        set is_cur [expr {$cur_iface ne "" && $iface eq $cur_iface}]
+        $json map_open
+        $json string iface string $iface
+        $json string type string [dict get $row type]
+        $json string ip string [dict get $row ip]
+        $json string ssid string [dict get $row ssid]
+        $json string bssid string [dict get $row bssid]
+        $json string current bool $is_cur
+        $json map_close
+    }
+    $json array_close
+
+    $json string access_points array_open
+    foreach row $aps {
+        $json map_open
+        $json string ssid string [dict get $row ssid]
+        $json string bssid string [dict get $row bssid]
+        $json string signal number [dict get $row signal]
+        $json string device string [dict get $row device]
+        $json string in_use bool [dict get $row in_use]
+        $json map_close
+    }
+    $json array_close
+
+    $json string error string $error
+    $json map_close
+
+    set result [$json get]
+    $json delete
+    return $result
+}
+
+# Fast: interfaces + current registry path (no wifi scan).
+proc mesh_net_iface_choices {} {
+    set error ""
+    set ifaces {}
+    set cur [mesh_net_current_info]
+    if {[catch { set ifaces [mesh_net_interfaces] } err]} {
+        set error $err
+        set ifaces {}
+    }
+    return [mesh_net_choices_json $cur $ifaces {} $error]
+}
+
+# Slow: wifi AP scan only (known SSIDs).
+proc mesh_net_ap_scan {} {
+    set error ""
+    set aps {}
+    if {[catch {
+        set known [mesh_net_known_ssids]
+        set aps [mesh_net_scan_aps $known]
+    } err]} {
+        set error $err
+        set aps {}
+    }
+
+    set json [yajl create #auto]
+    $json map_open
+    $json string access_points array_open
+    foreach row $aps {
+        $json map_open
+        $json string ssid string [dict get $row ssid]
+        $json string bssid string [dict get $row bssid]
+        $json string signal number [dict get $row signal]
+        $json string device string [dict get $row device]
+        $json string in_use bool [dict get $row in_use]
+        $json map_close
+    }
+    $json array_close
+    $json string error string $error
+    $json map_close
+    set result [$json get]
+    $json delete
+    return $result
+}
+
+# Full snapshot (ifaces + scan). Kept for convenience / debugging.
+proc mesh_net_choices {} {
+    set error ""
+    set ifaces {}
+    set aps {}
+    set cur [mesh_net_current_info]
+
+    if {[catch {
+        set ifaces [mesh_net_interfaces]
+        set known [mesh_net_known_ssids]
+        if {[catch { set aps [mesh_net_scan_aps $known] } scan_err]} {
+            set error $scan_err
+            set aps {}
+        }
+    } err]} {
+        set error $err
+    }
+
+    return [mesh_net_choices_json $cur $ifaces $aps $error]
+}
+
+#################################################################
+# Net switch (prefer iface / BSSID for registry path)
+#################################################################
+
+proc mesh_net_result_json { ok error } {
+    set json [yajl create #auto]
+    $json map_open
+    $json string ok bool $ok
+    $json string error string $error
+    $json map_close
+    set result [$json get]
+    $json delete
+    return $result
+}
+
+# Active NM connection name for a device, or "".
+proc mesh_net_conn_for_iface { iface } {
+    if {$iface eq ""} { return "" }
+    set out ""
+    if {[catch { set out [exec nmcli -t -f GENERAL.CONNECTION device show $iface] }]} {
+        return ""
+    }
+    set name ""
+    foreach line [split $out \n] {
+        if {[regexp {^GENERAL\.CONNECTION:(.*)$} $line -> v]} {
+            set name [string trim $v]
+            break
+        }
+    }
+    if {$name eq "" || $name eq "--"} { return "" }
+    return $name
+}
+
+# List {device type connection} for active eth/wifi devices.
+proc mesh_net_active_links {} {
+    set rows {}
+    set out ""
+    if {[catch { set out [exec nmcli -t -f DEVICE,TYPE,CONNECTION device status] }]} {
+        return $rows
+    }
+    foreach line [split [string trimright $out \n] \n] {
+        if {$line eq ""} { continue }
+        set parts [mesh_nmcli_split $line]
+        if {[llength $parts] < 3} { continue }
+        lassign $parts device typ conn
+        if {$typ ne "ethernet" && $typ ne "wifi"} { continue }
+        if {$conn eq "" || $conn eq "--"} { continue }
+        lappend rows [list $device $typ $conn]
+    }
+    return $rows
+}
+
+# Prefer prefer_iface (metric 50); other active eth/wifi connections get 600.
+# Returns the NM connection name for prefer_iface (may be "").
+proc mesh_net_set_metrics { prefer_iface } {
+    set links [mesh_net_active_links]
+    set prefer_conn ""
+
+    foreach row $links {
+        lassign $row device typ conn
+        set metric 600
+        if {$device eq $prefer_iface} {
+            set metric 50
+            set prefer_conn $conn
+        }
+        catch { exec nmcli connection modify id $conn ipv4.route-metric $metric }
+    }
+
+    if {$prefer_conn eq ""} {
+        set prefer_conn [mesh_net_conn_for_iface $prefer_iface]
+        if {$prefer_conn eq ""} {
+            set out ""
+            if {![catch { set out [exec nmcli -t -f NAME,DEVICE,TYPE connection show] }]} {
+                foreach line [split [string trimright $out \n] \n] {
+                    set parts [mesh_nmcli_split $line]
+                    if {[llength $parts] < 3} { continue }
+                    lassign $parts name device typ
+                    if {$device eq $prefer_iface ||
+                        ($device eq "" && $typ eq [mesh_iface_type $prefer_iface])} {
+                        # fall through: NAME match by later callers for wifi SSID
+                    }
+                    if {$device eq $prefer_iface} {
+                        set prefer_conn $name
+                        break
+                    }
+                }
+            }
+        }
+        if {$prefer_conn ne ""} {
+            catch { exec nmcli connection modify id $prefer_conn ipv4.route-metric 50 }
+        }
+    }
+    return $prefer_conn
+}
+
+# Re-activate non-preferred links so updated metrics hit the routing table.
+proc mesh_net_reactivate_others { prefer_iface } {
+    foreach row [mesh_net_active_links] {
+        lassign $row device typ conn
+        if {$device eq $prefer_iface} { continue }
+        catch { exec nmcli -w 25 connection up id $conn ifname $device }
+    }
+}
+
+# Switch registry preference to a non-wifi interface (ethernet).
+proc mesh_net_switch_iface { iface } {
+    if {$iface eq ""} {
+        return [mesh_net_result_json 0 "missing interface"]
+    }
+    if {![regexp {^[A-Za-z0-9._-]+$} $iface]} {
+        return [mesh_net_result_json 0 "invalid interface name"]
+    }
+    set type [mesh_iface_type $iface]
+    if {$type eq "wifi"} {
+        return [mesh_net_result_json 0 "choose a Wi-Fi access point to switch wireless"]
+    }
+
+    if {[catch {
+        set conn [mesh_net_set_metrics $iface]
+        if {$conn eq ""} {
+            catch { exec nmcli -w 30 device connect $iface }
+            set conn [mesh_net_conn_for_iface $iface]
+            if {$conn eq ""} {
+                error "no NetworkManager connection for $iface"
+            }
+            catch { exec nmcli connection modify id $conn ipv4.route-metric 50 }
+        }
+        exec nmcli -w 30 connection up id $conn ifname $iface
+        mesh_net_reactivate_others $iface
+        catch { exec sleep 1 }
+        mesh_refresh_registry_path
+    } err]} {
+        return [mesh_net_result_json 0 $err]
+    }
+    return [mesh_net_result_json 1 ""]
+}
+
+# Switch to a specific AP on a wifi device (known SSID credentials).
+# Temporarily pins 802-11-wireless.bssid so NM associates to that AP, then
+# clears the pin so reboot / roam can pick any BSSID for the SSID. Route
+# metric preference (50) stays persistent.
+proc mesh_net_switch_ap { device ssid bssid } {
+    if {$device eq "" || $ssid eq "" || $bssid eq ""} {
+        return [mesh_net_result_json 0 "missing device, ssid, or bssid"]
+    }
+    if {![regexp {^[A-Za-z0-9._-]+$} $device]} {
+        return [mesh_net_result_json 0 "invalid device name"]
+    }
+    if {![regexp -nocase {^[0-9a-f]{2}(:[0-9a-f]{2}){5}$} $bssid]} {
+        return [mesh_net_result_json 0 "invalid bssid"]
+    }
+    if {[regexp {[{}\[\]$;\\]} $ssid]} {
+        return [mesh_net_result_json 0 "invalid ssid"]
+    }
+
+    set type [mesh_iface_type $device]
+    if {$type ne "wifi"} {
+        return [mesh_net_result_json 0 "$device is not a Wi-Fi interface"]
+    }
+
+    if {[catch {
+        mesh_net_set_metrics $device
+        exec nmcli connection modify id $ssid \
+            802-11-wireless.bssid $bssid \
+            ipv4.route-metric 50
+        exec nmcli -w 45 connection up id $ssid ifname $device
+        # Drop the pin after associate — do not insist on this AP across reboot.
+        catch { exec nmcli connection modify id $ssid 802-11-wireless.bssid "" }
+        mesh_net_reactivate_others $device
+        catch { exec sleep 1 }
+        mesh_refresh_registry_path
+    } err]} {
+        # Best-effort: never leave a sticky BSSID pin behind on failure either.
+        catch { exec nmcli connection modify id $ssid 802-11-wireless.bssid "" }
+        return [mesh_net_result_json 0 $err]
+    }
+    return [mesh_net_result_json 1 ""]
+}
+
+#################################################################
 # HTTP Heartbeat
 #################################################################
 
@@ -160,6 +777,11 @@ proc mesh_build_heartbeat {} {
 
 proc mesh_send_heartbeat {} {
     global mesh_registry mesh_workgroup
+
+    # Keep advertised IP + UI net icon aligned with the live path to
+    # the registry (wifi vs ethernet can flip when both have addresses).
+    # Run even when heartbeat is skipped so the icon stays current.
+    mesh_refresh_registry_path
 
     # Skip if not configured
     if {$mesh_registry eq "" || $mesh_workgroup eq ""} {
@@ -370,6 +992,9 @@ proc mesh_heartbeat_now {} {
 if { [file exists $dspath/local/mesh.tcl] } {
     source $dspath/local/mesh.tcl
 }
+
+# Seed system/net/* immediately (don't wait for first timer tick)
+catch { mesh_refresh_registry_path }
 
 # Setup timer and start heartbeat
 mesh_setup

@@ -178,6 +178,28 @@ proc get_local_hostaddr {} {
     return $ip
 }
 
+# Seed system/net/* from the same default-route lookup used for
+# system/hostaddr so the UI has an icon before the first mesh heartbeat.
+# Mesh refreshes these toward the real registry host each tick.
+proc publish_local_netinfo {} {
+    if { $::tcl_platform(os) != "Linux" } { return }
+    set ip ""
+    set iface ""
+    catch {
+	set out [exec ip -4 route get 1.1.1.1]
+	regexp {src (\S+)} $out -> ip
+	regexp {dev (\S+)} $out -> iface
+    }
+    if { $ip eq "" || $iface eq "" } { return }
+    set type ethernet
+    if { [file isdirectory "/sys/class/net/$iface/wireless"] } {
+	set type wifi
+    }
+    catch { dservSet system/net/ip $ip }
+    catch { dservSet system/net/iface $iface }
+    catch { dservSet system/net/type $type }
+}
+
 proc set_hostinfo {} {
     # set host address to identify this machine (LAN IPv4; loopback fallback)
     set addr [get_local_hostaddr]
@@ -185,6 +207,7 @@ proc set_hostinfo {} {
 	set addr 127.0.0.1
     }
     dservSet system/hostaddr $addr
+    publish_local_netinfo
 
     # ess/ipaddr is the address ESS hands to stim2 over rmt --
     #     rmtSend "set dservhost [dservGet ess/ipaddr]"   (lib/ess-2.0.tm)
