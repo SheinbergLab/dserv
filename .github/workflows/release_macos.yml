@@ -5,6 +5,15 @@ on:
     tags:
       - '*'
 
+# The Tcl version this release is built against. Linux builds it from the
+# deps/tcl submodule, which is pinned to the matching core-9-0-N tag; macOS
+# links Homebrew's tcl-tk@9, which has no per-patch formula. The two must agree,
+# so the brew steps below ASSERT this version rather than accept whatever
+# tcl-tk@9 happens to be that day. To move to a new patch release, change this
+# and repoint deps/tcl to the same tag.
+env:
+  TCL_VERSION: "9.0.4"
+
 jobs:
 
   # Gate the upload jobs on the release existing. The release is created in exactly
@@ -54,6 +63,12 @@ jobs:
           # Remove any existing cmake installation
           brew uninstall cmake --ignore-dependencies || true
           brew install cmake tcl-tk@9 libuv openssl@3 fluidsynth
+
+          installed=$(brew list --versions tcl-tk@9 | awk '{print $2}')
+          case "$installed" in
+            "$TCL_VERSION"|"$TCL_VERSION"_*) echo "tcl-tk@9 $installed matches pin $TCL_VERSION" ;;
+            *) echo "::error::tcl-tk@9 is $installed but this release is pinned to $TCL_VERSION. Bump TCL_VERSION in this workflow and repoint the deps/tcl submodule to the matching core-9-0-N tag." ; exit 1 ;;
+          esac
 
       - name: Check out our code
         uses: actions/checkout@v4
@@ -159,6 +174,13 @@ jobs:
         run: |
           brew update
           brew install tcl-tk@9 yajl coreutils fluidsynth jq
+
+          # The runtime Tcl must match what dserv was linked against.
+          installed=$(brew list --versions tcl-tk@9 | awk '{print $2}')
+          case "$installed" in
+            "$TCL_VERSION"|"$TCL_VERSION"_*) echo "tcl-tk@9 $installed matches pin $TCL_VERSION" ;;
+            *) echo "::error::tcl-tk@9 is $installed but this release is pinned to $TCL_VERSION." ; exit 1 ;;
+          esac
 
       - name: Install the dserv package we just released.
         run: |
