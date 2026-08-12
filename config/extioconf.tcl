@@ -1689,9 +1689,37 @@ proc extio_cfg_writable {leaf} {
     return 0
 }
 
+# Add a leaf to the allowlist at RUNTIME, for the exact case below: firmware has
+# gained a config leaf and this dserv has not been restarted yet. Does not
+# persist -- put it in ::extio_cfg_writable above so it survives a restart.
+proc extio_cfg_allow {leaf} {
+    if { [extio_cfg_writable $leaf] } { return "already writable: $leaf" }
+    lappend ::extio_cfg_writable $leaf
+    set ::extio_cfg_writable [lsort -unique $::extio_cfg_writable]
+    puts "extio: allowlisted config leaf '$leaf' (RUNTIME only -- add it to\
+          ::extio_cfg_writable in config/extioconf.tcl to keep it)"
+    return "allowed: $leaf"
+}
+
 proc extio_cfg_set {box leaf value} {
     if { ![extio_cfg_writable $leaf] } {
-        error "extio_cfg_set: '$leaf' is not a writable config leaf"
+        # LOUD, AND ACTIONABLE, because this gate is a DUPLICATE of knowledge
+        # that really lives in the firmware. dserv_cfg_apply() already refuses
+        # a leaf the box does not know; this list exists only so a typo is
+        # caught before it reaches the wire, and it therefore has to be updated
+        # by hand every time firmware gains a setting. It caught ain/pace,
+        # dbg/level and ain/clk_ppm in succession during one evening's work,
+        # each time presenting as "the box ignored my write" rather than as a
+        # host-side omission -- so the message now says exactly which file to
+        # edit and gives the one-liner that unblocks a running rig.
+        set hint "extio_cfg_set: '$leaf' is not in dserv's writable-leaf allowlist.
+    The BOX may well accept it -- this is a SECOND, host-side gate that has to be
+    updated whenever the firmware gains a config leaf.
+    Unblock this dserv now:   extio_cfg_allow $leaf
+    Keep it:                  add '$leaf' to ::extio_cfg_writable in config/extioconf.tcl"
+        puts "extio: REFUSED config write '$leaf' -- not in ::extio_cfg_writable\
+              (see extio_cfg_allow to unblock without a restart)"
+        error $hint
     }
     if { ![dservExists extio/$box/state/fw] && ![dservExists extio/$box/state/board] } {
         error "extio_cfg_set: no box '$box' has announced itself"
