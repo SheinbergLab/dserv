@@ -132,8 +132,16 @@ void box_adc_stream_plan(uint8_t mask, uint32_t rate, uint8_t ovs_exp,
  * adc_read -- the fault that cost the entire first bring-up night), so a polled
  * sweep MUST NOT be attempted while a stream is running. box_ain stops the
  * stream before it hands the converter to anyone (`ain hold`, `borrow`). */
-int  box_adc_stream_start(uint8_t mask, uint32_t rate,
-			  uint8_t ovs_exp, box_adc_stream_plan_t *plan);
+int  box_adc_stream_start(uint8_t mask, uint32_t rate, uint8_t ovs_exp,
+			  int16_t clk_ppm, box_adc_stream_plan_t *plan);
+
+/* The CTIMER source's measured deviation from the frequency the SDK reports,
+ * in signed ppm. Returns 1 once a run has measured it (needs two epochs), 0
+ * before that -- so a caller can refuse to calibrate from a value that is still
+ * the seed rather than a measurement. Back-solved from the programmed divider
+ * and the observed period, so it is independent of any correction already in
+ * force: calibrating an already-calibrated box returns the same number. */
+int  box_adc_stream_clk_meas(int32_t *ppm);
 
 /* Stop the metronome and hand the ADC interrupt back. Idempotent. */
 void box_adc_stream_stop(void);

@@ -365,7 +365,8 @@ static void ain_thread_fn(void *a, void *b, void *c)
 			if (want_stream) {
 				int src = box_adc_stream_start(union_mask,
 							       (uint32_t) dserv_cfg_ain_rate(cfg),
-							       cfg->ain_ovs, &plan);
+							       cfg->ain_ovs,
+							       cfg->ain_clk_ppm, &plan);
 
 				if (src == 0) {
 					atomic_set(&streaming, 1);

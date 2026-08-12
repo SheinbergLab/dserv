@@ -362,6 +362,11 @@ void box_announce_manifest(const box_config_t *c)
 		pub_int(c, "dserv/port", c->dserv_port);
 		pub_int(c, "ain/rate",   dserv_cfg_ain_rate(c));
 		pub_int(c, "ain/oversample", dserv_cfg_ain_ovs_count(c));
+		/* The APPLIED clock calibration. In the manifest rather than only
+		 * under dbg because it is a config value a host may need to read
+		 * back and re-apply -- ain/dbg/clk_ppm_meas is the live
+		 * measurement, which is a different question. */
+		pub_int(c, "ain/clk_ppm", c->ain_clk_ppm);
 		/* The OVERRIDE, not the pacing in force -- what is actually running
 		 * is ain/dbg/pace, which can differ (a refused stream start falls
 		 * back to polled). A host configuring a box needs this one; a host

@@ -281,6 +281,7 @@ static inline void box_cli_dump(const box_config_t *c)
     if (c->ain_en)                        DUMPF("ain enable 1\r\n");
     if (c->ain_rate)                      DUMPF("ain rate %u\r\n", c->ain_rate);
     if (c->ain_ovs)                       DUMPF("ain oversample %u\r\n", 1u << c->ain_ovs);
+    if (c->ain_clk_ppm)                   DUMPF("ain clkppm %d\r\n", c->ain_clk_ppm);
     if (c->dbg_level == DBG_LEVEL_FULL)   DUMPF("dbg level full\r\n");
     if (c->dbg_level == DBG_LEVEL_OFF)    DUMPF("dbg level off\r\n");
     if (c->ain_pace == AIN_PACE_POLLED)   DUMPF("ain pace polled\r\n");
@@ -467,6 +468,12 @@ static inline cli_action_t box_cli_exec(box_config_t *c, const char *line,
         else { snprintf(out, outsz, "ERR dbg level health|full|off\r\n"); return CLI_ERR; }
         c->applied_count++;
         snprintf(out, outsz, "OK dbg level=%s (watchdog always publishes)\r\n", w);
+        return CLI_AIN;
+    }
+    if (sscanf(line, "ain clkppm %d", &v) == 1) {
+        if (v < -32768 || v > 32767) { snprintf(out, outsz, "ERR ain clkppm -32768..32767\r\n"); return CLI_ERR; }
+        c->ain_clk_ppm = (int16_t) v; c->applied_count++;
+        snprintf(out, outsz, "OK ain clkppm=%d (CTIMER source vs nominal; 0 = uncalibrated)\r\n", v);
         return CLI_AIN;
     }
     if (sscanf(line, "ain pace %15s", w) == 1) {

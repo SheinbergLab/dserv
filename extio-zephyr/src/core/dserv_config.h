@@ -259,6 +259,28 @@ typedef struct {
      * that could silence the liveness beacon would be a setting that can make a
      * dead box look like a quiet one. */
     uint8_t  dbg_level;
+    /* v27: measured deviation of the CTIMER's source clock from the frequency
+     * the SDK reports, in signed ppm. 0 = uncalibrated (use nominal).
+     *
+     * WHY A CALIBRATION CONSTANT AND NOT A CONTROL LOOP. The trigger clock is
+     * FRO_HF, an on-chip RC oscillator, so the rate actually delivered differs
+     * from the rate asked for by that oscillator's manufacturing error --
+     * measured -2897 ppm on one box and about +500 ppm on another. Sample TIMES
+     * are unaffected (they are measured, not assumed), so this is not a
+     * correctness fix; it is what makes `ain rate 100` mean 100 Hz, and makes
+     * two boxes agree with each other.
+     *
+     * Applied ONCE, when a stream starts, so the rate is right from the first
+     * sample and constant for the whole run. Re-tuning mid-run would trade a
+     * stable-but-offset rate for one that steps around as the box warms, which
+     * is worse for analysis: the offset is mostly fixed manufacturing spread,
+     * not drift.
+     *
+     * ain/dbg/clk_ppm_meas reports what the box currently MEASURES; this field
+     * is what it APPLIES. cmd/ain/calibrate copies one to the other. They
+     * differ until someone calibrates, and after a `save` they agree across
+     * reboots. */
+    int16_t  ain_clk_ppm;
 } box_config_t;
 
 /* box_config_t.ain_pace */
@@ -724,6 +746,11 @@ static inline cfg_result_t dserv_cfg__config(box_config_t *c, const char *k,
         while ((1 << e) < v && e < 7) e++;
         if (v < 1 || (1 << e) != v) return CFG_UNKNOWN;   /* exact powers of two only */
         c->ain_ovs = e; c->applied_count++; return CFG_AIN;
+    }
+    if (strcmp(k, "ain/clk_ppm") == 0) {   /* CTIMER source deviation, signed ppm */
+        long v = dserv_msg_as_long(m);
+        if (v < -32768 || v > 32767) return CFG_UNKNOWN;
+        c->ain_clk_ppm = (int16_t) v; c->applied_count++; return CFG_AIN;
     }
     if (strcmp(k, "dbg/level") == 0) {   /* health | full | off -- see dbg_level */
         char w[16]; dserv_msg_copy_cstr(m, w, sizeof w);

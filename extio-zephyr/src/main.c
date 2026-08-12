@@ -1555,6 +1555,51 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 	 * via the ordinary hold first, and the polled driver reprograms its own
 	 * trigger/commands on the next sweep, so nothing needs restoring.
 	 * Healthy = rc 0, words == expected, no FIFO-overflow bits in adc_stat. */
+	/* <prefix>/cmd/ain/calibrate -- adopt the MEASURED CTIMER source deviation
+	 * as this box's applied calibration, so a requested sample rate becomes the
+	 * delivered one.
+	 *
+	 * The trigger clock is FRO_HF, an RC oscillator, so the rate actually
+	 * delivered differs from the rate asked for by that oscillator's
+	 * manufacturing error -- measured -2897 ppm on one box, about +500 ppm on
+	 * another. Sample TIMES are unaffected (stage 3 measures them), so this is
+	 * convenience rather than correction: it makes `ain rate 100` mean 100 Hz,
+	 * and makes two boxes agree with each other.
+	 *
+	 * REFUSES UNTIL THERE IS A MEASUREMENT. The estimator needs two epochs to
+	 * produce a slope, and before that the value is the seed, not an
+	 * observation -- adopting it would write the nominal frequency back in as
+	 * if it had been measured, which is worse than staying uncalibrated because
+	 * it looks calibrated.
+	 *
+	 * LIVE, NOT SAVED, like every other config write. Persisting is a separate
+	 * `cmd/save`, deliberately: the operator decides when a bench measurement
+	 * becomes this box's permanent constant. */
+	if (leaf && strcmp(leaf, "cmd/ain/calibrate") == 0) {
+		int32_t meas = 0;
+
+		if (!box_adc_stream_clk_meas(&meas)) {
+			box_console_printf("cmd/ain/calibrate -> not settled yet "
+					   "(needs a running stream; ~1-2 min at 250 Hz)\n");
+			pub_periodic("ain/dbg/calibrated", 0);
+			return;
+		}
+		if (meas < -32768 || meas > 32767) {
+			box_console_printf("cmd/ain/calibrate -> refused, %d ppm out of range\n",
+					   (int) meas);
+			return;
+		}
+		cfg.ain_clk_ppm = (int16_t) meas;
+		cfg.applied_count++;
+		box_console_printf("cmd/ain/calibrate -> clk_ppm = %d "
+				   "(live; `save` to keep it)\n", (int) meas);
+		pub_periodic("ain/dbg/calibrated", 1);
+		/* Restart the sampler so the new divider takes effect from the
+		 * first sample of the next run rather than mid-stream. */
+		box_ain_apply();
+		return;
+	}
+
 	if (leaf && strcmp(leaf, "cmd/ain/streamtest") == 0) {
 		char arg[64];
 		unsigned hz = 16000, tms = 250, avgs = 4;
@@ -2991,11 +3036,12 @@ int main(void)
 					uint32_t s_deliv = 0, s_ovr = 0, s_slips = 0,
 						 s_fovf = 0, s_spill = 0;
 					uint32_t s_tns = 0, s_dus = 0, s_res = 0, s_resmax = 0;
-					int32_t  s_ppm = 0;
+					int32_t  s_ppm = 0, s_clk_meas = 0;
 #if defined(CONFIG_BOX_ADC_STREAM)
 					box_adc_stream_stats(&s_deliv, &s_ovr, &s_slips,
 							     &s_fovf, &s_spill);
 					box_adc_stream_timing(&s_tns, &s_dus, &s_res, &s_resmax, &s_ppm);
+					(void) box_adc_stream_clk_meas(&s_clk_meas);
 #endif
 					struct { const char *leaf; uint32_t v; } as[] = {
 						{ "ain/dbg/sweeps",    asw },
@@ -3064,6 +3110,12 @@ int main(void)
 						{ "ain/dbg/resid_us",   s_res },
 						{ "ain/dbg/resid_max_us", s_resmax },
 						{ "ain/dbg/rate_ppm",   (uint32_t) s_ppm },
+						/* clk_ppm is what the box APPLIES (config);
+						 * clk_ppm_meas is what it currently MEASURES.
+						 * They differ until someone calibrates, which
+						 * is exactly the state worth being able to see. */
+						{ "ain/dbg/clk_ppm",      (uint32_t) (int32_t) cfg.ain_clk_ppm },
+						{ "ain/dbg/clk_ppm_meas", (uint32_t) s_clk_meas },
 					};
 					for (unsigned ai2 = 0; ai2 < ARRAY_SIZE(as); ai2++) {
 						if (ain_dbg_is_health(as[ai2].leaf)) {

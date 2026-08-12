@@ -153,6 +153,27 @@ static uint64_t g_ep_n;  static int64_t g_ep_ns;  static int64_t g_ep_off; stati
 static uint64_t g_pv_n;  static int64_t g_pv_ns;  static uint8_t g_pv_have;
 static uint32_t st_resid_us, st_resid_max_us;
 static int32_t  st_rate_ppm;    /* measured minus nominal, signed parts-per-million */
+/* ---- one-shot rate calibration ----
+ * g_clk_ppm is what we APPLY (from config); st_clk_meas_ppm is what we MEASURE
+ * for the CTIMER's source against the frequency the SDK reports. They are
+ * independent by construction: the measurement back-solves the true source from
+ * MR3 and the observed period, so it does not depend on the correction already
+ * in force and cannot wind itself up over repeated calibrations. */
+static int16_t  g_clk_ppm;
+static uint32_t g_src_nom_hz;   /* what CLOCK_GetCTimerClkFreq reported     */
+static uint32_t g_mr3_plus1;    /* the divider actually programmed          */
+static int32_t  st_clk_meas_ppm;
+static int32_t  st_clk_prev_ppm;
+static uint8_t  st_clk_n;
+static uint8_t  st_clk_meas_valid;
+/* A measurement counts as SETTLED when two successive epoch estimates agree
+ * this closely. Presence is not enough: the slope is blended a quarter-weight
+ * per epoch, so the first estimate is part seed and calibrating from it adopts
+ * a number still on its way somewhere. Measured on the bench -- the estimate
+ * walked 1793 -> 2343 -> 2553 -> ~2600 ppm over ~90 s, and calibrating at the
+ * first valid point left 257 ppm on the table and needed a second pass. */
+#define STREAM_CLK_SETTLE_PPM 50
+#define STREAM_CLK_MIN_EST    3
 
 /* ---- service state ---- */
 static const struct device *g_dma;
@@ -352,6 +373,9 @@ static int stream_arm(uint8_t mask, uint8_t nch, uint8_t avgs_exp,
 	g_ep_have = g_pv_have = 0;
 	st_resid_us = st_resid_max_us = 0;
 	st_rate_ppm = 0;
+	st_clk_meas_valid = 0;
+	st_clk_n = 0;
+	st_clk_prev_ppm = 0;
 	for (uint32_t i = STREAM_RING_WORDS; i < 2u * STREAM_RING_WORDS; i++) {
 		stream_ring[i] = STREAM_CANARY;       /* arm the spill detector */
 	}
@@ -411,6 +435,18 @@ static int stream_timer_start(uint32_t trig_hz)
 	if (src == 0) {
 		return -7;
 	}
+	g_src_nom_hz = src;
+	/* APPLY THE CALIBRATION, ONCE, HERE. `src` is what the SDK believes FRO_HF
+	 * runs at; g_clk_ppm is how far the silicon actually is from that. Folding
+	 * it in before the divide is what makes a requested rate the delivered one
+	 * -- and doing it only at start is deliberate: the rate is then right from
+	 * the first sample and constant for the whole run, rather than stepping
+	 * around mid-recording as a control loop chased temperature. */
+	if (g_clk_ppm) {
+		int64_t adj = (int64_t) src * (int64_t) g_clk_ppm / 1000000;
+
+		src = (uint32_t) ((int64_t) src + adj);
+	}
 	CTIMER0->TCR = CTIMER_TCR_CRST_MASK;      /* hold in reset  */
 	CTIMER0->PR  = 0;
 	/* THE SIGNAL INPUTMUX ROUTES IS THE MATCH *OUTPUT*, NOT THE MATCH.
@@ -421,6 +457,7 @@ static int stream_timer_start(uint32_t trig_hz)
 	 * EMC3=toggle gives one edge per match -- HALF of them rising --
 	 * so the timer runs at 2x and the ADC sees exactly trig_hz. */
 	CTIMER0->MR[3] = (src / (2u * trig_hz)) - 1u;
+	g_mr3_plus1 = (uint32_t) CTIMER0->MR[3] + 1u;
 	/* The period we ACTUALLY got, in ns, straight from the register we just
 	 * wrote -- MR3 is an integer, so this equals 1e9/trig_hz only when the
 	 * source divides evenly. Stage 3 models sample times from this; using
@@ -695,8 +732,8 @@ void box_adc_stream_plan(uint8_t mask, uint32_t rate, uint8_t ovs_exp,
 	}
 }
 
-int box_adc_stream_start(uint8_t mask, uint32_t rate,
-			 uint8_t ovs_exp, box_adc_stream_plan_t *plan)
+int box_adc_stream_start(uint8_t mask, uint32_t rate, uint8_t ovs_exp,
+			 int16_t clk_ppm, box_adc_stream_plan_t *plan)
 {
 	const struct device *dma = DEVICE_DT_GET(DT_NODELABEL(edma0));
 	uint32_t stage = 0;
@@ -712,6 +749,7 @@ int box_adc_stream_start(uint8_t mask, uint32_t rate,
 	if (mask == 0 || rate == 0) {
 		return -EINVAL;
 	}
+	g_clk_ppm = clk_ppm;
 	box_adc_stream_plan(mask, rate, ovs_exp, &g_plan);
 	if (g_plan.nch == 0 || g_plan.nch > 6) {
 		return -EINVAL;
@@ -901,6 +939,41 @@ int box_adc_stream_read(int16_t *scan, uint8_t max, uint64_t *t_us)
 						st_rate_ppm = (int32_t)
 							(((int64_t) g_deliver_ps - (int64_t) nom_ps)
 							 * 1000000ll / (int64_t) nom_ps);
+
+						/* BACK-SOLVE THE SOURCE CLOCK. The divider is an
+						 * integer we chose and the period is now measured,
+						 * so the true frequency follows directly:
+						 *   F = 2*(MR3+1) / T
+						 * Stated against the SDK's nominal, this is the
+						 * per-box constant `ain clkppm` wants -- and
+						 * because it comes from MR3 rather than from the
+						 * frequency we assumed, calibrating a box that is
+						 * ALREADY calibrated yields the same answer
+						 * instead of compounding. */
+						uint64_t trig_ps = g_deliver_ps / spacing;
+
+						if (trig_ps && g_src_nom_hz) {
+							uint64_t f_true = (2ull * g_mr3_plus1 *
+									   1000000000000ull) / trig_ps;
+
+							int32_t now_ppm = (int32_t)
+								(((int64_t) f_true - (int64_t) g_src_nom_hz)
+								 * 1000000ll / (int64_t) g_src_nom_hz);
+							int32_t d = now_ppm - st_clk_prev_ppm;
+
+							if (d < 0) {
+								d = -d;
+							}
+							if (st_clk_n < 255u) {
+								st_clk_n++;
+							}
+							if (st_clk_n >= STREAM_CLK_MIN_EST &&
+							    d <= STREAM_CLK_SETTLE_PPM) {
+								st_clk_meas_valid = 1;
+							}
+							st_clk_prev_ppm = now_ppm;
+							st_clk_meas_ppm = now_ppm;
+						}
 					}
 				}
 			}
@@ -945,6 +1018,14 @@ void box_adc_stream_stats(uint32_t *delivered, uint32_t *overruns,
 	if (slips)     *slips     = st_slips;
 	if (fifo_ovf)  *fifo_ovf  = st_fifo_ovf;
 	if (spill)     *spill     = g_running ? stream_count_spill() : st_spill;
+}
+
+int box_adc_stream_clk_meas(int32_t *ppm)
+{
+	if (ppm) {
+		*ppm = st_clk_meas_ppm;
+	}
+	return st_clk_meas_valid;
 }
 
 void box_adc_stream_stats_reset(void)
