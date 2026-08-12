@@ -557,6 +557,29 @@ static inline int  sync_input_pin(const box_config_t *c)     { return (int) c->s
 static inline void sync_input_set(box_config_t *c, int gpio) { c->sync_pin = (uint8_t) gpio; c->sync_en = 1; }
 static inline void sync_input_off(box_config_t *c)           { c->sync_en = 0; }
 
+/* Is box pin `n` DRIVEN BY THE BOX as an output, i.e. is a `do` on it meaningful?
+ *
+ * THIS MIRRORS box_gpio_apply_config's ORDER, and the order is the whole content
+ * of the answer -- pin_mode is applied first, then the obs mirror forces its pin
+ * to an output regardless of mode, then the sync input forces ITS pin to an
+ * input regardless of everything. So a pin that is both `mode out` and the sync
+ * pin is an INPUT, and the obs pin is an output even at `mode off`. Anywhere
+ * that re-derives this from pin_mode alone will be wrong about both.
+ *
+ * The obs pin answering yes is not a technicality: the scheduled-onset path
+ * (`cmd/do/<pin>/at_abs`, from ess's obs_schedule_bind) drives exactly that pin,
+ * and it is normal for its pin_mode to be unset because the obs config owns it.
+ *
+ * Reserved pins are a PLATFORM fact (box_gpio_reserved / box_cli_pin_reserved),
+ * not a config one, so they are checked separately at each call site. */
+static inline int pin_is_output(const box_config_t *c, int n)
+{
+    if (n < 0 || n >= BOX_NPINS)                              return 0;
+    if (sync_input_enabled(c) && sync_input_pin(c) == n)      return 0;
+    if (obs_mirror_enabled(c) && obs_mirror_pin(c) == n)      return 1;
+    return c->pin_mode[n] == 1;
+}
+
 /* The device name is a datapoint-prefix: it must be non-empty, printable, and
  * carry no '/' (or a stray control byte from line-editing) -- a bad name breaks
  * the config/cmd/state namespace match silently. Hyphens are fine. */

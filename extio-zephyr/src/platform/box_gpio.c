@@ -121,6 +121,10 @@ typedef struct { uint64_t t_us; uint8_t pin; uint8_t level; } di_edge_t;
 static di_edge_t di_fifo[DI_FIFO_DEPTH];
 static volatile uint16_t di_fifo_head, di_fifo_tail;   /* ISR writes head */
 static volatile uint32_t di_fifo_drops;
+/* `do` commands refused because the target pin is not an output. Non-zero means
+ * a host is driving a pin the box's own config says is an input, an ain channel,
+ * or off -- previously that silently succeeded by re-muxing the pad. */
+static uint32_t do_refused;
 static uint8_t  di_use_fifo[BOX_NPINS];                /* poller-maintained */
 static uint8_t  di_pair_pending[BOX_NPINS];            /* count-parity slot  */
 static uint64_t di_pair_t[BOX_NPINS];
@@ -309,7 +313,25 @@ void box_gpio_apply_config(const box_config_t *c)
 			 * loading the pad. */
 			gpio_pin_configure_dt(&specs[i], GPIO_DISCONNECTED);
 			break;
-		default:                                 /* 0 = off: pad left alone */
+		default:                                 /* 0 = off: RELEASE the pad */
+			/* `off` used to mean "pad left alone", which made it an
+			 * absence rather than a state -- and the two only agreed
+			 * after a reboot. Fresh boot: nothing had configured the
+			 * pad, so `off` looked like high-Z. Set `off` at runtime
+			 * on a pin that was `out` and it KEPT DRIVING, because
+			 * nothing reconfigured it and disarming an interrupt does
+			 * nothing to an output. Same config, two different
+			 * electrical realities depending on history.
+			 *
+			 * Now it releases: high-Z, no drive, input buffer off, no
+			 * interrupt (disarmed above for every pin). GPIO_DISCONNECTED
+			 * is the same call `ain` uses -- PCR[MUX]=0 on this SoC.
+			 * Boards whose driver does not implement it fall back to a
+			 * plain input, which still does not DRIVE, and that is the
+			 * property `off` has to guarantee. */
+			if (gpio_pin_configure_dt(&specs[i], GPIO_DISCONNECTED) != 0) {
+				(void) gpio_pin_configure_dt(&specs[i], GPIO_INPUT);
+			}
 			break;
 		}
 	}
@@ -350,11 +372,25 @@ void box_gpio_exec(const box_config_t *c, const gpio_cmd_t *cmd)
 		return;
 	}
 
-	/* ensure output (a bare cmd may precede a mode set) -- but only for pins
-	 * NOT already configured as outputs: reconfiguring drives the pin low
-	 * first, a real glitch on the wire (e.g. SET 1 while already high). */
-	if (c->pin_mode[cmd->pin] != 1) {
-		gpio_pin_configure_dt(&specs[cmd->pin], GPIO_OUTPUT_INACTIVE);
+	/* REFUSE a `do` on a pin that is not an output, rather than making it one.
+	 *
+	 * This used to configure any non-output pin as an output on the spot, so a
+	 * bare command could precede a mode set. What it actually bought was a
+	 * command that always "worked": `do 5 1` on an input, an ain channel, or a
+	 * pin explicitly set `off` all silently re-muxed the pad and drove it --
+	 * the CLI answering OK either way. That is the config-field-that-lies shape
+	 * from the other direction: the pin mode said one thing and a command
+	 * quietly overrode it, including on a pad handed to the ADC.
+	 *
+	 * pin_is_output() answers from the SAME ordering apply_config uses, so the
+	 * obs pin still accepts the scheduled-onset path (cmd/do/<pin>/at_abs) at
+	 * any pin_mode, and the sync input refuses even at `mode out`.
+	 *
+	 * Counted, never silent -- a refused command that vanished would be worse
+	 * than the override it replaces. */
+	if (!pin_is_output(c, cmd->pin)) {
+		do_refused++;
+		return;
 	}
 
 	/* any new DO op on a pin cancels its pending pulse falling edge, so a
@@ -492,6 +528,36 @@ uint64_t box_gpio_now_us(void)
 uint32_t box_gpio_di_fifo_drops(void)
 {
 	return di_fifo_drops;
+}
+
+uint32_t box_gpio_do_refused(void)
+{
+	return do_refused;
+}
+
+/* The BOOT HEARTBEAT, deliberately NOT subject to the pin-mode gate.
+ *
+ * box_gpio_exec now refuses a `do` on a pin the config does not call an output,
+ * which is right for host commands and wrong for this: the boot blink is the
+ * firmware's own sign of life, the one thing a box with no network and no
+ * console still tells you. It also cannot satisfy the gate on any box that has
+ * ever been saved -- box_persist_decode memcpy's the WHOLE config struct, so a
+ * saved blob overwrites main's `pin_mode[LED_PIN] = 1` demo default with zero,
+ * and the LED would simply stop blinking on exactly the boxes in service. It
+ * blinked before this change (the old auto-configure did it), so keeping it is
+ * preserving behaviour, not carving an exception.
+ *
+ * Bounded and one-shot by construction: the caller drives it three times at
+ * boot and never again, so this cannot become a back door for anything else. */
+void box_gpio_boot_pulse(int pin, uint32_t us)
+{
+	if (pin < 0 || pin >= BOX_NPINS || box_gpio_reserved(pin)) {
+		return;
+	}
+	gpio_pin_configure_dt(&specs[pin], GPIO_OUTPUT_INACTIVE);
+	gpio_pin_set_dt(&specs[pin], 1);
+	k_busy_wait(us);
+	gpio_pin_set_dt(&specs[pin], 0);
 }
 
 /* ---- TEMP diagnostics for the one-DI-event-then-silence hunt ----

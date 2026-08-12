@@ -65,6 +65,16 @@ uint64_t box_gpio_now_us(void);
 /* DI edge-FIFO overflow count (+24) -- 0 on a healthy box; published 1 Hz */
 uint32_t box_gpio_di_fifo_drops(void);
 
+/* `do` commands refused because the pin is not an output (pin_is_output() --
+ * which honours the obs-mirror and sync-input overrides, not just pin_mode).
+ * Published as dbg/do_refused so a host driving a mis-configured pin finds out
+ * from a counter rather than from a wire that never moves. */
+uint32_t box_gpio_do_refused(void);
+
+/* Boot sign-of-life blink on `pin`, bypassing the pin-mode gate on purpose --
+ * see the note in box_gpio.c. For the boot heartbeat only. */
+void box_gpio_boot_pulse(int pin, uint32_t us);
+
 /* TEMP diagnostics (DI-silence hunt): ISR entry count, and on RT10xx the raw
  * IGPIO interrupt registers for the box port (imr, isr, icr1, edge_sel, psr). */
 uint32_t box_gpio_di_isr_count(void);

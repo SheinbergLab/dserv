@@ -2450,9 +2450,12 @@ int main(void)
 
 	/* Boot heartbeat: three hardware-timed LED pulses (the hardware counter
 	 * drops each falling edge, not software). */
-	gpio_cmd_t pulse = { .op = GPIO_OP_PULSE, .pin = LED_PIN, .value = 120000 };
+	/* NOT box_gpio_exec: that now refuses a pin the config does not call an
+	 * output, and a saved config zeroes LED_PIN's demo default -- so routing
+	 * the heartbeat through the host-command path would put out the boot light
+	 * on every box already in service. See box_gpio_boot_pulse. */
 	for (int i = 0; i < 3; i++) {
-		box_gpio_exec(&cfg, &pulse);
+		box_gpio_boot_pulse(LED_PIN, 120000);
 		k_msleep(250);
 	}
 
@@ -2962,6 +2965,9 @@ int main(void)
 				pub_dbg("sched/late_arr",  sched_late_arr);
 				pub_dbg("sched/late_proc", sched_late_proc);
 				pub_periodic("dbg/di_fifo_drop", box_gpio_di_fifo_drops());
+				/* HEALTH class: a host driving a pin the config says is not an
+				 * output gets a wire that never moves; this is where that shows. */
+				pub_periodic("dbg/do_refused", box_gpio_do_refused());
 #if defined(BOX_HAVE_ADC)
 				/* Analog health, published because its absence cost a box.
 				 * box3 went silent on 2026-07-28 and there was NOTHING to

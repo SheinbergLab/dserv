@@ -96,6 +96,31 @@ static inline int  box_cli_pin_reserved(int n)
 	return (n >= 0 && n < 32) ? (int) ((box_cli_pin_rsv >> n) & 1u) : 0;
 }
 
+/* Refuse a `do` on a pin that is not an output, and SAY WHY.
+ *
+ * The firmware refuses it too (box_gpio_exec), but a refusal the operator only
+ * discovers as a wire that never moves is barely better than the silent
+ * override this replaces -- so the CLI names the actual mode. Same predicate as
+ * the firmware, from dserv_config.h, so the two cannot drift: it honours the
+ * obs-mirror override (that pin is an output at any mode -- the scheduled-onset
+ * path drives it) and the sync input (an input even at `mode out`).
+ *
+ * Returns 1 to proceed, or 0 having written the error into `out`. */
+static inline int box_cli_do_ok(const box_config_t *c, int n, char *out, int outsz)
+{
+    if (box_cli_pin_reserved(n)) {
+        snprintf(out, outsz, "ERR pin %d is reserved by the board\r\n", n);
+        return 0;
+    }
+    if (!pin_is_output(c, n)) {
+        snprintf(out, outsz,
+                 "ERR pin %d is '%s', not an output -- `pin %d mode out` first\r\n",
+                 n, dserv_mode_str(c->pin_mode[n]), n);
+        return 0;
+    }
+    return 1;
+}
+
 /* CLI_GROUP = labels/groups/desc changed: caller refreshes the group runtime
  * and re-announces the manifest (no GPIO re-apply needed).
  * CLI_OBS = obs mode changed: caller re-announces the obs role
@@ -321,11 +346,13 @@ static inline cli_action_t box_cli_exec(box_config_t *c, const char *line,
 
     if (sscanf(line, "do %d pulse %d", &n, &v) == 2) {
         if (n < 0 || n >= BOX_NPINS || v < 0) { snprintf(out, outsz, "ERR bad do/pulse\r\n"); return CLI_ERR; }
+        if (!box_cli_do_ok(c, n, out, outsz)) return CLI_ERR;
         if (cmd) { cmd->op = GPIO_OP_PULSE; cmd->pin = (uint8_t) n; cmd->value = (uint32_t) v; }
         snprintf(out, outsz, "OK do%d pulse=%dus\r\n", n, v); return CLI_GPIO;
     }
     if (sscanf(line, "do %d %d", &n, &v) == 2) {
         if (n < 0 || n >= BOX_NPINS) { snprintf(out, outsz, "ERR bad do pin\r\n"); return CLI_ERR; }
+        if (!box_cli_do_ok(c, n, out, outsz)) return CLI_ERR;
         if (cmd) { cmd->op = GPIO_OP_SET; cmd->pin = (uint8_t) n; cmd->value = v ? 1 : 0; }
         snprintf(out, outsz, "OK do%d=%d\r\n", n, v ? 1 : 0); return CLI_GPIO;
     }
