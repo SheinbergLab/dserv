@@ -466,6 +466,10 @@ proc extio_ota_push {box file} {
 
     set sha [sha256 -file $file]             ;# hex over the exact file bytes = what the box computes
 
+    # Bytes are about to change what is IN the slot, so everything we believe
+    # about the slot is now false. See extio_ota_evidence_clear.
+    extio_ota_evidence_clear $box
+
     # A Zephyr box that announces state/ota/fetch_ok (fw +56, eth uplink live)
     # PULLS the image itself: stage it as a binary datapoint and fire
     # cmd/ota/fetch -- the box '<'-gets extio/<box>/ota/image straight into its
@@ -1088,6 +1092,7 @@ proc extio_ota_push_docked {box file sha size port} {
     fconfigure $ch -translation binary -encoding iso8859-1 -blocking 1 -buffering none
     set fp [open $file rb]; set data [read $fp]; close $fp
     foreach k {ack state result} { catch { dservClear extio/$box/state/ota/$k } }
+    extio_ota_evidence_clear $box            ;# the slot is about to change; see there
 
     # Observe the outcome reactively (dservWhen: non-blocking, no `after`, fires
     # once when state/ota/result reaches a terminal value).
@@ -1315,6 +1320,80 @@ proc extio_req_timeout {box id label ms} {
 # forgotten per-phase -- which is exactly how the retained-value trap gets
 # reintroduced.
 
+# ---- READ-BACK EVIDENCE, AND THE ONE RULE ABOUT IT -------------------------
+#
+# flash_verify/hdr_ok/staged_ver are the only answer to "what is actually IN the
+# inactive slot". dserv RETAINS, and nothing in the transfer path used to touch
+# them -- so a verify from the PREVIOUS update survived the next one intact:
+# same flash_verify=1, same hdr_ok=1, and a staged_ver still naming the OLD
+# version. extio_ota_arm gates on PRESENCE and VALUE, both of which that stale 1
+# satisfies, so it would arm a slot nobody had read back -- the exact failure the
+# gate was written to prevent. Observed 2026-08-11 on boxa: a completed
+# push_shelf fetch (ota/state=ok, progress=100, ack at the new byte count)
+# sitting next to three verify keys 36 MINUTES old. The lifecycle was never
+# exposed -- extio_ota_update clears these in its transfer await and chains a
+# verify -- but every standalone transfer (extio_ota_push_shelf, the
+# cmd/ota/pull trigger, the docked path) did neither.
+#
+# Two defences, because they cover different holes:
+#
+#   extio_ota_evidence_clear -- every transfer proc clears these BEFORE the
+#   first byte moves, so ABSENCE is the post-transfer state. Absence is the one
+#   case extio_ota_arm already refuses correctly and specifically, and a clear
+#   inside the transfer proc cannot be forgotten by a caller.
+#
+#   extio_ota_evidence_stale -- a timestamp check for what the clear cannot
+#   reach: a client that %sets cmd/ota/begin or cmd/ota/fetch itself, without
+#   passing through any proc here. There, absence is not available to us, so ask
+#   the other question -- was the read-back done AFTER the bytes it vouches for?
+set ::extio_ota_verify_keys {ota/flash_verify ota/hdr_ok ota/staged_ver}
+
+# dservClear on an absent point is a no-op returning TCL_OK, not an error, so
+# there is nothing here to catch.
+proc extio_ota_evidence_clear {box} {
+    foreach k $::extio_ota_verify_keys { dservClear extio/$box/state/$k }
+}
+
+# A HEALTHY verify is allowed to read a little older than the transfer keys, and
+# not because of clock skew. On any OTA event the firmware re-announces
+# state/result/progress/ack once a second for the next 6 s (ota_res_until,
+# extio-zephyr/src/main.c) -- and the verify is itself such an event, so the
+# verify's own re-announce burst re-stamps ota/state a few seconds AFTER
+# flash_verify landed. A strict ordering test would therefore refuse the
+# ordinary manual sequence (verify, then arm a second later). This window clears
+# that burst with room to spare, and the failure it exists to catch is off by
+# minutes, not seconds.
+set ::extio_ota_verify_grace_us [expr {10 * 1000000}]
+
+proc extio_ota_age {ts} { return "[format %.0f [expr {([now] - $ts) / 1000000.0}]]s" }
+
+# "" when the evidence is trustworthy (or when there is no transfer on record to
+# compare it against); otherwise the sentence explaining why it is not.
+proc extio_ota_evidence_stale {box} {
+    set v extio/$box/state/ota/flash_verify
+    if { ![dservExists $v] } { return "" }        ;# absent is a different answer -- the caller's
+    set vts [dservTimestamp $v]
+
+    # Newest transfer footprint wins: ota/state carries the ok|fail that ENDS a
+    # transfer, ack and progress move throughout one. Any of them later than the
+    # read-back means bytes landed in the slot after we last looked at it.
+    set tts 0; set twhat ""
+    foreach k {ota/state ota/ack ota/progress} {
+        set p extio/$box/state/$k
+        if { ![dservExists $p] } continue
+        set ts [dservTimestamp $p]
+        if { $ts > $tts } { set tts $ts; set twhat $k }
+    }
+    if { $tts == 0 } { return "" }
+    if { $vts >= $tts - $::extio_ota_verify_grace_us } { return "" }
+
+    set sv "?" ; catch { set sv [dservGet extio/$box/state/ota/staged_ver] }
+    return "state/ota/flash_verify is [extio_ota_age $vts] old but state/$twhat is only\
+            [extio_ota_age $tts] old -- the read-back PREDATES the transfer it would\
+            vouch for, and describes whatever was in the slot BEFORE it\
+            (staged_ver=$sv)"
+}
+
 proc extio_ota_lc_pub {box phase msg} {
     set ::extio_ota_lc($box,phase) $phase
     catch { dservSet extio/$box/state/ota/lifecycle     $phase }
@@ -1499,6 +1578,16 @@ proc extio_ota_arm {box} {
                 then the box answered and the datapoint is being lost between\
                 the box and here."
     }
+    # PRESENT IS NOT FRESH. dserv retains, so the verify keys from the previous
+    # update outlive the next transfer untouched -- see extio_ota_evidence_stale.
+    # Checked before the value: a stale 1 and a stale 0 are equally uninformative,
+    # and the fix for both is the same verify.
+    set stale [extio_ota_evidence_stale $box]
+    if { $stale ne "" } {
+        return "extio_ota_arm: $box -- $stale.\
+                Run `extio_ota_verify $box` and check state/ota/staged_ver names the\
+                version you just pushed."
+    }
     set fv [dservGet extio/$box/state/ota/flash_verify]
     if { $fv != 1 } {
         return "extio_ota_arm: $box read-back verify FAILED (flash_verify=$fv)\
@@ -1553,8 +1642,7 @@ proc extio_ota_status {box} {
                ota/trial fw_ver} {
         set d extio/$box/state/$k
         if { ![dservExists $d] } continue
-        set age [format %.0f [expr {([now] - [dservTimestamp $d]) / 1000000.0}]]
-        lappend out "$k=[dservGet $d] (${age}s)"
+        lappend out "$k=[dservGet $d] ([extio_ota_age [dservTimestamp $d]])"
     }
     return [join $out "\n"]
 }

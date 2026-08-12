@@ -129,6 +129,16 @@ dservctl extio "dservSet extio/box01/cmd/ota/verify 1"
 Read-back hash + MCUboot-header check. Want `state/ota/flash_verify=1`,
 `hdr_ok=1`, and `staged_ver` naming the version you meant to send.
 
+**Check the AGE, not just the value** (`extio_ota_status box01` prints one
+per field). These three are retained, so the previous update's `flash_verify=1`
+survives the next transfer intact — same 1, same `hdr_ok`, and a `staged_ver`
+still naming the OLD version. Observed 2026-08-11 on boxa: a completed fetch
+sitting next to verify keys 36 minutes old. `extio_ota_push_shelf` now clears
+them before the first byte moves, and `extio_ota_arm` refuses a read-back that
+predates the transfer — but a bare `dservSet cmd/ota/arm 1` goes straight to the
+box and gets neither. Prefer `extio_ota_verify` / `extio_ota_arm` /
+`extio_ota_confirm`, which also surface the box's refusal reason.
+
 ```sh
 dservctl extio "dservSet extio/box01/cmd/ota/arm 1"
 ```
