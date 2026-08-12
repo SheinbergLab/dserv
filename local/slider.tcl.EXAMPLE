@@ -64,42 +64,105 @@
 # slider::set_invert_x   0
 # slider::set_limit_x    10.0
 
-# ---- extio thumbstick (source `extio`) -------------------------------------
+# ---- extio joystick + select button (source `extio`) ------------------------
 #
+# An analog stick digitized by an extio box, with a button for the commit.
 # Two box-side groups, addressed by LABEL so any box on the rig can carry them:
 #
-#   ain group  `stick`         two channels, the X/Y pots
-#   DI  group  `stick_select`  one pin, the stick's push-select
+#   ain group  `stick`         two channels, the X/Y axes
+#   DI  group  `stick_select`  one pin, the select/commit button
 #
 # Define those on the box and the slider comes alive -- no binding to keep in
 # step, the same convention emconf uses for the analog eye group `eye`.
 #
-# On the box (extio-config, or `dservctl extio "extio_cfg_set <box> ..."`):
-#   ain group 0 label stick / channels 0,1 / mode onchange / deadband 4
-#   ain rate 100 / ain oversample 64
-#   group 0 label stick_select / pins <n>          (pin mode in, debounce 25)
+# WHY A BUTTON RATHER THAN "RETURNS TO CENTRE". A spring-return stick sweeps
+# back through decreasing radius, so committing on "radius fell below
+# threshold" samples the angle where it is least determined. The button commits
+# while the stick is still deflected. A stick's own push-select works, but
+# pressing DOWN THROUGH the stick nudges X/Y at exactly the sampled instant --
+# a separate button avoids that entirely and is worth it for real data.
 #
-# WHY THOSE NUMBERS. onchange is only safe because 64x hardware oversampling
-# puts the resting noise at ~0.5 counts, so a deadband of 4 is ~8 sigma and a
-# still stick emits nothing. And the base rate must stay at or under 200 Hz:
-# on-change publishing is gated at one block per 5 ms, so a 250 Hz base would
-# be silently halved during the gesture (the throttle counts it in
-# ain/dbg/throttled, but the samples are gone).
+# ---- 1. box side --------------------------------------------------------
+# (extio-config page, or `dservctl -H <host> extio "extio_cfg_set <box> ..."`)
+#
+#   ain/group/<i>/label stick        ain/group/<i>/channels 0,1
+#   ain/group/<i>/mode onchange      ain/group/<i>/deadband 4
+#   ain/rate 100                     ain/oversample 64
+#   pin/<n>/mode in_pullup           pin/<n>/debounce_ms 25
+#   group/<j>/label stick_select     group/<j>/pins <n>
+#
+# WHY THOSE NUMBERS:
+#   onchange is only safe because 64x hardware oversampling puts resting noise
+#   under ~0.5 counts, so a deadband of 4 is ~8 sigma and a still stick emits
+#   NOTHING (verified: 0 publishes in 15 s at rest). Without the oversampling
+#   this is the publish storm that used to take a box off the air.
+#
+#   The base rate must stay at or under 200 Hz. On-change publishing is gated
+#   at one block per 5 ms, so a 250 Hz base is silently HALVED mid-gesture --
+#   ain/dbg/throttled counts it, but the samples are gone.
+#
+#   Channels 0/1 are dedicated pads on the MCXN947 (A0/A1) and need no pin
+#   mode. Only channels 2-5 (pins 14-17) need `pin <n> mode ain`.
+#
+# ---- 2. rig side --------------------------------------------------------
 #
 # SET THE SOURCE EXPLICITLY on any rig with more than one slider input wired.
 # The default "auto" permits every path, so a trackpad and a stick would both
 # publish slider/position and the last writer would win.
 #
 # slider::set_source   extio
-# slider::set_chan_x   0        ;# column index in the `stick` block, not an ADC channel
+# slider::set_chan_x   0        ;# column index in the `stick` block, NOT an ADC channel
 # slider::set_chan_y   1
-# slider::set_center_x 2048.0   ;# stick centre; use `set current as center` to measure
-# slider::set_center_y 2048.0
 # slider::set_scale_x  0.00488  ;# 10 / 2048 -> full deflection ~= +-10 units
 # slider::set_scale_y  0.00488
-# slider::set_limit_x  10.0
-# slider::set_limit_y  10.0
+# slider::set_limit_x  -1.0     ;# see the asymmetry note below
+# slider::set_limit_y  -1.0
 # slider::set_swipe_threshold 1.0
+#
+# ---- 3. MEASURE THE CENTRE. It is not 2048. -----------------------------
+#
+# A real stick rests wherever its pots rest -- 1968/1951 on the bench unit, not
+# 2048. Left at 2048 that one sat at magnitude 0.60 against a threshold of 1.0,
+# i.e. 60% of the way to ENGAGED while untouched: engagement asymmetric, every
+# committed angle biased toward the resting offset, and the whole thing reading
+# as a "twitchy stick" rather than a wrong constant.
+#
+#   slider::set_center_x <measured>
+#   slider::set_center_y <measured>
+#
+# or, better, call slider::set_current_as_center with the stick at rest.
+# CAVEAT in onchange mode: at rest the box publishes nothing, so the proc
+# captures whatever the last movement left behind. Nudge the stick, let it
+# settle, THEN call it.
+#
+# ASYMMETRY THIS CREATES: with the centre off 2048 the two directions no longer
+# have equal travel (centre 1968 -> +10.38 one way, -9.60 the other). A
+# symmetric `limit` therefore clips one side only, which distorts the angle at
+# large deflection. Either disable the limit (-1, fine for swipe, where only
+# the angle matters) or set it to the SMALLER half-range.
+#
+# ---- 4. axis signs are per-stick wiring, so measure them too -------------
+#
+# Do NOT carry the trackpad's invert_y over -- that 1 is there because trackpad
+# Y grows downward, which says nothing about how your stick is wired.
+#
+#   slider::set_invert_x 0
+#   slider::set_invert_y 0
+#
+# Push RIGHT and commit -> slider/swipe/angle should read ~0 rad.
+# Push UP    and commit -> ~1.571 rad (90 deg).
+# Flip the corresponding invert for whichever axis disagrees; if the angle is
+# consistently 180 deg out, flip both.
+#
+# ---- 5. verifying ------------------------------------------------------
+#
+#   dservctl -H <host> -c "dservGet slider/swipe/engaged"   ;# 1 while deflected
+#   dservctl -H <host> -c "dservGet slider/swipe/angle"     ;# radians, on commit
+#
+# NB dservGet returns a scalar float as a FORMATTED STRING, not raw bytes --
+# `binary scan` on it yields ~0 and looks exactly like a broken commit. Array
+# datapoints (state/ain/<group>) DO come back as bytes. This asymmetry has
+# already cost one false bug report.
 #
 # The protocol still sets -mode/-release/-threshold via ::ess::slider_init, and
 # -threshold OVERRIDES whatever is set here -- so the value above is only the

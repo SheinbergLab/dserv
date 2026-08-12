@@ -41,6 +41,12 @@
 #
 
 package require dlsh
+# EACH SUBPROCESS GETS ITS OWN INTERPRETER, so the module path dsconf sets for
+# the main interp is not inherited -- without this, `package require extio`
+# fails with "can't find package extio" and the whole config script aborts,
+# taking the slider subprocess with it. emconf.tcl does the same thing for the
+# same reason.
+tcl::tm::add $dspath/lib
 package require extio   ;# decode extio state/ain blocks (thumbstick source)
 
 # disable exit
