@@ -41,7 +41,15 @@ main { display:grid; grid-template-columns:300px 1fr; gap:0; height:calc(100vh -
 h2 { font-size:13px; text-transform:uppercase; letter-spacing:.08em; color:var(--dim);
      margin:22px 0 8px; font-weight:600; }
 h2:first-child { margin-top:0; }
-table { border-collapse:collapse; width:100%; max-width:900px; }
+table { border-collapse:collapse; width:100%; max-width:900px;
+        /* TABULAR FIGURES. Live values re-render in place, and with
+         * proportional digits every change re-measures the column --
+         * the table visibly shimmers as a joystick moves. Fixed-width
+         * digits make a value change cost no width change. */
+        font-variant-numeric: tabular-nums; }
+/* ...and reserve the width, so a value that loses a DIGIT (1000 -> 999)
+ * cannot reflow the column either. */
+span[data-ain-grp] { display:inline-block; min-width:14ch; }
 td,th { padding:4px 10px 4px 0; text-align:left; vertical-align:top; font-size:13px; }
 th { color:var(--dim); font-weight:500; }
 tr.row:hover { background:#1e2230; }
@@ -209,7 +217,7 @@ function onExtio(msg) {
   boxes.get(box)[leaf] = { v, t: msg.timestamp || now() };
   if (pendingSelect && box === pendingSelect) { pendingSelect = null; selectBox(box); return; }
   renderFleet();
-  if (box === sel) renderPanel();
+  if (box === sel) schedulePanel();
 }
 
 const get = (box, leaf, dflt = null) => {
@@ -1072,6 +1080,27 @@ function fwSection(b) {
  * (overwhelming) majority of calls where nothing structural moved -- the
  * values then flow through tickAges/syncBinds into the standing DOM. */
 let panelSig = null;
+/* COALESCE DATAPOINT-DRIVEN REDRAWS. A selected box publishing an analog group
+ * at 250 blocks/s used to call renderPanel() 250 times a second, and each call
+ * walks the panel with several querySelectorAll passes. Nothing on a CONFIG
+ * page needs that: the values are for reading, not for scoping, and a display
+ * cannot show more than it refreshes.
+ *
+ * It was hidden until recently because the old focus/pointer deferral happened
+ * to throttle this path as a side effect; taking the deferral out (rightly --
+ * it froze the page on Windows) uncovered the real rate.
+ *
+ * USER-DRIVEN redraws stay immediate: every explicit renderPanel() call after a
+ * click, edit or selection still runs on the spot, so a control still answers
+ * back the instant you touch it. Only the firehose is paced. */
+const PANEL_COALESCE_MS = 200;
+let panelPending = null;
+function schedulePanel() {
+  if (panelPending) return;
+  panelPending = setTimeout(() => { panelPending = null; renderPanel(); },
+                            PANEL_COALESCE_MS);
+}
+
 function renderPanel() {
   const el = document.getElementById('panel');
   if (!sel || !boxes.has(sel)) {
