@@ -64,6 +64,47 @@
 # slider::set_invert_x   0
 # slider::set_limit_x    10.0
 
+# ---- extio thumbstick (source `extio`) -------------------------------------
+#
+# Two box-side groups, addressed by LABEL so any box on the rig can carry them:
+#
+#   ain group  `stick`         two channels, the X/Y pots
+#   DI  group  `stick_select`  one pin, the stick's push-select
+#
+# Define those on the box and the slider comes alive -- no binding to keep in
+# step, the same convention emconf uses for the analog eye group `eye`.
+#
+# On the box (extio-config, or `dservctl extio "extio_cfg_set <box> ..."`):
+#   ain group 0 label stick / channels 0,1 / mode onchange / deadband 4
+#   ain rate 100 / ain oversample 64
+#   group 0 label stick_select / pins <n>          (pin mode in, debounce 25)
+#
+# WHY THOSE NUMBERS. onchange is only safe because 64x hardware oversampling
+# puts the resting noise at ~0.5 counts, so a deadband of 4 is ~8 sigma and a
+# still stick emits nothing. And the base rate must stay at or under 200 Hz:
+# on-change publishing is gated at one block per 5 ms, so a 250 Hz base would
+# be silently halved during the gesture (the throttle counts it in
+# ain/dbg/throttled, but the samples are gone).
+#
+# SET THE SOURCE EXPLICITLY on any rig with more than one slider input wired.
+# The default "auto" permits every path, so a trackpad and a stick would both
+# publish slider/position and the last writer would win.
+#
+# slider::set_source   extio
+# slider::set_chan_x   0        ;# column index in the `stick` block, not an ADC channel
+# slider::set_chan_y   1
+# slider::set_center_x 2048.0   ;# stick centre; use `set current as center` to measure
+# slider::set_center_y 2048.0
+# slider::set_scale_x  0.00488  ;# 10 / 2048 -> full deflection ~= +-10 units
+# slider::set_scale_y  0.00488
+# slider::set_limit_x  10.0
+# slider::set_limit_y  10.0
+# slider::set_swipe_threshold 1.0
+#
+# The protocol still sets -mode/-release/-threshold via ::ess::slider_init, and
+# -threshold OVERRIDES whatever is set here -- so the value above is only the
+# floor for the no-protocol case.
+
 # Print the resulting settings so the log clearly shows the current
 # per-rig calibration.
 puts "slider (local): [dservGet slider/settings]"

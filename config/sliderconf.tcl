@@ -15,6 +15,11 @@
 #                      with mtouch/trackpad/range giving the device's own
 #                      axis extents. Normalized to the same 0..4095 space
 #                      as ain, so ain-style calibration transfers.
+#   extio ain group  - a thumbstick digitized by an extio box, published as
+#                      extio/<box>/state/ain/stick. Same 0..4095 space as the
+#                      other hardware paths, so calibration transfers. Paired
+#                      with a one-pin DI group `stick_select` (the stick's own
+#                      push-select) which COMMITS the swipe -- see below.
 #   slider/virtual   - already-calibrated [x y] values from browser / sim.
 #
 # Output:
@@ -22,7 +27,8 @@
 #   slider/active    - 0/1 engagement signal. Pot (ain) always 1 when the
 #                      ain path is the active source. Trackpad 1 between
 #                      PRESS and RELEASE. Consumers that want to react to
-#                      subject engagement subscribe here.
+#                      subject engagement subscribe here. Stick: 1 while
+#                      deflected past swipe_threshold.
 #   slider/raw       - raw [x y] as binary uint16 pair (DSERV_SHORT), in
 #                      ADC counts; only emitted by the hardware path since
 #                      the virtual path has no raw to report.
@@ -35,6 +41,7 @@
 #
 
 package require dlsh
+package require extio   ;# decode extio state/ain blocks (thumbstick source)
 
 # disable exit
 proc exit {args} { error "exit not available for this subprocess" }
@@ -122,6 +129,27 @@ namespace eval slider {
     variable swipe_last_engaged_x 0.0
     variable swipe_last_engaged_y 0.0
     variable last_swipe_engaged_pub -1
+
+    # ---- extio thumbstick state ----
+    #
+    # A STICK HAS NO TOUCH, so the trackpad's PRESS/DRAG/RELEASE has to be
+    # rebuilt from what a stick does have:
+    #
+    #   origin  - the calibrated CENTRE, not a press point. A stick is
+    #             absolute-referenced and spring-returns, so center_{x,y}
+    #             already IS the origin and calibrate_axis already reports
+    #             displacement from it. Nothing to latch.
+    #   engage  - radius crosses swipe_threshold (same threshold, same units
+    #             as the trackpad path: post-calibration magnitude).
+    #   commit  - THE SELECT BUTTON, not the return to centre.
+    #
+    # That last one is the whole reason to wire the button. Committing on
+    # "radius fell back below threshold" would sample the angle at the moment
+    # the stick is nearest centre -- where angle is least determined and most
+    # contaminated by how the finger left the stick. The button commits while
+    # the stick is still deflected, so swipe_last_engaged_{x,y} holds a large-
+    # radius sample and the committed angle is the one the subject chose.
+    variable stick_pressed 0
 
     proc update_settings {} {
         variable settings
@@ -315,6 +343,138 @@ namespace eval slider {
     # No slider/raw publish here - the virtual path has no real raw value
     # to report, and conflating "fake raw" with true ADC counts would
     # confuse calibration UIs.
+    # ---- extio thumbstick: analog pair + select button --------------------
+    #
+    # Subscribed by LABEL with a wildcard box (extio/*/state/ain/stick), the
+    # same convention emconf uses for the analog eye source: define an ain
+    # group called `stick` on any box and it comes alive, with no rig-side
+    # binding to keep in step.
+    #
+    # source_allows() is the arbiter when a rig sets one -- but the DEFAULT IS
+    # "auto", which permits every path. So a rig that has both a trackpad and a
+    # `stick` group defined WILL have both publishing slider/position, last
+    # writer wins, exactly the hazard emconf documents for eye sources. Set
+    # slider::set_source explicitly in local/slider.tcl on any rig with more
+    # than one slider input wired.
+    #
+    # chan_x / chan_y index the BLOCK's columns (which are in ascending channel
+    # order), not the box's ADC channel numbers -- same meaning they have for
+    # ain/vals. A two-channel `stick` group is therefore 0 and 1.
+    proc process_stick { dpoint data } {
+        variable settings
+        variable current_raw_x
+        variable current_raw_y
+        variable swipe_engaged
+        variable swipe_last_engaged_x
+        variable swipe_last_engaged_y
+
+        if { ![source_allows extio] } return
+
+        # Newest scan only. This is a POSITION, not a trajectory to log: the
+        # decoder documents ain_latest as exactly what a position controller
+        # wants, and it stays correct if the group is ever batched.
+        set col [::extio::ain_latest $data]
+        set nchan [llength $col]
+        if { $nchan == 0 } return
+
+        dict with settings {
+            set raw_x [expr {($chan_x >= 0 && $chan_x < $nchan) ? [lindex $col $chan_x] : 0}]
+            set raw_y [expr {($chan_y >= 0 && $chan_y < $nchan) ? [lindex $col $chan_y] : 0}]
+            set current_raw_x $raw_x
+            set current_raw_y $raw_y
+
+            set rawvals [binary format ss $raw_x $raw_y]
+            dservSetData slider/raw [now] 4 $rawvals ;# 4 = DSERV_SHORT
+
+            # Displacement from the calibrated centre -- which for a stick is
+            # both the absolute position AND the swipe vector, so the same
+            # publish serves every mode.
+            set x [calibrate_axis $raw_x $center_x $scale_x \
+                       $deadzone_x $invert_x $limit_x]
+            if { $chan_y >= 0 } {
+                set y [calibrate_axis $raw_y $center_y $scale_y \
+                           $deadzone_y $invert_y $limit_y]
+            } else {
+                set y 0.0
+            }
+            publish $x $y
+
+            if { $continuity_mode eq "swipe" } {
+                set mag [expr {sqrt($x*$x + $y*$y)}]
+                if { $mag >= $swipe_threshold } {
+                    set swipe_engaged 1
+                    set swipe_last_engaged_x $x
+                    set swipe_last_engaged_y $y
+                    publish_swipe_engaged 1
+                    publish_active 1
+                } else {
+                    # Back inside the deadband without committing: the subject
+                    # abandoned the choice. Drop engagement but KEEP
+                    # last_engaged, so a select arriving in the same few ms as
+                    # the stick crossing back still commits the intended angle
+                    # rather than nothing.
+                    set swipe_engaged 0
+                    publish_swipe_engaged 0
+                    publish_active 0
+                }
+            } else {
+                publish_active 1
+            }
+        }
+    }
+
+    # The stick's push-select, as a one-pin DI group (extio/*/state/group/
+    # stick_select). `data` is the group's bitmask, so non-zero = pressed.
+    #
+    # Consumed HERE rather than bound as an ess button on purpose: the
+    # protocol's contract is slider/swipe/{engaged,angle} and nothing else, so
+    # committing here means a protocol written for the trackpad runs on a stick
+    # unchanged. It is also not a layering stretch -- the trackpad's
+    # PRESS/RELEASE is already a contact signal this file consumes, and select
+    # is its exact analogue for a stick.
+    proc process_stick_select { dpoint data } {
+        variable settings
+        variable stick_pressed
+        variable swipe_engaged
+        variable swipe_last_engaged_x
+        variable swipe_last_engaged_y
+
+        if { ![source_allows extio] } return
+
+        set down [expr {$data != 0}]
+        if { $down == $stick_pressed } return      ;# level, not edge: ignore repeats
+        set stick_pressed $down
+        if { !$down } return                       ;# commit on PRESS, not release
+
+        dict with settings {
+            if { $continuity_mode ne "swipe" } return
+            if { !$swipe_engaged } return          ;# not deflected: nothing chosen
+
+            # Same commit payload and ORDER as the trackpad path: magnitude
+            # first, so a consumer woken by the angle already sees a current
+            # magnitude.
+            set mag [expr {sqrt($swipe_last_engaged_x*$swipe_last_engaged_x + \
+                                $swipe_last_engaged_y*$swipe_last_engaged_y)}]
+            dservSetData slider/swipe/mag [now] 2 \
+                [binary format f $mag] ;# 2 = DSERV_FLOAT
+            set angle [expr {atan2($swipe_last_engaged_y, $swipe_last_engaged_x)}]
+            if { $angle < 0 } {
+                set angle [expr {$angle + 2.0*3.14159265358979}]
+            }
+            dservSetData slider/swipe/angle [now] 2 \
+                [binary format f $angle] ;# 2 = DSERV_FLOAT
+
+            set swipe_engaged 0
+            publish_swipe_engaged 0
+            publish_active 0
+            switch $release_behavior {
+                hold     { # last position stays as-is }
+                stop     { # consumer keys off slider/active }
+                recenter { publish 0.0 0.0 }
+            }
+        }
+    }
+
     proc process_virtual { dpoint data } {
         if { ![source_allows virtual] } return
 
@@ -510,6 +670,16 @@ namespace eval slider {
 # Subscribe to the ain feed (primary hardware path)
 dservAddExactMatch ain/vals
 dpointSetScript    ain/vals slider::process_ain
+
+# Subscribe to the extio thumbstick: analog pair by GROUP LABEL with a wildcard
+# box, plus its select button. Matching on the label rather than a configured
+# box name is what makes it self-activating -- define `stick` / `stick_select`
+# on any box on the rig and it works, the same way emconf picks up `eye`.
+dservAddMatch      extio/*/state/ain/stick
+dpointSetScript    extio/*/state/ain/stick slider::process_stick
+
+dservAddMatch      extio/*/state/group/stick_select
+dpointSetScript    extio/*/state/group/stick_select slider::process_stick_select
 
 # Subscribe to the virtual path (browser / simulator)
 dservAddExactMatch slider/virtual
