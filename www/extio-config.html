@@ -318,6 +318,33 @@ async function cfgSet(box, leaf, value) {
   } catch (e) { alert(`set ${leaf} failed: ${e.message || e}`); }
 }
 
+/* DRIVE AN OUTPUT PIN, for bench work: loopback a DO into a DI, or find which
+ * header pin is actually wired to the thing you are holding.
+ *
+ * Offered ONLY for pins whose mode is `out`, which is not merely cosmetic --
+ * since 0.4.0+80 the firmware REFUSES cmd/do on a pin it does not consider an
+ * output (dbg/do_refused counts them) rather than silently re-muxing the pad.
+ * So a button on an input would do nothing, and showing it would be the same
+ * lie this page exists to avoid.
+ *
+ * This writes the cmd/do datapoint directly rather than going through an
+ * extio_* proc: cmd/do/<pin> is the box's documented wire contract and needs no
+ * host-side support, so bench debugging keeps working against a dserv that has
+ * not been updated. It is NOT config -- nothing is persisted and nothing is
+ * marked dirty. */
+async function doSet(box, pin, v) {
+  try { await conn.send(`dservSet extio/${box}/cmd/do/${pin} ${v}`, 'extio'); }
+  catch (e) { alert(`do ${pin}=${v} failed: ${e.message || e}`); }
+}
+/* The VALUE of cmd/do/<n>/pulse_us IS THE WIDTH, not a trigger -- send 1 and you
+ * get a 1 µs pulse nobody will ever see. Use the pin's own configured pulse_us
+ * so the button does what the row says, falling back to 100 ms: a bench default
+ * you can watch on an LED, where an unset (0) width would simply be refused. */
+async function doPulse(box, pin, us) {
+  try { await conn.send(`dservSet extio/${box}/cmd/do/${pin}/pulse_us ${us}`, 'extio'); }
+  catch (e) { alert(`pulse ${pin} failed: ${e.message || e}`); }
+}
+
 /* Ask the box to re-publish after an edit, DEBOUNCED.
  *
  * Only some config changes re-announce as a side effect; ain/rate, dserv/ip,
@@ -608,9 +635,26 @@ let redrawPending = false;
  * the press itself: down inside the panel defers redraws until the pointer is
  * released, wherever it is released (window-level up/cancel, so a drag out of
  * the panel cannot wedge the flag). */
-let panelPtrDown = false;
+let panelPtrAt = 0;
+/* A POINTER-DOWN EXPIRES. The flag below is cleared by pointerup/pointercancel,
+ * and if either is lost the panel stops redrawing FOREVER -- ages freeze, OTA
+ * staging progress never appears, and the trial-boot banner never shows.
+ *
+ * That is not hypothetical: every OTA action on this page opens a native modal
+ * (`confirm` in otaUpdate, `alert` on its result). In Firefox the modal
+ * swallows the pending pointer sequence, so the window-level pointerup never
+ * arrives and the flag sticks from the moment you click Update -- which is
+ * exactly when the progress you wanted to watch starts. Safari delivers the
+ * pointerup, which is why this looked browser-specific rather than broken.
+ *
+ * Bounding it by TIME rather than by enumerating the ways a pointerup can go
+ * missing means the next such quirk costs a couple of seconds of deferral
+ * instead of a dead page. Real clicks are far under this; a control the user is
+ * genuinely working in stays protected by the activeElement check below, which
+ * has no such failure mode. */
+const PANEL_PTR_STALE_MS = 2000;
 function panelBusy() {
-  if (panelPtrDown) return true;
+  if (panelPtrAt && Date.now() - panelPtrAt < PANEL_PTR_STALE_MS) return true;
   const a = document.activeElement;
   return a && a !== document.body && document.getElementById('panel')?.contains(a);
 }
@@ -748,7 +792,13 @@ function renderPanel() {
                 : own ? `<span class="age" title="claimed by the obs/sync role — clear it above to free this pin">${own}</span>`
                 : `<select onchange="cfgSet('${b}','pin/${p}/mode',this.value)">${sel}</select>`}</td>
       <td>${(mode === 'in' || mode === 'in_pullup') && lvl !== null
-            ? `<b><span data-val-box="${esc(b)}" data-val-leaf="di/${p}"></span></b> ${ageSpan(b, 'di/' + p)}` : ''}</td>
+            ? `<b><span data-val-box="${esc(b)}" data-val-leaf="di/${p}"></span></b> ${ageSpan(b, 'di/' + p)}`
+            : (mode === 'out' && !res && !own)
+            ? `<button title="drive pin ${p} high" onclick="doSet('${esc(b)}',${p},1)">1</button>
+               <button title="drive pin ${p} low"  onclick="doSet('${esc(b)}',${p},0)">0</button>
+               <button title="pulse pin ${p} for ${pul.get(p) || 100000} µs"
+                       onclick="doPulse('${esc(b)}',${p},${pul.get(p) || 100000})">pulse</button>`
+            : ''}</td>
       <td>${(res || own) ? '' : field(b, `label/${p}`, `pin/${p}/label`, { wide: 1 })}</td>
       <td>${(res || own) ? '' : `<input class="w4" value="${deb.get(p) ?? ''}" placeholder="0"
               onchange="cfgSet('${b}','pin/${p}/debounce_ms',this.value)">`}</td>
@@ -1008,7 +1058,10 @@ function renderPanel() {
        member moves more than <code>deadband</code> counts (joystick); <code>continuous</code> takes every
        <code>decimate</code>-th base scan (boxcar-averaged if <code>avg</code>), batching
        <code>batch</code> takes per block. The base scan rate is <code>ain/rate</code> below, and
-       sampling runs only while analog is enabled and a member channel is available.${
+       sampling runs only while analog is enabled and a member channel is available.
+       <b>Channels are a comma-separated list</b> in ascending order — <code>0,1</code> for a
+       two-axis eye or joystick signal, <code>2</code> for a single channel — and the block's
+       columns follow that same order. A range or space-separated form is not accepted.${
        agAnnounced ? '' : ' <b>This firmware does not announce analog group config</b> — dashed fields are write-only (a write still configures the box); update the firmware for full readback.'}</p>
 
     <h2>analog</h2>
@@ -1062,9 +1115,9 @@ async function init() {
   });
   /* the pointer half of panelBusy() -- see its comment (Safari checkboxes) */
   document.getElementById('panel').addEventListener('pointerdown',
-    () => { panelPtrDown = true; }, true);
+    () => { panelPtrAt = Date.now(); }, true);
   const ptrDone = () => {
-    panelPtrDown = false;
+    panelPtrAt = 0;
     setTimeout(() => { if (redrawPending && !panelBusy()) renderPanel(); }, 0);
   };
   window.addEventListener('pointerup', ptrDone, true);
