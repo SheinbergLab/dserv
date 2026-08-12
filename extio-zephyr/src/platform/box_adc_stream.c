@@ -36,9 +36,21 @@
  * word (usage fault, EXC_RETURN). The instrument must be unable to do that
  * again no matter how wrong the next DMA config is: overruns land in owned
  * padding and get COUNTED (stream/spill) instead of executed. */
-#define STREAM_RING_WORDS  1536u
+/* SIZED TO THE WORST CASE THE PLANNER CAN ASK FOR, which is 4 blocks x 16
+ * triggers x 8 channels = 512 words. It used to be 1536 usable -- 4x what any
+ * configuration could reach -- with a SECOND 1536 words of canary behind it,
+ * 12 KB in total on a box whose RAM was 95% full.
+ *
+ * The canary is now 256 bytes rather than a full ring length. It was sized to
+ * absorb the +66 fault (a mis-configured cyclic transfer marching one whole
+ * ring past the end), but DETECTING that needs only the first words past the
+ * boundary: an overrun writes contiguously from where the ring stops, so it
+ * cannot step over a 64-word tripwire on its way out. Same detector, 6 KB
+ * cheaper. */
+#define STREAM_RING_WORDS   512u
+#define STREAM_CANARY_WORDS  64u
 #define STREAM_CANARY      0xDEADBEEFu
-static uint32_t stream_ring[STREAM_RING_WORDS * 2u];
+static uint32_t stream_ring[STREAM_RING_WORDS + STREAM_CANARY_WORDS];
 
 /* ADC0 FIFO-A's eDMA request source on MCXN947 (fsl_inputmux_connections.h:
  * kINPUTMUX_Adc0FifoARequestToDma0Ch21Ena -- the "Ch21" is the SOURCE LINE
@@ -376,7 +388,8 @@ static int stream_arm(uint8_t mask, uint8_t nch, uint8_t avgs_exp,
 	st_clk_meas_valid = 0;
 	st_clk_n = 0;
 	st_clk_prev_ppm = 0;
-	for (uint32_t i = STREAM_RING_WORDS; i < 2u * STREAM_RING_WORDS; i++) {
+	for (uint32_t i = STREAM_RING_WORDS;
+	     i < STREAM_RING_WORDS + STREAM_CANARY_WORDS; i++) {
 		stream_ring[i] = STREAM_CANARY;       /* arm the spill detector */
 	}
 	k_sem_reset(&s_ready);
@@ -521,7 +534,8 @@ static uint32_t stream_count_spill(void)
 {
 	uint32_t n = 0;
 
-	for (uint32_t i = STREAM_RING_WORDS; i < 2u * STREAM_RING_WORDS; i++) {
+	for (uint32_t i = STREAM_RING_WORDS;
+	     i < STREAM_RING_WORDS + STREAM_CANARY_WORDS; i++) {
 		if (stream_ring[i] != STREAM_CANARY) {
 			n++;
 		}
@@ -608,8 +622,14 @@ int box_adc_stream_test(const box_config_t *cfg, uint32_t trig_hz,
 			struct dma_status st = { 0 };
 
 			if (dma_get_status(dma, STREAM_DMA_CH, &st) == 0) {
-				out->sw_words =
-					(sizeof stream_ring - (uint32_t) st.pending_length) / 4u;
+				/* From what the transfer was CONFIGURED for, not
+				 * sizeof(stream_ring) -- the array carries the
+				 * canary too, so the whole-array form over-counted
+				 * by the padding. */
+				uint32_t total = g_block_words * g_nblocks * 4u;
+
+				out->sw_words = (total >= (uint32_t) st.pending_length)
+					? (total - (uint32_t) st.pending_length) / 4u : 0u;
 			}
 		}
 		/* back to hardware mode for the real run */
