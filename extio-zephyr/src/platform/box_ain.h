@@ -126,4 +126,25 @@ void box_ain_stats_reset(void);
 /* +26 stall ledger: floor length of the last / worst sweep starvation gap */
 void box_ain_late_gaps(uint32_t *last_us, uint32_t *max_us);
 
+/* ---- v25 pacing: what is RUNNING, next to what was ASKED FOR ----
+ *
+ * Published as a pair (ain/dbg/pace, ain/dbg/pace_want) on purpose. Hardware
+ * pacing can decline to start -- no ADC, no DMA channel, a channel set the
+ * chain cannot hold -- and the sampler then falls back to the polled loop
+ * rather than stopping. That is the right behaviour and the wrong thing to
+ * leave invisible: a box whose timing quietly got worse looks exactly like a
+ * box whose timing was always that bad. */
+int box_ain_streaming(void);    /* 1 = hardware-paced right now */
+int box_ain_pace_want(void);    /* 1 = the config asked for it  */
+
+/* Geometry the stream planner settled on -- trigger rate, triggers averaged
+ * per delivered sample, hardware AVGS exponent per trigger -- plus:
+ *   clamped  1 = the requested oversample did NOT fit the sample period and
+ *            was reduced. The operator is getting less averaging than asked.
+ *   fails    stream starts refused (each one a fall back to polled)
+ *   resyncs  FIFO phase slips that forced a restart
+ * All zero on a polled box. */
+void box_ain_stream_info(uint32_t *trig_hz, uint16_t *spacing, uint8_t *avgs_exp,
+			 uint8_t *clamped, uint32_t *fails, uint32_t *resyncs);
+
 #endif /* BOX_AIN_H */

@@ -3,6 +3,9 @@
  */
 #include "box_ain.h"
 #include "box_adc.h"
+#if defined(CONFIG_BOX_ADC_STREAM)
+#include "box_adc_stream.h"
+#endif
 
 #include <zephyr/kernel.h>
 #include <errno.h>
@@ -81,6 +84,50 @@ static atomic_t borrowed;
 
 static uint8_t  union_mask;          /* channels any active group wants */
 static uint32_t period_us;
+
+/* ---- pacing (v25) ----
+ *
+ * `want_stream` is what the CONFIG asks for, decided in recompute(); `streaming`
+ * is what the HARDWARE is doing, written only by the sampling thread. Keeping
+ * them apart is the whole reason a box that failed to start the stream and
+ * quietly fell back to polling is a one-glance diagnosis (ain/dbg/pace against
+ * ain/dbg/pace_want) rather than a puzzle about why the jitter came back. */
+static uint8_t  want_stream;
+static atomic_t streaming;
+static uint32_t st_stream_fails;     /* stream_start refusals -> fell back to polled */
+static uint32_t st_resyncs;          /* phase slips that forced a restart            */
+#if defined(CONFIG_BOX_ADC_STREAM)
+static box_adc_stream_plan_t plan;
+#endif
+
+/* Does this build+config want hardware pacing? */
+static int pace_wants_stream(void)
+{
+#if defined(CONFIG_BOX_ADC_STREAM)
+	switch (cfg->ain_pace) {
+	case AIN_PACE_POLLED: return 0;
+	case AIN_PACE_STREAM: return 1;
+	default:              return IS_ENABLED(CONFIG_BOX_ADC_STREAM_DEFAULT);
+	}
+#else
+	return 0;
+#endif
+}
+
+/* Stop the stream if one is running. Every path that takes the converter away
+ * from the sampler goes through here, because the stream holds something the
+ * polled path cannot share: the LPADC's interrupt line (see
+ * box_adc_stream_start). A borrow that left it masked would leave `adccal`
+ * blocked forever inside adc_read with no error to show for it. */
+static void stream_stop_if_running(void)
+{
+#if defined(CONFIG_BOX_ADC_STREAM)
+	if (atomic_get(&streaming)) {
+		box_adc_stream_stop();
+		atomic_set(&streaming, 0);
+	}
+#endif
+}
 
 static uint32_t st_sweeps, st_blocks, st_dropped, st_late, st_throttled;
 static uint32_t sat_run;   /* consecutive cadence syncs that never parked */
@@ -162,6 +209,40 @@ static void recompute(void)
 
 	int rate = dserv_cfg_ain_rate(cfg);
 	period_us = (uint32_t) (1000000 / (rate > 0 ? rate : 50));
+	want_stream = (uint8_t) pace_wants_stream();
+}
+
+/* One delivered scan -> every group. Identical for both pacings, which is the
+ * point: hardware pacing changes where the scan and its timestamp COME FROM,
+ * and nothing else. Everything downstream -- deadbands, decimation, batching,
+ * the publish ceiling, the queue -- is untouched. */
+static void feed_scan(const int16_t *scan, uint64_t t_us)
+{
+	for (int g = 0; g < BOX_NAGROUPS; g++) {
+		ain_block_t blk;
+
+		if (ain_group_feed(&rt[g], cfg, g, union_mask, scan, t_us,
+				   period_us, &blk)) {
+			int64_t now_ms = k_uptime_get();
+
+			if (!cfg->ain_group_mode[g] &&
+			    now_ms - last_block_ms[g] < (1000 / AIN_MAX_BLOCKS_PER_S)) {
+				st_throttled++;
+				continue;
+			}
+			last_block_ms[g] = now_ms;
+			if (k_msgq_put(&ain_q, &blk, K_NO_WAIT) != 0) {
+				/* The service loop is not draining. Drop the
+				 * NEWEST rather than block: sampling must not
+				 * stall behind the uplink, and a stalled
+				 * sampler would corrupt the cadence for every
+				 * group, not just this one. */
+				st_dropped++;
+			} else {
+				st_blocks++;
+			}
+		}
+	}
 }
 
 static void ain_thread_fn(void *a, void *b, void *c)
@@ -182,6 +263,31 @@ static void ain_thread_fn(void *a, void *b, void *c)
 			recompute();
 			box_adc_set_oversample(cfg->ain_ovs);   /* v24 hw averaging */
 			running_period = 0;       /* force the re-arm below */
+			/* STOP, so the start branch below rebuilds from the config
+			 * that now applies. Two distinct reasons, and missing the
+			 * second one cost a bench cycle:
+			 *
+			 *  - already streaming: a stream's channel set, trigger
+			 *    rate and command chain are programmed into hardware
+			 *    at start, so an edit cannot be "picked up on the next
+			 *    tick" the way the polled loop picks up a new period.
+			 *
+			 *  - polled, but the edit ASKED for a stream: the start
+			 *    branch is guarded by `!running`, and a live sampler
+			 *    is running -- so `ain pace stream` set pace_want and
+			 *    then nothing happened, with pace_fails staying 0
+			 *    because no start was ever attempted. It took effect
+			 *    only on the next unrelated stop. A pacing change is a
+			 *    restart, not a parameter.
+			 *
+			 * Polled->polled needs no teardown: that IS the case the
+			 * next-tick re-arm below handles correctly. */
+			if (atomic_get(&running) &&
+			    (atomic_get(&streaming) || want_stream)) {
+				stream_stop_if_running();
+				k_timer_stop(&tick);
+				atomic_set(&running, 0);
+			}
 		}
 
 		uint32_t hold = hold_left_ms();
@@ -197,6 +303,7 @@ static void ain_thread_fn(void *a, void *b, void *c)
 			 * the device powered for its own use, and suspending here is
 			 * precisely the bug this flag exists to prevent. */
 			if (atomic_get(&running)) {
+				stream_stop_if_running();
 				k_timer_stop(&tick);
 				atomic_set(&running, 0);
 				running_period = 0;
@@ -228,12 +335,33 @@ static void ain_thread_fn(void *a, void *b, void *c)
 			warmup = 1;
 			atomic_set(&running, 1);
 			running_period = 0;
+
+#if defined(CONFIG_BOX_ADC_STREAM)
+			/* Hardware pacing, if this build+config wants it. A
+			 * refusal is NOT fatal: fall back to the polled sampler
+			 * and count it, because a box that keeps sampling with
+			 * worse timing is better than one that stops -- and
+			 * ain/dbg/pace vs pace_want makes the downgrade visible
+			 * instead of leaving it to be inferred from jitter. */
+			if (want_stream) {
+				int src = box_adc_stream_start(union_mask,
+							       (uint32_t) dserv_cfg_ain_rate(cfg),
+							       cfg->ain_ovs, &plan);
+
+				if (src == 0) {
+					atomic_set(&streaming, 1);
+				} else {
+					st_stream_fails++;
+				}
+			}
+#endif
 		} else if (!want && (atomic_get(&running) || box_adc_powered())) {
 			/* `|| powered` covers the boot case: box_adc_init() leaves the
 			 * converter ACTIVE, so a box that comes up with analog disabled
 			 * has a device to switch off even though the sampler never
 			 * started. Without it the LPADC would sit enabled forever on
 			 * exactly the boxes that asked for no analog at all. */
+			stream_stop_if_running();
 			k_timer_stop(&tick);
 			(void) box_adc_suspend();   /* -ENOTSUP where there is no PM hook */
 			atomic_set(&running, 0);
@@ -252,6 +380,59 @@ static void ain_thread_fn(void *a, void *b, void *c)
 			k_sem_take(&ain_wake, hold ? K_MSEC(hold) : K_FOREVER);
 			continue;
 		}
+
+#if defined(CONFIG_BOX_ADC_STREAM)
+		if (atomic_get(&streaming)) {
+			/* HARDWARE-PACED. No k_timer, no blocking adc_read, no
+			 * saturation guard: the cadence is the CTIMER's and this
+			 * thread cannot slow it down, only fail to collect from
+			 * it -- which is counted as an overrun, in the stream,
+			 * against samples that were still TAKEN on time. That is
+			 * the whole difference from the branch below, where a
+			 * slow pass means samples never existed.
+			 *
+			 * The timeout is a liveness check, not a cadence: it
+			 * exists so a hold, a config edit or a dead pipe is
+			 * noticed within a quarter second instead of never. */
+			if (!box_adc_stream_wait(K_MSEC(250))) {
+				continue;
+			}
+			if (hold_left_ms() ||
+			    (uint32_t) atomic_get(&generation) != applied_gen) {
+				continue;
+			}
+
+			for (;;) {
+				int16_t  scan[AIN_MAX_CH];
+				uint64_t t_us = 0;
+
+				memset(scan, 0, sizeof scan);
+				int n = box_adc_stream_read(scan, AIN_MAX_CH, &t_us);
+
+				if (n == 0) {
+					break;
+				}
+				if (n < 0) {
+					/* Phase slip: channel identity in this
+					 * window is no longer trustworthy (see
+					 * box_adc_stream_read). Restart from a
+					 * reset FIFO rather than publish a
+					 * plausible-looking lie. */
+					st_resyncs++;
+					stream_stop_if_running();
+					atomic_set(&running, 0);
+					break;
+				}
+				if (warmup) {
+					warmup = 0;
+					continue;
+				}
+				st_sweeps++;
+				feed_scan(scan, t_us);
+			}
+			continue;
+		}
+#endif
 
 		if (running_period != period_us) {
 			running_period = period_us;
@@ -337,31 +518,7 @@ static void ain_thread_fn(void *a, void *b, void *c)
 			}
 		}
 
-		for (int g = 0; g < BOX_NAGROUPS; g++) {
-			ain_block_t blk;
-
-			if (ain_group_feed(&rt[g], cfg, g, union_mask, scan, t_us,
-					   running_period, &blk)) {
-				int64_t now_ms = k_uptime_get();
-
-				if (!cfg->ain_group_mode[g] &&
-				    now_ms - last_block_ms[g] < (1000 / AIN_MAX_BLOCKS_PER_S)) {
-					st_throttled++;
-					continue;
-				}
-				last_block_ms[g] = now_ms;
-				if (k_msgq_put(&ain_q, &blk, K_NO_WAIT) != 0) {
-					/* The service loop is not draining. Drop the
-					 * NEWEST rather than block: sampling must not
-					 * stall behind the uplink, and a stalled
-					 * sampler would corrupt the cadence for every
-					 * group, not just this one. */
-					st_dropped++;
-				} else {
-					st_blocks++;
-				}
-			}
-		}
+		feed_scan(scan, t_us);
 	}
 }
 
@@ -465,6 +622,27 @@ void box_ain_return(void)
 int      box_ain_running(void) { return (int) atomic_get(&running); }
 uint32_t box_ain_holds(void)   { return st_holds; }
 
+int box_ain_streaming(void) { return (int) atomic_get(&streaming); }
+int box_ain_pace_want(void) { return want_stream; }
+
+void box_ain_stream_info(uint32_t *trig_hz, uint16_t *spacing, uint8_t *avgs_exp,
+			 uint8_t *clamped, uint32_t *fails, uint32_t *resyncs)
+{
+#if defined(CONFIG_BOX_ADC_STREAM)
+	if (trig_hz)  *trig_hz  = plan.trig_hz;
+	if (spacing)  *spacing  = plan.spacing;
+	if (avgs_exp) *avgs_exp = plan.avgs_exp;
+	if (clamped)  *clamped  = plan.clamped;
+#else
+	if (trig_hz)  *trig_hz  = 0;
+	if (spacing)  *spacing  = 0;
+	if (avgs_exp) *avgs_exp = 0;
+	if (clamped)  *clamped  = 0;
+#endif
+	if (fails)    *fails    = st_stream_fails;
+	if (resyncs)  *resyncs  = st_resyncs;
+}
+
 int box_ain_pop(ain_block_t *out)
 {
 	if (!out) {
@@ -495,6 +673,10 @@ void box_ain_stats_reset(void)
 	/* The gaps are part of the late story -- leaving them behind would report
 	 * a 32 ms worst gap against a late count of zero. */
 	st_late_gap_last_us = st_late_gap_max_us = 0;
+	st_stream_fails = st_resyncs = 0;
+#if defined(CONFIG_BOX_ADC_STREAM)
+	box_adc_stream_stats_reset();
+#endif
 }
 
 #else  /* no ADC on this board */
@@ -516,5 +698,17 @@ void box_ain_late_gaps(uint32_t *last_us, uint32_t *max_us)
 }
 
 void box_ain_stats_reset(void) { }
+int  box_ain_streaming(void) { return 0; }
+int  box_ain_pace_want(void) { return 0; }
+void box_ain_stream_info(uint32_t *trig_hz, uint16_t *spacing, uint8_t *avgs_exp,
+			 uint8_t *clamped, uint32_t *fails, uint32_t *resyncs)
+{
+	if (trig_hz)  *trig_hz  = 0;
+	if (spacing)  *spacing  = 0;
+	if (avgs_exp) *avgs_exp = 0;
+	if (clamped)  *clamped  = 0;
+	if (fails)    *fails    = 0;
+	if (resyncs)  *resyncs  = 0;
+}
 
 #endif

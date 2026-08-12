@@ -256,6 +256,8 @@ static inline void box_cli_dump(const box_config_t *c)
     if (c->ain_en)                        DUMPF("ain enable 1\r\n");
     if (c->ain_rate)                      DUMPF("ain rate %u\r\n", c->ain_rate);
     if (c->ain_ovs)                       DUMPF("ain oversample %u\r\n", 1u << c->ain_ovs);
+    if (c->ain_pace == AIN_PACE_POLLED)   DUMPF("ain pace polled\r\n");
+    if (c->ain_pace == AIN_PACE_STREAM)   DUMPF("ain pace stream\r\n");
     for (int ag = 0; ag < BOX_NAGROUPS; ag++)
         if (c->ain_group_chans[ag]) {
             char cs[16]; dserv_pins_str(c->ain_group_chans[ag], cs, sizeof cs);
@@ -427,6 +429,15 @@ static inline cli_action_t box_cli_exec(box_config_t *c, const char *line,
         }
         c->ain_ovs = e;
         snprintf(out, outsz, "OK ain oversample=%dx (hw average per trigger)\r\n", v);
+        return CLI_AIN;
+    }
+    if (sscanf(line, "ain pace %15s", w) == 1) {
+        if (!strcmp(w, "auto"))        c->ain_pace = AIN_PACE_AUTO;
+        else if (!strcmp(w, "polled")) c->ain_pace = AIN_PACE_POLLED;
+        else if (!strcmp(w, "stream")) c->ain_pace = AIN_PACE_STREAM;
+        else { snprintf(out, outsz, "ERR ain pace auto|polled|stream\r\n"); return CLI_ERR; }
+        c->applied_count++;
+        snprintf(out, outsz, "OK ain pace=%s (auto follows the build; ain/dbg/pace says what is RUNNING)\r\n", w);
         return CLI_AIN;
     }
     if (sscanf(line, "ain rate %d", &v) == 1) {

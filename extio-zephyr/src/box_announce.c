@@ -362,6 +362,12 @@ void box_announce_manifest(const box_config_t *c)
 		pub_int(c, "dserv/port", c->dserv_port);
 		pub_int(c, "ain/rate",   dserv_cfg_ain_rate(c));
 		pub_int(c, "ain/oversample", dserv_cfg_ain_ovs_count(c));
+		/* The OVERRIDE, not the pacing in force -- what is actually running
+		 * is ain/dbg/pace, which can differ (a refused stream start falls
+		 * back to polled). A host configuring a box needs this one; a host
+		 * diagnosing one needs the other. */
+		pub_str(c, "ain/pace", c->ain_pace == AIN_PACE_POLLED ? "polled" :
+				       c->ain_pace == AIN_PACE_STREAM ? "stream" : "auto");
 		pub_str(c, "net/mode",   c->net_mode ? "static" : "dhcp");
 	}
 

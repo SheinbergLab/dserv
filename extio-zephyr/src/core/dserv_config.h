@@ -224,7 +224,25 @@ typedef struct {
      * 1 kHz + 16x here delivers MORE averaging at ~1/5 the CPU and a tenth
      * of the wakeups. 0 = off = exactly what an older blob loads as. */
     uint8_t  ain_ovs;
+    /* v25: which PACING the analog sampler uses. 0 = auto (the build's default,
+     * CONFIG_BOX_ADC_STREAM_DEFAULT -- so flipping the fleet is a firmware
+     * decision, not a re-save of every box's config), 1 = polled, 2 = stream.
+     *
+     * AN OVERRIDE, NOT A SETTING, and the encoding is what makes that true. A
+     * plain 0/1 boolean would have meant that the day stream becomes the
+     * default, every box carrying a saved blob would still load 0 = polled and
+     * "the default" would be a thing only factory-fresh boxes ever saw. Auto
+     * defers to the build; the two explicit values exist so a box can be pinned
+     * either way from the console while a fault is being chased -- which is the
+     * only reason anyone should be setting this at all.
+     *
+     * Boards without CONFIG_BOX_ADC_STREAM ignore it entirely: there is no
+     * hardware-paced path to select, and `auto` resolves to polled. */
+    uint8_t  ain_pace;
 } box_config_t;
+
+/* box_config_t.ain_pace */
+enum { AIN_PACE_AUTO = 0, AIN_PACE_POLLED = 1, AIN_PACE_STREAM = 2 };
 
 #define OBS_MODE_MIRROR 0
 #define OBS_MODE_LEADER 1
@@ -661,6 +679,14 @@ static inline cfg_result_t dserv_cfg__config(box_config_t *c, const char *k,
         while ((1 << e) < v && e < 7) e++;
         if (v < 1 || (1 << e) != v) return CFG_UNKNOWN;   /* exact powers of two only */
         c->ain_ovs = e; c->applied_count++; return CFG_AIN;
+    }
+    if (strcmp(k, "ain/pace") == 0) {      /* auto | polled | stream -- see ain_pace */
+        char w[16]; dserv_msg_copy_cstr(m, w, sizeof w);
+        if (!strcmp(w, "auto"))        c->ain_pace = AIN_PACE_AUTO;
+        else if (!strcmp(w, "polled")) c->ain_pace = AIN_PACE_POLLED;
+        else if (!strcmp(w, "stream")) c->ain_pace = AIN_PACE_STREAM;
+        else return CFG_UNKNOWN;
+        c->applied_count++; return CFG_AIN;
     }
     /* Analog groups: ain/group/<g>/{channels,label,mode,deadband,decimate,batch,average,off} */
     { int ng = -1; int npos = -1;

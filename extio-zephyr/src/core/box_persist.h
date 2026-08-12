@@ -23,7 +23,11 @@
 #include <string.h>
 
 #define BOX_PERSIST_MAGIC    0x57494F31u   /* "WIO1" */
-#define BOX_PERSIST_VERSION  24  /* v24: ain_ovs (LPADC hardware-average exponent).
+#define BOX_PERSIST_VERSION  25  /* v25: ain_pace (auto|polled|stream -- an OVERRIDE of
+                                  * the build's sampler pacing, so making the
+                                  * hardware-paced path the default stays a firmware
+                                  * decision and does not need every box re-saved).
+                                  * v24: ain_ovs (LPADC hardware-average exponent).
                                   * v23: obs_mode (mirror|leader -- the obs pin's role;
                                   * a persisted leader is the announced obs-leader
                                   * capability hosts discover).

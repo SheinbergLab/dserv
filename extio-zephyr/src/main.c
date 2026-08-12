@@ -2903,6 +2903,17 @@ int main(void)
 					box_ain_late_gaps(&ain_gap_l, &ain_gap_m);
 					box_adc_stats(&amx, &an);
 					box_adc_pm_stats(&asp, &arm);
+					uint32_t s_trig = 0, s_fails = 0, s_resync = 0;
+					uint16_t s_spacing = 0;
+					uint8_t  s_avgs = 0, s_clamped = 0;
+					box_ain_stream_info(&s_trig, &s_spacing, &s_avgs,
+							    &s_clamped, &s_fails, &s_resync);
+					uint32_t s_deliv = 0, s_ovr = 0, s_slips = 0,
+						 s_fovf = 0, s_spill = 0;
+#if defined(CONFIG_BOX_ADC_STREAM)
+					box_adc_stream_stats(&s_deliv, &s_ovr, &s_slips,
+							     &s_fovf, &s_spill);
+#endif
 					struct { const char *leaf; uint32_t v; } as[] = {
 						{ "ain/dbg/sweeps",    asw },
 						{ "ain/dbg/late_gap_us",     ain_gap_l },
@@ -2926,6 +2937,37 @@ int main(void)
 						{ "ain/dbg/holds",     box_ain_holds() },
 						{ "ain/dbg/suspends",  asp },
 						{ "ain/dbg/resumes",   arm },
+						/* PACING (v25). `pace` is what the hardware is
+						 * doing, `pace_want` what the config asked
+						 * for; they differ exactly when a stream start
+						 * was refused and the sampler fell back, which
+						 * is otherwise only detectable as jitter
+						 * nobody is measuring. The geometry beside
+						 * them says what the requested oversample
+						 * actually BECAME -- and `clamped` says when
+						 * it became less than was asked for. */
+						{ "ain/dbg/pace",      (uint32_t) box_ain_streaming() },
+						{ "ain/dbg/pace_want", (uint32_t) box_ain_pace_want() },
+						{ "ain/dbg/trig_hz",   s_trig },
+						{ "ain/dbg/spacing",   s_spacing },
+						{ "ain/dbg/avgs",      1u << s_avgs },
+						{ "ain/dbg/clamped",   s_clamped },
+						{ "ain/dbg/pace_fails", s_fails },
+						/* Stream health. `overruns` is the honest twin
+						 * of `late`: samples the hardware took on time
+						 * and the CPU failed to collect -- a strictly
+						 * better failure than the polled path's, where
+						 * a late pass means the sample never existed.
+						 * Any `slips` or `spill` at all wants a look.
+						 * `delivered` is deliberately NOT here: in
+						 * stream mode it is `sweeps` by another name,
+						 * and the 1 Hz block already learned once
+						 * what redundant per-second leaves cost. */
+						{ "ain/dbg/overruns",  s_ovr },
+						{ "ain/dbg/slips",     s_slips },
+						{ "ain/dbg/resyncs",   s_resync },
+						{ "ain/dbg/fifo_ovf",  s_fovf },
+						{ "ain/dbg/spill",     s_spill },
 					};
 					for (unsigned ai2 = 0; ai2 < ARRAY_SIZE(as); ai2++) {
 						pub_periodic(as[ai2].leaf, as[ai2].v);

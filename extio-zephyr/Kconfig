@@ -31,4 +31,24 @@ config BOX_ADC_STREAM
 	  sampler is untouched. MCXN947-class parts (needs the CTIMER->ADC
 	  INPUTMUX route and the FIFO DMA request line).
 
+config BOX_ADC_STREAM_DEFAULT
+	bool "Use the hardware-paced pipeline as the default sampler pacing"
+	default n
+	depends on BOX_ADC_STREAM
+	help
+	  What `ain pace auto` resolves to. Off = the polled sampler, with the
+	  stream reachable per box (`ain pace stream`); on = every box on this
+	  firmware samples hardware-paced unless it is explicitly pinned to
+	  `ain pace polled`.
+
+	  A FIRMWARE SWITCH RATHER THAN A CONFIG DEFAULT, deliberately: config
+	  blobs are append-only and load older fields as zero, so a boolean
+	  "use stream" in box_config_t would have meant that the day this
+	  becomes the default, every box carrying a saved blob still loads
+	  polled -- a default only factory-fresh boxes ever see. Here, flipping
+	  the fleet is an OTA, and reverting it is the previous image.
+
+	  Turn this on once the stream has been soaked on a real rig; until
+	  then the bench box opts in by hand.
+
 source "Kconfig.zephyr"
