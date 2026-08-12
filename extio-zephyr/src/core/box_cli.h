@@ -96,6 +96,24 @@ static inline int  box_cli_pin_reserved(int n)
 	return (n >= 0 && n < 32) ? (int) ((box_cli_pin_rsv >> n) & 1u) : 0;
 }
 
+/* Refuse a change that would push the box past its total block-rate ceiling,
+ * and SAY WHAT THE BUDGET IS. The number that matters to an operator is not
+ * "2000" in the abstract but how much of it their current groups already
+ * spend, so print both. */
+static inline int box_cli_bps_ok(const box_config_t *c, char *out, int outsz)
+{
+    int bps = ain_total_bps(c);
+
+    if (bps > AIN_MAX_TOTAL_BPS) {
+        snprintf(out, outsz,
+                 "ERR that would publish %d blocks/s; the box sustains %d "
+                 "(sum over groups of rate/decimate/batch -- raise batch or decimate)\r\n",
+                 bps, AIN_MAX_TOTAL_BPS);
+        return 0;
+    }
+    return 1;
+}
+
 /* Refuse a `do` on a pin that is not an output, and SAY WHY.
  *
  * The firmware refuses it too (box_gpio_exec), but a refusal the operator only
@@ -487,7 +505,9 @@ static inline cli_action_t box_cli_exec(box_config_t *c, const char *line,
     }
     if (sscanf(line, "ain rate %d", &v) == 1) {
         if (v < 1 || v > 65535) { snprintf(out, outsz, "ERR ain rate 1-65535 Hz\r\n"); return CLI_ERR; }
+        uint16_t _oldrate = c->ain_rate;
         c->ain_rate = (uint16_t) v; c->applied_count++;
+        if (!box_cli_bps_ok(c, out, outsz)) { c->ain_rate = (uint16_t) _oldrate; return CLI_ERR; }
         snprintf(out, outsz, "OK ain rate=%dHz (base scan; save+reboot)\r\n", v); return CLI_AIN;
     }
     if (sscanf(line, "ain group %d channels %23s", &n, w) == 2) {
@@ -498,11 +518,15 @@ static inline cli_action_t box_cli_exec(box_config_t *c, const char *line,
                      BOX_NAGROUPS - 1, box_cli_ain_nch - 1);
             return CLI_ERR;
         }
+        uint8_t _oldm = c->ain_group_chans[n], _oldb = c->ain_group_batch[n];
         c->ain_group_chans[n] = (uint8_t) mask; c->applied_count++;
         /* Widening a group is the one edit that can invalidate an already
          * accepted batch. Refusing the CHANNEL change over a secondary field
          * would reject the wrong thing, so batch yields -- but say so, or it
          * is the same silent clamp from a different direction. */
+        if (!box_cli_bps_ok(c, out, outsz)) {
+            c->ain_group_chans[n] = _oldm; c->ain_group_batch[n] = _oldb; return CLI_ERR;
+        }
         if (ain_batch_reclamp(c, n)) {
             snprintf(out, outsz, "OK ain group%d channels=%s (batch reduced to %d to fit)\r\n",
                      n, w, c->ain_group_batch[n]);
@@ -522,6 +546,7 @@ static inline cli_action_t box_cli_exec(box_config_t *c, const char *line,
     }
     if (sscanf(line, "ain group %d mode %15s", &n, w) == 2) {
         if (n < 0 || n >= BOX_NAGROUPS) { snprintf(out, outsz, "ERR bad group\r\n"); return CLI_ERR; }
+        uint8_t _oldmo = c->ain_group_mode[n];
         if (!strcmp(w, "continuous")) c->ain_group_mode[n] = 1;
         else if (!strcmp(w, "onchange")) c->ain_group_mode[n] = 0;
         else { snprintf(out, outsz, "ERR ain mode: onchange|continuous\r\n"); return CLI_ERR; }
@@ -536,7 +561,9 @@ static inline cli_action_t box_cli_exec(box_config_t *c, const char *line,
     if (sscanf(line, "ain group %d decimate %d", &n, &v) == 2) {
         if (n < 0 || n >= BOX_NAGROUPS || v < 1 || v > 255) {
             snprintf(out, outsz, "ERR ain decimate 1-255\r\n"); return CLI_ERR; }
+        uint8_t _oldd = c->ain_group_decimate[n];
         c->ain_group_decimate[n] = (uint8_t) v; c->applied_count++;
+        if (!box_cli_bps_ok(c, out, outsz)) { c->ain_group_decimate[n] = _oldd; return CLI_ERR; }
         snprintf(out, outsz, "OK ain group%d decimate=%d\r\n", n, v); return CLI_AIN;
     }
     if (sscanf(line, "ain group %d batch %d", &n, &v) == 2) {
@@ -552,7 +579,9 @@ static inline cli_action_t box_cli_exec(box_config_t *c, const char *line,
                      n, cap, (cap > 0 ? AIN_BLOCK_MAX / cap : 0), AIN_BLOCK_MAX);
             return CLI_ERR;
         }
+        uint8_t _oldbt = c->ain_group_batch[n];
         c->ain_group_batch[n] = (uint8_t) v; c->applied_count++;
+        if (!box_cli_bps_ok(c, out, outsz)) { c->ain_group_batch[n] = _oldbt; return CLI_ERR; }
         snprintf(out, outsz, "OK ain group%d batch=%d\r\n", n, v); return CLI_AIN;
     }
     if (sscanf(line, "ain group %d average %d", &n, &v) == 2) {

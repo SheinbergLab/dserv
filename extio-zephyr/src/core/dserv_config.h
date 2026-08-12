@@ -292,6 +292,28 @@ typedef struct {
  * home for that constant when it is this header's dependent, not its provider. */
 #define AIN_BLOCK_MAX  24
 
+/* Ceiling on how often ONE on-change group may publish. Its rate is set by
+ * INPUT NOISE rather than by config, so it needs a cap of its own. */
+#define AIN_MAX_BLOCKS_PER_S  200
+
+/* Ceiling on the TOTAL block rate across every group, and the number that
+ * decides whether this box stays up.
+ *
+ * MEASURED on a bench MCXN947 (2 ch, 64x oversample, continuous, batch 1),
+ * counting delivered blocks and watching the service loop:
+ *
+ *     2000 blocks/s   exact delivery, 0 drops, watchdog 15/15  -- clean
+ *                     (identical whether from 1 group at 2000 Hz or 4 at 500)
+ *     3000 blocks/s   6.6% short, bulk drops climbing, watchdog 14/15
+ *     8000 blocks/s   box lost (4 groups x 2000 Hz, no batching)
+ *
+ * The governing variable is TOTAL blocks/s, not sample rate: the per-frame send
+ * cost (275-864 us) is what saturates the service loop, and four groups at
+ * 500 Hz load it exactly like one at 2000. The old per-group cap could not see
+ * that, and exempted continuous mode entirely on the grounds that its rate is
+ * operator-declared -- which is precisely how 8000 was reached. */
+#define AIN_MAX_TOTAL_BPS  2000
+
 /* Largest batch group `g` may use, given the channels it currently has.
  *
  * A block carries count*nchan samples, so the two settings are coupled and the
@@ -447,6 +469,51 @@ static inline int dserv_cfg_ain_rate(const box_config_t *c)
 { return c->ain_rate ? c->ain_rate : 50; }
 
 /* The hardware-average COUNT (1..128) the exponent encodes. */
+/* Blocks per second group `g` will publish, from config alone.
+ *
+ * Continuous is arithmetic: rate / decimate / batch. On-change is driven by
+ * input noise and cannot be predicted, so it counts as its own cap -- the
+ * honest worst case, which is what a ceiling has to be sized against. */
+static inline int ain_group_bps(const box_config_t *c, int g)
+{
+    if (g < 0 || g >= BOX_NAGROUPS || !c->ain_group_chans[g]) return 0;
+
+    int rate = dserv_cfg_ain_rate(c);
+
+    if (!c->ain_group_mode[g]) {
+        return rate < AIN_MAX_BLOCKS_PER_S ? rate : AIN_MAX_BLOCKS_PER_S;
+    }
+    int dec = c->ain_group_decimate[g] ? c->ain_group_decimate[g] : 1;
+    int bat = c->ain_group_batch[g] ? c->ain_group_batch[g] : 1;
+    int cap = ain_batch_cap(c, g);
+
+    if (bat > cap) bat = cap;                    /* what the sampler will use */
+    int bps = rate / (dec * bat);
+    return bps < 1 ? 1 : bps;
+}
+
+static inline int ain_total_bps(const box_config_t *c)
+{
+    int t = 0;
+
+    for (int g = 0; g < BOX_NAGROUPS; g++) t += ain_group_bps(c, g);
+    return t;
+}
+
+/* Apply-check-revert. Every setting that moves the block rate goes through
+ * this, so the refusal lands where the operator made the change rather than as
+ * missing data an hour later. Reverting is how one helper can guard fields of
+ * different types without a scratch copy of a 1 KB struct. */
+#define AIN_TRY_BPS(c, field, val, saveT)                                  \
+    do {                                                                   \
+        saveT _old = (field);                                              \
+        (field) = (val);                                                   \
+        if (ain_total_bps(c) > AIN_MAX_TOTAL_BPS) {                        \
+            (field) = _old;                                                \
+            return CFG_UNKNOWN;                                            \
+        }                                                                  \
+    } while (0)
+
 static inline int dserv_cfg_ain_ovs_count(const box_config_t *c)
 { return 1 << (c->ain_ovs & 7); }
 
@@ -782,7 +849,8 @@ static inline cfg_result_t dserv_cfg__config(box_config_t *c, const char *k,
     }
     if (strcmp(k, "ain/rate") == 0) {      /* box-wide base SCAN rate Hz (groups decimate from it) */
         long v = dserv_msg_as_long(m); if (v < 1) v = 1; if (v > 65535) v = 65535;
-        c->ain_rate = (uint16_t) v; c->applied_count++; return CFG_AIN;
+        AIN_TRY_BPS(c, c->ain_rate, (uint16_t) v, uint16_t);
+        c->applied_count++; return CFG_AIN;
     }
     if (strcmp(k, "ain/oversample") == 0) { /* hw conversions averaged per trigger: 1,2,4,...,128 */
         long v = dserv_msg_as_long(m);
@@ -827,8 +895,18 @@ static inline cfg_result_t dserv_cfg__config(box_config_t *c, const char *k,
              * ignored rather than refused -- the driver is the authority on
              * channel count, not this parser. */
             if (dserv_parse_pins(w, &mask) < 0 || (mask & ~0xFFu)) return CFG_UNKNOWN;
-            c->ain_group_chans[ng] = (uint8_t) mask;
-            (void) ain_batch_reclamp(c, ng);
+            {
+                uint8_t oldm = c->ain_group_chans[ng];
+                uint8_t oldb = c->ain_group_batch[ng];
+
+                c->ain_group_chans[ng] = (uint8_t) mask;
+                (void) ain_batch_reclamp(c, ng);
+                if (ain_total_bps(c) > AIN_MAX_TOTAL_BPS) {
+                    c->ain_group_chans[ng] = oldm;
+                    c->ain_group_batch[ng] = oldb;
+                    return CFG_UNKNOWN;
+                }
+            }
             c->applied_count++; return CFG_AIN;
         }
         if (strcmp(sub, "label") == 0) {
@@ -840,9 +918,14 @@ static inline cfg_result_t dserv_cfg__config(box_config_t *c, const char *k,
         }
         if (strcmp(sub, "mode") == 0) {
             char w[16]; dserv_msg_copy_cstr(m, w, sizeof w);
-            if (!strcmp(w, "continuous")) c->ain_group_mode[ng] = 1;
-            else if (!strcmp(w, "onchange")) c->ain_group_mode[ng] = 0;
-            else c->ain_group_mode[ng] = dserv_msg_as_long(m) ? 1 : 0;
+            {
+                uint8_t nm;
+
+                if (!strcmp(w, "continuous")) nm = 1;
+                else if (!strcmp(w, "onchange")) nm = 0;
+                else nm = dserv_msg_as_long(m) ? 1 : 0;
+                AIN_TRY_BPS(c, c->ain_group_mode[ng], nm, uint8_t);
+            }
             c->applied_count++; return CFG_AIN;
         }
         if (strcmp(sub, "deadband") == 0) {
@@ -851,12 +934,14 @@ static inline cfg_result_t dserv_cfg__config(box_config_t *c, const char *k,
         }
         if (strcmp(sub, "decimate") == 0) {
             long v = dserv_msg_as_long(m); if (v < 1) v = 1; if (v > 255) v = 255;
-            c->ain_group_decimate[ng] = (uint8_t) v; c->applied_count++; return CFG_AIN;
+            AIN_TRY_BPS(c, c->ain_group_decimate[ng], (uint8_t) v, uint8_t);
+            c->applied_count++; return CFG_AIN;
         }
         if (strcmp(sub, "batch") == 0) {
             long v = dserv_msg_as_long(m); if (v < 1) v = 1; if (v > 255) v = 255;
             if (v > ain_batch_cap(c, ng)) return CFG_UNKNOWN;   /* batch*nchan <= AIN_BLOCK_MAX */
-            c->ain_group_batch[ng] = (uint8_t) v; c->applied_count++; return CFG_AIN;
+            AIN_TRY_BPS(c, c->ain_group_batch[ng], (uint8_t) v, uint8_t);
+            c->applied_count++; return CFG_AIN;
         }
         if (strcmp(sub, "average") == 0) {
             if (dserv_msg_as_long(m)) c->ain_group_flags[ng] |= AIN_GROUP_FLAG_AVG;

@@ -138,6 +138,8 @@ static uint32_t sat_run;   /* consecutive cadence syncs that never parked */
 static uint32_t st_late_gap_last_us, st_late_gap_max_us;
 static uint32_t st_holds;
 static int64_t  last_block_ms[BOX_NAGROUPS];
+static int64_t  bps_win_ms;      /* start of the current 1 s total-rate window */
+static uint32_t bps_in_win;      /* blocks queued so far in it                 */
 
 /* Milliseconds left on the current hold, 0 if none. */
 static uint32_t hold_left_ms(void)
@@ -168,7 +170,9 @@ static uint32_t hold_left_ms(void)
  * mode whose rate nobody chose.
  *
  * Blocks refused here are COUNTED (ain/dbg/throttled), never silently lost. */
-#define AIN_MAX_BLOCKS_PER_S  200
+/* AIN_MAX_BLOCKS_PER_S and AIN_MAX_TOTAL_BPS now live in dserv_config.h -- the
+ * config layer refuses a setting that would exceed the total, so both sides
+ * have to agree on the number. */
 
 /* Derive what the sampler needs from the live config.
  *
@@ -249,6 +253,23 @@ static void feed_scan(const int16_t *scan, uint64_t t_us)
 				st_throttled++;
 				continue;
 			}
+			/* TOTAL-RATE BACKSTOP. The config layer refuses settings that
+			 * would exceed AIN_MAX_TOTAL_BPS, but on-change groups are
+			 * driven by input noise rather than by config, so the sum can
+			 * still run away at runtime. A fixed one-second window is
+			 * enough: this exists to make the box DEGRADE (counted in
+			 * ain/dbg/throttled) where it used to be lost outright at
+			 * 8000 blocks/s. */
+			if (now_ms - bps_win_ms >= 1000) {
+				bps_win_ms = now_ms;
+				bps_in_win = 0;
+			}
+			if (bps_in_win >= AIN_MAX_TOTAL_BPS) {
+				st_throttled++;
+				continue;
+			}
+			bps_in_win++;
+
 			last_block_ms[g] = now_ms;
 			if (k_msgq_put(&ain_q, &blk, K_NO_WAIT) != 0) {
 				/* The service loop is not draining. Drop the
