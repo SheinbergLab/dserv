@@ -278,41 +278,100 @@ namespace eval em {
     # eye position -- the same role P1-P4 sub-pixel difference plays for the
     # camera -- so they run through the SAME calibration (set-center + scale, or
     # biquadratic). Decoded via lib/extio-1.0.tm. CH0 -> h, CH1 -> v.
+    # TIMESTAMPS COME FROM THE BOX, NOT FROM `now`, and EVERY scan in the block
+    # is emitted -- see the two notes below. Both matter for the same reason:
+    # this is the path by which eye position reaches the data file, and a sample
+    # is only as useful as the instant it claims to have happened at.
     proc process_analog { dpoint data } {
         variable settings
         variable current_raw_h
         variable current_raw_v
 
-        set xy [::extio::ain_latest $data]     ;# newest scan -> {X Y} counts
-        if { [llength $xy] < 2 } return
-        lassign $xy raw_h raw_v
-        # stick orientation: swap CH0<->CH1 before any calibration, so center/
-        # scale/invert and set_current_as_center all act on the intended axes.
-        if { [dict get $settings swap_axes] } { lassign [list $raw_v $raw_h] raw_h raw_v }
-        set cur_t [now]
-        set current_raw_h $raw_h               ;# feeds set_current_as_center (post-swap)
-        set current_raw_v $raw_v
+        set d    [::extio::ain_decode $data]
+        set n    [dict get $d nchan]
+        set s    [dict get $d samples]
+        if { $n < 2 } return                   ;# need an h and a v
+        set rows [expr {[llength $s] / $n}]
+        if { $rows < 1 } return
 
-        # `dict get` per value rather than `dict with settings`. dict with copies
-        # EVERY key of the dict into a local and writes them all back on exit --
-        # 10 keys here, of which the taken branch reads at most 6, on a path that
-        # runs at the eye sample rate. Measured in dserv's em interp on a Pi 5:
-        # dict with 5.18 us vs 0.91 us for three dict gets. Nothing inside this
-        # block ever ASSIGNS a settings key, so the write-back was pure cost.
-        if {[dict get $settings use_biquadratic]} {
-            set h_deg [biquadratic_transform $raw_h $raw_v [dict get $settings bq_h_coeffs]]
-            set v_deg [biquadratic_transform $raw_h $raw_v [dict get $settings bq_v_coeffs]]
+        # ---- WHEN: the box's own sample time, on dserv's timeline ----
+        #
+        # `now` was dserv's clock AT CALLBACK TIME, which carries the transport
+        # delay from the box plus however long this interp took to get to the
+        # frame -- measured on officepi 2026-08-11 as ordinary 1-5 ms with
+        # intermittent ~200 ms spikes. That jitter landed directly in the eye
+        # timestamps, and it is exactly what the box's hardware-paced pipeline
+        # exists to remove: sample times there are trigger-clock arithmetic good
+        # to about a microsecond.
+        #
+        # It also put eye data and OBS BOUNDARIES on two different clocks --
+        # state/in_obs is published with the box's stamp, so aligning eye to obs
+        # was comparing a hardware instant against a receipt instant. The frame's
+        # own timestamp is the box's t0 mapped to dserv time, so both now come
+        # from the same place.
+        set t0  [dservTimestamp $dpoint]
+        # From the block, not from a nominal rate: the box's trigger clock runs
+        # off an RC oscillator ~0.3% away from nominal, so counting samples at
+        # "250 Hz" walks ~14 ms off across a 5 s trial.
+        set ivl [dict get $d interval_us]
+
+        # ---- WHAT: every scan, not just the newest ----
+        #
+        # This used ain_latest, which returns ONLY the last row. At batch 1 that
+        # is every sample and nothing is lost -- but batching is the standard
+        # tool for cutting the frame rate (`ain group G batch 10`), and with it
+        # this silently kept one sample in ten. The block is self-describing and
+        # says how many scans it carries; honour it, so reducing frame rate stays
+        # a bandwidth decision rather than a data-loss one.
+        #
+        # Settings are read ONCE, ahead of the loop, rather than per row. Same
+        # argument as the `dict get` vs `dict with` note this replaces (dict with
+        # copies all 10 keys in and writes them back; measured 5.18 us against
+        # 0.91 us on a Pi 5) -- it just now also has to not repeat per scan.
+        set swap [dict get $settings swap_axes]
+        set bq   [dict get $settings use_biquadratic]
+        if { $bq } {
+            set bqh [dict get $settings bq_h_coeffs]
+            set bqv [dict get $settings bq_v_coeffs]
         } else {
-            set h_deg [expr {[dict get $settings scale_h] * ($raw_h - [dict get $settings raw_center_h])}]
-            set v_deg [expr {[dict get $settings scale_v] * ($raw_v - [dict get $settings raw_center_v])}]
-            if {[dict get $settings invert_h]} { set h_deg [expr {-$h_deg}] }
-            if {[dict get $settings invert_v]} { set v_deg [expr {-$v_deg}] }
+            set sh [dict get $settings scale_h]
+            set sv [dict get $settings scale_v]
+            set ch [dict get $settings raw_center_h]
+            set cv [dict get $settings raw_center_v]
+            set ih [dict get $settings invert_h]
+            set iv [dict get $settings invert_v]
         }
 
-        set eyevals [binary format ff $h_deg $v_deg]
-        dservSetData eyetracking/position $cur_t 2 $eyevals
-        set rawvals [binary format ff $raw_h $raw_v]
-        dservSetData eyetracking/raw $cur_t 2 $rawvals
+        for { set k 0 } { $k < $rows } { incr k } {
+            set i     [expr {$k * $n}]
+            set raw_h [lindex $s $i]
+            set raw_v [lindex $s [expr {$i + 1}]]
+            # stick orientation: swap CH0<->CH1 before any calibration, so
+            # center/scale/invert and set_current_as_center all act on the
+            # intended axes.
+            if { $swap } { lassign [list $raw_v $raw_h] raw_h raw_v }
+
+            if { $bq } {
+                set h_deg [biquadratic_transform $raw_h $raw_v $bqh]
+                set v_deg [biquadratic_transform $raw_h $raw_v $bqv]
+            } else {
+                set h_deg [expr {$sh * ($raw_h - $ch)}]
+                set v_deg [expr {$sv * ($raw_v - $cv)}]
+                if { $ih } { set h_deg [expr {-$h_deg}] }
+                if { $iv } { set v_deg [expr {-$v_deg}] }
+            }
+
+            set t [expr {$t0 + $k * $ivl}]
+            dservSetData eyetracking/position $t 2 [binary format ff $h_deg $v_deg]
+            dservSetData eyetracking/raw      $t 2 [binary format ff $raw_h $raw_v]
+        }
+
+        # The NEWEST scan is what "where is the eye now" means: the center-capture
+        # helper and the scalar ess/em_pos both want the current position, not a
+        # replay. Published once per block rather than per scan -- em_pos is a
+        # level, and at batch 10 per-scan writes would be nine redundant sets.
+        set current_raw_h $raw_h               ;# feeds set_current_as_center (post-swap)
+        set current_raw_v $raw_v
         dservSet ess/em_pos "$h_deg $v_deg"
     }
 
