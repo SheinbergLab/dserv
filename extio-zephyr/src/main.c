@@ -390,7 +390,22 @@ static const box_ota_flash_t g_ota_flash_ops = {
  * advance every second so a frozen one is diagnostic; making it conditional on
  * change would be harmless today (it is a counter) and catastrophic the moment
  * someone made it a level. */
-#define PUB_PERIODIC_MAX 32   /* was 24; +7 dbg/pub_* leaves joined at stage 1 */
+/* 64, was 32. SIZE THIS ABOVE THE LEAF COUNT OR THE SUPPRESSION SILENTLY STOPS
+ * WORKING FOR THE EXCESS -- the table is first-come-first-served and overflow
+ * publishes unconditionally (see below), so the leaves that lose are simply the
+ * ones registered last, and nothing says so. Stage 2's twelve ain/dbg pacing
+ * leaves went on the end of that array and pushed the total past 32: measured
+ * on boxa, telemetry was running at ~48 frames/s against 250 frames/s of actual
+ * eye data, i.e. a sixth of the uplink spent restating numbers that had not
+ * changed. The whole point of this table is that not sending is worth more than
+ * sending efficiently; an undersized one gives that back without a symptom you
+ * would ever look for.
+ *
+ * There are ~53 distinct leaves today (24 literals + the ain/dbg block, plus 20
+ * ain/stream/* that only appear when streamtest runs). If that grows past 64,
+ * raise this -- dbg/pub_suppressed collapsing toward zero while pub_frames
+ * climbs is the tell. */
+#define PUB_PERIODIC_MAX 64
 #define PUB_REFRESH_S    30
 
 static struct { const char *leaf; uint32_t v; uint8_t seen; } pub_hist[PUB_PERIODIC_MAX];

@@ -186,9 +186,46 @@ static int stream_arm(uint8_t mask, uint8_t nch, uint8_t avgs_exp,
 				continue;
 			}
 			lpadc_conv_command_config_t cc;
+			uint8_t diff = 0;
+			int in = box_adc_input_of(ch, &diff);
+
+			/* THE BOX'S CHANNEL INDEX IS NOT THE LPADC CHANNEL
+			 * NUMBER. It is a CMD-slot index; the board picks the
+			 * pad with `zephyr,input-positive`, whose low 4 bits are
+			 * the LPADC channel and whose bit 5 selects side B
+			 * (adc_mcux_lpadc.c:214-217). On this board ain channel
+			 * 1 is CH0B -- channel ZERO, side B -- so the obvious
+			 * `channelNumber = ch` read ADC0_A1 instead: an
+			 * unconnected pad that reported a joystick axis at half
+			 * range with an offset, because it was picking the
+			 * signal up by coupling. Plausible, self-consistent and
+			 * wrong, which is the whole reason box_adc.h now
+			 * publishes the map instead of leaving each caller to
+			 * assume one. Found on boxa 2026-08-11 by moving the
+			 * stick and watching one axis behave and one not.
+			 *
+			 * Refuse what this cannot represent rather than convert
+			 * it approximately -- a differential channel or a
+			 * non-unity gain needs a command shape we do not build,
+			 * and the polled path is right there. */
+			if (in < 0 || diff) {
+				return -9;
+			}
 
 			LPADC_GetDefaultConvCommandConfig(&cc);
-			cc.channelNumber       = ch;
+			/* ADC_CMDL_ADCH's own mask, not a hand-written one: the
+			 * field is FIVE bits (0x1F -- channels run to 31), while
+			 * the driver's comment beside the same line says "lower
+			 * 4 bits". A hand-rolled 0xF agrees with the prose and
+			 * would silently fold channels 16-31 onto 0-15. Side B
+			 * is bit 5, clear of the field either way. */
+			cc.channelNumber       = ADC_CMDL_ADCH((uint32_t) in);
+#if !(defined(FSL_FEATURE_LPADC_HAS_B_SIDE_CHANNELS) && \
+	(FSL_FEATURE_LPADC_HAS_B_SIDE_CHANNELS == 0U))
+			if ((uint32_t) in & 0x20u) {
+				cc.sampleChannelMode = kLPADC_SampleChannelSingleEndSideB;
+			}
+#endif
 			cc.hardwareAverageMode =
 				(lpadc_hardware_average_mode_t) avgs_exp;
 			cc.chainedNextCommandNumber = 0;   /* patched below */

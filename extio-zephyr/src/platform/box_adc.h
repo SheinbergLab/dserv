@@ -98,6 +98,26 @@ uint8_t     box_adc_channels(void);  /* 4 (MCP3204) / 8 (ADC 20) / 0 if absent *
 uint8_t     box_adc_bits(void);      /* resolution, 12 for both parts above */
 uint16_t    box_adc_vref_mv(void);   /* full-scale in mV, for counts -> volts */
 
+/* THE PHYSICAL INPUT behind ain channel `ch`, in the devicetree's
+ * `zephyr,input-positive` encoding -- for a caller that builds its own
+ * conversion commands instead of going through adc_read(). Returns -1 when
+ * there is no declared map, or when the channel is declared with a gain this
+ * cannot represent. `differential`, if non-NULL, receives 1 for a differential
+ * channel; such a channel needs a command shape this accessor does not describe,
+ * so a caller must refuse it rather than convert it single-ended.
+ *
+ * WHY THIS IS PUBLIC. `channel_id` -- the box's flat wire index, the `0,1` in
+ * `ain group G channels 0,1` -- is a CMD-slot index on the LPADC, not a pad.
+ * The board chooses the pad, via input-positive, whose low 4 bits are the LPADC
+ * channel number and whose bit 5 selects side B (adc_mcux_lpadc.c:214-217). On
+ * this board ain channel 1 is CH0B: LPADC channel ZERO, side B. Anything that
+ * assumes index == channel number reads a different pad and gets a plausible
+ * number from it -- box_adc_stream did exactly that until 2026-08-11, and it
+ * presented as a joystick axis with half range and an offset, because the pad
+ * it actually read was picking the signal up by coupling. The map has always
+ * been here (see "the CHANNEL MAP" in box_adc.c); it just was not reachable. */
+int         box_adc_input_of(uint8_t ch, uint8_t *differential);
+
 /* Box pin this ain channel lives on, or -1 for a channel on a DEDICATED pad
  * (one that is not a box pin at all, so it is always analog). Declared per
  * board in zephyr,user/box-ain-pins, indexed by ain channel. */

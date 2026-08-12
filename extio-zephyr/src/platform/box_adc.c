@@ -230,6 +230,32 @@ void box_adc_pm_stats(uint32_t *suspends, uint32_t *resumes)
 	if (resumes)  *resumes  = pm_resumes;
 }
 
+int box_adc_input_of(uint8_t ch, uint8_t *differential)
+{
+#ifdef BOX_ADC_DT_MAP
+	if (ch < ARRAY_SIZE(dt_ch)) {
+		if (differential) {
+			*differential = dt_ch[ch].differential ? 1u : 0u;
+		}
+		/* Gain is reported as "not plain" by refusing, not by scaling:
+		 * a caller building its own conversion command cannot honour a
+		 * gain it does not know about, and silently converting at 1x
+		 * what the board declared at 2x is a wrong number that looks
+		 * right. Only ADC_GAIN_1 is claimed here. */
+		if (dt_ch[ch].gain != ADC_GAIN_1) {
+			return -1;
+		}
+		return (int) dt_ch[ch].input_positive;
+	}
+#else
+	ARG_UNUSED(ch);
+	if (differential) {
+		*differential = 0;
+	}
+#endif
+	return -1;
+}
+
 int box_adc_pin_of(uint8_t ch)
 {
 #ifdef BOX_HAVE_AIN_PINMAP
@@ -353,6 +379,8 @@ int         box_adc_resume(void)   { return -ENODEV; }
 int         box_adc_powered(void)  { return 0; }
 void        box_adc_pm_stats(uint32_t *s, uint32_t *r) { if (s) *s = 0; if (r) *r = 0; }
 int         box_adc_pin_of(uint8_t ch) { ARG_UNUSED(ch); return -1; }
+int         box_adc_input_of(uint8_t ch, uint8_t *d)
+{ ARG_UNUSED(ch); if (d) *d = 0; return -1; }
 uint8_t     box_adc_active_mask(const box_config_t *c) { ARG_UNUSED(c); return 0; }
 const char *box_adc_name(void)     { return "none"; }
 uint8_t     box_adc_channels(void) { return 0; }
