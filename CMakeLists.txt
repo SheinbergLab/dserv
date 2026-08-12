@@ -273,18 +273,35 @@ elseif(WIN32)
         OpenSSL::Crypto
     )
 else()
-    target_link_libraries(dserv 
-        ${LIBTCL} 
-        ${LIBJANSSON} 
-        ${LIBZ} 
-        pthread 
-        rt 
+    target_link_libraries(dserv
+        ${LIBTCL}
+        ${LIBJANSSON}
+        ${LIBZ}
+        pthread
+        rt
         dl
         usockets
         ${USOCKETS_LIBS}
         OpenSSL::SSL
         OpenSSL::Crypto
     )
+
+    # Load the libtcl9.0.so we SHIP, not the distro's.
+    #
+    # The deb installs our own libtcl9.0.so into /usr/local/lib (see
+    # InstallRequiredSystemLibraries below), built from the core-9-0-N tag
+    # deps/tcl is pinned to. But on Debian both copies land in the ld cache and
+    # the multiarch one is listed first -- /etc/ld.so.conf.d/*.conf is globbed
+    # alphabetically, so aarch64-linux-gnu.conf beats libc.conf, which is what
+    # contributes /usr/local/lib. With no RUNPATH on the binary, apt's
+    # libtcl9.0 won and the shipped one sat unused: measured on officepi and
+    # hm-0 (trixie, libtcl9.0 9.0.1+dfsg-2) with dserv built against 9.0.4.
+    #
+    # DT_RUNPATH is searched before the cache, so this makes build-time and
+    # run-time Tcl the same library again. Note it is deliberately narrow --
+    # RUNPATH does not propagate to transitive deps, and modules dlopened later
+    # reuse the libtcl9.0.so already loaded under that SONAME.
+    set_target_properties(dserv PROPERTIES INSTALL_RPATH "/usr/local/lib")
 endif()
 
 enable_testing()
