@@ -1674,6 +1674,7 @@ set ::extio_cfg_writable {
     wifi/ssid wifi/pass wifi/pm
     obs/pin obs/mode sync/pin xport/mode
     ain/enable ain/rate ain/oversample ain/pace
+    dbg/level
     console channel
 }
 set ::extio_cfg_writable_rx {

@@ -413,7 +413,23 @@ static int     pub_force;          /* set once per pass; forces a full refresh *
 static int64_t pub_refresh_at;
 static uint32_t pub_suppressed;    /* frames NOT sent -- the win, measured */
 
-static void pub_periodic(const char *leaf, uint32_t v)
+/* ---- telemetry CLASS (v26) ----
+ *
+ * HEALTH answers "is this box alive, and is it losing data" -- the handful you
+ * want from every box, always. FULL is everything else: the counters you turn on
+ * for an afternoon while chasing something and turn off again.
+ *
+ * The split exists because telemetry is a PER-SEND CPU cost, not a bandwidth
+ * one: 275-864 us per 128-byte frame. By stage 2 a box was spending ~48
+ * frames/s on diagnostics against 250 of actual eye data, and at batch 10 the
+ * diagnostics OUTWEIGHED the science. Suppression can't help there -- a counter
+ * that advances every second genuinely changes every second -- so the only
+ * lever left is not asking for it.
+ *
+ * The watchdog does not come through here at any level, deliberately: a debug
+ * setting that could silence the liveness beacon would let a dead box look like
+ * a quiet one. */
+static void pub_periodic_raw(const char *leaf, uint32_t v)
 {
 	unsigned i;
 
@@ -445,6 +461,49 @@ static void pub_periodic(const char *leaf, uint32_t v)
 		dserv_msg_int(pf, pn, 0, (int32_t) v);
 		box_pub_bulk(pf);
 	}
+}
+
+/* HEALTH: published at every level except `off`. */
+static void pub_periodic(const char *leaf, uint32_t v)
+{
+	if (cfg.dbg_level == DBG_LEVEL_OFF) {
+		return;
+	}
+	pub_periodic_raw(leaf, v);
+}
+
+/* FULL: published only when someone asked for it. */
+static void pub_dbg(const char *leaf, uint32_t v)
+{
+	if (cfg.dbg_level != DBG_LEVEL_FULL) {
+		return;
+	}
+	pub_periodic_raw(leaf, v);
+}
+
+/* Which ain/dbg leaves are health. Named rather than flagged in the array so
+ * the classification reads as one list instead of a column of booleans that
+ * nobody checks against each other. */
+static int ain_dbg_is_health(const char *leaf)
+{
+	static const char *const h[] = {
+		"ain/dbg/sweeps",   /* is it sampling at all */
+		"ain/dbg/running",  /* ...and does it think it is */
+		"ain/dbg/powered",
+		"ain/dbg/pace",     /* hardware or software paced RIGHT NOW */
+		"ain/dbg/dropped",  /* losing blocks to a slow uplink */
+		"ain/dbg/late",     /* polled: samples never taken */
+		"ain/dbg/overruns", /* stream: samples taken, not collected */
+		"ain/dbg/slips",    /* stream: channel identity lost -- never ignore */
+		"ain/dbg/chans",
+	};
+
+	for (unsigned i = 0; i < ARRAY_SIZE(h); i++) {
+		if (strcmp(leaf, h[i]) == 0) {
+			return 1;
+		}
+	}
+	return 0;
 }
 
 #if defined(BOX_HAVE_OTA_SLOT)
@@ -2871,9 +2930,9 @@ int main(void)
 				 * budget rather than a guess. */
 				uint32_t ul = 0, um = 0, ud = 0;
 				box_net_usb_send_stats(&ul, &um, &ud);
-				pub_periodic("dbg/usb_send_us",     ul);
-				pub_periodic("dbg/usb_send_max_us", um);
-				pub_periodic("dbg/usb_drops",       ud);
+				pub_dbg("dbg/usb_send_us",     ul);
+				pub_dbg("dbg/usb_send_max_us", um);
+				pub_dbg("dbg/usb_drops",       ud);
 				{
 					/* The discovery beacon's transmit ledger. A
 					 * fire-and-forget broadcast has no ack, so
@@ -2885,23 +2944,23 @@ int main(void)
 					uint32_t bs = 0, bf = 0;
 					int be = 0;
 					box_beacon_stats(&bs, &bf, &be);
-					pub_periodic("dbg/beacon_sent",  bs);
-					pub_periodic("dbg/beacon_fail",  bf);
-					pub_periodic("dbg/beacon_errno", be);
+					pub_dbg("dbg/beacon_sent",  bs);
+					pub_dbg("dbg/beacon_fail",  bf);
+					pub_dbg("dbg/beacon_errno", be);
 				}
 				/* the at-schedule ledger (+23): cumulative, so a host
 				 * can delta them over any obs window and classify a
 				 * missing pulse from the datafile alone */
-				pub_periodic("sched/accepted", sched_acc);
-				pub_periodic("sched/fired",    sched_fired_n);
-				pub_periodic("sched/refused",  sched_ref);
+				pub_dbg("sched/accepted", sched_acc);
+				pub_dbg("sched/fired",    sched_fired_n);
+				pub_dbg("sched/refused",  sched_ref);
 				/* +29 late split: late_arr = the frame ARRIVED after
 				 * its target (host/network); late_proc = arrived in
 				 * time but armed late -- pinned ~0 on eth by
 				 * construction, so growth here is the fast path
 				 * regressing. */
-				pub_periodic("sched/late_arr",  sched_late_arr);
-				pub_periodic("sched/late_proc", sched_late_proc);
+				pub_dbg("sched/late_arr",  sched_late_arr);
+				pub_dbg("sched/late_proc", sched_late_proc);
 				pub_periodic("dbg/di_fifo_drop", box_gpio_di_fifo_drops());
 #if defined(BOX_HAVE_ADC)
 				/* Analog health, published because its absence cost a box.
@@ -3001,7 +3060,11 @@ int main(void)
 						{ "ain/dbg/rate_ppm",   (uint32_t) s_ppm },
 					};
 					for (unsigned ai2 = 0; ai2 < ARRAY_SIZE(as); ai2++) {
-						pub_periodic(as[ai2].leaf, as[ai2].v);
+						if (ain_dbg_is_health(as[ai2].leaf)) {
+							pub_periodic(as[ai2].leaf, as[ai2].v);
+						} else {
+							pub_dbg(as[ai2].leaf, as[ai2].v);
+						}
 					}
 				}
 #endif
@@ -3021,7 +3084,7 @@ int main(void)
 			 * mechanism exists to remove -- an instrument that consumes what it
 			 * measures. Divide by the refresh interval for frames/s avoided. */
 			if (pub_force) {
-				pub_periodic("dbg/pub_suppressed", pub_suppressed);
+				pub_dbg("dbg/pub_suppressed", pub_suppressed);
 			}
 
 			/* What the publisher dropped, delayed, and batched. Published
@@ -3034,13 +3097,13 @@ int main(void)
 				box_pub_stats_t ps;
 
 				box_pub_get_stats(&ps);
-				pub_periodic("dbg/pub_bulk_drop",   ps.bulk_dropped);
-				pub_periodic("dbg/pub_ev_drop",     ps.ev_dropped);
-				pub_periodic("dbg/pub_wire_drop",   ps.wire_dropped);
-				pub_periodic("dbg/pub_wait_max_us", ps.wait_max_us);
-				pub_periodic("dbg/pub_bulk_hwm",    ps.bulk_hwm);
-				pub_periodic("dbg/pub_gathers",     ps.gathers);
-				pub_periodic("dbg/pub_frames",      ps.gather_frames);
+				pub_dbg("dbg/pub_bulk_drop",   ps.bulk_dropped);
+				pub_dbg("dbg/pub_ev_drop",     ps.ev_dropped);
+				pub_dbg("dbg/pub_wire_drop",   ps.wire_dropped);
+				pub_dbg("dbg/pub_wait_max_us", ps.wait_max_us);
+				pub_dbg("dbg/pub_bulk_hwm",    ps.bulk_hwm);
+				pub_dbg("dbg/pub_gathers",     ps.gathers);
+				pub_dbg("dbg/pub_frames",      ps.gather_frames);
 			}
 
 #if defined(BOX_HAVE_CPU1)
@@ -3053,8 +3116,8 @@ int main(void)
 				int c1_alive;
 
 				box_cpu1_stats(&c1, &c1_alive);
-				pub_periodic("dbg/cpu1_hb",    c1);
-				pub_periodic("dbg/cpu1_alive", (uint32_t) c1_alive);
+				pub_dbg("dbg/cpu1_hb",    c1);
+				pub_dbg("dbg/cpu1_alive", (uint32_t) c1_alive);
 			}
 #endif
 

@@ -23,7 +23,9 @@
 #include <string.h>
 
 #define BOX_PERSIST_MAGIC    0x57494F31u   /* "WIO1" */
-#define BOX_PERSIST_VERSION  25  /* v25: ain_pace (auto|polled|stream -- an OVERRIDE of
+#define BOX_PERSIST_VERSION  26  /* v26: dbg_level (health|full|off -- periodic
+                                  * telemetry became a per-send CPU cost worth opting into).
+                                  * v25: ain_pace (auto|polled|stream -- an OVERRIDE of
                                   * the build's sampler pacing, so making the
                                   * hardware-paced path the default stays a firmware
                                   * decision and does not need every box re-saved).

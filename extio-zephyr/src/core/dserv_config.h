@@ -239,10 +239,32 @@ typedef struct {
      * Boards without CONFIG_BOX_ADC_STREAM ignore it entirely: there is no
      * hardware-paced path to select, and `auto` resolves to polled. */
     uint8_t  ain_pace;
+    /* v26: how much periodic telemetry this box publishes.
+     *
+     * 0 = HEALTH (default), 1 = FULL, 2 = OFF -- and health MUST be the zero,
+     * because an older blob loads absent fields as zero and the default has to
+     * be what those boxes get.
+     *
+     * WHY IT EXISTS. Telemetry was unconditional and it grew by accretion: by
+     * stage 2 a box was sending ~48 diagnostic frames/s against 250 frames/s of
+     * actual eye data, and at batch 10 the diagnostics OUTWEIGHED the science
+     * (47 against 25). Each frame costs 275-864 us of CPU to send, so the cost
+     * is per-send overhead rather than bandwidth -- not sending is worth far
+     * more than sending efficiently. Health keeps what answers "is this box
+     * alive and is it losing data"; full is what you turn on for an afternoon
+     * while chasing something.
+     *
+     * The watchdog is NOT gated by this at any level. Its whole purpose is to
+     * advance every second so a frozen one is diagnostic, and a debug setting
+     * that could silence the liveness beacon would be a setting that can make a
+     * dead box look like a quiet one. */
+    uint8_t  dbg_level;
 } box_config_t;
 
 /* box_config_t.ain_pace */
 enum { AIN_PACE_AUTO = 0, AIN_PACE_POLLED = 1, AIN_PACE_STREAM = 2 };
+/* box_config_t.dbg_level */
+enum { DBG_LEVEL_HEALTH = 0, DBG_LEVEL_FULL = 1, DBG_LEVEL_OFF = 2 };
 
 #define OBS_MODE_MIRROR 0
 #define OBS_MODE_LEADER 1
@@ -679,6 +701,14 @@ static inline cfg_result_t dserv_cfg__config(box_config_t *c, const char *k,
         while ((1 << e) < v && e < 7) e++;
         if (v < 1 || (1 << e) != v) return CFG_UNKNOWN;   /* exact powers of two only */
         c->ain_ovs = e; c->applied_count++; return CFG_AIN;
+    }
+    if (strcmp(k, "dbg/level") == 0) {   /* health | full | off -- see dbg_level */
+        char w[16]; dserv_msg_copy_cstr(m, w, sizeof w);
+        if (!strcmp(w, "health"))      c->dbg_level = DBG_LEVEL_HEALTH;
+        else if (!strcmp(w, "full"))   c->dbg_level = DBG_LEVEL_FULL;
+        else if (!strcmp(w, "off"))    c->dbg_level = DBG_LEVEL_OFF;
+        else return CFG_UNKNOWN;
+        c->applied_count++; return CFG_AIN;
     }
     if (strcmp(k, "ain/pace") == 0) {      /* auto | polled | stream -- see ain_pace */
         char w[16]; dserv_msg_copy_cstr(m, w, sizeof w);

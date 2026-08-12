@@ -256,6 +256,8 @@ static inline void box_cli_dump(const box_config_t *c)
     if (c->ain_en)                        DUMPF("ain enable 1\r\n");
     if (c->ain_rate)                      DUMPF("ain rate %u\r\n", c->ain_rate);
     if (c->ain_ovs)                       DUMPF("ain oversample %u\r\n", 1u << c->ain_ovs);
+    if (c->dbg_level == DBG_LEVEL_FULL)   DUMPF("dbg level full\r\n");
+    if (c->dbg_level == DBG_LEVEL_OFF)    DUMPF("dbg level off\r\n");
     if (c->ain_pace == AIN_PACE_POLLED)   DUMPF("ain pace polled\r\n");
     if (c->ain_pace == AIN_PACE_STREAM)   DUMPF("ain pace stream\r\n");
     for (int ag = 0; ag < BOX_NAGROUPS; ag++)
@@ -429,6 +431,15 @@ static inline cli_action_t box_cli_exec(box_config_t *c, const char *line,
         }
         c->ain_ovs = e;
         snprintf(out, outsz, "OK ain oversample=%dx (hw average per trigger)\r\n", v);
+        return CLI_AIN;
+    }
+    if (sscanf(line, "dbg level %15s", w) == 1) {
+        if (!strcmp(w, "health"))    c->dbg_level = DBG_LEVEL_HEALTH;
+        else if (!strcmp(w, "full")) c->dbg_level = DBG_LEVEL_FULL;
+        else if (!strcmp(w, "off"))  c->dbg_level = DBG_LEVEL_OFF;
+        else { snprintf(out, outsz, "ERR dbg level health|full|off\r\n"); return CLI_ERR; }
+        c->applied_count++;
+        snprintf(out, outsz, "OK dbg level=%s (watchdog always publishes)\r\n", w);
         return CLI_AIN;
     }
     if (sscanf(line, "ain pace %15s", w) == 1) {

@@ -366,6 +366,8 @@ void box_announce_manifest(const box_config_t *c)
 		 * is ain/dbg/pace, which can differ (a refused stream start falls
 		 * back to polled). A host configuring a box needs this one; a host
 		 * diagnosing one needs the other. */
+		pub_str(c, "dbg/level", c->dbg_level == DBG_LEVEL_FULL ? "full" :
+					 c->dbg_level == DBG_LEVEL_OFF  ? "off"  : "health");
 		pub_str(c, "ain/pace", c->ain_pace == AIN_PACE_POLLED ? "polled" :
 				       c->ain_pace == AIN_PACE_STREAM ? "stream" : "auto");
 		pub_str(c, "net/mode",   c->net_mode ? "static" : "dhcp");
