@@ -345,6 +345,72 @@ async function doPulse(box, pin, us) {
   catch (e) { alert(`pulse ${pin} failed: ${e.message || e}`); }
 }
 
+/* Batch, with the cap the FIRMWARE silently enforces made visible.
+ *
+ * ain_group_batch_eff() clamps batch so batch*nchan <= AIN_BLOCK_MAX (24
+ * int16s per block), but nothing refuses the write -- so a group configured
+ * batch 20 on 2 channels reads back 20 and samples 12. That is a config field
+ * that lies, and the page is where it can be caught. */
+function batchCell(b, gn, i) {
+  const raw = field(b, `ain/group/${gn}/batch`, `ain/group/${i}/batch`);
+  const nch = String(get(b, `ain/group/${gn}/chans`, '')).split(',').filter(x => x !== '').length;
+  const cur = Number(get(b, `ain/group/${gn}/batch`, 0));
+  if (!nch || !cur) return raw;
+  const cap = Math.max(1, Math.floor(24 / nch));
+  return cur > cap
+    ? `${raw} <span class="age" style="color:#ffb4a8" title="batch × channels must be ≤ 24; the box will sample ${cap}">→ clamped to ${cap}</span>`
+    : raw;
+}
+
+/* ---- pacing / telemetry / clock-calibration controls ----
+ *
+ * These three are config leaves the box has had for a while with no UI, so they
+ * were reachable only from the console or a raw datapoint write. A setting you
+ * cannot see is the same problem as one that lies. */
+const selOf = (b, leaf, cur, opts) =>
+  `<select onchange="cfgSet('${esc(b)}','${leaf}',this.value)">` +
+  opts.map(o => `<option ${o === cur ? 'selected' : ''}>${o}</option>`).join('') + '</select>';
+
+const paceSel = (b) => selOf(b, 'ain/pace', String(get(b, 'ain/pace', 'auto')),
+                             ['auto', 'polled', 'stream']);
+const dbgLevelSel = (b) => selOf(b, 'dbg/level', String(get(b, 'dbg/level', 'health')),
+                                 ['health', 'full', 'off']);
+
+/* APPLIED next to MEASURED, because the gap between them is the whole point:
+ * they differ until someone calibrates, and that is the state worth seeing.
+ * clk_ppm_meas is a full-telemetry leaf, so at health it reads "—" and the
+ * button is the only way to act on it. */
+function clkCell(b) {
+  /* Prefer the MANIFEST leaf, fall back to the telemetry one. Firmware before
+   * the announce gained ain/clk_ppm still reports the applied value under
+   * ain/dbg, and showing "—" for a box that is in fact calibrated would be its
+   * own small lie. */
+  const hasManifest = get(b, 'ain/clk_ppm', null) !== null;
+  const appliedLeaf = hasManifest ? 'ain/clk_ppm' : 'ain/dbg/clk_ppm';
+  const applied = get(b, appliedLeaf, null);
+  const meas    = get(b, 'ain/dbg/clk_ppm_meas', null);
+  const a = applied === null ? '—' : `<b>${applied}</b> ${ageSpan(b, appliedLeaf)}`;
+  /* WITH ITS AGE, because clk_ppm_meas is a full-telemetry leaf and dserv
+   * retains: at health it keeps rendering whatever the last full session left,
+   * which reads as a live measurement and is not one. */
+  const m = meas === null ? '<span class="age">measured: — (set telemetry=full)</span>'
+                          : `<span class="age">measured: ${meas}</span> ${ageSpan(b, 'ain/dbg/clk_ppm_meas')}`;
+  return `${a} ${m}
+    <button title="Adopt the measured value as this box's applied calibration. Needs a running stream and a settled estimate (~1-2 min); refuses otherwise."
+            onclick="ainCalibrate('${esc(b)}')">Calibrate</button>`;
+}
+
+/* Calibration is a COMMAND, not config: it tells the box to adopt what it has
+ * measured. The result still has to be Saved like any other config write --
+ * the operator decides when a bench measurement becomes the box's constant. */
+async function ainCalibrate(box) {
+  try {
+    await conn.send(`dservSet extio/${box}/cmd/ain/calibrate 1`, 'extio');
+    askAnnounce(box);
+    setTimeout(() => renderPanel(), 800);
+  } catch (e) { alert(`calibrate failed: ${e.message || e}`); }
+}
+
 /* Ask the box to re-publish after an edit, DEBOUNCED.
  *
  * Only some config changes re-announce as a side effect; ain/rate, dserv/ip,
@@ -913,7 +979,7 @@ function renderPanel() {
                onchange="cfgSet('${b}','ain/group/${i}/deadband',this.value)"></td>
           <td><input class="w4${wo}"${t} placeholder="1"
                onchange="cfgSet('${b}','ain/group/${i}/decimate',this.value)"></td>
-          <td><input class="w4${wo}"${t} placeholder="1"
+          <td><input class="w4${wo}"${t} placeholder="1" title="scans per block; batch × channels ≤ 24"
                onchange="cfgSet('${b}','ain/group/${i}/batch',this.value)"></td>
           <td><input type="checkbox"
                onchange="cfgSet('${b}','ain/group/${i}/average',this.checked?1:0)"></td>
@@ -925,7 +991,7 @@ function renderPanel() {
         <td>${agModeSel(i, get(b, `ain/group/${gn}/mode`, 'onchange'))}</td>
         <td>${field(b, `ain/group/${gn}/deadband`, `ain/group/${i}/deadband`)}</td>
         <td>${field(b, `ain/group/${gn}/decimate`, `ain/group/${i}/decimate`)}</td>
-        <td>${field(b, `ain/group/${gn}/batch`, `ain/group/${i}/batch`)}</td>
+        <td>${batchCell(b, gn, i)}</td>
         <td><input type="checkbox" ${get(b, `ain/group/${gn}/avg`) == 1 ? 'checked' : ''}
              onchange="cfgSet('${b}','ain/group/${i}/average',this.checked?1:0)"></td>
         <td>${lastCell(gn)}</td>
@@ -1061,7 +1127,10 @@ function renderPanel() {
        sampling runs only while analog is enabled and a member channel is available.
        <b>Channels are a comma-separated list</b> in ascending order — <code>0,1</code> for a
        two-axis eye or joystick signal, <code>2</code> for a single channel — and the block's
-       columns follow that same order. A range or space-separated form is not accepted.${
+       columns follow that same order. A range or space-separated form is not accepted.
+       <b>batch × channels must be ≤ 24</b> (the block payload holds 24 samples): a larger
+       <code>batch</code> is stored as written but SILENTLY CLAMPED when sampling, so 2 channels
+       cap at 12 and 6 channels at 4.${
        agAnnounced ? '' : ' <b>This firmware does not announce analog group config</b> — dashed fields are write-only (a write still configures the box); update the firmware for full readback.'}</p>
 
     <h2>analog</h2>
@@ -1074,7 +1143,12 @@ function renderPanel() {
           <th>base rate Hz</th><td>${field(b, 'ain/rate', 'ain/rate')} ${ageSpan(b, 'ain/rate')}</td></tr>
       <tr><th title="LPADC hardware averaging: N conversions averaged in silicon per trigger (1,2,4,...,128). The noise tool that does NOT cost sweep rate — prefer base 1000 + oversample 16 over base 10000 + decimate 10 + avg.">oversample ×</th>
           <td>${field(b, 'ain/oversample', 'ain/oversample')} ${ageSpan(b, 'ain/oversample')}</td>
-          <th></th><td></td></tr>
+          <th title="How sampling is clocked. auto follows the firmware default; stream is the hardware-paced CTIMER/DMA path (sample times good to ~1 µs); polled is the software-timed sampler. ain/dbg/pace says what is RUNNING — it can differ if a stream start was refused.">pacing</th>
+          <td>${paceSel(b)} ${ageSpan(b, 'ain/pace')}</td></tr>
+      <tr><th title="Measured deviation of the box's CTIMER source (an RC oscillator) from nominal, in ppm. Applied at stream start so a requested rate is the delivered one. Sample TIMES are correct either way — this only makes the rate match the label.">clock cal ppm</th>
+          <td>${clkCell(b)}</td>
+          <th title="How much periodic telemetry this box publishes. health = a handful that answer 'is it alive and losing data'; full = every counter, for an afternoon of chasing something; off = nothing but the watchdog.">telemetry</th>
+          <td>${dbgLevelSel(b)} ${ageSpan(b, 'dbg/level')}</td></tr>
       <tr><th>running</th><td>${dbg('running')}</td><th>powered</th><td>${dbg('powered')}</td></tr>
       <tr><th>sweeps</th><td>${dbg('sweeps')}</td><th>throttled</th><td>${dbg('throttled')}</td></tr>
     </table>
