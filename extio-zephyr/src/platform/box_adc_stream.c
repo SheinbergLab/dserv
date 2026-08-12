@@ -87,6 +87,73 @@ static uint8_t  g_nblocks;
 static uint32_t stream_majors;      /* consumed TCDs (blocks) in loop mode    */
 static uint8_t  stream_reload_idx;  /* which block to re-queue next           */
 
+/* ---- STAGE 3: sample times from the TRIGGER CLOCK, not from the ISR --------
+ *
+ * The cadence is exact hardware and the observation of it is not. Every window
+ * the DMA completes is stamped in the callback, and that stamp carries the
+ * conversion chain, the FIFO-to-DMA hand-off and the interrupt latency on top of
+ * the instant we actually want. Those terms are all POSITIVE -- a stamp can be
+ * late, never early -- which is the whole lever: the minimum observed error over
+ * many windows IS the fixed part, and everything above it is jitter to discard.
+ *
+ * So sample times are generated, not measured:
+ *
+ *     t(window n) = anchor + (n*spacing + (spacing-1)/2) * trig_period
+ *
+ * evenly spaced by construction, with the ISR only ever correcting the anchor.
+ * The centre of the aperture is the right instant for an AVERAGED window: the
+ * value is the mean of `spacing` conversions spread across it, so its time is
+ * their midpoint, not the last one. At 16x spacing that is a 2 ms correction at
+ * 250 Hz -- larger than every jitter term we have been chasing.
+ *
+ * TRIG PERIOD COMES FROM THE REGISTER, NOT THE REQUEST. MR3 is an integer, so
+ * the rate actually programmed is src/(2*(MR3+1)) and only equals the asked-for
+ * rate when it divides evenly. Modelling from the request would accumulate that
+ * difference as unbounded drift -- at 250 Hz a 0.1% error is 3.6 s/hour.
+ *
+ * The anchor tracks FAST DOWN, SLOW UP. A new minimum is certainly better
+ * information (latency cannot be negative, so a lower offset is a truer one) and
+ * is taken immediately; upward movement is real clock drift between the CTIMER's
+ * FRO and the core counter, and is followed with a slow EMA rather than chased
+ * into the jitter. Same shape that the TTL sync input's drift wander vindicated
+ * (see the adaptive EMA there). */
+#define STREAM_DRIFT_SHIFT 12   /* ~4096 windows: 16 s at 250 Hz */
+
+/* THE TRIGGER CLOCK IS REGULAR BUT ITS RATE IS NOT KNOWN. CTIMER0 runs from
+ * FRO_HF -- an on-chip RC oscillator, not a crystal -- so the period the
+ * register arithmetic predicts is off by the FRO's tolerance. Measured on boxa
+ * 2026-08-11: sample times modelled from the nominal frequency walked off a
+ * 4000 us grid by ~11.5 us EVERY WINDOW, a smooth 0.29% rate error (and the
+ * same error, read the other way, is why a "250 Hz" feed delivered 15042
+ * samples in 60 s = 250.7/s). Nothing about that is jitter; it is the FRO
+ * being an FRO.
+ *
+ * So the period is MEASURED against the box clock rather than computed. Within
+ * an epoch we keep the LEAST-LATE observation (latency is one-sided, so the
+ * minimum is the truest point); across epochs, two such points a long baseline
+ * apart give the slope, with the latency common-moded out. The model is
+ * piecewise linear and re-based at each epoch using the OLD parameters, so a
+ * rate update changes the slope going forward without stepping the timeline --
+ * and keeping (n - base) small is also what keeps the picosecond arithmetic
+ * clear of overflow on a run of any length.
+ *
+ * Period is carried in PICOseconds: at 4 ms a 1 ns quantum is 0.25 ppm, which
+ * would be ~0.9 ms/hour of avoidable drift. */
+#define STREAM_EPOCH_WIN   2048u   /* ~8 s at 250 Hz; long enough that 19 us of
+                                    * residual noise is ~2 ppm of slope */
+
+static uint64_t g_trig_ns;      /* nominal trigger period, from MR3 + src clock */
+static uint64_t g_deliver_ps;   /* MEASURED delivered-window period, picoseconds */
+static int64_t  g_anchor_ns;    /* box-clock ns of the model's base point        */
+static uint64_t g_base_n;       /* window index the anchor refers to             */
+static uint8_t  g_anchor_valid;
+/* current epoch's least-late observation */
+static uint64_t g_ep_n;  static int64_t g_ep_ns;  static int64_t g_ep_off; static uint8_t g_ep_have;
+/* previous epoch's, for the baseline */
+static uint64_t g_pv_n;  static int64_t g_pv_ns;  static uint8_t g_pv_have;
+static uint32_t st_resid_us, st_resid_max_us;
+static int32_t  st_rate_ppm;    /* measured minus nominal, signed parts-per-million */
+
 /* ---- service state ---- */
 static const struct device *g_dma;
 static box_adc_stream_plan_t g_plan;
@@ -273,6 +340,18 @@ static int stream_arm(uint8_t mask, uint8_t nch, uint8_t avgs_exp,
 	stream_majors     = 0;
 	stream_reload_idx = 0;
 	s_prod = s_cons   = 0;
+	/* The timing model is per-RUN: the anchor is the box-clock instant of THIS
+	 * stream's trigger 0, so it must not survive a restart (a config edit, a
+	 * hold, a resync). Carrying it over would place every sample of the new run
+	 * against the old run's zero. */
+	g_anchor_valid = 0;
+	g_anchor_ns    = 0;
+	g_base_n       = 0;
+	g_trig_ns      = 0;
+	g_deliver_ps   = 0;
+	g_ep_have = g_pv_have = 0;
+	st_resid_us = st_resid_max_us = 0;
+	st_rate_ppm = 0;
 	for (uint32_t i = STREAM_RING_WORDS; i < 2u * STREAM_RING_WORDS; i++) {
 		stream_ring[i] = STREAM_CANARY;       /* arm the spill detector */
 	}
@@ -342,6 +421,11 @@ static int stream_timer_start(uint32_t trig_hz)
 	 * EMC3=toggle gives one edge per match -- HALF of them rising --
 	 * so the timer runs at 2x and the ADC sees exactly trig_hz. */
 	CTIMER0->MR[3] = (src / (2u * trig_hz)) - 1u;
+	/* The period we ACTUALLY got, in ns, straight from the register we just
+	 * wrote -- MR3 is an integer, so this equals 1e9/trig_hz only when the
+	 * source divides evenly. Stage 3 models sample times from this; using
+	 * the requested rate instead would bank the rounding error as drift. */
+	g_trig_ns = (2ull * ((uint64_t) CTIMER0->MR[3] + 1ull) * 1000000000ull) / src;
 	CTIMER0->EMR = (CTIMER0->EMR & ~(CTIMER_EMR_EM3_MASK |
 					 CTIMER_EMR_EMC3_MASK)) |
 		       CTIMER_EMR_EMC3(3);        /* toggle on match */
@@ -645,6 +729,11 @@ int box_adc_stream_start(uint8_t mask, uint32_t rate,
 		stream_disarm();
 		return -EIO;
 	}
+	/* Seed the model with the NOMINAL period. It is the right starting guess
+	 * and the wrong final answer -- FRO_HF is an RC oscillator, so the epoch
+	 * estimator above will walk this to the real rate within a few epochs.
+	 * ain/dbg/rate_ppm reports how far it had to go. */
+	g_deliver_ps = g_trig_ns * (uint64_t) g_plan.spacing * 1000ull;
 	g_running = 1;
 	if (plan) {
 		*plan = g_plan;
@@ -703,6 +792,10 @@ int box_adc_stream_read(int16_t *scan, uint8_t max, uint64_t *t_us)
 	uint32_t idx  = s_cons % g_nblocks;
 	const uint32_t *w = &stream_ring[idx * g_block_words];
 	uint64_t stamp = s_ts[idx];
+	/* `s_cons` IS the model's window index: it starts at 0 with the stream and
+	 * jumps forward on an overrun, which is right -- the skipped windows really
+	 * did happen, and the trigger clock kept counting them. */
+	uint64_t n = s_cons;
 
 	s_cons++;
 
@@ -747,6 +840,92 @@ int box_adc_stream_read(int16_t *scan, uint8_t max, uint64_t *t_us)
 		}
 	}
 
+	/* ---- STAGE 3: correct the anchor, then GENERATE the sample time ----
+	 *
+	 * The stamp observed in the callback belongs to the LAST trigger of this
+	 * window plus a positive, mostly-constant delay. Model that trigger, take
+	 * the difference as this window's offset estimate, and filter it fast-down
+	 * / slow-up (see STREAM_DRIFT_SHIFT above). */
+	if (g_deliver_ps) {
+		int64_t stamp_ns = (int64_t) (stamp * 1000ull);
+		/* Where the model says this window's LAST trigger was -- the instant
+		 * the ISR observation belongs to (the DMA cannot deliver before the
+		 * final conversion of the window has landed). */
+		int64_t model_ns = g_anchor_ns +
+			(int64_t) (((n - g_base_n) * g_deliver_ps) / 1000ull);
+		int64_t off      = stamp_ns - model_ns;
+
+		if (!g_anchor_valid) {
+			g_anchor_ns    = stamp_ns;
+			g_base_n       = n;
+			g_anchor_valid = 1;
+			off            = 0;
+		} else if (off < 0) {
+			g_anchor_ns += off;         /* earlier than modelled: truer */
+		} else {
+			g_anchor_ns += off >> STREAM_DRIFT_SHIFT;
+		}
+
+		st_resid_us = (uint32_t) (off > 0 ? off / 1000 : 0);
+		if (st_resid_us > st_resid_max_us) {
+			st_resid_max_us = st_resid_us;
+		}
+
+		/* ---- rate measurement: keep this epoch's LEAST-LATE point ---- */
+		if (!g_ep_have || off < g_ep_off) {
+			g_ep_have = 1; g_ep_off = off; g_ep_n = n; g_ep_ns = stamp_ns;
+		}
+		if (g_ep_have && (n - g_base_n) >= STREAM_EPOCH_WIN) {
+			if (g_pv_have && g_ep_n > g_pv_n) {
+				uint64_t dn = g_ep_n - g_pv_n;
+				int64_t  dt = g_ep_ns - g_pv_ns;      /* ns over dn windows */
+
+				if (dt > 0) {
+					uint64_t est_ps = ((uint64_t) dt * 1000ull) / dn;
+
+					/* Sanity-bound the estimate before trusting it:
+					 * a wild one can only come from a stamp pair
+					 * that straddled something we do not model (a
+					 * hold, a missed overrun). Half to double the
+					 * nominal is generous and still excludes
+					 * nonsense. */
+					uint64_t nom_ps = g_trig_ns * spacing * 1000ull;
+
+					if (est_ps > nom_ps / 2ull && est_ps < nom_ps * 2ull) {
+						/* Blend, don't jump: each epoch's slope
+						 * carries ~2 ppm of noise from the
+						 * residual, and averaging beats trusting
+						 * any single baseline. */
+						g_deliver_ps += ((int64_t) est_ps -
+								 (int64_t) g_deliver_ps) / 4;
+						st_rate_ppm = (int32_t)
+							(((int64_t) g_deliver_ps - (int64_t) nom_ps)
+							 * 1000000ll / (int64_t) nom_ps);
+					}
+				}
+			}
+			/* Re-base with the OLD parameters so the timeline stays
+			 * continuous across the rate update, and (n - base) stays
+			 * small enough that the picosecond product cannot overflow. */
+			g_anchor_ns += (int64_t) (((g_ep_n - g_base_n) * g_deliver_ps) / 1000ull);
+			g_base_n     = g_ep_n;
+			g_pv_n = g_ep_n; g_pv_ns = g_ep_ns; g_pv_have = 1;
+			g_ep_have = 0;
+		}
+
+		/* The APERTURE CENTRE, not the last trigger: the value is the mean of
+		 * `spacing` conversions spread evenly across the window, so its
+		 * instant is their midpoint -- (spacing-1)/2 trigger periods earlier.
+		 * At 16x spacing that is a 2 ms correction, larger than every jitter
+		 * term this pipeline was built to remove. */
+		int64_t centre_ns = g_anchor_ns +
+			(int64_t) (((n - g_base_n) * g_deliver_ps) / 1000ull) -
+			(int64_t) (((uint64_t) (spacing - 1u) * g_deliver_ps) /
+				   (2ull * spacing * 1000ull));
+
+		stamp = (uint64_t) (centre_ns / 1000);
+	}
+
 	if (t_us) {
 		*t_us = stamp;
 	}
@@ -771,4 +950,24 @@ void box_adc_stream_stats(uint32_t *delivered, uint32_t *overruns,
 void box_adc_stream_stats_reset(void)
 {
 	st_delivered = st_overruns = st_slips = st_fifo_ovf = st_spill = 0;
+	st_resid_max_us = 0;
+}
+
+void box_adc_stream_timing(uint32_t *trig_ns, uint32_t *deliver_us,
+			   uint32_t *resid_us, uint32_t *resid_max_us,
+			   int32_t *rate_ppm)
+{
+	if (trig_ns)  *trig_ns  = (uint32_t) g_trig_ns;
+	/* The MEASURED delivered-sample period: what the block's interval_us
+	 * should say, rather than 1000000/rate, so a host reshaping a batch steps
+	 * sample k on the same timebase its t0 came from. Rounded to the nearest
+	 * microsecond, which is all the block format carries -- the precision
+	 * lives in t0. */
+	if (deliver_us) {
+		*deliver_us = g_deliver_ps ?
+			(uint32_t) ((g_deliver_ps + 500000ull) / 1000000ull) : 0;
+	}
+	if (resid_us)     *resid_us     = st_resid_us;
+	if (resid_max_us) *resid_max_us = st_resid_max_us;
+	if (rate_ppm)     *rate_ppm     = st_rate_ppm;
 }

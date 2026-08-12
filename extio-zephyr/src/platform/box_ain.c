@@ -218,11 +218,30 @@ static void recompute(void)
  * the publish ceiling, the queue -- is untouched. */
 static void feed_scan(const int16_t *scan, uint64_t t_us)
 {
+	/* The spacing between samples the host will reshape a batch with. In
+	 * stream mode that is the TRIGGER CLOCK's delivered period, not
+	 * 1000000/rate: the two differ by however much MR3's integer division
+	 * rounded, and a host stepping sample k by the wrong interval walks away
+	 * from the t0 it was given. Same reason the model itself reads the
+	 * register instead of the request. */
+	uint32_t ivl = period_us;
+
+#if defined(CONFIG_BOX_ADC_STREAM)
+	if (atomic_get(&streaming)) {
+		uint32_t d = 0;
+
+		box_adc_stream_timing(NULL, &d, NULL, NULL, NULL);
+		if (d) {
+			ivl = d;
+		}
+	}
+#endif
+
 	for (int g = 0; g < BOX_NAGROUPS; g++) {
 		ain_block_t blk;
 
 		if (ain_group_feed(&rt[g], cfg, g, union_mask, scan, t_us,
-				   period_us, &blk)) {
+				   ivl, &blk)) {
 			int64_t now_ms = k_uptime_get();
 
 			if (!cfg->ain_group_mode[g] &&

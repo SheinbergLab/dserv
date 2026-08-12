@@ -168,4 +168,28 @@ void box_adc_stream_stats(uint32_t *delivered, uint32_t *overruns,
 			  uint32_t *slips, uint32_t *fifo_ovf, uint32_t *spill);
 void box_adc_stream_stats_reset(void);
 
+/* ---- STAGE 3: what the timing model is actually doing --------------------
+ *
+ * trig_ns      the trigger period ACTUALLY programmed (from MR3 and the source
+ *              clock, not from the requested rate -- they differ whenever the
+ *              source does not divide evenly, and modelling from the request
+ *              would bank that difference as drift)
+ * deliver_us   the delivered-sample period on the same trigger clock; what a
+ *              block's interval_us should carry
+ * resid_us     how late the LAST window's interrupt was against the model --
+ *              i.e. the jitter this pipeline removes from the sample time. The
+ *              polled path baked exactly this into every stamp.
+ * resid_max_us the worst of those since the last stats reset
+ *
+ * A residual that is small and stable means the model is tracking; one that
+ * climbs steadily means the trigger clock and the box clock are drifting apart
+ * faster than the anchor's EMA follows.
+ * rate_ppm     how far the MEASURED rate sits from the nominal one. Not an
+ *              error to fix -- it is the FRO's real tolerance, and the reason
+ *              the period is measured at all. Expect hundreds of ppm.
+ */
+void box_adc_stream_timing(uint32_t *trig_ns, uint32_t *deliver_us,
+			   uint32_t *resid_us, uint32_t *resid_max_us,
+			   int32_t *rate_ppm);
+
 #endif /* BOX_ADC_STREAM_H */

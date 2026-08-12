@@ -2925,9 +2925,12 @@ int main(void)
 							    &s_clamped, &s_fails, &s_resync);
 					uint32_t s_deliv = 0, s_ovr = 0, s_slips = 0,
 						 s_fovf = 0, s_spill = 0;
+					uint32_t s_tns = 0, s_dus = 0, s_res = 0, s_resmax = 0;
+					int32_t  s_ppm = 0;
 #if defined(CONFIG_BOX_ADC_STREAM)
 					box_adc_stream_stats(&s_deliv, &s_ovr, &s_slips,
 							     &s_fovf, &s_spill);
+					box_adc_stream_timing(&s_tns, &s_dus, &s_res, &s_resmax, &s_ppm);
 #endif
 					struct { const char *leaf; uint32_t v; } as[] = {
 						{ "ain/dbg/sweeps",    asw },
@@ -2983,6 +2986,19 @@ int main(void)
 						{ "ain/dbg/resyncs",   s_resync },
 						{ "ain/dbg/fifo_ovf",  s_fovf },
 						{ "ain/dbg/spill",     s_spill },
+						/* TIMING MODEL (stage 3). trig_ns is the
+						 * period actually programmed, so it against
+						 * the requested rate shows the rounding the
+						 * model absorbs. resid_max_us is the headline
+						 * number: how late the interrupt ran against
+						 * the trigger clock, i.e. exactly the jitter
+						 * that used to BE the sample time on the
+						 * polled path. */
+						{ "ain/dbg/trig_ns",    s_tns },
+						{ "ain/dbg/deliver_us", s_dus },
+						{ "ain/dbg/resid_us",   s_res },
+						{ "ain/dbg/resid_max_us", s_resmax },
+						{ "ain/dbg/rate_ppm",   (uint32_t) s_ppm },
 					};
 					for (unsigned ai2 = 0; ai2 < ARRAY_SIZE(as); ai2++) {
 						pub_periodic(as[ai2].leaf, as[ai2].v);
