@@ -542,6 +542,36 @@ static void ota_ack_int(const char *leaf, int32_t v)
 	box_pub_event(f);
 }
 
+/* A CONFIG WRITE THE BOX DECLINED.
+ *
+ * dserv_dispatch() returns CFG_UNKNOWN and applies nothing -- which until now
+ * published nothing either, so a host writing config/ain/rate 3000 got no
+ * signal at all and extio_cfg_set still answered "set ... LIVE". That is the
+ * exact failure the config-layer refusals exist to prevent, one layer up: the
+ * operator believes a setting that never took.
+ *
+ * EVENT class, for the reason ota_ack_* gives above -- a verdict displaced by a
+ * manifest burst reads as a box that never answered. The counter is what makes
+ * a REPEATED refusal of the same leaf visible: dserv retains, so re-sending the
+ * same bad value would leave the string unchanged and look like nothing
+ * happened. */
+static uint32_t cfg_refused_n;
+
+static void cfg_refuse_pub(const char *cfgleaf)
+{
+	uint8_t f[DSERV_MSG_LEN];
+	char nm[80];
+
+	cfg_refused_n++;
+	dserv_state_name(&cfg, nm, sizeof nm, "cfg/refused");
+	dserv_msg_string(f, nm, 0, cfgleaf);
+	box_pub_event(f);
+	dserv_state_name(&cfg, nm, sizeof nm, "cfg/refused_n");
+	dserv_msg_int(f, nm, 0, (int32_t) cfg_refused_n);
+	box_pub_event(f);
+	box_console_printf("config REFUSED: %s\n", cfgleaf);
+}
+
 static void ota_ack_str(const char *leaf, const char *v)
 {
 	uint8_t f[DSERV_MSG_LEN];
@@ -2118,6 +2148,15 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 	gpio_cmd_t cmd;
 	uint8_t xport_was = cfg.transport_mode;   /* for the strand-guard below */
 	cfg_result_t r = dserv_dispatch(&cfg, &m, &cmd);
+
+	/* Only config/* -- a stray or mistyped leaf elsewhere under this box's
+	 * name also lands on CFG_UNKNOWN, and reporting those as config
+	 * refusals would bury the signal we actually want. Report the leaf the
+	 * host WROTE (ain/rate), not the wire form (config/ain/rate), so it
+	 * matches what extio_cfg_set was called with. */
+	if (r == CFG_UNKNOWN && leaf && strncmp(leaf, "config/", 7) == 0) {
+		cfg_refuse_pub(leaf + 7);
+	}
 	if (r == CFG_GPIO && cmd.op != GPIO_OP_NONE &&
 	    cmd.op != GPIO_OP_SCHED_PULSE && cmd.op != GPIO_OP_SCHED_TIMER) {
 		box_gpio_exec(&cfg, &cmd);            /* immediate DO set/pulse */
