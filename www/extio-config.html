@@ -76,6 +76,16 @@ button.danger  { background:#5b2c29; border-color:#7a3a36; }
 .empty { color:var(--dim); padding:40px 0; text-align:center; }
 input.wo { border-style:dashed; color:var(--warn); }
 input.wo::placeholder { color:#6b6350; font-style:italic; }
+/* Commit lifecycle, on the CONTROL rather than in a banner: amber while the
+   text differs from the box (typed, not applied), blue while a write awaits
+   the box's readback, a green flash when the readback matches, red when the
+   box answered with something else (refused / clamped / normalised). */
+input.editing, select.editing   { border-color:var(--warn); }
+input.pending, select.pending   { border-color:#2d6da6; }
+input.mismatch, select.mismatch { border-color:var(--bad); }
+@keyframes okflash { from { box-shadow:0 0 0 2px #2c5b3c; border-color:var(--ok); }
+                     to   { box-shadow:none; } }
+input.confirmed, select.confirmed { animation: okflash 1s ease-out; }
 code { background:#141720; padding:1px 5px; border-radius:3px; font-size:12px; }
 /* Save/Reboot ride the bottom of the viewport: the dirty banner lives at the
    top of a panel that got LONG (pins + two group tables), and a Save you have
@@ -125,7 +135,17 @@ code { background:#141720; padding:1px 5px; border-radius:3px; font-size:12px; }
  *      that scored 8/8 while measuring nothing.
  *   2. LIVE IS NOT SAVED. Config applies immediately and is lost on reboot until
  *      cmd/save. The banner tracks exactly which leaves are dirty.
- */
+ *
+ * AND ONE RENDERING DISCIPLINE, which is what keeps the page equally usable
+ * from Safari and from Windows browsers: STRUCTURE and VALUES update on
+ * separate paths. The DOM is rebuilt only when panelSignature() changes
+ * (rows appearing, capabilities flipping) -- with focus, caret and half-typed
+ * text restored -- while everything else flows into the standing DOM in
+ * place: form controls through syncBinds (data-bind/data-ctl, plus the
+ * pending-write ledger that turns a box's readback into a green flash or a
+ * red refusal), display text through tickAges (data-val/-age/-up/-clk/-ota/
+ * -clamp spans). Nothing is ever gated on where focus is -- that gate froze
+ * the page on any OS that gives buttons click focus. */
 let conn = null, dp = null;
 const boxes = new Map();          /* name -> {leaf: {v, t}} */
 let sel = null, fetched = new Set(), pendingSelect = null;
@@ -167,7 +187,7 @@ function onExtio(msg) {
       fleetHtml = null;
       if (sel === old) {
         if (neu && boxes.has(neu)) { selectBox(neu); }
-        else { sel = null; panelHtml = null; renderFleet(); renderPanel(); }
+        else { sel = null; panelSig = null; renderFleet(); renderPanel(); }
       } else {
         renderFleet();
       }
@@ -220,46 +240,80 @@ function fmtAge(s) {
 const esc = s => String(s).replace(/[&<>"']/g,
   c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
-/* AGES ARE EMPTY SPANS IN THE MARKUP, filled in place by tickAges().
+/* EVERYTHING THAT CHANGES ON ITS OWN IS AN EMPTY SPAN, filled in place.
  *
- * The old ageSpan() baked the text ("3s") into the HTML string, so the 1 Hz
- * tick produced a DIFFERENT string every second, the innerHTML memo never
- * matched, and the panel was replaced wholesale once a second. That is what
- * made checkboxes "hard to click": a click needs mousedown and mouseup on the
- * SAME element, and on Safari clicking a checkbox never moves focus, so the
- * focus guard below never deferred the redraw -- the node was simply swapped
- * out mid-press. With the age TEXT out of the markup, the memo is stable
- * between REAL value changes, and updating a span's textContent in place
- * destroys nothing a pointer could be aiming at.
+ * The panel's DOM is replaced only when its STRUCTURE changes (see
+ * panelSignature). Anything else -- ages, live values, counters, streaming
+ * blocks, the up-since line, OTA progress -- must therefore be a data-*
+ * span that tickAges() fills, never inline text: inline text either forces
+ * a structural rebuild for a cosmetic change, or (worse) silently goes
+ * stale because nothing rebuilds. The same rule, from the other side, is
+ * why every form control carries data-bind: syncBinds() keeps its value
+ * current in place, so a rebuild is never needed just to show a readback.
+ *
+ * ageSpan always emits the span, even for a leaf not yet seen: the ticker
+ * leaves it empty until data arrives. Presence decided at build time was a
+ * quiet staleness bug (a leaf arriving later never got its age).
  *
  * data-age-plain marks spans inside styled parents (the liveness pill) whose
  * class must not be overwritten by the age bucket. */
 function ageSpan(box, leaf) {
-  if (ageOf(box, leaf) === null) return '';
   return `<span class="age" data-age-box="${esc(box)}" data-age-leaf="${esc(leaf)}"></span>`;
 }
 function agePlain(box, leaf) {
   return `<span data-age-box="${esc(box)}" data-age-leaf="${esc(leaf)}" data-age-plain="1"></span>`;
 }
 function tickAges(root) {
-  for (const el of root.querySelectorAll('[data-age-leaf]')) {
-    const a = ageOf(el.dataset.ageBox, el.dataset.ageLeaf);
-    if (a === null) continue;
-    el.textContent = fmtAge(a);
-    if (!('agePlain' in el.dataset)) {
-      el.className = 'age ' + (a > 60 ? 'dead' : a > 10 ? 'old' : '');
-    }
+  /* Composite cells first, plain values second, AGES LAST: the composite
+   * fills inject fresh ageSpan markup each pass, and the age loop must see
+   * those spans in the same tick or they render empty for a second. None of
+   * these contain anything clickable (buttons stay OUTSIDE the spans), so
+   * re-setting innerHTML at 1 Hz destroys nothing a pointer aims at. */
+  for (const el of root.querySelectorAll('[data-up-box]')) {
+    const u = upInfo(el.dataset.upBox);
+    el.innerHTML = !u ? '<span class="age">unknown — no watchdog yet</span>'
+      : `${esc(fmtBoot(u.boot))} · ${u.live ? 'up' : '<span class="age dead">was up</span>'} ${esc(fmtDur(u.upUs))}`;
   }
-  /* Live VALUES get the same in-place treatment as ages, for the same reason:
-   * anything that moves on its own (the ain/dbg counters advance every second,
-   * a chatty on-change analog group streams blocks) would re-defeat the
-   * innerHTML memo and put the panel right back to churning under the
-   * pointer. Rendered as empty spans, filled here at 1 Hz -- a second of
-   * display latency on diagnostic counters, in exchange for a DOM that only
-   * moves when its STRUCTURE changes. */
+  for (const el of root.querySelectorAll('[data-clk-box]')) {
+    const b = el.dataset.clkBox;
+    /* Prefer the MANIFEST leaf, fall back to the telemetry one. Firmware
+     * before the announce gained ain/clk_ppm still reports the applied value
+     * under ain/dbg, and showing "—" for a box that is in fact calibrated
+     * would be its own small lie. */
+    const appliedLeaf = get(b, 'ain/clk_ppm', null) !== null ? 'ain/clk_ppm' : 'ain/dbg/clk_ppm';
+    const applied = get(b, appliedLeaf, null);
+    /* meas WITH ITS AGE, because clk_ppm_meas is a full-telemetry leaf and
+     * dserv retains: at health it keeps rendering whatever the last full
+     * session left, which reads as a live measurement and is not one. */
+    const meas = get(b, 'ain/dbg/clk_ppm_meas', null);
+    el.innerHTML = `${applied === null ? '—' : `<b>${esc(applied)}</b> ${ageSpan(b, appliedLeaf)}`} ${
+      meas === null ? '<span class="age">measured: — (set telemetry=full)</span>'
+                    : `<span class="age">measured: ${esc(meas)}</span> ${ageSpan(b, 'ain/dbg/clk_ppm_meas')}`}`;
+  }
+  for (const el of root.querySelectorAll('[data-ota-box]')) {
+    const b = el.dataset.otaBox;
+    const lc = get(b, 'ota/lifecycle', null);
+    const prog = get(b, 'ota/progress', null);
+    const busy = lc !== null && OTA_BUSY.includes(String(lc));
+    el.innerHTML = lc === null ? '' :
+      `<b>${esc(lc)}</b> ${ageSpan(b, 'ota/lifecycle')}${prog !== null && busy ? ` · ${esc(prog)}%` : ''}`;
+  }
+  /* The cap the FIRMWARE silently enforces, made visible: pre-+83 firmware
+   * stores an over-cap batch and samples the clamp -- a config field that
+   * lies, and this row is where it is caught. Recomputed here because it
+   * depends on two VALUES (batch, chans), not on structure. */
+  for (const el of root.querySelectorAll('[data-clamp-box]')) {
+    const b = el.dataset.clampBox, gn = el.dataset.clampGrp;
+    const nch = String(get(b, `ain/group/${gn}/chans`, '')).split(',').filter(x => x !== '').length;
+    const cur = Number(get(b, `ain/group/${gn}/batch`, 0));
+    const cap = nch ? Math.max(1, Math.floor(24 / nch)) : 0;
+    const over = nch > 0 && cur > 0 && cur > cap;
+    el.textContent = over ? `→ clamped to ${cap}` : '';
+    el.title = over ? `batch × channels must be ≤ 24; the box will sample ${cap}` : '';
+  }
   for (const el of root.querySelectorAll('[data-val-leaf]')) {
     const v = get(el.dataset.valBox, el.dataset.valLeaf, null);
-    el.textContent = v === null ? '—' : v;
+    el.textContent = v === null ? (el.dataset.valDflt !== undefined ? el.dataset.valDflt : '—') : v;
   }
   for (const el of root.querySelectorAll('[data-ain-grp]')) {
     const bb = boxes.get(el.dataset.ainBox) || {};
@@ -280,6 +334,14 @@ function tickAges(root) {
     const dec = decodeChord(gb, csvNums(get(gb, `group/${gg}/pins`)), val);
     el.innerHTML = (val === null ? '—' : esc(val)) + (dec ? ` <b>${esc(dec)}</b>` : '');
   }
+  for (const el of root.querySelectorAll('[data-age-leaf]')) {
+    const a = ageOf(el.dataset.ageBox, el.dataset.ageLeaf);
+    if (a === null) continue;
+    el.textContent = fmtAge(a);
+    if (!('agePlain' in el.dataset)) {
+      el.className = 'age ' + (a > 60 ? 'dead' : a > 10 ? 'old' : '');
+    }
+  }
 }
 
 /* ---- writes: named procs in the extio interp, never raw datapoint pokes ---- */
@@ -289,18 +351,9 @@ const dirtyText = () => dirty.size
   : '';
 const saveText = () => `Save to flash${dirty.size ? ` (${dirty.size})` : ''}`;
 
-/* Update ONLY the dirty banner and the Save button, without a redraw.
- *
- * An edit leaves focus inside the panel, so renderPanel() correctly defers --
- * redrawing would destroy the control just used. But the whole POINT of the
- * edit is that "unsaved changes" has become true, and deferring that until
- * focus happens to leave meant Save stayed greyed out while changes piled up.
- * The user reasonably read that as the change not registering.
- *
- * So: touch the two elements that reflect dirty state, in place, and leave the
- * rest of the DOM (and the focus) exactly where it is. Same principle as
- * everywhere else on these pages -- do not replace what someone is pointing at
- * -- applied to the one case where the state genuinely must update mid-edit. */
+/* Update ONLY the dirty banner and the Save button, in place: dirty-ness is
+ * page state, not box state, so no datapoint will ever arrive to refresh it
+ * and no structural rebuild is owed for it. */
 function updateDirtyUi() {
   const banner = document.getElementById('dirty');
   const btn = document.getElementById('savebtn');
@@ -308,14 +361,42 @@ function updateDirtyUi() {
   if (btn) { btn.textContent = saveText(); btn.disabled = dirty.size === 0; }
 }
 
-async function cfgSet(box, leaf, value) {
+/* `el` is the control the edit came from (inline handlers pass `this`). A
+ * BOUND control enters the pending ledger: it keeps showing the committed
+ * value until the box's readback confirms it (green flash), or fails to
+ * within PENDING_MS (red, titled with what the box actually reports). That
+ * ledger -- not the control's transient DOM -- is the source of truth, so it
+ * survives structural rebuilds: create a group and the confirmation lands on
+ * the REAL row that replaces the creation row. Unbound controls (write-only
+ * leaves, creation inputs) get no pending state: with no readback there is
+ * nothing honest to confirm. */
+async function cfgSet(box, leaf, value, el) {
+  const bound = el && el.dataset &&
+                (el.dataset.bind !== undefined || el.dataset.pinMode !== undefined);
   try {
     await conn.send(`extio_cfg_set ${box} ${leaf} {${value}}`, 'extio');
+    if (bound) {
+      pendingByCtl.set(el.dataset.ctl, { v: String(value), t: Date.now() });
+      clearMismatch(el);
+      el.classList.remove('editing');
+      el.classList.add('pending');
+    } else if (el && el.classList) {
+      el.classList.remove('editing');
+    }
     dirty.add(leaf);
-    updateDirtyUi();      /* immediate: renderPanel() defers while focus is in the panel */
+    updateDirtyUi();
     renderPanel();
     askAnnounce(box);
-  } catch (e) { alert(`set ${leaf} failed: ${e.message || e}`); }
+  } catch (e) {
+    /* the write never reached the box: drop the phantom and show its truth */
+    if (bound) {
+      pendingByCtl.delete(el.dataset.ctl);
+      el.classList.remove('editing', 'pending');
+      const cur = boundValue(el);
+      if (cur !== null) setVal(el, cur);
+    }
+    alert(`set ${leaf} failed: ${e.message || e}`);
+  }
 }
 
 /* DRIVE AN OUTPUT PIN, for bench work: loopback a DO into a DI, or find which
@@ -339,27 +420,22 @@ async function doSet(box, pin, v) {
 /* The VALUE of cmd/do/<n>/pulse_us IS THE WIDTH, not a trigger -- send 1 and you
  * get a 1 µs pulse nobody will ever see. Use the pin's own configured pulse_us
  * so the button does what the row says, falling back to 100 ms: a bench default
- * you can watch on an LED, where an unset (0) width would simply be refused. */
-async function doPulse(box, pin, us) {
+ * you can watch on an LED, where an unset (0) width would simply be refused.
+ * Looked up at CLICK time, not baked into the onclick at build time: rebuilds
+ * are rare now, so a baked width would outlive a pulse_us edit. */
+async function doPulse(box, pin) {
+  const us = Number(sparse(get(box, 'pins/pulse_us')).get(pin)) || 100000;
   try { await conn.send(`dservSet extio/${box}/cmd/do/${pin}/pulse_us ${us}`, 'extio'); }
   catch (e) { alert(`pulse ${pin} failed: ${e.message || e}`); }
 }
 
-/* Batch, with the cap the FIRMWARE silently enforces made visible.
- *
- * ain_group_batch_eff() clamps batch so batch*nchan <= AIN_BLOCK_MAX (24
- * int16s per block), but nothing refuses the write -- so a group configured
- * batch 20 on 2 channels reads back 20 and samples 12. That is a config field
- * that lies, and the page is where it can be caught. */
+/* Batch input plus the firmware-clamp flag. ain_group_batch_eff() clamps
+ * batch so batch*nchan <= AIN_BLOCK_MAX (24 int16s per block) without
+ * refusing the write; the flag span is tick-filled (data-clamp-*) because it
+ * depends on two VALUES and must track them without a rebuild. */
 function batchCell(b, gn, i) {
-  const raw = field(b, `ain/group/${gn}/batch`, `ain/group/${i}/batch`);
-  const nch = String(get(b, `ain/group/${gn}/chans`, '')).split(',').filter(x => x !== '').length;
-  const cur = Number(get(b, `ain/group/${gn}/batch`, 0));
-  if (!nch || !cur) return raw;
-  const cap = Math.max(1, Math.floor(24 / nch));
-  return cur > cap
-    ? `${raw} <span class="age" style="color:#ffb4a8" title="batch × channels must be ≤ 24; the box will sample ${cap}">→ clamped to ${cap}</span>`
-    : raw;
+  return field(b, `ain/group/${gn}/batch`, `ain/group/${i}/batch`) +
+    ` <span class="age" style="color:#ffb4a8" data-clamp-box="${esc(b)}" data-clamp-grp="${esc(gn)}"></span>`;
 }
 
 /* ---- pacing / telemetry / clock-calibration controls ----
@@ -367,36 +443,25 @@ function batchCell(b, gn, i) {
  * These three are config leaves the box has had for a while with no UI, so they
  * were reachable only from the console or a raw datapoint write. A setting you
  * cannot see is the same problem as one that lies. */
-const selOf = (b, leaf, cur, opts) =>
-  `<select onchange="cfgSet('${esc(b)}','${leaf}',this.value)">` +
-  opts.map(o => `<option ${o === cur ? 'selected' : ''}>${o}</option>`).join('') + '</select>';
+const selOf = (b, leaf, wLeaf, dflt, opts) => {
+  const cur = String(get(b, leaf, dflt));
+  return `<select data-ctl="${esc(b)}|${wLeaf}" data-bind="${leaf}" data-bind-box="${esc(b)}"
+            data-dflt="${dflt}" onchange="cfgSet('${esc(b)}','${wLeaf}',this.value,this)">` +
+    opts.map(o => `<option ${o === cur ? 'selected' : ''}>${o}</option>`).join('') + '</select>';
+};
 
-const paceSel = (b) => selOf(b, 'ain/pace', String(get(b, 'ain/pace', 'auto')),
-                             ['auto', 'polled', 'stream']);
-const dbgLevelSel = (b) => selOf(b, 'dbg/level', String(get(b, 'dbg/level', 'health')),
-                                 ['health', 'full', 'off']);
+const paceSel = (b) => selOf(b, 'ain/pace', 'ain/pace', 'auto', ['auto', 'polled', 'stream']);
+const dbgLevelSel = (b) => selOf(b, 'dbg/level', 'dbg/level', 'health', ['health', 'full', 'off']);
 
 /* APPLIED next to MEASURED, because the gap between them is the whole point:
  * they differ until someone calibrates, and that is the state worth seeing.
- * clk_ppm_meas is a full-telemetry leaf, so at health it reads "—" and the
- * button is the only way to act on it. */
+ * The values live in a tick-filled span (see tickAges) since both move on
+ * their own; the button stays OUTSIDE the span so its DOM node is stable
+ * under the pointer. */
 function clkCell(b) {
-  /* Prefer the MANIFEST leaf, fall back to the telemetry one. Firmware before
-   * the announce gained ain/clk_ppm still reports the applied value under
-   * ain/dbg, and showing "—" for a box that is in fact calibrated would be its
-   * own small lie. */
-  const hasManifest = get(b, 'ain/clk_ppm', null) !== null;
-  const appliedLeaf = hasManifest ? 'ain/clk_ppm' : 'ain/dbg/clk_ppm';
-  const applied = get(b, appliedLeaf, null);
-  const meas    = get(b, 'ain/dbg/clk_ppm_meas', null);
-  const a = applied === null ? '—' : `<b>${applied}</b> ${ageSpan(b, appliedLeaf)}`;
-  /* WITH ITS AGE, because clk_ppm_meas is a full-telemetry leaf and dserv
-   * retains: at health it keeps rendering whatever the last full session left,
-   * which reads as a live measurement and is not one. */
-  const m = meas === null ? '<span class="age">measured: — (set telemetry=full)</span>'
-                          : `<span class="age">measured: ${meas}</span> ${ageSpan(b, 'ain/dbg/clk_ppm_meas')}`;
-  return `${a} ${m}
-    <button title="Adopt the measured value as this box's applied calibration. Needs a running stream and a settled estimate (~1-2 min); refuses otherwise."
+  return `<span data-clk-box="${esc(b)}"></span>
+    <button data-ctl="${esc(b)}|btn/calibrate"
+            title="Adopt the measured value as this box's applied calibration. Needs a running stream and a settled estimate (~1-2 min); refuses otherwise."
             onclick="ainCalibrate('${esc(b)}')">Calibrate</button>`;
 }
 
@@ -431,6 +496,11 @@ function askAnnounce(box) {
 }
 let dirty = new Set();
 let renamingTo = null;   /* {from, to} while a rename is in flight -- panel banner */
+/* Writes awaiting the box's readback: ctl id -> {v: committed value, t: when}.
+ * Keyed by the WRITE leaf (`box|cfgLeaf`), which is stable across structural
+ * rebuilds and even across a group slot going from creation row to real row. */
+const pendingByCtl = new Map();
+const PENDING_MS = 6000;   /* announce debounce 400 ms + box round-trip, ×margin */
 async function doSave(box) {
   await conn.send(`extio_cfg_save ${box}`, 'extio');
   dirty.clear(); updateDirtyUi(); renderPanel();
@@ -440,7 +510,10 @@ async function doSave(box) {
  * state/ota/lifecycle, which is exactly why that roll-up key exists. Anything
  * cleverer here would be a second, divergent implementation of a state machine
  * that already has tests. */
-async function otaUpdate(box, channel) {
+async function otaUpdate(box) {
+  /* channel read at CLICK time -- a baked onclick argument would outlive a
+   * channel edit now that rebuilds are rare */
+  const channel = String(get(box, 'channel', 'dev'));
   if (!confirm(`Update ${box} from the ${channel} shelf?\n\nThe box will reboot into a TRIAL boot and must be confirmed, or it reverts.`)) return;
   try { alert(await conn.send(`extio_ota_update ${box} ${channel}`, 'extio')); }
   catch (e) { alert('update failed to start: ' + (e.message || e)); }
@@ -494,7 +567,7 @@ function renderFleet() {
   if (html !== fleetHtml) { el.innerHTML = fleetHtml = html; tickAges(el); }
 }
 function selectBox(n) {
-  sel = n; dirty = new Set(); panelHtml = null; renderFleet(); renderPanel(); refreshDirty(n);
+  sel = n; dirty = new Set(); panelSig = null; renderFleet(); renderPanel(); refreshDirty(n);
   /* Opening a box asks it to describe itself: retained values may predate the
    * last edit made from a console, and there is no periodic re-announce. */
   if (conn) conn.send(`extio_cfg_announce ${n}`, 'extio').catch(() => {});
@@ -544,20 +617,30 @@ async function renameBox(box) {
    * under the old name reads as "nothing happened"), and the failure UX if
    * the tombstone never lands. */
   renamingTo = { from: box, to: name };
-  panelHtml = null; renderPanel();
+  panelSig = null; renderPanel();
   const t0 = Date.now();
   const tick = setInterval(() => {
     if (!boxes.has(box)) { clearInterval(tick); return; }   /* tombstone landed */
     if (Date.now() - t0 > 25000) {
       clearInterval(tick);
-      renamingTo = null; panelHtml = null; renderPanel();
+      renamingTo = null; panelSig = null; renderPanel();
       alert(`No rename event for '${name}' yet. On pre-+59 firmware the box HAS renamed live ` +
             `but cannot confirm: wait ~30 s, then Save from its panel -- or reboot it to revert.`);
     }
   }, 500);
 }
 
-/* ---- per-box panel ---- */
+/* ---- per-box panel ----
+ *
+ * Every editable control carries three data- attributes:
+ *   data-ctl       "box|writeLeaf" -- its stable identity, used to key the
+ *                  pending ledger and to restore focus across a rebuild.
+ *   data-bind      the READ leaf syncBinds() keeps it current from (absent on
+ *                  write-only and creation controls: nothing honest to show).
+ *   data-bind-box  which box, so the sweep needs no context.
+ * The read and write leaves genuinely differ on this box (announce publishes
+ * label/<n>; you set pin/<n>/label) -- which is exactly why the binding must
+ * name both, not guess one from the other. */
 function field(box, leaf, cfgLeaf, opts = {}) {
   let v = get(box, leaf, null);
   if (v === null && opts.fallback !== undefined) v = opts.fallback;
@@ -568,7 +651,10 @@ function field(box, leaf, cfgLeaf, opts = {}) {
   /* esc(): labels/desc allow every printable except '/', so a quote in a
    * value would otherwise end the attribute and truncate the form */
   return `<input class="${cls}" value="${v === null ? '' : esc(v)}"
-            onchange="cfgSet('${box}','${cfgLeaf}',this.value)">`;
+            data-ctl="${esc(box)}|${cfgLeaf}" data-bind="${leaf}" data-bind-box="${esc(box)}"${
+            opts.i32 ? ' data-i32="1"' : ''}${
+            opts.fallback !== undefined ? ` data-dflt="${esc(opts.fallback)}"` : ''}
+            onchange="cfgSet('${box}','${cfgLeaf}',this.value,this)">`;
 }
 
 /* WRITE-ONLY field: the box accepts this config leaf but never publishes it
@@ -591,7 +677,8 @@ const csvNums = (str) => String(str || '').split(',').filter(x => x !== '').map(
 
 function woField(box, cfgLeaf, wide) {
   return `<input class="${wide ? 'w8' : 'w4'} wo" placeholder="write-only" title="The box accepts this setting but does not report it, so its current value cannot be shown."
-            onchange="if(this.value!==''){cfgSet('${box}','${cfgLeaf}',this.value)}">`;
+            data-ctl="${esc(box)}|${cfgLeaf}"
+            onchange="if(this.value!==''){cfgSet('${box}','${cfgLeaf}',this.value,this)}">`;
 }
 
 /* Silkscreen name for a pin VALUE (obs/sync fields): annotation only, and only
@@ -671,68 +758,266 @@ async function clearGroup(box, idx, gname) {
   if (!confirm(`Free digital group slot ${idx}${gname ? ` (“${gname}”)` : ''}?`)) return;
   await cfgSet(box, `group/${idx}/pins`, 'off');
   forgetLocal(box, [`group/${gname}`]);
-  panelHtml = null; renderPanel();
+  panelSig = null; renderPanel();
 }
 async function clearAinGroup(box, idx, gname) {
   if (!confirm(`Free analog group slot ${idx}${gname ? ` (“${gname}”)` : ''}?`)) return;
   await cfgSet(box, `ain/group/${idx}/off`, '1');
   forgetLocal(box, [`ain/group/${gname}`, `ain/${gname}`]);
-  panelHtml = null; renderPanel();
+  panelSig = null; renderPanel();
 }
 
-/* DO NOT REDRAW WHILE THE USER IS IN THE PANEL.
+/* NEVER GATE UPDATES ON FOCUS. This page used to defer ALL panel redraws
+ * while document.activeElement was inside #panel, reasoning that a redraw
+ * destroys the control being used. The reasoning was right; the gate was
+ * wrong, because WHERE FOCUS LIVES IS A PLATFORM POLICY: Safari/macOS gives
+ * click focus to almost nothing, so the gate rarely engaged and the page
+ * looked fine -- while on Windows (Chrome, Edge, Firefox alike) EVERY
+ * control takes click focus, so one click on any button or combo box parked
+ * focus in the panel and froze every update until a stray click on empty
+ * space. Clicking "Refresh from box" froze the very values it fetched. That
+ * was the whole of the "have to manually refresh on Windows" complaint.
  *
- * renderPanel() replaces #panel wholesale (the house style here -- see
- * www/CLAUDE.md), and it is driven by every datapoint update PLUS a 1 Hz tick
- * so ages stay honest. Both of those destroy the element you are interacting
- * with: an open <select> closes the instant a frame arrives, and text you are
- * typing is reset to the box's value. The dropdowns looked present but
- * unusable, which is exactly what a 1 Hz DOM replace does to a menu.
- *
- * Skipping the redraw while focus is inside the panel costs a second of age
- * staleness, only while you are actively editing, and only on the panel -- the
- * fleet list keeps ticking. A `pending` flag makes sure the state you missed is
- * drawn as soon as focus leaves, rather than waiting for the next update. */
+ * The replacement protects exactly what needs protecting and nothing more:
+ *   - VALUES flow into existing DOM in place (syncBinds/tickAges), skipping
+ *     only the one control that is focused, plus pending-write logic -- so
+ *     nothing is ever yanked from under a pointer or a caret, on any OS.
+ *   - STRUCTURE is rebuilt only when panelSignature() changes, and the
+ *     rebuild restores focus, caret and any half-typed text (rebuildPanel).
+ * The only deferral left is the pointer flag below, and it defers only
+ * STRUCTURAL rebuilds: a swap between mousedown and mouseup would still eat
+ * the click (mouseup must land on the same node). */
 let redrawPending = false;
-/* Focus is NOT enough to detect "the user is interacting": Safari never
- * focuses a checkbox, radio or (sometimes) select on click, so activeElement
- * stays <body> through the whole press and the focus check alone lets a
- * datapoint-driven redraw yank the control mid-click. The pointer flag covers
- * the press itself: down inside the panel defers redraws until the pointer is
- * released, wherever it is released (window-level up/cancel, so a drag out of
- * the panel cannot wedge the flag). */
 let panelPtrAt = 0;
-/* A POINTER-DOWN EXPIRES. The flag below is cleared by pointerup/pointercancel,
- * and if either is lost the panel stops redrawing FOREVER -- ages freeze, OTA
- * staging progress never appears, and the trial-boot banner never shows.
- *
- * That is not hypothetical: every OTA action on this page opens a native modal
- * (`confirm` in otaUpdate, `alert` on its result). In Firefox the modal
- * swallows the pending pointer sequence, so the window-level pointerup never
- * arrives and the flag sticks from the moment you click Update -- which is
- * exactly when the progress you wanted to watch starts. Safari delivers the
- * pointerup, which is why this looked browser-specific rather than broken.
- *
- * Bounding it by TIME rather than by enumerating the ways a pointerup can go
- * missing means the next such quirk costs a couple of seconds of deferral
- * instead of a dead page. Real clicks are far under this; a control the user is
- * genuinely working in stays protected by the activeElement check below, which
- * has no such failure mode. */
+/* A POINTER-DOWN EXPIRES. The flag is cleared by pointerup/pointercancel, and
+ * if either is lost, structural rebuilds would stall until the next press.
+ * Not hypothetical: OTA actions open native modals, and in Firefox a modal
+ * swallows the pending pointer sequence -- the window-level pointerup never
+ * arrives. Bounding by TIME means the next such quirk costs two seconds of
+ * deferral instead of a stalled panel. */
 const PANEL_PTR_STALE_MS = 2000;
-function panelBusy() {
-  if (panelPtrAt && Date.now() - panelPtrAt < PANEL_PTR_STALE_MS) return true;
-  const a = document.activeElement;
-  return a && a !== document.body && document.getElementById('panel')?.contains(a);
-}
+const ptrBusy = () => panelPtrAt && Date.now() - panelPtrAt < PANEL_PTR_STALE_MS;
 /* Phases that mean "something is in flight" -- Abort is offered, Update is not. */
 const OTA_BUSY = ['staging', 'verifying', 'arming', 'trial', 'confirming'];
 
+/* ---- the value side: keep controls current without touching structure ---- */
+
+/* What the box says this control should show, through the control's own
+ * transform: sparse per-pin maps, CSV membership, u32->i32, declared
+ * defaults, and the pin-mode derivation. Returns a STRING (or null when the
+ * model has nothing), so comparisons happen in one type. */
+function boundValue(el) {
+  const box = el.dataset.bindBox;
+  if (el.dataset.pinMode !== undefined) return modeOfPin(box, +el.dataset.pinMode);
+  const leaf = el.dataset.bind;
+  let v;
+  if (el.dataset.sparseKey !== undefined) {
+    v = sparse(get(box, leaf)).get(+el.dataset.sparseKey);
+    v = v === undefined ? '' : v;
+  } else if (el.dataset.csvKey !== undefined) {
+    return csvNums(get(box, leaf)).includes(+el.dataset.csvKey) ? '1' : '0';
+  } else {
+    v = get(box, leaf, null);
+    if (v === null) v = el.dataset.dflt !== undefined ? el.dataset.dflt : null;
+    if (v !== null && el.dataset.i32 !== undefined && +v >= 0x80000000) v = +v - 0x100000000;
+  }
+  return v === null ? null : String(v);
+}
+function setVal(el, v) {
+  if (el.type === 'checkbox') { const c = v == 1; if (el.checked !== c) el.checked = c; }
+  else { const s = v === null ? '' : v; if (el.value !== s) el.value = s; }
+}
+/* Numeric when both sides are numbers ("0250" vs "250" is the same rate), and
+ * an empty readback equals the control's placeholder default: the manifest
+ * sends per-pin scalars sparsely, so debounce set to 0 reads back as ABSENT,
+ * which must confirm a typed "0" rather than flag it as refused. */
+function valEq(a, b, el) {
+  if (a === b) return true;
+  if (a === null || b === null) return false;
+  const na = +a, nb = +b;
+  if (a !== '' && b !== '' && isFinite(na) && isFinite(nb)) return na === nb;
+  if (a === '' && el && el.placeholder !== '' && isFinite(+b) && +b === +el.placeholder) return true;
+  return false;
+}
+function flashOk(el) {
+  el.classList.remove('confirmed'); void el.offsetWidth; el.classList.add('confirmed');
+}
+/* mismatch borrows el.title for its explanation; keep the control's own
+ * title (quiet/batch have real ones) restorable */
+function markMismatch(el, cur) {
+  el.classList.remove('confirmed');
+  el.classList.add('mismatch');
+  if (!('origTitle' in el.dataset)) el.dataset.origTitle = el.title;
+  el.title = `box reports ${cur === null || cur === '' ? '(nothing)' : cur} — write not confirmed`;
+}
+function clearMismatch(el) {
+  el.classList.remove('mismatch');
+  if ('origTitle' in el.dataset) { el.title = el.dataset.origTitle; delete el.dataset.origTitle; }
+}
+
+/* Sweep every bound control: resolve pending writes, then mirror the model.
+ * The focused control is the ONE exception -- never write into a control the
+ * user is in. Runs per datapoint and at 1 Hz; setVal/classList writes are
+ * no-ops when nothing changed, so the DOM stays still. */
+function syncBinds(root) {
+  const act = document.activeElement;
+  for (const el of root.querySelectorAll('[data-bind],[data-pin-mode]')) {
+    const cur = boundValue(el);
+    const p = el.dataset.ctl ? pendingByCtl.get(el.dataset.ctl) : undefined;
+    if (p) {
+      if (cur !== null && valEq(cur, p.v, el)) {
+        /* confirmed -- including LATE, after the mismatch flag went up: a box
+         * that answers slowly (or a tab the browser throttled) must still
+         * resolve to green when the readback finally matches, not wear a
+         * stale red flag forever. That is why expiry KEEPS the entry. */
+        pendingByCtl.delete(el.dataset.ctl);
+        el.classList.remove('pending');
+        clearMismatch(el);
+        if (el !== act) setVal(el, cur);
+        flashOk(el);
+      } else if (!p.expired && Date.now() - p.t < PENDING_MS) {
+        el.classList.remove('confirmed');   /* stale flash (throttled tab) must not stack */
+        el.classList.add('pending');
+        if (el !== act) setVal(el, p.v);
+      } else {
+        /* not confirmed in time: show the box's truth, flag the control, and
+         * keep the entry so a late readback can still confirm (above) and a
+         * fresh edit can dismiss it (input handler) */
+        p.expired = true;
+        el.classList.remove('pending');
+        markMismatch(el, cur);
+        if (el !== act) setVal(el, cur);
+      }
+      continue;
+    }
+    if (el === act) continue;
+    if (cur !== null || el.dataset.dflt !== undefined) setVal(el, cur);
+  }
+  /* expired entries whose control left the DOM or whose write will simply
+   * never be confirmed: age them out eventually */
+  if (pendingByCtl.size) {
+    for (const [k, v] of pendingByCtl) {
+      if (Date.now() - v.t > 300000) pendingByCtl.delete(k);
+    }
+  }
+}
+
+/* ---- the structure side: what forces a rebuild, and how one behaves ---- */
+
+function modeOfPin(b, p) {
+  if (csvNums(get(b, 'pins/reserved')).includes(p)) return 'reserved';
+  if (csvNums(get(b, 'pins/ain')).includes(p))      return 'ain';
+  if (csvNums(get(b, 'pins/pullup')).includes(p))   return 'in_pullup';
+  if (csvNums(get(b, 'pins/in')).includes(p))       return 'in';
+  if (csvNums(get(b, 'pins/out')).includes(p))      return 'out';
+  return 'off';
+}
+/* Announced groups are keyed BY NAME (group/<name>/pins) with group/<name>/idx
+ * carrying the slot; a group whose announced pins are EMPTY is a tombstone
+ * (newer firmware frees the name that way, because dserv retains keys
+ * forever): treat it as an empty slot, not a group. */
+function scanGroups(b) {
+  const bx = boxes.get(b) || {};
+  const gmax = Number(get(b, 'groups/max')) || 4;
+  const gslot = new Map();
+  for (const k of Object.keys(bx)) {
+    const m = /^group\/([^/]+)\/idx$/.exec(k);
+    if (!m) continue;
+    if (String(get(b, `group/${m[1]}/pins`, '')) === '') continue;   /* tombstone */
+    gslot.set(+get(b, `group/${m[1]}/idx`), m[1]);
+  }
+  return { gmax, gslot };
+}
+function scanAinGroups(b) {
+  const bx = boxes.get(b) || {};
+  const agmax = Number(get(b, 'ain/groups/max')) || 4;
+  const agslot = new Map();
+  let agAnnounced = false;
+  for (const k of Object.keys(bx)) {
+    const m = /^ain\/group\/([^/]+)\/idx$/.exec(k);
+    if (!m) continue;
+    agAnnounced = true;
+    if (String(get(b, `ain/group/${m[1]}/chans`, '')) === '') continue;  /* tombstone */
+    agslot.set(+get(b, `ain/group/${m[1]}/idx`), m[1]);
+  }
+  const blobOnly = [];
+  for (const k of Object.keys(bx)) {
+    const m = /^ain\/([^/]+)$/.exec(k);
+    if (!m || !Array.isArray(bx[k].v) || m[1] === 'dbg' || m[1] === 'group') continue;
+    if ([...agslot.values()].includes(m[1])) continue;         /* has a real row */
+    if (String(get(b, `ain/group/${m[1]}/chans`, null)) === '') continue;  /* tombstoned ghost */
+    blobOnly.push(m[1]);
+  }
+  blobOnly.sort();
+  return { agmax, agslot, agAnnounced, blobOnly };
+}
+
+/* Everything that decides the panel's SHAPE or its non-bound static text.
+ * A leaf in this list changing => full rebuild; anything else must reach the
+ * screen through a bound control or a tick-filled span, or it will go stale.
+ * Deliberately NOT here: dirty (updateDirtyUi), ages/counters/values (tick),
+ * control values (syncBinds), OTA lifecycle text and progress (tick) -- only
+ * the busy/idle/none distinction, which flips buttons. */
+function panelSignature(b) {
+  const g = scanGroups(b), a = scanAinGroups(b);
+  const lc = get(b, 'ota/lifecycle', null);
+  return [b, liveness(b).cls,
+          renamingTo && renamingTo.from === b ? renamingTo.to : '',
+          get(b, 'ain/clk_ppm', null) !== null ? 'M' : '',
+          lc === null ? 'ota-none' : OTA_BUSY.includes(String(lc)) ? 'ota-busy' : 'ota-idle',
+          get(b, 'ota/trial') == 1 ? 'T' : '',
+          [...g.gslot].sort((x, y) => x[0] - y[0]).map(([i, n]) => i + ':' + n).join(','),
+          [...a.agslot].sort((x, y) => x[0] - y[0]).map(([i, n]) => i + ':' + n).join(','),
+          a.agAnnounced ? 'A' : '', a.blobOnly.join(','),
+          ...['board', 'pins/silk', 'ain/silk', 'pins/all', 'pins/in', 'pins/out',
+              'pins/ain', 'pins/pullup', 'pins/reserved', 'obs_pin', 'sync_pin',
+              'obs/mode', 'obs_leader', 'groups/max', 'ain/groups/max',
+              'ain/dbg/chans'].map(l => String(get(b, l, '')))
+         ].join('\x1f');
+}
+
+/* Replace #panel's DOM, then put the user back where they were: same control
+ * (by data-ctl), same caret, same half-typed text, same scroll. This is what
+ * lets a rebuild land DURING an edit instead of deferring on focus. */
+const cssq = s => s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+function rebuildPanel(el, html) {
+  const act = document.activeElement;
+  let ctl = null, typed = null, caret = null;
+  if (act && el.contains(act) && act.dataset && act.dataset.ctl) {
+    ctl = act.dataset.ctl;
+    if (act.tagName === 'INPUT' && act.type !== 'checkbox') {
+      typed = act.value;
+      try { caret = [act.selectionStart, act.selectionEnd]; } catch (e) {}
+    }
+  }
+  const scroll = el.scrollTop;
+  el.innerHTML = html;
+  el.scrollTop = scroll;
+  if (ctl) {
+    const n = el.querySelector(`[data-ctl="${cssq(ctl)}"]`);
+    if (n) {
+      n.focus({ preventScroll: true });
+      if (typed !== null && n.tagName === 'INPUT' && n.type !== 'checkbox') {
+        n.value = typed;
+        if (caret) try { n.setSelectionRange(caret[0], caret[1]); } catch (e) {}
+        /* the editing tint lived on the node we just threw away */
+        if (n.dataset.bind !== undefined) {
+          const cur = boundValue(n);
+          n.classList.toggle('editing', cur !== null && !valEq(String(n.value), cur, n));
+        }
+      }
+    }
+  }
+}
+
+/* read-only display value: tick-filled, so it tracks the box without ever
+ * forcing a rebuild */
+const vspan = (b, leaf, dflt = '—') =>
+  `<span data-val-box="${esc(b)}" data-val-leaf="${esc(leaf)}" data-val-dflt="${esc(dflt)}"></span>`;
+
 function fwSection(b) {
   const lc   = get(b, 'ota/lifecycle', null);
-  const msg  = get(b, 'ota/lifecycle_msg', '');
-  const prog = get(b, 'ota/progress', null);
   const trial = get(b, 'ota/trial') == 1;
-  const ch   = get(b, 'channel', 'dev');
   const busy = lc !== null && OTA_BUSY.includes(String(lc));
   const dead = liveness(b).cls === 'bad';
 
@@ -741,54 +1026,71 @@ function fwSection(b) {
    * property working as designed, but it is also the state in which a box
    * quietly loses an update nobody realises was pending. */
   const trialBanner = trial ? `<div id="dirty" style="background:#3a1f15;border-color:#7a3a36;color:#ffb4a8">
-      <b>TRIAL BOOT — not yet permanent.</b> ${get(b, 'fw_ver', '?')} is running unconfirmed.
+      <b>TRIAL BOOT — not yet permanent.</b> ${vspan(b, 'fw_ver', '?')} is running unconfirmed.
       Any reset reverts it to the previous image.
-      <button class="primary" style="margin-left:10px" onclick="otaConfirm('${b}')">Confirm</button>
+      <button class="primary" style="margin-left:10px" data-ctl="${esc(b)}|btn/ota-confirm"
+              onclick="otaConfirm('${b}')">Confirm</button>
       <span class="age" style="margin-left:8px">to reject: do not confirm — power cycle ·
         CLI: <code>dservctl extio "extio_ota_confirm ${b}"</code></span>
     </div>` : '';
 
   /* lifecycle is published only by extio_ota_update. A box driven by hand has
    * none, so say so rather than rendering an empty progress line that looks
-   * like a stalled transfer. */
+   * like a stalled transfer. Phase text and progress live in the data-ota
+   * span (tick-filled): an OTA must be WATCHABLE without rebuilds -- only the
+   * busy/idle flip is structural, because it swaps the buttons. */
   const lcRow = lc === null
     ? `<tr><th>lifecycle</th><td colspan="3" class="age">no run recorded — updates driven by hand do not publish it</td></tr>`
-    : `<tr><th>lifecycle</th><td><b>${lc}</b> ${ageSpan(b, 'ota/lifecycle')}${
-         prog !== null && busy ? ` · ${prog}%` : ''}</td>
-       <td colspan="2" class="age">${msg}</td></tr>`;
+    : `<tr><th>lifecycle</th><td><span data-ota-box="${esc(b)}"></span></td>
+       <td colspan="2" class="age">${vspan(b, 'ota/lifecycle_msg', '')}</td></tr>`;
 
   return `
     <h2>firmware</h2>
     ${trialBanner}
     <table>
-      <tr><th>running</th><td>${get(b, 'fw_ver', '—')} ${ageSpan(b, 'fw_ver')}</td>
-          <th>channel</th><td>${ch}</td></tr>
-      <tr><th>staged</th><td>${get(b, 'ota/staged_ver', '—')}</td>
-          <th>history</th><td class="age">${get(b, 'ota/updates', 0)} updates ·
-              ${get(b, 'ota/reverts', 0)} reverts · ${get(b, 'ota/rejects', 0)} rejects</td></tr>
+      <tr><th>running</th><td>${vspan(b, 'fw_ver')} ${ageSpan(b, 'fw_ver')}</td>
+          <th>channel</th><td>${vspan(b, 'channel', 'dev')}</td></tr>
+      <tr><th>staged</th><td>${vspan(b, 'ota/staged_ver')}</td>
+          <th>history</th><td class="age">${vspan(b, 'ota/updates', '0')} updates ·
+              ${vspan(b, 'ota/reverts', '0')} reverts · ${vspan(b, 'ota/rejects', '0')} rejects</td></tr>
       ${lcRow}
     </table>
     <div style="display:flex;gap:10px;margin-top:10px">
-      <button ${busy || dead ? 'disabled' : ''} onclick="otaUpdate('${b}','${ch}')">
-        Update from ${ch} shelf</button>
-      <button class="danger" ${busy ? '' : 'disabled'} onclick="otaAbort('${b}')">Abort</button>
+      <button ${busy || dead ? 'disabled' : ''} data-ctl="${esc(b)}|btn/ota-update"
+              onclick="otaUpdate('${b}')">
+        Update from ${vspan(b, 'channel', 'dev')} shelf</button>
+      <button class="danger" ${busy ? '' : 'disabled'} data-ctl="${esc(b)}|btn/ota-abort"
+              onclick="otaAbort('${b}')">Abort</button>
     </div>
     <p class="note">${dead ? 'Box is offline — an update cannot be started.' :
       'Stage → verify → arm → trial boot → confirm, driven by <code>extio_ota_update</code>. ' +
       'A box will refuse an image it is already running, so the shelf version must differ.'}</p>`;
 }
 
-let panelHtml = null;
+/* Memo on the structure SIGNATURE, not on the rendered HTML: renderPanel runs
+ * per datapoint and per tick, and must cost a few dozen model reads on the
+ * (overwhelming) majority of calls where nothing structural moved -- the
+ * values then flow through tickAges/syncBinds into the standing DOM. */
+let panelSig = null;
 function renderPanel() {
-  if (panelBusy()) { redrawPending = true; return; }
-  redrawPending = false;
   const el = document.getElementById('panel');
   if (!sel || !boxes.has(sel)) {
-    const empty = '<div class="empty">select a box</div>';
-    if (panelHtml !== empty) { el.innerHTML = panelHtml = empty; }
+    if (panelSig !== '@empty') { el.innerHTML = '<div class="empty">select a box</div>'; panelSig = '@empty'; }
     return;
   }
-  const b = sel, L = liveness(b);
+  const sig = panelSignature(sel);
+  if (sig !== panelSig) {
+    if (ptrBusy()) { redrawPending = true; return; }  /* a swap mid-press eats the click */
+    redrawPending = false;
+    panelSig = sig;
+    rebuildPanel(el, buildPanel(sel));
+  }
+  tickAges(el);
+  syncBinds(el);
+}
+
+function buildPanel(b) {
+  const L = liveness(b);
   /* Silkscreen names for this board, or null -- annotation beside the numeric
    * ids, never a replacement for them (the number is the wire contract). */
   /* announced silk wins over the host-side table; see extio_silk.js */
@@ -848,30 +1150,37 @@ function renderPanel() {
                      : (p >= 0 && p === syncPin) ? 'sync in' : null;
 
   const pinRows = pins.map(p => {
-    const mode = modeOf(p), lvl = get(b, `di/${p}`, null), res = mode === 'reserved';
+    const mode = modeOf(p), res = mode === 'reserved';
     const own = res ? null : ownedBy(p);
-    const sel = ['off', 'in', 'in_pullup', 'out', 'ain'].map(o =>
+    const opts = ['off', 'in', 'in_pullup', 'out', 'ain'].map(o =>
       `<option ${o === mode ? 'selected' : ''}>${o}</option>`).join('');
     return `<tr class="row" ${(res || own) ? 'style="opacity:.5"' : ''}>
       <td><b>${p}</b>${sk && sk.pin(p) ? ` <span class="age">${sk.pin(p)}</span>` : ''}</td>
       <td>${res ? '<span class="age">reserved</span>'
                 : own ? `<span class="age" title="claimed by the obs/sync role — clear it above to free this pin">${own}</span>`
-                : `<select onchange="cfgSet('${b}','pin/${p}/mode',this.value)">${sel}</select>`}</td>
-      <td>${(mode === 'in' || mode === 'in_pullup') && lvl !== null
+                : `<select data-ctl="${esc(b)}|pin/${p}/mode" data-pin-mode="${p}" data-bind-box="${esc(b)}"
+                     onchange="cfgSet('${b}','pin/${p}/mode',this.value,this)">${opts}</select>`}</td>
+      <td>${(mode === 'in' || mode === 'in_pullup')
             ? `<b><span data-val-box="${esc(b)}" data-val-leaf="di/${p}"></span></b> ${ageSpan(b, 'di/' + p)}`
             : (mode === 'out' && !res && !own)
-            ? `<button title="drive pin ${p} high" onclick="doSet('${esc(b)}',${p},1)">1</button>
-               <button title="drive pin ${p} low"  onclick="doSet('${esc(b)}',${p},0)">0</button>
-               <button title="pulse pin ${p} for ${pul.get(p) || 100000} µs"
-                       onclick="doPulse('${esc(b)}',${p},${pul.get(p) || 100000})">pulse</button>`
+            ? `<button data-ctl="${esc(b)}|btn/do/${p}/1" title="drive pin ${p} high" onclick="doSet('${esc(b)}',${p},1)">1</button>
+               <button data-ctl="${esc(b)}|btn/do/${p}/0" title="drive pin ${p} low"  onclick="doSet('${esc(b)}',${p},0)">0</button>
+               <button data-ctl="${esc(b)}|btn/do/${p}/pulse" title="pulse pin ${p} for its configured pulse_us (default 100 ms)"
+                       onclick="doPulse('${esc(b)}',${p})">pulse</button>`
             : ''}</td>
       <td>${(res || own) ? '' : field(b, `label/${p}`, `pin/${p}/label`, { wide: 1 })}</td>
       <td>${(res || own) ? '' : `<input class="w4" value="${deb.get(p) ?? ''}" placeholder="0"
-              onchange="cfgSet('${b}','pin/${p}/debounce_ms',this.value)">`}</td>
+              data-ctl="${esc(b)}|pin/${p}/debounce_ms" data-bind="pins/debounce_ms"
+              data-bind-box="${esc(b)}" data-sparse-key="${p}"
+              onchange="cfgSet('${b}','pin/${p}/debounce_ms',this.value,this)">`}</td>
       <td>${(res || own) ? '' : `<input class="w4" value="${pul.get(p) ?? ''}" placeholder="0"
-              onchange="cfgSet('${b}','pin/${p}/pulse_us',this.value)">`}</td>
+              data-ctl="${esc(b)}|pin/${p}/pulse_us" data-bind="pins/pulse_us"
+              data-bind-box="${esc(b)}" data-sparse-key="${p}"
+              onchange="cfgSet('${b}','pin/${p}/pulse_us',this.value,this)">`}</td>
       <td>${(res || own) ? '' : `<input type="checkbox" ${alo.has(p) ? 'checked' : ''}
-              onchange="cfgSet('${b}','pin/${p}/active_low',this.checked?1:0)">`}</td>
+              data-ctl="${esc(b)}|pin/${p}/active_low" data-bind="pins/active_low"
+              data-bind-box="${esc(b)}" data-csv-key="${p}"
+              onchange="cfgSet('${b}','pin/${p}/active_low',this.checked?1:0,this)">`}</td>
     </tr>`;
   }).join('') || '<tr><td colspan="7" class="age">no pins announced</td></tr>';
 
@@ -881,33 +1190,25 @@ function renderPanel() {
    * there was nothing to click. The box has a fixed number of slots
    * (BOX_NGROUPS; announced as groups/max by newer firmware, 4 on everything
    * current), so render them all and let typing a pin list bring one up.
-   *
-   * Announced groups are keyed BY NAME (group/<name>/pins) with
-   * group/<name>/idx carrying the slot -- writes are by INDEX
-   * (config/group/<i>/pins). A group whose announced pins are EMPTY is a
-   * tombstone (newer firmware frees the name that way, because dserv retains
-   * keys forever): treat it as an empty slot, not a group. */
-  const bx = boxes.get(b) || {};
-  const gmax = Number(get(b, 'groups/max')) || 4;
-  const gslot = new Map();
-  for (const k of Object.keys(bx)) {
-    const m = /^group\/([^/]+)\/idx$/.exec(k);
-    if (!m) continue;
-    if (String(get(b, `group/${m[1]}/pins`, '')) === '') continue;   /* tombstone */
-    gslot.set(+get(b, `group/${m[1]}/idx`), m[1]);
-  }
+   * Writes go by INDEX (config/group/<i>/...), reads by announced NAME --
+   * see scanGroups for the name/slot/tombstone rules. Creation-row controls
+   * are unbound (an empty slot has nothing to read); their data-ctl still
+   * names the write leaf, so when the announce turns the slot into a real
+   * row, focus and the pending confirmation land on the control that
+   * replaced them. */
+  const { gmax, gslot } = scanGroups(b);
   const groups = Array.from({ length: gmax }, (_, i) => {
     const gn = gslot.get(i);
     if (gn === undefined) {
       return `<tr class="row"><td><b>${i}</b></td>
-        <td><input class="w8" placeholder="label (optional)"
-             onchange="cfgSet('${b}','group/${i}/label',this.value)"></td>
-        <td><input class="w8" placeholder="pins e.g. 2,3,4"
-             onchange="if(this.value!=='')cfgSet('${b}','group/${i}/pins',this.value)"></td>
-        <td><input class="w4" placeholder="0"
-             onchange="cfgSet('${b}','group/${i}/settle_ms',this.value)"></td>
-        <td><input type="checkbox"
-             onchange="cfgSet('${b}','group/${i}/quiet',this.checked?1:0)"></td>
+        <td><input class="w8" placeholder="label (optional)" data-ctl="${esc(b)}|group/${i}/label"
+             onchange="cfgSet('${b}','group/${i}/label',this.value,this)"></td>
+        <td><input class="w8" placeholder="pins e.g. 2,3,4" data-ctl="${esc(b)}|group/${i}/pins"
+             onchange="if(this.value!=='')cfgSet('${b}','group/${i}/pins',this.value,this)"></td>
+        <td><input class="w4" placeholder="0" data-ctl="${esc(b)}|group/${i}/settle_ms"
+             onchange="cfgSet('${b}','group/${i}/settle_ms',this.value,this)"></td>
+        <td><input type="checkbox" data-ctl="${esc(b)}|group/${i}/quiet"
+             onchange="cfgSet('${b}','group/${i}/quiet',this.checked?1:0,this)"></td>
         <td class="age" colspan="2">unused — type a pin list to create</td></tr>`;
     }
     return `<tr class="row"><td><b>${i}</b></td>
@@ -916,9 +1217,10 @@ function renderPanel() {
       <td>${field(b, `group/${gn}/settle_ms`, `group/${i}/settle_ms`)}</td>
       <td><input type="checkbox" ${get(b, `group/${gn}/quiet`) == 1 ? 'checked' : ''}
            title="suppress members' per-pin di publishes"
-           onchange="cfgSet('${b}','group/${i}/quiet',this.checked?1:0)"></td>
+           data-ctl="${esc(b)}|group/${i}/quiet" data-bind="group/${gn}/quiet" data-bind-box="${esc(b)}"
+           onchange="cfgSet('${b}','group/${i}/quiet',this.checked?1:0,this)"></td>
       <td><span data-grp-box="${esc(b)}" data-grp="${esc(gn)}"></span> ${ageSpan(b, `group/${gn}`)}</td>
-      <td><button class="danger" title="free this slot (pins → off)"
+      <td><button class="danger" title="free this slot (pins → off)" data-ctl="${esc(b)}|btn/group/${i}/clear"
            onclick="clearGroup('${b}',${i},'${esc(gn)}')">✕</button></td></tr>`;
   }).join('');
 
@@ -933,33 +1235,19 @@ function renderPanel() {
    *     (dashed, the woField idiom) and any group actually PUBLISHING betrays
    *     itself through its state/ain/<label> data blocks -- shown as
    *     slot-unknown rows above the writable ones. */
-  const agmax = Number(get(b, 'ain/groups/max')) || 4;
-  const agslot = new Map();
-  let agAnnounced = false;
-  for (const k of Object.keys(bx)) {
-    const m = /^ain\/group\/([^/]+)\/idx$/.exec(k);
-    if (!m) continue;
-    agAnnounced = true;
-    if (String(get(b, `ain/group/${m[1]}/chans`, '')) === '') continue;  /* tombstone */
-    agslot.set(+get(b, `ain/group/${m[1]}/idx`), m[1]);
-  }
+  const { agmax, agslot, agAnnounced, blobOnly } = scanAinGroups(b);
   /* newest block values, tick-filled (a chatty on-change group would
-   * otherwise churn the panel with every publish) */
+   * otherwise churn the DOM with every publish) */
   const lastCell = gn =>
     `<span data-ain-box="${esc(b)}" data-ain-grp="${esc(gn)}"></span> ${ageSpan(b, `ain/${gn}`)}`;
-  const agModeSel = (i, cur) => `<select onchange="cfgSet('${b}','ain/group/${i}/mode',this.value)">` +
+  const agModeSel = (i, gn, cur) =>
+    `<select data-ctl="${esc(b)}|ain/group/${i}/mode"${gn !== null
+       ? ` data-bind="ain/group/${gn}/mode" data-bind-box="${esc(b)}" data-dflt="onchange"` : ''}
+       onchange="cfgSet('${b}','ain/group/${i}/mode',this.value,this)">` +
     ['onchange', 'continuous'].map(o =>
       `<option ${o === String(cur) ? 'selected' : ''}>${o}</option>`).join('') + '</select>';
-  const blobOnly = [];
-  for (const k of Object.keys(bx)) {
-    const m = /^ain\/([^/]+)$/.exec(k);
-    if (!m || !Array.isArray(bx[k].v) || m[1] === 'dbg' || m[1] === 'group') continue;
-    if ([...agslot.values()].includes(m[1])) continue;         /* has a real row */
-    if (String(get(b, `ain/group/${m[1]}/chans`, null)) === '') continue;  /* tombstoned ghost */
-    blobOnly.push(m[1]);
-  }
   const aingroups =
-    blobOnly.sort().map(gn => `<tr class="row"><td class="age">?</td>
+    blobOnly.map(gn => `<tr class="row"><td class="age">?</td>
       <td><b>${esc(gn)}</b></td>
       <td colspan="6" class="age">publishing, but this firmware does not announce its slot/config</td>
       <td>${lastCell(gn)}</td><td></td></tr>`).join('') +
@@ -970,32 +1258,34 @@ function renderPanel() {
         const t = agAnnounced ? ''
           : ' title="This firmware does not report analog groups, so the current value cannot be shown. Writing still configures the box."';
         return `<tr class="row"><td><b>${i}</b></td>
-          <td><input class="w8${wo}"${t} placeholder="label (optional)"
-               onchange="cfgSet('${b}','ain/group/${i}/label',this.value)"></td>
-          <td><input class="w4${wo}"${t} placeholder="chans e.g. 0,1"
-               onchange="if(this.value!=='')cfgSet('${b}','ain/group/${i}/channels',this.value)"></td>
-          <td>${agModeSel(i, 'onchange')}</td>
-          <td><input class="w4${wo}"${t} placeholder="8"
-               onchange="cfgSet('${b}','ain/group/${i}/deadband',this.value)"></td>
-          <td><input class="w4${wo}"${t} placeholder="1"
-               onchange="cfgSet('${b}','ain/group/${i}/decimate',this.value)"></td>
+          <td><input class="w8${wo}"${t} placeholder="label (optional)" data-ctl="${esc(b)}|ain/group/${i}/label"
+               onchange="cfgSet('${b}','ain/group/${i}/label',this.value,this)"></td>
+          <td><input class="w4${wo}"${t} placeholder="chans e.g. 0,1" data-ctl="${esc(b)}|ain/group/${i}/channels"
+               onchange="if(this.value!=='')cfgSet('${b}','ain/group/${i}/channels',this.value,this)"></td>
+          <td>${agModeSel(i, null, 'onchange')}</td>
+          <td><input class="w4${wo}"${t} placeholder="8" data-ctl="${esc(b)}|ain/group/${i}/deadband"
+               onchange="cfgSet('${b}','ain/group/${i}/deadband',this.value,this)"></td>
+          <td><input class="w4${wo}"${t} placeholder="1" data-ctl="${esc(b)}|ain/group/${i}/decimate"
+               onchange="cfgSet('${b}','ain/group/${i}/decimate',this.value,this)"></td>
           <td><input class="w4${wo}"${t} placeholder="1" title="scans per block; batch × channels ≤ 24"
-               onchange="cfgSet('${b}','ain/group/${i}/batch',this.value)"></td>
-          <td><input type="checkbox"
-               onchange="cfgSet('${b}','ain/group/${i}/average',this.checked?1:0)"></td>
+               data-ctl="${esc(b)}|ain/group/${i}/batch"
+               onchange="cfgSet('${b}','ain/group/${i}/batch',this.value,this)"></td>
+          <td><input type="checkbox" data-ctl="${esc(b)}|ain/group/${i}/average"
+               onchange="cfgSet('${b}','ain/group/${i}/average',this.checked?1:0,this)"></td>
           <td class="age" colspan="2">unused — type channels to create</td></tr>`;
       }
       return `<tr class="row"><td><b>${i}</b></td>
         <td>${field(b, `ain/group/${gn}/label`, `ain/group/${i}/label`, { wide: 1, fallback: gn })}</td>
         <td>${field(b, `ain/group/${gn}/chans`, `ain/group/${i}/channels`)}</td>
-        <td>${agModeSel(i, get(b, `ain/group/${gn}/mode`, 'onchange'))}</td>
+        <td>${agModeSel(i, gn, get(b, `ain/group/${gn}/mode`, 'onchange'))}</td>
         <td>${field(b, `ain/group/${gn}/deadband`, `ain/group/${i}/deadband`)}</td>
         <td>${field(b, `ain/group/${gn}/decimate`, `ain/group/${i}/decimate`)}</td>
         <td>${batchCell(b, gn, i)}</td>
         <td><input type="checkbox" ${get(b, `ain/group/${gn}/avg`) == 1 ? 'checked' : ''}
-             onchange="cfgSet('${b}','ain/group/${i}/average',this.checked?1:0)"></td>
+             data-ctl="${esc(b)}|ain/group/${i}/average" data-bind="ain/group/${gn}/avg" data-bind-box="${esc(b)}"
+             onchange="cfgSet('${b}','ain/group/${i}/average',this.checked?1:0,this)"></td>
         <td>${lastCell(gn)}</td>
-        <td><button class="danger" title="free this slot"
+        <td><button class="danger" title="free this slot" data-ctl="${esc(b)}|btn/ain-group/${i}/clear"
              onclick="clearAinGroup('${b}',${i},'${esc(gn)}')">✕</button></td></tr>`;
     }).join('');
 
@@ -1047,20 +1337,16 @@ function renderPanel() {
     <h2>identity</h2>
     <table>
       <tr><th>name</th><td><code>${b}</code>
-            <button onclick="renameBox('${b}')"
+            <button data-ctl="${esc(b)}|btn/rename" onclick="renameBox('${b}')"
               title="One committed operation: the box re-registers and re-announces under the new name, the rename is saved to flash, and the old identity is purged.">Rename…</button></td>
-          <th>board</th><td>${get(b, 'board', '?')}</td></tr>
+          <th>board</th><td>${vspan(b, 'board', '?')}</td></tr>
       <tr><th>desc</th><td>${field(b, 'desc', 'desc', { wide: 1 })}</td>
-          <th>build</th><td>${get(b, 'build', '?')}</td></tr>
-      <tr><th>fw_ver</th><td>${get(b, 'fw_ver', '—')} ${ageSpan(b, 'fw_ver')}</td>
-          <th>fw</th><td>${get(b, 'fw', '—')}</td></tr>
-      <tr><th>boot</th><td>${get(b, 'boot', '?')}</td>
-          <th>channel</th><td>${get(b, 'channel', '—')}</td></tr>
-      <tr><th>up since</th><td colspan="3">${(() => {
-            const u = upInfo(b);
-            if (!u) return '<span class="age">unknown — no watchdog yet</span>';
-            return `${fmtBoot(u.boot)} · ${u.live ? 'up' : '<span class="age dead">was up</span>'} ${fmtDur(u.upUs)}`;
-          })()}</td></tr>
+          <th>build</th><td>${vspan(b, 'build', '?')}</td></tr>
+      <tr><th>fw_ver</th><td>${vspan(b, 'fw_ver')} ${ageSpan(b, 'fw_ver')}</td>
+          <th>fw</th><td>${vspan(b, 'fw')}</td></tr>
+      <tr><th>boot</th><td>${vspan(b, 'boot', '?')}</td>
+          <th>channel</th><td>${vspan(b, 'channel')}</td></tr>
+      <tr><th>up since</th><td colspan="3"><span data-up-box="${esc(b)}"></span></td></tr>
     </table>
     <p class="note"><code>fw_ver</code> is what MCUboot actually booted — the one to trust after an
        OTA. <code>fw</code> is compiled in and never changes, so it can look correct on a box running
@@ -1070,8 +1356,8 @@ function renderPanel() {
 
     <h2>network</h2>
     <table>
-      <tr><th>ip</th><td>${get(b, 'ip', '—')} ${ageSpan(b, 'ip')}</td>
-          <th>transport</th><td>${get(b, 'transport', '—')}</td></tr>
+      <tr><th>ip</th><td>${vspan(b, 'ip')} ${ageSpan(b, 'ip')}</td>
+          <th>transport</th><td>${vspan(b, 'transport')}</td></tr>
       <tr><th>dserv ip</th><td>${field(b, 'dserv/ip', 'dserv/ip', { wide: 1 })} ${ageSpan(b, 'dserv/ip')}</td>
           <th>dserv port</th><td>${field(b, 'dserv/port', 'dserv/port')}</td></tr>
       <tr><th>net mode</th><td>${field(b, 'net/mode', 'net/mode', { wide: 1 })}</td><th></th><td></td></tr>
@@ -1083,13 +1369,8 @@ function renderPanel() {
     <table>
       <tr><th>obs pin</th><td>${field(b, 'obs_pin', 'obs/pin', { i32: 1 })}${silkPin(sk, get(b, 'obs_pin'))} ${ageSpan(b, 'obs_pin')}</td>
           <th>sync pin</th><td>${field(b, 'sync_pin', 'sync/pin', { i32: 1 })}${silkPin(sk, get(b, 'sync_pin'))} ${ageSpan(b, 'sync_pin')}</td></tr>
-      <tr><th>obs mode</th><td>${(() => {
-            const m = String(get(b, 'obs/mode', 'mirror'));
-            return `<select onchange="cfgSet('${b}','obs/mode',this.value)">` +
-              ['mirror', 'leader'].map(o =>
-                `<option${o === m ? ' selected' : ''}>${o}</option>`).join('') +
-              `</select>`;
-          })()} ${get(b, 'obs_leader', 0) == 1
+      <tr><th>obs mode</th><td>${selOf(b, 'obs/mode', 'obs/mode', 'mirror', ['mirror', 'leader'])
+          } ${get(b, 'obs_leader', 0) == 1
             ? '<span class="ok">announced obs leader</span>' : ''}</td>
           <th></th><td></td></tr>
     </table>
@@ -1137,7 +1418,8 @@ function renderPanel() {
     <h2>analog</h2>
     <table>
       <tr><th>enabled</th><td>
-            <select onchange="cfgSet('${b}','ain/enable',this.value)">
+            <select data-ctl="${esc(b)}|ain/enable" data-bind="ain_en" data-bind-box="${esc(b)}"
+                    data-dflt="0" onchange="cfgSet('${b}','ain/enable',this.value,this)">
               <option value="1" ${ainOn ? 'selected' : ''}>on</option>
               <option value="0" ${ainOn ? '' : 'selected'}>off</option>
             </select></td>
@@ -1162,13 +1444,15 @@ function renderPanel() {
     ${fwSection(b)}
 
     <div id="actionbar">
-      <button id="savebtn" class="primary" onclick="doSave('${b}')" ${dirty.size ? '' : 'disabled'}>
+      <button id="savebtn" class="primary" data-ctl="${esc(b)}|btn/save"
+        onclick="doSave('${b}')" ${dirty.size ? '' : 'disabled'}>
         ${saveText()}</button>
-      <button class="danger" onclick="doReboot('${b}')">Reboot</button>
-      <button onclick="conn.send('extio_cfg_announce ${b}','extio')" title="Ask the box to re-publish everything now">Refresh from box</button>
+      <button class="danger" data-ctl="${esc(b)}|btn/reboot" onclick="doReboot('${b}')">Reboot</button>
+      <button data-ctl="${esc(b)}|btn/refresh" onclick="conn.send('extio_cfg_announce ${b}','extio')"
+        title="Ask the box to re-publish everything now">Refresh from box</button>
     </div>
   `;
-  if (html !== panelHtml) { el.innerHTML = panelHtml = html; tickAges(el); }
+  return html;
 }
 
 /* ---- boot ---- */
@@ -1185,29 +1469,68 @@ async function init() {
    *
    * Everything that is purely local is therefore started FIRST and
    * unconditionally. */
-  document.getElementById('panel').addEventListener('focusout', () => {
-    setTimeout(() => { if (redrawPending && !panelBusy()) renderPanel(); }, 0);
+  const panel = document.getElementById('panel');
+  /* leaving a control: sync it promptly (it was the one element the sweep
+   * skipped), and flush any structural rebuild a press deferred */
+  panel.addEventListener('focusout', () => {
+    setTimeout(() => {
+      if (redrawPending) renderPanel();
+      else { tickAges(panel); syncBinds(panel); }
+    }, 0);
   });
-  /* the pointer half of panelBusy() -- see its comment (Safari checkboxes) */
-  document.getElementById('panel').addEventListener('pointerdown',
-    () => { panelPtrAt = Date.now(); }, true);
+  /* pointer flag: defers STRUCTURAL swaps only, so mousedown/mouseup land on
+   * the same node (value syncs never replace nodes and need no deferral) */
+  panel.addEventListener('pointerdown', () => { panelPtrAt = Date.now(); }, true);
   const ptrDone = () => {
     panelPtrAt = 0;
-    setTimeout(() => { if (redrawPending && !panelBusy()) renderPanel(); }, 0);
+    setTimeout(() => { if (redrawPending) renderPanel(); }, 0);
   };
   window.addEventListener('pointerup', ptrDone, true);
   window.addEventListener('pointercancel', ptrDone, true);
 
-  /* Re-render on a timer as well as on updates: AGE changes with the clock, not
+  /* Edit feedback, delegated so it survives rebuilds:
+   *  - typing tints the field amber while it differs from the box (and an
+   *    edit clears a stale mismatch flag);
+   *  - Enter commits by blurring (change fires only if the value moved);
+   *  - Escape reverts to the box's value without committing. */
+  /* a fresh edit dismisses an expired (mismatch-flagged) write: the user has
+   * seen the flag and moved on, and the sweep must not re-raise it under
+   * their caret */
+  const dropExpired = (t) => {
+    if (!t.dataset || !t.dataset.ctl) return;
+    const p = pendingByCtl.get(t.dataset.ctl);
+    if (p && p.expired) pendingByCtl.delete(t.dataset.ctl);
+    clearMismatch(t);
+  };
+  panel.addEventListener('input', (e) => {
+    const t = e.target;
+    if (!t.dataset || t.dataset.bind === undefined) return;
+    if (t.type === 'checkbox' || t.tagName === 'SELECT') return;
+    dropExpired(t);
+    const cur = boundValue(t);
+    t.classList.toggle('editing', cur !== null && !valEq(String(t.value), cur, t));
+  });
+  panel.addEventListener('keydown', (e) => {
+    const t = e.target;
+    if (!t || t.tagName !== 'INPUT' || t.type === 'checkbox') return;
+    if (e.key === 'Enter') { t.blur(); }
+    else if (e.key === 'Escape') {
+      dropExpired(t);
+      const cur = t.dataset.bind !== undefined ? boundValue(t) : '';
+      t.value = cur === null ? '' : cur;
+      t.classList.remove('editing');
+    }
+  });
+  panel.addEventListener('animationend', (e) => {
+    if (e.animationName === 'okflash') e.target.classList.remove('confirmed');
+  });
+
+  /* Tick on a timer as well as on updates: AGE changes with the clock, not
    * with traffic, so a box going silent must become visibly stale on its own.
-   * This is also the GUARANTEE behind the redraw deferral -- focusout only makes
-   * the catch-up snappier; the tick is what makes it certain.
-   *
-   * tickAges runs FIRST and unconditionally: it fills the age spans in place
-   * (no DOM replacement, so it is safe even mid-click), which keeps ages
-   * honest even while renderPanel() is deferring because the user is in the
-   * panel -- staleness must stay visible exactly then. The render calls after
-   * it only touch the DOM when a VALUE or liveness bucket changed. */
+   * The tick is also what resolves a pending write into its timeout when the
+   * box never answers, and what expires liveness buckets into a structural
+   * rebuild (dimming). tickAges(document) covers the fleet's spans; the
+   * panel's are re-filled inside renderPanel after any rebuild. */
   setInterval(() => { tickAges(document); renderClockWarn(); renderFleet();
                       if (sel) renderPanel(); }, 1000);
 
