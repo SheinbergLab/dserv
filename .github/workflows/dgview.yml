@@ -349,9 +349,56 @@ jobs:
           cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=C:/deps -DLIBDG_PATH=${{ github.workspace }}/dlsh/libdg/build
           ninja -C build
           
+      # The Chocolatey community feed 503s often enough to break a release, and
+      # choco EXITS 0 when it does ("Chocolatey installed 0/0 packages"), so a
+      # silent no-install used to sail past this step green and only surface two
+      # steps later as "CPack Error: Cannot find NSIS compiler makensis".
+      # Retry, fall back to the portable zip, and verify makensis is really there.
       - name: Install NSIS
-        run: choco install nsis -y
-        
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          function Find-MakeNSIS {
+            foreach ($p in @("C:\Program Files (x86)\NSIS\makensis.exe",
+                             "C:\Program Files\NSIS\makensis.exe")) {
+              if (Test-Path $p) { return $p }
+            }
+            $cmd = Get-Command makensis.exe -ErrorAction SilentlyContinue
+            if ($cmd) { return $cmd.Source }
+            return $null
+          }
+
+          foreach ($attempt in 1..2) {
+            Write-Host "::group::choco install nsis (attempt $attempt/2)"
+            choco install nsis -y --no-progress
+            Write-Host "::endgroup::"
+            if (Find-MakeNSIS) { break }
+            Write-Host "makensis still absent after attempt $attempt"
+            if ($attempt -lt 2) { Start-Sleep -Seconds 20 }
+          }
+
+          $makensis = Find-MakeNSIS
+          if (-not $makensis) {
+            Write-Host "Chocolatey unusable; falling back to the portable NSIS zip"
+            $zip = Join-Path $env:RUNNER_TEMP 'nsis.zip'
+            Invoke-WebRequest -UseBasicParsing -OutFile $zip `
+              -Uri 'https://downloads.sourceforge.net/project/nsis/NSIS%203/3.11/nsis-3.11.zip'
+            Expand-Archive -Path $zip -DestinationPath 'C:\nsis' -Force
+            $dir = (Get-ChildItem 'C:\nsis' -Directory | Select-Object -First 1).FullName
+            $candidate = Join-Path $dir 'makensis.exe'
+            if (Test-Path $candidate) {
+              $makensis = $candidate
+              # cpack looks up makensis on PATH (or in the registry, which the zip
+              # does not write), so the next step needs this directory.
+              Add-Content -Path $env:GITHUB_PATH -Value $dir -Encoding utf8
+            }
+          }
+
+          if (-not $makensis) { throw "NSIS install failed: makensis.exe not found" }
+          Write-Host "makensis: $makensis"
+          & $makensis /VERSION
+
       - name: Create installer
         run: |
           cd tools/dgview/build
