@@ -153,7 +153,7 @@ function requestInitialData() {
           ess/buttons/channels ess/slider_active slider/settings
           ess/joystick_active ess/joystick/dir ess/joystick/response
           ess/session_stats
-          em/settings mesh/peers
+          em/settings em/source_active mesh/peers
           openephys/status
           ess/rmt_connected ess/rmt_host ess/stim_required
           system/hostname system/hostaddr system/os

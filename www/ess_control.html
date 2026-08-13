@@ -194,6 +194,19 @@
                                     </div>
                                 </div>
                                 <div class="ess-input-row">
+                                    <span class="ess-input-label" title="Which eye source may publish. auto lets whichever is live write, which is right when only one is plugged in; pin one when a VideoStream tracker, an extio analog group and the virtual eye could otherwise race.">Source</span>
+                                    <div class="ess-input-group">
+                                        <select id="eye-source">
+                                            <option value="auto">auto</option>
+                                            <option value="video">video</option>
+                                            <option value="analog">analog</option>
+                                            <option value="virtual">virtual</option>
+                                        </select>
+                                        <span id="eye-source-active" class="ess-input-label"
+                                              title="which source last actually produced a position"></span>
+                                    </div>
+                                </div>
+                                <div class="ess-input-row">
                                     <span class="ess-input-label">Invert</span>
                                     <div class="ess-input-group">
                                         <label><input type="checkbox" id="eye-h-invert"> h</label>
@@ -314,6 +327,8 @@
                  hInvert: document.getElementById('eye-h-invert'),
                  vInvert: document.getElementById('eye-v-invert'),
                  swap: document.getElementById('eye-swap'),
+                 source: document.getElementById('eye-source'),
+                 sourceActive: document.getElementById('eye-source-active'),
                  recenterBtn: document.getElementById('eye-recenter')
              };
              
@@ -357,6 +372,13 @@
                  this.sendEmCommand(`::em::set_param invert_v ${e.target.checked ? 1 : 0}`);
              });
 
+             /* set_source, NOT set_param: it validates against the allowed
+                names, so a stale option value cannot quietly set a source that
+                gates every processor off and leaves the rig with no eye. */
+             this.elements.source?.addEventListener('change', (e) => {
+                 this.sendEmCommand(`::em::set_source ${e.target.value}`);
+             });
+
              this.elements.swap?.addEventListener('change', (e) => {
                  this.sendEmCommand(`::em::set_param swap_axes ${e.target.checked ? 1 : 0}`);
              });
@@ -367,6 +389,16 @@
          }
          
          setupSubscriptions() {
+             /* What is ACTUALLY writing, which is the thing `auto` costs you:
+                with auto you never declare a source, so the only way to know
+                which one is feeding the rig is to be told. */
+             this.dpManager?.subscribe('em/source_active', (data) => {
+                 if (this.elements.sourceActive) {
+                     const v = String(data?.data ?? data ?? '');
+                     this.elements.sourceActive.textContent = v ? `\u2190 ${v}` : '';
+                 }
+             });
+
              this.dpManager?.subscribe('em/settings', (data) => {
                  this.updateFromSettings(data.value);
              });
@@ -397,6 +429,9 @@
              }
              if (params.invert_v !== undefined && this.elements.vInvert) {
                  this.elements.vInvert.checked = !!parseInt(params.invert_v);
+             }
+             if (params.source !== undefined && this.elements.source) {
+                 this.elements.source.value = String(params.source);
              }
              if (params.swap_axes !== undefined && this.elements.swap) {
                  this.elements.swap.checked = !!parseInt(params.swap_axes);

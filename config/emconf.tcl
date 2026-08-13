@@ -95,6 +95,7 @@ namespace eval em {
         invert_v 0 \
         swap_axes 0 \
         use_biquadratic 0 \
+        source auto \
         bq_h_coeffs {0 0 0 0 0 0 0 0 0} \
         bq_v_coeffs {0 0 0 0 0 0 0 0 0}]
     
@@ -105,6 +106,62 @@ namespace eval em {
     # Track last valid position in degrees
     variable last_valid_h 0.0
     variable last_valid_v 0.0
+
+    # ---- which eye source may publish ------------------------------------
+    #
+    # Every processor here writes the SAME three datapoints
+    # (eyetracking/position, eyetracking/raw, ess/em_pos), so with more than one
+    # source live it is last-writer-wins at whatever rate they run. That was
+    # harmless while only ever one source existed at a time, and it is the
+    # reason this worked so smoothly: you looked at the eye viewer and saw
+    # whichever one was plugged in, without having to say so.
+    #
+    # DEFAULT auto KEEPS EXACTLY THAT. auto lets every processor publish, so
+    # nothing changes for a rig with one source. Naming a source pins it, for
+    # when a box publishing an analog group called `eye` and a VideoStream
+    # tracker are on one dserv and would otherwise race at 250 Hz.
+    #
+    #   ::em::set_source auto      any source publishes (default, permissive)
+    #   ::em::set_source video     VideoStream tracker only (eyetracking/results)
+    #   ::em::set_source analog    extio analog group only (state/ain/eye)
+    #   ::em::set_source virtual   virtual eye only
+    variable source_names {auto video analog virtual}
+
+    proc source_allows { name } {
+        variable settings
+        set s [dict get $settings source]
+        return [expr {$s eq $name || $s eq "auto"}]
+    }
+
+    proc set_source { s } {
+        variable source_names
+        if { $s ni $source_names } {
+            error "em: source '$s' not one of: [join $source_names {, }]"
+        }
+        set_param source $s
+        puts "em: eye source = $s"
+        return $s
+    }
+
+    # WHICH SOURCE IS ACTUALLY WRITING, published on CHANGE only -- the whole
+    # point of `auto` is not having to declare it, so the cost of that
+    # convenience should be an observable rather than a mystery. A viewer can
+    # show it, and a rig that suddenly reads the wrong eye says so here instead
+    # of looking merely wrong. On change only: these run at up to 250 Hz.
+    #
+    # Called at each processor's PUBLISH SITE, never at its entry. A processor
+    # can be entered and then bail (analog returns on nchan < 2, video on a
+    # bad frame), and marking on entry claimed a source was feeding the rig
+    # when it was producing nothing -- the exact misreading this exists to
+    # prevent.
+    variable source_last ""
+    proc source_mark { name } {
+        variable source_last
+        if { $name eq $source_last } return
+        set source_last $name
+        dservSet em/source_active $name
+        puts "em: eye data now coming from '$name'"
+    }
 
     proc update_settings {} {
         variable settings
@@ -134,6 +191,18 @@ namespace eval em {
             set settings [dict merge $settings $stored]
             update_settings
             puts "em: eye calibration restored (profile $cal_profile)"
+            # A PINNED SOURCE IS EXPERIMENT-CRITICAL AND OTHERWISE SILENT.
+            # It rides in this db because set_param persists everything, but
+            # unlike a gain or a centre it can make a whole rig read the wrong
+            # eye -- or no eye -- and the reason is a value someone set days ago
+            # with no comment attached to it. Say so at boot, where anyone
+            # asking "why is the eye data wrong" will actually look.
+            set s [dict get $settings source]
+            if { $s ne "auto" } {
+                puts "em: NOTE eye source is PINNED to '$s' (restored from the\
+                      calibration db) -- other sources will not publish.\
+                      ::em::set_source auto restores the permissive default."
+            }
         }
     }
     
@@ -178,6 +247,7 @@ namespace eval em {
     }
 
     proc process { dpoint data } {
+        if { ![source_allows video] } return
         variable settings
         variable last_valid_h
         variable last_valid_v
@@ -248,6 +318,7 @@ namespace eval em {
         
         # Send eye position in degrees as floats [h, v] convention
         set eyevals [binary format ff $h_deg $v_deg]
+        source_mark video
         dservSetData eyetracking/position $cur_t 2 $eyevals ;# 2 = DSERV_FLOAT
         
         # Also send raw differences for calibration/debugging
@@ -260,9 +331,11 @@ namespace eval em {
 
     # Process virtual eye data (already in degrees)
     proc process_virtual { dpoint data } {
+        if { ![source_allows virtual] } return
         lassign $data h_deg v_deg
 
         # Virtual data is already in degrees, just pass through
+        source_mark virtual
         set eyevals [binary format ff $h_deg $v_deg]
         dservSetData eyetracking/position 0 2 $eyevals
 
@@ -283,6 +356,7 @@ namespace eval em {
     # this is the path by which eye position reaches the data file, and a sample
     # is only as useful as the instant it claims to have happened at.
     proc process_analog { dpoint data } {
+        if { ![source_allows analog] } return
         variable settings
         variable current_raw_h
         variable current_raw_v
@@ -362,6 +436,7 @@ namespace eval em {
             }
 
             set t [expr {$t0 + $k * $ivl}]
+            source_mark analog
             dservSetData eyetracking/position $t 2 [binary format ff $h_deg $v_deg]
             dservSetData eyetracking/raw      $t 2 [binary format ff $raw_h $raw_v]
         }
@@ -390,8 +465,10 @@ dpointSetScript    eyetracking/results em::process
 # extio MCP3204 analog eye source: an eye tracker's analog out digitized by the
 # box, published as state/ain/<label>. Glob dev follows whatever box is present.
 # Label your box's analog group "eye" (ain group N label eye), or set em_ain_dp.
-# NB: this writes eyetracking/position, same as the other sources -- run ONE eye
-# source at a time (last writer wins).
+# NB: this writes eyetracking/position, same as the other sources. With
+# em/settings source == auto (the default) they ALL publish and it is
+# last-writer-wins, which is fine while only one is live; ::em::set_source
+# video|analog|virtual pins one when they are not.
 set em_ain_dp extio/*/state/ain/eye
 dservAddMatch   $em_ain_dp
 dpointSetScript $em_ain_dp em::process_analog

@@ -225,10 +225,27 @@ namespace eval vbox {
             return
         }
 
-        set payload [binary format cccc 1 [expr {1 << $chan}] 1 $cnt]
+        # ALL the group's channels, scan-major in ascending channel order --
+        # the column contract the real firmware emits and every decoder assumes.
+        # This box has one physical signal, so column 0 carries it and the rest
+        # are deterministic derivations of it: enough to exercise nchan > 1
+        # decoding, column/label mapping and any consumer that needs an h AND a
+        # v (em::process_analog returns outright on nchan < 2), without
+        # pretending to be independent inputs.
+        set chlist [lsort -integer [split $ain(chans) ,]]
+        set nch [llength $chlist]
+        set mask 0
+        foreach c $chlist { set mask [expr {$mask | (1 << $c)}] }
+        set wide {}
+        foreach v $samples {
+            for {set j 0} {$j < $nch} {incr j} {
+                lappend wide [expr {$j == 0 ? $v : (4095 - $v)}]
+            }
+        }
+        set payload [binary format cccc 1 $mask $nch $cnt]
         append payload [binary format i $interval]
         append payload [binary format ss 0 0]
-        append payload [binary format s$cnt $samples]
+        append payload [binary format s[llength $wide] $wide]
         dservSetData [state_name ain/$ain(label)] $t0 0 $payload
         incr ctr(blocks)
     }
