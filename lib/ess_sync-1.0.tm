@@ -349,6 +349,26 @@ namespace eval ess {
         if {[dict exists $m entries $key]} { dict unset m entries $key }
     }
 
+    # Advance one entry of the shared-lib base manifest after a
+    # successful push, so the local file stops reading as unpushed.
+    #
+    # The checksum recorded is the LOCAL file's, not the one the
+    # registry echoes back: scripts::dirty compares base against
+    # `sha256 -file`, so this is the value that has to match for the
+    # Sync badge to clear. If the two ever disagreed, sync_libs would
+    # report the lib as modified regardless of what the base says.
+    proc _base_lib_advance {filename version by} {
+        variable system_path
+        variable current
+        set project $current(project)
+        set f [file join $system_path $project lib $filename]
+        if {![file exists $f]} { return }
+        set path [_base_lib_manifest_path $project]
+        set manifest [_base_manifest_read $path]
+        _base_entry_set manifest $filename [sha256 -file $f] $version $by
+        _base_manifest_write $path $manifest
+    }
+
     # 3-way decision from three checksums ("" == absent).
     # Returns: unchanged | pull | keep_local | conflict | cold
     proc _base_decide {base local registry} {
@@ -1321,6 +1341,12 @@ namespace eval ess {
             error "Commit failed: $err"
         }
 
+        # The push IS a sync point: advance the base so the Sync badge
+        # (scripts::dirty) stops counting this lib as unpushed. Without
+        # this, a lib pushed alongside a system's scripts stayed dirty
+        # until the next pull re-seeded its base entry.
+        catch { _base_lib_advance $filename $version $user }
+
         ess_info "Committed lib $filename to registry ($registry_workgroup)" "sync"
         return "success"
     }
@@ -1443,6 +1469,12 @@ namespace eval ess {
             if {[catch {
                 set response [https_put $url $body]
                 incr pushed
+                # Only the configured workgroup's base manifest describes
+                # this tree — a seed aimed elsewhere (ess::seed_libs
+                # _templates) must not touch it.
+                if {$wg eq $registry_workgroup} {
+                    catch { _base_lib_advance $filename $version $user }
+                }
                 ess_info "  Pushed: $filename" "sync"
             } put_err]} {
                 ess_error "  Failed to push $filename: $put_err" "sync"

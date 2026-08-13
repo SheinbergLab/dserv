@@ -345,6 +345,12 @@ const LibsPlugin = {
             wb.libsState.syncStatus[filename] = 'synced';
             this._updateLibSyncDots(wb);
 
+            // commit_lib advanced the lib base manifest; nudge the
+            // scripts subprocess to re-scan so the header Sync badge
+            // drops this lib now instead of at its next periodic scan.
+            wb.connection?.evalAsync?.('sendNoReply scripts {scripts::dirty}')
+                ?.catch(() => {});
+
             wb.showNotification(`Committed lib/${filename} to registry`, 'success');
         } catch (err) {
             console.error('Commit lib failed:', err);
