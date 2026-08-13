@@ -86,12 +86,24 @@ static int u_eth_init(const box_config_t *c)      { return box_net_eth_init(c); 
 static const box_config_t *eth_cfg;
 static int u_eth_available(void)
 {
-	int has_target = eth_cfg &&
-		(eth_cfg->dserv_ip[0] | eth_cfg->dserv_ip[1] |
-		 eth_cfg->dserv_ip[2] | eth_cfg->dserv_ip[3]);
-	return box_net_eth_link() && has_target;
+	return box_net_eth_link() && eth_cfg && dserv_cfg_has_target(eth_cfg);
 }
-static int u_eth_connect(const box_config_t *c)   { return box_net_eth_connect(c->dserv_ip, dserv_cfg_port(c)); }
+/* The uplink dial, and the OTHER 0.0.0.0 spinner -- the louder of the two.
+ *
+ * uplink_service_locked() redials whenever the active transport is not
+ * connected, and box_net_eth_connect() is guarded only by "a socket already
+ * exists": the SYN to 0.0.0.0 fails, box_net_eth_connected() closes the socket,
+ * and the next service pass opens another. On an event-driven loop that is a
+ * spin, not a 5 s cadence, so it -- not the registration rounds -- is what
+ * actually fills the console. Same predicate, same reason: there is nowhere to
+ * dial, and "no target" is a refusal, not a failure to retry. */
+static int u_eth_connect(const box_config_t *c)
+{
+	if (!dserv_cfg_has_target(c)) {
+		return -1;
+	}
+	return box_net_eth_connect(c->dserv_ip, dserv_cfg_port(c));
+}
 static int u_eth_connected(void)                  { return box_net_eth_connected(); }
 static int u_eth_poll(uint8_t *b, int m)          { return box_net_eth_poll(b, m); }
 static int u_eth_poll2(uint8_t *b, int m, int *len, uint64_t *arr)
@@ -149,6 +161,9 @@ static struct {
 static void reg_request(const box_config_t *c, int full)
 {
 	uint8_t ip[4];
+	if (!dserv_cfg_has_target(c)) {
+		return;                          /* unadopted: no host to register with */
+	}
 	if (!box_net_eth_get_ip(ip)) {
 		return;                          /* no lease yet: nothing to advertise */
 	}
@@ -424,7 +439,42 @@ static bool     reg_ever_up;   /* have we EVER completed a registration? */
 static void eth_reg_watchdog(const box_config_t *cfg)
 {
 	static int64_t retry_ms, fresh_ms;
+	static uint8_t waiting_said;         /* print the resting state once, not per pass */
 	int64_t now = k_uptime_get();
+
+	/* UNADOPTED IS NOT DOWN, and the watchdog must not conflate them.
+	 *
+	 * With no target there is no host that could connect back, so every field
+	 * this function maintains would be a lie told at 5 s intervals: `tries`
+	 * climbing, `down_ms` growing, and -- because the beacon publishes both --
+	 * a factory box rendering on the host's list as a STRANDED box rather than
+	 * a free one. Underneath, each "retry" is 8 blocking TCP connects to
+	 * 0.0.0.0 whose SYNs cannot be routed, which is the `E: net_send_data()`
+	 * storm that buried the console during a new FRDM-MCXN947's first bring-up
+	 * (2026-08-13) and made a one-line diagnosis take an evening.
+	 *
+	 * Reached only under a forced `mode eth`: in AUTO, u_eth_available() gates
+	 * on the same predicate, so eth is never promoted without a target and this
+	 * function never runs. Forcing the transport is allowed to skip the policy;
+	 * it is not allowed to invent a fault.
+	 *
+	 * The counters are CLEARED rather than frozen. They describe reachability
+	 * of a configured host, and there isn't one -- carrying a stale count into
+	 * the adoption that follows would date the new owner's link to the old
+	 * nothing. Adoption sets dserv/ip, this returns false, and the next pass
+	 * starts a genuinely fresh registration. */
+	if (!dserv_cfg_has_target(cfg)) {
+		if (!waiting_said) {
+			waiting_said = 1;
+			printk("reg: no dserv target -- waiting to be adopted "
+			       "(beacon up; or set one: `dserv ip A.B.C.D`)\n");
+		}
+		retry_ms = 0;
+		reg_down_since_ms = 0;
+		reg_rereg = 0;
+		return;
+	}
+	waiting_said = 0;
 
 	if (!box_net_eth_server_up()) {
 		fresh_ms = now;

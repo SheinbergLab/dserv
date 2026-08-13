@@ -477,6 +477,21 @@ static inline const char *dserv_cfg_name(const box_config_t *c)
 static inline uint16_t dserv_cfg_port(const box_config_t *c)
 { return c->dserv_port ? c->dserv_port : DSERV_DEFAULT_PORT; }
 
+/* Has this box been told where its dserv is?
+ *
+ * 0.0.0.0 is not a bad address, it is the FACTORY state -- the box is waiting
+ * to be adopted, and the discovery beacon reports exactly that (`target` all
+ * zeros => "free" on the host's box list). It is a resting state, not a fault,
+ * and nothing may treat it as one: there is no host to reach, so a retry is not
+ * a retry, it is a connection to nowhere.
+ *
+ * One predicate rather than the OR open-coded at each site, because the two
+ * sites that had it (u_eth_available, and now the registration path) must agree
+ * -- eth calling itself unavailable while the reg watchdog hammers the same
+ * absent target is precisely the split that produced the 0.0.0.0 storm. */
+static inline int dserv_cfg_has_target(const box_config_t *c)
+{ return (c->dserv_ip[0] | c->dserv_ip[1] | c->dserv_ip[2] | c->dserv_ip[3]) != 0; }
+
 /* The update channel this box tracks; "" (factory/pre-v19) => "dev". */
 static inline const char *dserv_cfg_channel(const box_config_t *c)
 { return c->channel[0] ? c->channel : "dev"; }
