@@ -14,6 +14,9 @@ package require qpcs
 
 tcl::tm::add $dspath/lib
 
+# host address / route queries (::net::local_addr, ::net::addr_toward, ...)
+package require net
+
 # enable error logging
 errormon enable
 
@@ -158,52 +161,16 @@ subprocess df "source [file join $dspath config/dfconf.tcl]"
 # setup docs subprocess
 subprocess docs "source [file join $dspath config/docsconf.tcl]"
 
-# Discover this machine's LAN IP with NO external network dependency: a kernel
-# route lookup (Linux `ip route get`, macOS `route get default` + ipconfig).
-# Replaces a blocking connect to google.com:80 that added a DNS/socket hit at
-# boot, hung with no internet, and returned a public IPv6 rather than the LAN
-# IPv4 stim comms need. Route lookups send no packets and work offline.
-proc get_local_hostaddr {} {
-    set ip ""
-    if { $::tcl_platform(os) == "Linux" } {
-	catch {
-	    if {[regexp {src (\S+)} [exec ip -4 route get 1.1.1.1] -> m]} { set ip $m }
-	}
-    } elseif { $::tcl_platform(os) == "Darwin" } {
-	catch {
-	    set iface [exec sh -c {route -n get default 2>/dev/null | awk '/interface:/{print $2; exit}'}]
-	    if { $iface ne "" } { set ip [string trim [exec ipconfig getifaddr $iface]] }
-	}
-    }
-    return $ip
-}
-
-# Source address of the kernel route TOWARD an IPv4 literal — i.e. which
-# of this box's addresses a peer at $dest can actually reach back. On a
-# multi-homed box this differs from get_local_hostaddr: the DEFAULT route
-# follows the mesh-primary preference (netmon can flip it to wifi), while
-# a stim computer on the wired rig subnet is reached — and must register
-# back — over the wire. Route lookups send no packets; "" on any failure
-# (non-IPv4 dest included), so callers can fall back.
-proc get_hostaddr_toward { dest } {
-    if { ![regexp {^\d+\.\d+\.\d+\.\d+$} $dest] } { return "" }
-    set ip ""
-    if { $::tcl_platform(os) == "Linux" } {
-	catch {
-	    if {[regexp {src (\S+)} [exec ip -4 route get $dest] -> m]} { set ip $m }
-	}
-    } elseif { $::tcl_platform(os) == "Darwin" } {
-	catch {
-	    set iface [exec sh -c "route -n get $dest 2>/dev/null | awk '/interface:/{print \$2; exit}'"]
-	    if { $iface ne "" } { set ip [string trim [exec ipconfig getifaddr $iface]] }
-	}
-    }
-    return $ip
-}
+# Address discovery lives in lib/net-1.0.tm: kernel route lookups only —
+# no packets, no DNS, everything catch-wrapped (an uncaught error here
+# truncates the whole boot; see the module header for the contract).
+# ::net::local_addr is the default-route address; ::net::addr_toward is
+# the address a SPECIFIC peer can reach us on, which differs on a
+# multi-homed box whenever mesh-primary (netmon) is not the peer's net.
 
 proc set_hostinfo {} {
     # set host address to identify this machine (LAN IPv4; loopback fallback)
-    set addr [get_local_hostaddr]
+    set addr [::net::local_addr]
     if { $addr eq "" } {
 	set addr 127.0.0.1
     }
@@ -254,7 +221,7 @@ proc set_hostinfo {} {
 	    # which link is default. Hostname ESS_RMT_HOST or a failed
 	    # lookup falls back to the old default-route behavior.
 	    set stim_addr $addr
-	    set toward [get_hostaddr_toward $rmt]
+	    set toward [::net::addr_toward $rmt]
 	    if { $toward ne "" } {
 		set stim_addr $toward
 	    }
@@ -264,7 +231,7 @@ proc set_hostinfo {} {
 	dservSet ess/ipaddr $stim_addr
     }
 
-    # Every branch here is wrapped, for the same reason get_local_hostaddr
+    # Every branch here is wrapped, for the same reason net-1.0.tm
     # wraps its own execs: `exec` FORKS, and this process is large, heavily
     # threaded and mlockall()ed under RT scheduling. A fork that fails (or a
     # tool that is missing, or COMPUTERNAME being unset on a non-Darwin,

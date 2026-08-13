@@ -57,7 +57,12 @@ proc exit {args} { error "exit not available for this subprocess" }
 
 load ${dspath}/modules/dserv_timer[info sharedlibextension]
 
+tcl::tm::add $dspath/lib
+
 package require yajltcl
+# route/addr/iface/resolve/url-host queries — see lib/net-1.0.tm for the
+# contract (no packets; resolve_ipv4 is real DNS and must stay gated)
+package require net
 
 errormon enable
 
@@ -99,30 +104,6 @@ proc netmon_publish { key value } {
 #################################################################
 # Status core (passive; no scans, no DNS)
 #################################################################
-
-# Classify a Linux netdev as wifi vs ethernet (wireless sysfs wins).
-proc netmon_iface_type { iface } {
-    if {$iface eq ""} { return "" }
-    if {[file isdirectory "/sys/class/net/$iface/wireless"]} {
-        return wifi
-    }
-    return ethernet
-}
-
-# Kernel route lookup toward an IPv4 literal. Returns {ip iface}
-# ("" ""  on failure). Sends no packets; no DNS.
-proc netmon_route_lookup { dest } {
-    if {$dest eq ""} { return [list "" ""] }
-    set out ""
-    if {[catch { set out [exec ip -4 route get $dest] }]} {
-        return [list "" ""]
-    }
-    set ip ""
-    set iface ""
-    regexp {src (\S+)} $out -> ip
-    regexp {dev (\S+)} $out -> iface
-    return [list $ip $iface]
-}
 
 # Map RSSI (dBm) to 0..4 bars for the status-bar icon.
 proc netmon_wifi_bars_from_dbm { dbm } {
@@ -178,10 +159,10 @@ proc netmon_refresh {} {
     set ip ""
     set iface ""
     if {$netmon_target ne ""} {
-        lassign [netmon_route_lookup $netmon_target] ip iface
+        lassign [::net::route_toward $netmon_target] ip iface
     }
     if {$ip eq "" || $iface eq "" || $iface eq "lo"} {
-        lassign [netmon_route_lookup 1.1.1.1] ip iface
+        lassign [::net::route_toward 1.1.1.1] ip iface
     }
 
     if {$ip eq "" || $iface eq "" || $iface eq "lo"} {
@@ -197,7 +178,7 @@ proc netmon_refresh {} {
     }
 
     set netmon_fail_count 0
-    set type [netmon_iface_type $iface]
+    set type [::net::iface_type $iface]
     netmon_publish system/net/state up
     netmon_publish system/net/ip $ip
     netmon_publish system/net/iface $iface
@@ -214,40 +195,16 @@ proc netmon_refresh {} {
 # Registry target (cached resolution; 60 s backoff while unresolved)
 #################################################################
 
-# Extract host from registry URL (https://dserv.net:443/x -> dserv.net).
-proc netmon_registry_host { url } {
-    if {$url eq ""} { return "" }
-    if {[regexp {^https?://\[([^\]]+)\]} $url -> host]} {
-        return $host
-    }
-    if {[regexp {^https?://([^/:]+)} $url -> host]} {
-        return $host
-    }
-    return ""
-}
-
-# Resolve hostname -> IPv4 via getent (can block on a dead resolver —
-# which is why this is only ever called from netmon_maybe_resolve's
-# backoff gate or a registry change, never unconditionally per tick).
-proc netmon_resolve_ipv4 { host } {
-    if {$host eq ""} { return "" }
-    set out ""
-    if {[catch { set out [exec getent ahostsv4 $host] }]} {
-        return ""
-    }
-    set line [lindex [split [string trim $out] \n] 0]
-    set addr [lindex $line 0]
-    if {[regexp {^\d+\.\d+\.\d+\.\d+$} $addr]} { return $addr }
-    return ""
-}
-
+# ::net::resolve_ipv4 is real DNS and can block on a dead resolver —
+# which is why it is only ever called from netmon_maybe_resolve's
+# backoff gate or a registry change, never unconditionally per tick.
 proc netmon_maybe_resolve {} {
     global netmon_target netmon_target_host netmon_next_resolve
     if {$netmon_target ne "" || $netmon_target_host eq ""} { return }
     if {[netmon_offline]} { return }
     set now [clock seconds]
     if {$now < $netmon_next_resolve} { return }
-    set addr [netmon_resolve_ipv4 $netmon_target_host]
+    set addr [::net::resolve_ipv4 $netmon_target_host]
     if {$addr ne ""} {
         set netmon_target $addr
         puts "netmon: registry $netmon_target_host -> $addr"
@@ -261,7 +218,7 @@ proc netmon_set_target { url } {
     set netmon_target ""
     set netmon_target_host ""
     set netmon_next_resolve 0
-    set host [netmon_registry_host $url]
+    set host [::net::url_host $url]
     if {$host eq "" || $host eq "localhost" ||
         $host eq "127.0.0.1" || $host eq "::1"} {
         return
@@ -330,7 +287,7 @@ proc netmon_interfaces {} {
             continue
         }
         if {$iface eq "lo"} { continue }
-        set type [netmon_iface_type $iface]
+        set type [::net::iface_type $iface]
         set ssid ""
         set bssid ""
         if {$type eq "wifi"} {
@@ -610,7 +567,7 @@ proc netmon_switch_iface { iface {req 0} } {
     if {![regexp {^[A-Za-z0-9._-]+$} $iface]} {
         return [netmon_switch_result $req 0 "invalid interface name"]
     }
-    if {[netmon_iface_type $iface] eq "wifi"} {
+    if {[::net::iface_type $iface] eq "wifi"} {
         return [netmon_switch_result $req 0 \
                     "choose a Wi-Fi access point to switch wireless"]
     }
@@ -654,7 +611,7 @@ proc netmon_switch_ap { profile device bssid {req 0} } {
     if {[regexp {[{}\[\]$;\\]} $profile]} {
         return [netmon_switch_result $req 0 "invalid profile name"]
     }
-    if {[netmon_iface_type $device] ne "wifi"} {
+    if {[::net::iface_type $device] ne "wifi"} {
         return [netmon_switch_result $req 0 "$device is not a Wi-Fi interface"]
     }
 
