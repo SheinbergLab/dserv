@@ -37,8 +37,9 @@
 # from mesh/registry, published by mesh_configure), falling back to the
 # default route via 1.1.1.1. The registry hostname is resolved ONCE and
 # cached — never per tick — so a dead resolver can't stall the timer;
-# unresolved hosts retry on a 60 s backoff. Route lookups themselves are
-# kernel-table queries and send no packets, so the icon works offline.
+# unresolved hosts retry on a backoff growing 60 s -> 10 min. Route
+# lookups themselves are kernel-table queries and send no packets, so
+# the icon works offline.
 #
 # The status path needs only `ip` (and `iw` on wifi). nmcli is required
 # only for scan/switch; without NetworkManager those return an error
@@ -72,10 +73,14 @@ errormon enable
 
 set netmon_interval 5000
 
-# Route target: cached registry IPv4 (never re-resolved per tick)
+# Route target: cached registry IPv4 (never re-resolved per tick).
+# While a hostname stays unresolvable (wired rig on a private router
+# with no internet), retries back off 60s -> 10min so the box doesn't
+# fork getent-into-resolver-timeout once a minute forever.
 set netmon_target ""
 set netmon_target_host ""
 set netmon_next_resolve 0
+set netmon_resolve_wait 60
 
 # Consecutive ticks with no usable route (2+ -> state down)
 set netmon_fail_count 0
@@ -200,6 +205,7 @@ proc netmon_refresh {} {
 # backoff gate or a registry change, never unconditionally per tick.
 proc netmon_maybe_resolve {} {
     global netmon_target netmon_target_host netmon_next_resolve
+    global netmon_resolve_wait
     if {$netmon_target ne "" || $netmon_target_host eq ""} { return }
     if {[netmon_offline]} { return }
     set now [clock seconds]
@@ -207,17 +213,21 @@ proc netmon_maybe_resolve {} {
     set addr [::net::resolve_ipv4 $netmon_target_host]
     if {$addr ne ""} {
         set netmon_target $addr
+        set netmon_resolve_wait 60
         puts "netmon: registry $netmon_target_host -> $addr"
     } else {
-        set netmon_next_resolve [expr {$now + 60}]
+        set netmon_next_resolve [expr {$now + $netmon_resolve_wait}]
+        set netmon_resolve_wait [expr {min($netmon_resolve_wait * 2, 600)}]
     }
 }
 
 proc netmon_set_target { url } {
     global netmon_target netmon_target_host netmon_next_resolve
+    global netmon_resolve_wait
     set netmon_target ""
     set netmon_target_host ""
     set netmon_next_resolve 0
+    set netmon_resolve_wait 60
     set host [::net::url_host $url]
     if {$host eq "" || $host eq "localhost" ||
         $host eq "127.0.0.1" || $host eq "::1"} {
