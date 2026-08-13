@@ -117,8 +117,16 @@
   .desc { color: var(--muted); font-size: 12px; margin-top: 3px; font-style: italic; }
 
   .sect { margin-top: 12px; }
-  .sect .lbl { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
-               color: var(--faint); margin-bottom: 6px; }
+  /* DIRECT CHILD. As a descendant selector this also matched the `lbl`
+   * modifier on a pin/channel caption -- a different meaning of the same
+   * short name -- and the .di/.do/.ain rules below only override colour and
+   * weight, so a heading's uppercase, letter-spacing and 11px leaked onto
+   * user data: a channel named eye_x was drawn EYE_X, and a labelled output
+   * caption was silently bumped past the 52px it is sized for. The caption
+   * modifier is now `named`; this stays scoped so the collision cannot
+   * come back. */
+  .sect > .lbl { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
+                 color: var(--faint); margin-bottom: 6px; }
   .dis { display: flex; gap: 10px; flex-wrap: wrap; }
   .di { text-align: center; width: 64px; }   /* FIXED width: growing counts must not reflow the row */
   .di .btn { width: 44px; height: 44px; border-radius: 50%; background: var(--off);
@@ -128,7 +136,7 @@
                 box-shadow: 0 0 14px rgba(74, 222, 128, 0.55); }
   .di .pin { font-size: 11px; color: var(--muted); margin-top: 4px;
              overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .di .pin.lbl { color: var(--ink); font-weight: 600; }
+  .di .pin.named { color: var(--ink); font-weight: 600; }
   .di .cnt { font-size: 10px; color: var(--faint); font-variant-numeric: tabular-nums;
              overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .dos { display: flex; gap: 10px; flex-wrap: wrap; }
@@ -139,11 +147,11 @@
                 box-shadow: 0 0 10px rgba(251, 191, 36, 0.5); }
   .do .pin { font-size: 10px; color: var(--faint); margin-top: 3px;
              max-width: 52px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .do .pin.lbl { color: var(--muted); font-weight: 600; }
+  .do .pin.named { color: var(--muted); font-weight: 600; }
   .ain { display: flex; align-items: center; gap: 8px; font-size: 12px; margin-top: 3px; }
   .ain .ch { color: var(--faint); width: 34px;
              overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .ain .ch.lbl { color: var(--ink); font-weight: 600; }
+  .ain .ch.named { color: var(--ink); font-weight: 600; }
   .sect.ainlbl .ain .ch { width: 92px; }
   .ain .bar { flex: 1; height: 8px; background: var(--off); border-radius: 4px; overflow: hidden; }
   .ain .fill { height: 100%; background: var(--blue); width: 0%; }
@@ -520,7 +528,7 @@ function cardHtml(b) {
                 const cap = lbl ? esc(lbl) : (silk || 'di ' + pin);
                 const ttl = [lbl && esc(lbl), 'di ' + pin, silk].filter(Boolean).join(' · ');
                 return `<div class="di"><div class="btn ${d.v ? 'on' : ''}"></div>` +
-                       `<div class="pin${lbl ? ' lbl' : ''}" title="${ttl}">${cap}</div>` +
+                       `<div class="pin${lbl ? ' named' : ''}" title="${ttl}">${cap}</div>` +
                        `<div class="cnt" title="${d.count} press${d.count === 1 ? '' : 'es'}">&times;${d.count}</div></div>`;
             }).join('') + '</div></div>';
     }
@@ -533,7 +541,7 @@ function cardHtml(b) {
                 const cap = lbl ? esc(lbl) : (silk || 'do ' + pin);
                 const ttl = [lbl && esc(lbl), 'do ' + pin, silk].filter(Boolean).join(' · ');
                 return `<div class="do"><div class="led ${b.dout.get(pin) ? 'on' : ''}"></div>` +
-                       `<div class="pin${lbl ? ' lbl' : ''}" title="${ttl}">${cap}</div></div>`;
+                       `<div class="pin${lbl ? ' named' : ''}" title="${ttl}">${cap}</div></div>`;
             }).join('') + '</div></div>';
     }
     let groups = '';
@@ -590,7 +598,7 @@ function cardHtml(b) {
                     const cap = lbl ? esc(lbl) : (silk || 'ch ' + ch);
                     const ttl = [lbl && esc(lbl), 'ain ch ' + ch, silk].filter(Boolean).join(' · ');
                     const pct = Math.max(0, Math.min(100, ((val + 32768) / 65535) * 100));
-                    return `<div class="ain"><span class="ch${lbl ? ' lbl' : ''}" title="${ttl}">${cap}</span>` +
+                    return `<div class="ain"><span class="ch${lbl ? ' named' : ''}" title="${ttl}">${cap}</span>` +
                            `<div class="bar"><div class="fill" style="width:${pct.toFixed(1)}%"></div></div>` +
                            `<span class="val">${val}</span></div>`;
                 }).join('');
