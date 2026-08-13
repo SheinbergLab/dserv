@@ -889,6 +889,12 @@ function clearMismatch(el) {
  * no-ops when nothing changed, so the DOM stays still. */
 function syncBinds(root) {
   const act = document.activeElement;
+  /* Resolved entries are dropped AFTER the sweep, not during it: one leaf can
+   * have several editors sharing a data-ctl (an ain label appears in the
+   * channel map and in each group that reads that channel), and deleting on
+   * the first confirm left the rest looking for a ledger entry that was
+   * already gone -- so they never flashed green. */
+  const done = new Set();
   for (const el of root.querySelectorAll('[data-bind],[data-pin-mode]')) {
     const cur = boundValue(el);
     const p = el.dataset.ctl ? pendingByCtl.get(el.dataset.ctl) : undefined;
@@ -898,7 +904,7 @@ function syncBinds(root) {
          * that answers slowly (or a tab the browser throttled) must still
          * resolve to green when the readback finally matches, not wear a
          * stale red flag forever. That is why expiry KEEPS the entry. */
-        pendingByCtl.delete(el.dataset.ctl);
+        done.add(el.dataset.ctl);
         el.classList.remove('pending');
         clearMismatch(el);
         if (el !== act) setVal(el, cur);
@@ -921,6 +927,7 @@ function syncBinds(root) {
     if (el === act) continue;
     if (cur !== null || el.dataset.dflt !== undefined) setVal(el, cur);
   }
+  for (const k of done) pendingByCtl.delete(k);
   /* expired entries whose control left the DOM or whose write will simply
    * never be confirmed: age them out eventually */
   if (pendingByCtl.size) {
@@ -1010,9 +1017,16 @@ function panelSignature(b) {
 const cssq = s => s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 function rebuildPanel(el, html) {
   const act = document.activeElement;
-  let ctl = null, typed = null, caret = null;
+  let ctl = null, typed = null, caret = null, nth = 0;
   if (act && el.contains(act) && act.dataset && act.dataset.ctl) {
     ctl = act.dataset.ctl;
+    /* A leaf may legitimately have MORE THAN ONE editor -- an ain channel's
+     * label is edited in the channel map and in every group that reads that
+     * channel, and they deliberately share a data-ctl so one pending write
+     * resolves all of them. So remember WHICH of them had focus; taking the
+     * first match would teleport a caret, and half-typed text, into a
+     * different table mid-edit. */
+    nth = [...el.querySelectorAll(`[data-ctl="${cssq(ctl)}"]`)].indexOf(act);
     if (act.tagName === 'INPUT' && act.type !== 'checkbox') {
       typed = act.value;
       try { caret = [act.selectionStart, act.selectionEnd]; } catch (e) {}
@@ -1022,7 +1036,8 @@ function rebuildPanel(el, html) {
   el.innerHTML = html;
   el.scrollTop = scroll;
   if (ctl) {
-    const n = el.querySelector(`[data-ctl="${cssq(ctl)}"]`);
+    const all = el.querySelectorAll(`[data-ctl="${cssq(ctl)}"]`);
+    const n = all[nth >= 0 && nth < all.length ? nth : 0];
     if (n) {
       n.focus({ preventScroll: true });
       if (typed !== null && n.tagName === 'INPUT' && n.type !== 'checkbox') {
@@ -1359,13 +1374,18 @@ function buildPanel(b) {
         : pinsAin.includes(gate)
           ? `pin ${gate} — <b>ain</b>`
           : `pin ${gate} — <span class="age">digital now (set pin ${gate} to ain to sample)</span>`;
-      return `<tr class="row"><td><b>${k}</b></td><td><b>${sk.ain(k) ?? '—'}</b></td><td>${state}</td></tr>`;
+      return `<tr class="row"><td><b>${k}</b></td><td><b>${sk.ain(k) ?? '—'}</b></td>` +
+             `<td>${field(b, `ain/label/${k}`, `ain/label/${k}`)}</td><td>${state}</td></tr>`;
     }).join('');
     ainMap = `<table style="margin-top:10px">
-      <tr><th>ain ch</th><th>header</th><th>pad</th></tr>${rows}</table>
+      <tr><th>ain ch</th><th>header</th><th title="What this channel is wired to. The per-channel twin of a digital pin's label -- and the only place ch0/ch1 can be named, since they are dedicated analog pads and never appear in the I/O pin table.">label</th><th>pad</th></tr>${rows}</table>
     <p class="note">ain channel <i>k</i> is Arduino A<i>k</i>. ch0/1 are dedicated pads and always
        analog; ch2–5 sample only while their pin is in <code>ain</code> mode (the group mask shrinks
-       honestly meanwhile). A4 reaches the header through solder jumper SJ8; A5 shares SW2 — pressing
+       honestly meanwhile). <b>Label</b> names what the channel is wired to — the analog twin of a
+       pin label, and the only place ch0/ch1 can be named, since a dedicated pad is never a GPIO and
+       so never appears in the pin table above. A group's <i>column labels</i> edit these same
+       values, laid out in that group's column order.
+       A4 reaches the header through solder jumper SJ8; A5 shares SW2 — pressing
        the button grounds the net — so allocate it last. Labels assume the current Arduino-strip map:
        a box on a pre-A0/A1 image samples ch0–2 on J8-20/24/28 instead — update it before trusting
        them.</p>`;
