@@ -178,6 +178,29 @@ proc get_local_hostaddr {} {
     return $ip
 }
 
+# Source address of the kernel route TOWARD an IPv4 literal — i.e. which
+# of this box's addresses a peer at $dest can actually reach back. On a
+# multi-homed box this differs from get_local_hostaddr: the DEFAULT route
+# follows the mesh-primary preference (netmon can flip it to wifi), while
+# a stim computer on the wired rig subnet is reached — and must register
+# back — over the wire. Route lookups send no packets; "" on any failure
+# (non-IPv4 dest included), so callers can fall back.
+proc get_hostaddr_toward { dest } {
+    if { ![regexp {^\d+\.\d+\.\d+\.\d+$} $dest] } { return "" }
+    set ip ""
+    if { $::tcl_platform(os) == "Linux" } {
+	catch {
+	    if {[regexp {src (\S+)} [exec ip -4 route get $dest] -> m]} { set ip $m }
+	}
+    } elseif { $::tcl_platform(os) == "Darwin" } {
+	catch {
+	    set iface [exec sh -c "route -n get $dest 2>/dev/null | awk '/interface:/{print \$2; exit}'"]
+	    if { $iface ne "" } { set ip [string trim [exec ipconfig getifaddr $iface]] }
+	}
+    }
+    return $ip
+}
+
 proc set_hostinfo {} {
     # set host address to identify this machine (LAN IPv4; loopback fallback)
     set addr [get_local_hostaddr]
@@ -222,7 +245,19 @@ proc set_hostinfo {} {
 	set rmt $::env(ESS_RMT_HOST)
 	if { $rmt ne "" && $rmt ne "localhost" &&
 	     ![string match 127.* $rmt] && $rmt ne $addr } {
+	    # Remote stim2: prefer the source address of the route TOWARD
+	    # it over the default-route address. They disagree exactly when
+	    # this box is multi-homed with mesh-primary on one network
+	    # (say wifi, via netmon) and the stim computer on another (the
+	    # wired rig subnet): stim must register back to the address it
+	    # can reach, which per-destination routing gives regardless of
+	    # which link is default. Hostname ESS_RMT_HOST or a failed
+	    # lookup falls back to the old default-route behavior.
 	    set stim_addr $addr
+	    set toward [get_hostaddr_toward $rmt]
+	    if { $toward ne "" } {
+		set stim_addr $toward
+	    }
 	}
     }
     if { ![dservExists ess/ipaddr] || [dservGet ess/ipaddr] eq "" } {
