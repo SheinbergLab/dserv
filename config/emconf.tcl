@@ -154,13 +154,52 @@ namespace eval em {
     # bad frame), and marking on entry claimed a source was feeding the rig
     # when it was producing nothing -- the exact misreading this exists to
     # prevent.
+    #
+    # THE DATAPOINT FLICKERS ON PURPOSE. Two live sources under `auto` alternate
+    # per sample, so em/source_active alternates with them -- and that flicker
+    # is the clearest possible sign that you need to choose between them. It is
+    # kept.
+    #
+    # The LOG LINE must not flicker with it. One puts per change meant a line
+    # per sample once two sources competed -- hundreds a second, drowning the
+    # log at exactly the moment it is worth reading. So the line is throttled to
+    # 1 Hz, and repeated flipping is reported as CONTENDED with a count rather
+    # than as a stream of "now coming from" lines that each look like news.
+    #
+    # No contention FLAG is published from here. Contention is a RATE, and a
+    # rate needs a clock to decay -- this interp has no event loop, so a flag
+    # set on a flip could only be cleared by another flip. It would latch on
+    # after the contention stopped, and a burst shorter than the throttle
+    # window would never set it at all (measured: 5 flips accumulated, flag
+    # never fired). The consumer that does have a clock is the page, so it
+    # watches em/source_active change and decides for itself.
     variable source_last ""
+    variable source_flips 0
+    variable source_log_t 0
     proc source_mark { name } {
-        variable source_last
+        variable source_last; variable source_flips
+        variable source_log_t
         if { $name eq $source_last } return
+        set prev $source_last
         set source_last $name
         dservSet em/source_active $name
-        puts "em: eye data now coming from '$name'"
+        incr source_flips
+
+        # no `after` in this interp (there is no Tcl event loop -- it would be
+        # silently inert), so the throttle is a synchronous clock comparison
+        set now [clock milliseconds]
+        set dt [expr {$now - $source_log_t}]
+        if { $source_log_t != 0 && $dt < 1000 } return
+
+        if { $source_flips > 2 } {
+            puts "em: eye source CONTENDED -- $source_flips changes in ${dt} ms\
+ (now '$name', was '$prev'). More than one source is publishing;\
+ ::em::set_source video|analog|virtual to pick one."
+        } else {
+            puts "em: eye data now coming from '$name'"
+        }
+        set source_flips 0
+        set source_log_t $now
     }
 
     proc update_settings {} {

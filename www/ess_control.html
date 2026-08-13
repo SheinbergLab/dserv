@@ -314,6 +314,10 @@
     <script src="js/TclTerminal.js"></script>
     <script src="js/PageNav.js"></script>
     
+    <style>
+     /* contention: two eye sources overwriting each other under `auto` */
+     #eye-source-active.em-contended { color: var(--ess-danger, #f66); font-weight: 600; }
+    </style>
     <!-- Eye settings class definition (initialized by ess_app.js) -->
     <script>
      class EyeSettings {
@@ -347,6 +351,33 @@
              }
          }
          
+         /* CONTENTION IS A RATE, so it is measured here rather than published.
+            Under `auto` two live sources alternate per sample and this readout
+            oscillates -- which is the clearest sign you need to pick one, but
+            only if someone is watching it. Counting distinct sources in a
+            rolling window says it in words, and decays on its own the moment
+            the flapping stops (em has no event loop and so could not have
+            decayed a flag of its own). */
+         noteSource(v) {
+             const WINDOW_MS = 2000;
+             const now = Date.now();
+             this._srcSeen = (this._srcSeen || []).filter(e => now - e.t < WINDOW_MS);
+             if (v) this._srcSeen.push({ t: now, v });
+             const distinct = new Set(this._srcSeen.map(e => e.v)).size;
+             this.setContended(distinct > 1);
+             clearTimeout(this._srcTimer);
+             this._srcTimer = setTimeout(() => this.setContended(false), WINDOW_MS);
+         }
+
+         setContended(on) {
+             const el = this.elements.sourceActive;
+             if (!el) return;
+             el.classList.toggle('em-contended', on);
+             el.title = on
+                 ? 'More than one eye source is publishing and they are overwriting each other. Pick one above.'
+                 : 'which source last actually produced a position';
+         }
+
          bindEvents() {
              this.elements.hBias?.addEventListener('change', (e) => {
                  this.sendEmCommand(`::em::set_param raw_center_h ${e.target.value}`);
@@ -393,11 +424,13 @@
                 with auto you never declare a source, so the only way to know
                 which one is feeding the rig is to be told. */
              this.dpManager?.subscribe('em/source_active', (data) => {
-                 if (this.elements.sourceActive) {
-                     const v = String(data?.data ?? data ?? '');
-                     this.elements.sourceActive.textContent = v ? `\u2190 ${v}` : '';
-                 }
+                 if (!this.elements.sourceActive) return;
+                 const v = String(data?.data ?? data ?? '');
+                 this.elements.sourceActive.textContent = v ? `\u2190 ${v}` : '';
+                 this.noteSource(v);
              });
+
+
 
              this.dpManager?.subscribe('em/settings', (data) => {
                  this.updateFromSettings(data.value);
