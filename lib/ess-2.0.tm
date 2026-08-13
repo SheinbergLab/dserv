@@ -2703,6 +2703,76 @@ namespace eval ess {
 	return $suggestion
     }
 
+    ########################################################################
+    # WHICH EXTIO ANALOG STREAMS THIS SYSTEM RECORDS
+    #
+    # Declared as an ordinary param, so it layers system -> protocol -> variant
+    # on add_param's existing last-wins semantics, shows up in the variant
+    # options editor, and lands in the file as PARAM record_streams for free:
+    #
+    #     $sys add_param record_streams all variable string
+    #
+    # Values are a closed set, deliberately not a grammar:
+    #   all   (default)  every live analog stream
+    #   none             record no analog blocks
+    #   <names>          explicit group names, e.g. "eye joystick".
+    #                    Qualify as <box>/<group> only when two live boxes
+    #                    publish the same group name.
+    #
+    # DEFAULT all, NOT none. The two mistakes are not symmetric: recording a
+    # stream you did not need costs disk, while failing to record one you did
+    # is unrecoverable and you find out at analysis. So forgetting to declare
+    # must fail toward keeping the data.
+    #
+    # Resolved against extio/ain/streams, extioconf's manifest of what is LIVE
+    # (live judged by watchdog freshness -- a vanished box is absent from it,
+    # so we can never add a match for a stream that will never update).
+    proc ain_resolve_streams {want} {
+        set avail [dict create]
+        if { [dservExists extio/ain/streams] } {
+            catch { set avail [dservGet extio/ain/streams] }
+        }
+        set recorded  [dict create]
+        set missing   {}
+        set ambiguous {}
+
+        if { $want eq "none" } {
+            # nothing recorded; everything available is a deliberate decline
+        } elseif { $want eq "all" } {
+            set recorded $avail
+        } else {
+            foreach nm $want {
+                set hits {}
+                if { [string first / $nm] >= 0 } {
+                    if { [dict exists $avail $nm] } { lappend hits $nm }
+                } else {
+                    dict for {k s} $avail {
+                        if { [dict get $s group] eq $nm } { lappend hits $k }
+                    }
+                }
+                switch -- [llength $hits] {
+                    0       { lappend missing $nm }
+                    1       { dict set recorded [lindex $hits 0] \
+                                  [dict get $avail [lindex $hits 0]] }
+                    default { lappend ambiguous [list $nm $hits] }
+                }
+            }
+        }
+        # what exists but is not being recorded, and why -- so a file states
+        # that an absent stream was INTENDED. Without this, "no joystick data"
+        # is indistinguishable from a dead box, a firmware regression, or a bug
+        # in this proc, and there is no way to tell them apart later.
+        set declined [dict create]
+        dict for {k s} $avail {
+            if { ![dict exists $recorded $k] } {
+                dict set declined $k [dict create group [dict get $s group] \
+                                          reason not-in-record_streams]
+            }
+        }
+        return [dict create want $want recorded $recorded declined $declined \
+                    missing $missing ambiguous $ambiguous]
+    }
+
     proc file_open {f {overwrite 0}} {
         variable current
         variable open_datafile
@@ -2714,6 +2784,32 @@ namespace eval ess {
         if {$open_files != ""} {
             print "$open_files open: call ::ess::file_close"
             return -1
+        }
+
+        # RESOLVE ANALOG STREAMS FIRST, before any file exists. A protocol that
+        # declares a stream it cannot get is not allowed to record: running a
+        # whole session and discovering afterwards that a declared signal is
+        # missing is the failure this declaration exists to prevent. Refusing
+        # here costs nothing to unwind -- nothing has been opened yet.
+        set want all
+        set _p [$current(state_system) get_params]
+        if { [dict exists $_p record_streams] } {
+            set want [lindex [dict get $_p record_streams] 0]
+        }
+        if { $want eq "" } { set want all }
+        set ain [ain_resolve_streams $want]
+        if { [llength [dict get $ain missing]] ||
+             [llength [dict get $ain ambiguous]] } {
+            print "record_streams declared: $want"
+            print "available now:           [dict keys [dict get $ain recorded]][dict keys [dict get $ain declined]]"
+            foreach nm [dict get $ain missing] {
+                print "  MISSING: $nm -- no live box publishes this analog group"
+            }
+            foreach a [dict get $ain ambiguous] {
+                print "  AMBIGUOUS: [lindex $a 0] -- matches [lindex $a 1]; qualify as <box>/<group>"
+            }
+            print "file NOT opened. Power the box, or set record_streams to omit it."
+            return -3
         }
 
         set data_dir [get_data_dir]
@@ -2798,6 +2894,21 @@ namespace eval ess {
             dservLoggerAddMatch $filename slider/settings
         }
 
+        # extio analog blocks, resolved above. UNBUFFERED on purpose: the log
+        # buffer concatenates the DATA of successive datapoints and keeps only
+        # the FIRST one's timestamp, and these blocks carry their t0 in the
+        # dserv envelope rather than the payload (box_ain_group.h) -- so
+        # buffering them would discard the per-block sample time the box's
+        # hardware pacing exists to produce. obs_limited, like every other
+        # high-rate source here.
+        dict for {k s} [dict get $ain recorded] {
+            dservLoggerAddMatch $filename [dict get $s dpoint] 1
+        }
+        # The decode key, in the file: which columns each block carries, what
+        # they are called, and what was available but deliberately declined.
+        dservSet ess/ain/recorded $ain
+        dservLoggerAddMatch $filename ess/ain/recorded
+
         # call the system's specific file_open callback
         #  to add matches
         $current(state_system) file_open $filename
@@ -2813,6 +2924,7 @@ namespace eval ess {
         dservTouch stimdg
 	dservTouch em/settings
 	dservTouch em/biquadratic
+	dservTouch ess/ain/recorded   ;# re-emit into THIS file (set before the match)
 	
 	::ess::evt_put TIME OPEN [now] [clock seconds]
         ::ess::evt_put ID ESS [now] $current(system)
