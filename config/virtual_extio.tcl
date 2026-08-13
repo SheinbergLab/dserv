@@ -319,6 +319,7 @@ namespace eval vbox {
             pub_int obs_pin $now $data
         } elseif { $leaf eq "config/ain/rate" } {
             set ain(rate) $data
+            ain_announce_group          ;# rate is part of what a group announces
         } elseif { $leaf eq "config/ain/enable" } {
             set was $ain(enable)
             set ain(enable) [expr {$data != 0}]
@@ -333,6 +334,7 @@ namespace eval vbox {
             else               { set ainlabel($ch) $data }
             pub_str ain/label/$ch $now $data
         } elseif { [regexp {^config/ain/group/0/(\w+)$} $leaf -> key] } {
+            set oldname $ain(label)
             switch -exact $key {
                 channels { set ain(chans) $data }
                 label    { set ain(label) $data }
@@ -340,7 +342,32 @@ namespace eval vbox {
                 mode     { set ain(mode) $data }
                 decimate { set ain(decimate) $data }
             }
+            # A RENAME FREES THE OLD NAME. dserv retains datapoints forever, so
+            # the group's old announce leaves would otherwise linger and a host
+            # would keep offering a stream nothing publishes. The firmware
+            # disowns a name by announcing chans == "" once; mirror that, or
+            # this box cannot exercise a consumer's tombstone handling.
+            if { $key eq "label" && $oldname ne $ain(label) } {
+                pub_str ain/group/$oldname/chans $now ""
+            }
+            ain_announce_group
         }
+    }
+
+    # Announce the analog group under its NAME, the way the firmware does: a
+    # host reshapes a block from the group's announced channel list alone, so
+    # without these leaves the group's data is undecodable and the group is
+    # invisible to anything building a manifest.
+    proc ain_announce_group {} {
+        variable ain
+        set now [now]
+        set g $ain(label)
+        if { $g eq "" } return
+        pub_str ain/group/$g/chans    $now $ain(chans)
+        pub_str ain/group/$g/mode     $now $ain(mode)
+        pub_int ain/group/$g/batch    $now $ain(batch)
+        pub_int ain/group/$g/decimate $now $ain(decimate)
+        pub_int ain/rate              $now $ain(rate)
     }
 
     proc on_obs { dp data } {
@@ -409,6 +436,7 @@ namespace eval vbox {
         foreach ch [lsort -integer [array names ainlabel]] {
             pub_str ain/label/$ch $now $ainlabel($ch)
         }
+        ain_announce_group
     }
 
     proc init {} {

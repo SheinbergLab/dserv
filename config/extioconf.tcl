@@ -380,6 +380,11 @@ proc extio_discover {} {
         dservSet extio/primary [lindex $boxes 0]
         puts "extio: live boxes = {$boxes}  primary = [lindex $boxes 0]"
     }
+    # The analog manifest tracks the same liveness. Recomputed every tick, not
+    # only when the box set changes: a group can be created, relabelled or
+    # tombstoned on a box that was already live, and the config-change hooks
+    # below can only fire for leaves this host actually sees change.
+    extio_ain_publish_manifest
 }
 
 # ---- group decode (label algebra): a box announces group membership
@@ -455,6 +460,72 @@ proc extio_ain_labels {box gname} {
         }
     }
     return $out
+}
+
+# ---- extio/ain/streams: what analog is AVAILABLE, and what its columns are --
+#
+# One datapoint answering "which analog streams exist right now, and what is
+# each column called". The consumer is ::ess::file_open, deciding what to record
+# and writing the decode key into the file.
+#
+# WHY A DATAPOINT rather than a query proc: file_open runs in the ess interp on
+# the critical path of opening a recording. Asking extio for this would be a
+# blocking `send`, which occupies the MAIN interp's serial queue; reading a
+# datapoint costs nothing and cannot wedge the open.
+#
+# LIVE BOXES ONLY -- ::extio_known, the same watchdog-freshness test
+# extio_discover uses, never key existence. A vanished box's ain keys LINGER
+# (dserv retains datapoints and never deletes them), so a manifest built from
+# what is in the table would offer file_open a stream from a box that is not
+# there, and the recording would carry a channel that never updates. A stream
+# missing from the manifest is honest; one that is present and silent is not.
+#
+# It names COLUMNS, not timing. interval_us and each block's t0 travel INSIDE
+# the blocks, where they are measured rather than declared -- repeating them
+# here would create a second source that can drift from the data it describes.
+#
+#   dict get [dservGet extio/ain/streams] box01/eye
+#     -> {box box01 group eye dpoint extio/box01/state/ain/eye
+#         chans {0 1} labels {eye_h eye_v} mode continuous batch 1
+#         decimate 1 avg 0 rate_hz 250}
+proc extio_ain_manifest {} {
+    set m [dict create]
+    foreach k [dservKeys] {
+        if { ![regexp {^extio/([^/]+)/state/ain/group/([^/]+)/chans$} $k -> box gname] } continue
+        if { ![info exists ::extio_known($box)] } continue     ;# not live -> not offered
+        set csv [dservGet $k]
+        if { $csv eq "" } continue                             ;# tombstoned group
+        set chans {}
+        foreach c [split $csv ,] {
+            set c [string trim $c]
+            if { $c ne "" } { lappend chans $c }
+        }
+        if { ![llength $chans] } continue
+        set e [dict create box $box group $gname \
+                   dpoint extio/$box/state/ain/$gname \
+                   chans $chans labels [extio_ain_labels $box $gname]]
+        # announced group config, when the firmware reports it (older images
+        # announce nothing here -- the entry is still valid, just less described)
+        foreach fld {mode deadband decimate batch avg} {
+            set dp extio/$box/state/ain/group/$gname/$fld
+            if { [dservExists $dp] } { dict set e $fld [dservGet $dp] }
+        }
+        foreach {fld dp} [list rate_hz extio/$box/state/ain/rate \
+                               clk_ppm extio/$box/state/ain/clk_ppm] {
+            if { [dservExists $dp] } { dict set e $fld [dservGet $dp] }
+        }
+        dict set m $box/$gname $e
+    }
+    return $m
+}
+
+set ::extio_ain_streams_last ""
+proc extio_ain_publish_manifest {args} {
+    set m [extio_ain_manifest]
+    if { $m eq $::extio_ain_streams_last } return              ;# publish on CHANGE only
+    set ::extio_ain_streams_last $m
+    dservSet extio/ain/streams $m
+    puts "extio: analog streams = {[dict keys $m]}"
 }
 
 proc extio_label_invalidate {dp data} {      ;# a relabel stales every map for that box
@@ -1879,6 +1950,14 @@ proc extio_wire_common {} {                 ;# device-independent: sync + obs_pi
     dpointSetScript extio/*/state/group/* extio_group_decode
     dservAddMatch extio/*/state/label/*     ;# relabels invalidate cached maps
     dpointSetScript extio/*/state/label/* extio_label_invalidate
+    # analog manifest: react to a group or a channel name changing rather than
+    # waiting up to one 2 s tick, so a file opened right after an edit records
+    # what the page just showed. Publish-on-change makes this idempotent with
+    # the tick.
+    dservAddMatch   extio/*/state/ain/group/*/chans
+    dpointSetScript extio/*/state/ain/group/*/chans extio_ain_publish_manifest
+    dservAddMatch   extio/*/state/ain/label/*
+    dpointSetScript extio/*/state/ain/label/* extio_ain_publish_manifest
     dservAddMatch extio/*/state/ota/state   ;# OTA progress log + free the staged image on finish
     dpointSetScript extio/*/state/ota/state extio_ota_on_state
     dservAddMatch extio/*/cmd/ota/pull      ;# network-triggered shelf OTA (extio-setup dserv mode)
