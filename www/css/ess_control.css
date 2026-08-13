@@ -108,11 +108,22 @@ body.ess-app {
     cursor: pointer;
 }
 
-.ess-hostname-display.clickable:hover,
+/* Hover is a COLOUR change only, no underline: at 20px the secondary->primary
+   jump (#a0a0a0 -> #e0e0e0) is plainly visible on its own, and an underline
+   under a 20px title reads as heavier than the thing deserves. */
+.ess-hostname-display.clickable:hover {
+    color: var(--ess-text-primary);
+}
+
+/* Keyboard focus keeps a SHAPE, not just a colour. Colour alone is the one
+   affordance a keyboard user cannot hunt for by moving something, and it is
+   invisible to anyone who cannot separate those two greys -- so the outline
+   stays here even though hover no longer draws anything. */
 .ess-hostname-display.clickable:focus-visible {
     color: var(--ess-text-primary);
-    text-decoration: underline;
-    text-underline-offset: 3px;
+    outline: 2px solid var(--ess-accent);
+    outline-offset: 3px;
+    border-radius: 4px;
 }
 
 .ess-juice-status {
