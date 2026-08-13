@@ -649,6 +649,26 @@ async function renameBox(box) {
  * The read and write leaves genuinely differ on this box (announce publishes
  * label/<n>; you set pin/<n>/label) -- which is exactly why the binding must
  * name both, not guess one from the other. */
+/* Per-CHANNEL role labels for the channels THIS group uses, in the group's
+ * column order -- so they line up with the block's columns and with what a
+ * logged recording carries.
+ *
+ * Channel-scoped, not group-scoped: a channel is one wire to one signal. If two
+ * groups read the same channel the same label shows in both rows and editing
+ * either edits the one underlying value. The column header says so, because
+ * discovering that by surprise would be worse than reading it.
+ *
+ * Em dash when the group has no channels yet -- there is nothing to name until
+ * it claims something. */
+function chanLabelCells(b, gn) {
+  const chans = String(get(b, `ain/group/${gn}/chans`, ''))
+    .split(',').map(x => x.trim()).filter(x => x !== '');
+  if (!chans.length) return '<span class="age">—</span>';
+  return chans.map(ch =>
+    `<span class="age">${esc(ch)}</span>&nbsp;${field(b, `ain/label/${ch}`, `ain/label/${ch}`)}`
+  ).join('<br>');
+}
+
 function field(box, leaf, cfgLeaf, opts = {}) {
   let v = get(box, leaf, null);
   if (v === null && opts.fallback !== undefined) v = opts.fallback;
@@ -1278,7 +1298,7 @@ function buildPanel(b) {
   const aingroups =
     blobOnly.map(gn => `<tr class="row"><td class="age">?</td>
       <td><b>${esc(gn)}</b></td>
-      <td colspan="6" class="age">publishing, but this firmware does not announce its slot/config</td>
+      <td colspan="7" class="age">publishing, but this firmware does not announce its slot/config</td>
       <td>${lastCell(gn)}</td><td></td></tr>`).join('') +
     Array.from({ length: agmax }, (_, i) => {
       const gn = agslot.get(i);
@@ -1291,6 +1311,7 @@ function buildPanel(b) {
                onchange="cfgSet('${b}','ain/group/${i}/label',this.value,this)"></td>
           <td><input class="w4${wo}"${t} placeholder="chans e.g. 0,1" data-ctl="${esc(b)}|ain/group/${i}/channels"
                onchange="if(this.value!=='')cfgSet('${b}','ain/group/${i}/channels',this.value,this)"></td>
+          <td class="age">—</td>
           <td>${agModeSel(i, null, 'onchange')}</td>
           <td><input class="w4${wo}"${t} placeholder="8" data-ctl="${esc(b)}|ain/group/${i}/deadband"
                onchange="cfgSet('${b}','ain/group/${i}/deadband',this.value,this)"></td>
@@ -1306,6 +1327,7 @@ function buildPanel(b) {
       return `<tr class="row"><td><b>${i}</b></td>
         <td>${field(b, `ain/group/${gn}/label`, `ain/group/${i}/label`, { wide: 1, fallback: gn })}</td>
         <td>${field(b, `ain/group/${gn}/chans`, `ain/group/${i}/channels`)}</td>
+        <td>${chanLabelCells(b, gn)}</td>
         <td>${agModeSel(i, gn, get(b, `ain/group/${gn}/mode`, 'onchange'))}</td>
         <td>${field(b, `ain/group/${gn}/deadband`, `ain/group/${i}/deadband`)}</td>
         <td>${field(b, `ain/group/${gn}/decimate`, `ain/group/${i}/decimate`)}</td>
@@ -1428,7 +1450,7 @@ function buildPanel(b) {
        publishes. Type a pin list into a free slot to create a group; ✕ frees the slot.</p>
 
     <h2>analog groups</h2>
-    <table><tr><th>#</th><th>label</th><th>chans</th><th>mode</th><th>deadband</th><th>decimate</th><th>batch</th><th>avg</th><th>last</th><th></th></tr>${aingroups}</table>
+    <table><tr><th>#</th><th>label</th><th>chans</th><th title="Per-CHANNEL role labels, in this group's column order. They name the columns of the published block, so a logged recording says what each number is. Channel-scoped: a channel shared by two groups shows the same label in both rows.">column labels</th><th>mode</th><th>deadband</th><th>decimate</th><th>batch</th><th>avg</th><th>last</th><th></th></tr>${aingroups}</table>
     <p class="note">An analog group publishes a named set of ADC channels together as
        self-describing blocks on <code>state/ain/&lt;label&gt;</code>. <code>onchange</code> emits when a
        member moves more than <code>deadband</code> counts (joystick); <code>continuous</code> takes every
@@ -1438,6 +1460,10 @@ function buildPanel(b) {
        <b>Channels are a comma-separated list</b> in ascending order — <code>0,1</code> for a
        two-axis eye or joystick signal, <code>2</code> for a single channel — and the block's
        columns follow that same order. A range or space-separated form is not accepted.
+       <b>Column labels name what each channel actually is</b> (<code>eye_x</code>,
+       <code>lever_force</code>) so a logged block is self-describing and a plot can offer
+       the signal by name rather than by number. They belong to the CHANNEL, not the group:
+       a channel read by two groups carries the same label in both.
        <b>batch × channels must be ≤ 24</b> (the block payload holds 24 samples), so 2 channels
        cap at 12 and 6 at 4. Firmware from 0.4.0+83 REFUSES an over-cap batch, and reduces it
        for you if you widen the channel set; older firmware stores what you type and silently
