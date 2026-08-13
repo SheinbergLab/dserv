@@ -342,14 +342,20 @@ class NetStatusModal {
             const hasSignal = Number.isFinite(signalNum);
             const sig = hasSignal ? `${signalNum}%` : '—';
             const strengthClass = this._signalClass(signalNum);
-            const clickable = !inUse && !this._switching;
+            // The in-use AP stays clickable while this device is NOT the
+            // registry path: that click means "make Wi-Fi primary" (route
+            // metrics flip; the association doesn't change).
+            const clickable = !this._switching && !(inUse && sameIface);
+            const rowTitle = inUse
+                ? 'Make this interface primary (keeps this access point).'
+                : apTitle;
             const classes = [
                 inUse ? 'ess-net-modal-current' : '',
                 clickable ? 'is-clickable' : ''
             ].filter(Boolean).join(' ');
 
             const attrs = clickable
-                ? ` data-net-switch="ap" data-profile="${this._escapeHtml(row.profile || row.ssid || '')}" data-device="${this._escapeHtml(device)}" data-bssid="${this._escapeHtml(row.bssid || '')}" title="${this._escapeHtml(apTitle)}" role="button" tabindex="0"`
+                ? ` data-net-switch="ap" data-profile="${this._escapeHtml(row.profile || row.ssid || '')}" data-device="${this._escapeHtml(device)}" data-bssid="${this._escapeHtml(row.bssid || '')}" title="${this._escapeHtml(rowTitle)}" role="button" tabindex="0"`
                 : '';
 
             html += `<tr class="${classes}"${attrs}>`;
