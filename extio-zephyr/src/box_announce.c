@@ -420,6 +420,32 @@ void box_announce_manifest(const box_config_t *c)
 		}
 	}
 
+	/* ANALOG CHANNEL LABELS, same tombstone discipline as the pin labels
+	 * above: a cleared label must be published as "" or the old value stays
+	 * retained forever and a consumer keeps naming a column that no longer
+	 * claims that name. Only channels the part actually has. */
+	{
+		static uint8_t ain_label_pub_mask;
+
+		for (int i = 0; i < AIN_MAX_CH; i++) {
+			int has = c->ain_label[i][0] != 0;
+
+			/* Nothing to say about a channel that has never been
+			 * labelled -- and the mask is what keeps a CLEARED one
+			 * speaking once more, to blank the retained value. */
+			if (!has && !((ain_label_pub_mask >> i) & 1u)) {
+				continue;
+			}
+			snprintf(leaf, sizeof leaf, "ain/label/%d", i);
+			pub_str(c, leaf, c->ain_label[i]);
+			if (has) {
+				ain_label_pub_mask |= (uint8_t) (1u << i);
+			} else {
+				ain_label_pub_mask &= (uint8_t) ~(1u << i);
+			}
+		}
+	}
+
 	/* Slot capacity, so a config UI renders exactly the CREATABLE slots
 	 * instead of hardcoding the compiled-in constants -- the same reasoning
 	 * as pins/all: a per-board table in the page is confidently wrong for

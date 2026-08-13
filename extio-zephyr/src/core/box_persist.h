@@ -23,7 +23,9 @@
 #include <string.h>
 
 #define BOX_PERSIST_MAGIC    0x57494F31u   /* "WIO1" */
-#define BOX_PERSIST_VERSION  27  /* v27: ain_clk_ppm (measured CTIMER source
+#define BOX_PERSIST_VERSION  28  /* v28: ain_label[] (per-analog-channel role
+                                  * labels, so logged blocks are self-describing).
+                                  * v27: ain_clk_ppm (measured CTIMER source
                                   * deviation; makes a requested rate the delivered one).
                                   * v26: dbg_level (health|full|off -- periodic
                                   * telemetry became a per-send CPU cost worth opting into).

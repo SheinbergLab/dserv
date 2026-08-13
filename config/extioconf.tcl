@@ -425,6 +425,38 @@ proc extio_group_decode {dp data} {
     dservSet extio/$box/decoded/$gname [expr {[llength $on] ? [join $on _] : "center"}]
 }
 
+# Column names for an analog group's block, in the block's own column order.
+#
+# The analog twin of the label map extio_group_decode builds for a chord: a
+# group's `chans` are its columns in ascending order, and ain/label/<ch> names
+# each one. Unlabelled channels fall back to ch<N>, so the result is always the
+# right LENGTH and a consumer can index it against the decoded samples without
+# checking.
+#
+# WHY THIS MATTERS BEYOND DISPLAY: it is what makes a logged block
+# self-describing. Without it, which column is horizontal eye position lives in
+# a rig-local setting (chan_x/chan_y) and never reaches the file -- so an old
+# recording needs out-of-band knowledge to interpret. With it, the names travel
+# with the manifest.
+#
+#   extio_ain_labels box01 eye   ->   {eye_x eye_y}
+proc extio_ain_labels {box gname} {
+    set chansdp extio/$box/state/ain/group/$gname/chans
+    if { ![dservExists $chansdp] } { return {} }
+    set csv [dservGet $chansdp]
+    if { $csv eq "" } { return {} }              ;# tombstoned group
+    set out {}
+    foreach ch [split $csv ,] {
+        set ldp extio/$box/state/ain/label/$ch
+        if { [dservExists $ldp] && [dservGet $ldp] ne "" } {
+            lappend out [dservGet $ldp]
+        } else {
+            lappend out "ch$ch"
+        }
+    }
+    return $out
+}
+
 proc extio_label_invalidate {dp data} {      ;# a relabel stales every map for that box
     if { [regexp {^extio/([^/]+)/state/label/} $dp -> box] } {
         foreach k [array names ::extio_gmap $box/*] { unset -nocomplain ::extio_gmap($k) }
@@ -1681,6 +1713,7 @@ set ::extio_cfg_writable_rx {
     {^pin/[0-9]+/(mode|label|active_low|debounce_ms|pulse_us)$}
     {^group/[0-9]+/(pins|label|settle_ms|quiet)$}
     {^ain/group/[0-9]+/[a-z_]+$}
+    {^ain/label/[0-9]+$}
 }
 
 proc extio_cfg_writable {leaf} {

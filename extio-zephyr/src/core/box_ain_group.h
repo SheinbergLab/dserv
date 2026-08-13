@@ -48,7 +48,8 @@
  * UNTOUCHED -- the block header has always carried `mask` (a byte) and `nchan`,
  * so eight channels was already representable and a host decodes it with no
  * change. Costs a few bytes of per-group RAM on a 4-channel box. */
-#define AIN_MAX_CH     8
+/* AIN_MAX_CH now lives in dserv_config.h (the config layer stores per-channel
+ * labels and cannot include this header, which includes it). */
 /* AIN_BLOCK_MAX now lives in dserv_config.h: the CONFIG layer has to refuse a
  * batch that would not fit, and it cannot include this header (this one
  * includes it). Same constant, one definition. */

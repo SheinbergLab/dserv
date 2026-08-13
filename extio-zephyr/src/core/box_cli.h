@@ -299,6 +299,8 @@ static inline void box_cli_dump(const box_config_t *c)
     if (c->ain_en)                        DUMPF("ain enable 1\r\n");
     if (c->ain_rate)                      DUMPF("ain rate %u\r\n", c->ain_rate);
     if (c->ain_ovs)                       DUMPF("ain oversample %u\r\n", 1u << c->ain_ovs);
+    for (int i = 0; i < AIN_MAX_CH; i++)
+        if (c->ain_label[i][0])           DUMPF("ain label %d %s\r\n", i, c->ain_label[i]);
     if (c->ain_clk_ppm)                   DUMPF("ain clkppm %d\r\n", c->ain_clk_ppm);
     if (c->dbg_level == DBG_LEVEL_FULL)   DUMPF("dbg level full\r\n");
     if (c->dbg_level == DBG_LEVEL_OFF)    DUMPF("dbg level off\r\n");
@@ -487,6 +489,17 @@ static inline cli_action_t box_cli_exec(box_config_t *c, const char *line,
         c->applied_count++;
         snprintf(out, outsz, "OK dbg level=%s (watchdog always publishes)\r\n", w);
         return CLI_AIN;
+    }
+    if (sscanf(line, "ain label %d %15s", &n, w) == 2) {
+        if (n < 0 || n >= AIN_MAX_CH) {
+            snprintf(out, outsz, "ERR ain label: channel 0-%d\r\n", AIN_MAX_CH - 1); return CLI_ERR; }
+        if (!strcmp(w, "off")) w[0] = '\0';
+        if (!dserv_label_valid(w)) {
+            snprintf(out, outsz, "ERR label: printable, no '/', <= %d chars\r\n", BOX_LABEL_MAX - 1);
+            return CLI_ERR; }
+        snprintf(c->ain_label[n], BOX_LABEL_MAX, "%s", w); c->applied_count++;
+        snprintf(out, outsz, "OK ain label%d=%s\r\n", n, w[0] ? w : "(none)");
+        return CLI_GROUP;   /* labels change the manifest -> re-announce */
     }
     if (sscanf(line, "ain clkppm %d", &v) == 1) {
         if (v < -32768 || v > 32767) { snprintf(out, outsz, "ERR ain clkppm -32768..32767\r\n"); return CLI_ERR; }

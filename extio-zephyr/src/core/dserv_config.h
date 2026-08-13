@@ -58,6 +58,7 @@
 #define BOX_NGROUPS   4     /* DI chord groups (atomic bitmask publishing)   */
 #define BOX_NAGROUPS  4     /* analog (MCP3204) groups: named channel sets   */
 #define BOX_LABEL_MAX 16    /* per-pin / per-group role labels               */
+#define AIN_MAX_CH    8     /* widest analog part we intend to fit           */
 #define BOX_DESC_MAX  40    /* free-form box description                     */
 #define BOX_CHANNEL_MAX 16  /* firmware update channel this box tracks       */
 
@@ -281,6 +282,27 @@ typedef struct {
      * differ until someone calibrates, and after a `save` they agree across
      * reboots. */
     int16_t  ain_clk_ppm;
+    /* v28: per-ANALOG-CHANNEL role labels ("eye_x", "stick_y"), the analog twin
+     * of pin_label.
+     *
+     * CHANNEL-scoped, not group-scoped: a channel is one wire to one signal, so
+     * its meaning cannot differ between the groups that read it. A group's
+     * columns are its `chans` in ascending order, so group + these labels names
+     * every column without storing the name twice.
+     *
+     * WHY IT EXISTS, and why the timing mattered. A group name says what the
+     * SET is ("eye"); nothing said what each COLUMN was, so consumers carried
+     * the mapping rig-locally (chan_x/chan_y/swap_axes in local/slider.tcl) and
+     * LOGGED DATA carried no column identity at all -- the interpretation lived
+     * outside the file. Adding this after data existed would have left every
+     * earlier recording needing out-of-band knowledge forever; adding it before
+     * makes the record self-describing from the first file.
+     *
+     * NOT inherited from pin_label, deliberately: box-ain-pins is
+     * [ff ff 0e 0f 10 11] here, so channels 0 and 1 are DEDICATED PADS with no
+     * box pin -- and they are exactly the ones carrying eye and stick.
+     * Inheritance would work for 2-5 and silently not for the two that matter. */
+    char     ain_label[AIN_MAX_CH][BOX_LABEL_MAX];
 } box_config_t;
 
 /* Max int16 samples in one analog block: 12B header + 48B of samples, and a
@@ -766,6 +788,15 @@ static inline cfg_result_t dserv_cfg__config(box_config_t *c, const char *k,
         if (!strcmp(w, "off")) w[0] = '\0';
         if (!dserv_label_valid(w)) return CFG_UNKNOWN;
         snprintf(c->pin_label[n], BOX_LABEL_MAX, "%s", w);
+        c->applied_count++; return CFG_LABEL;
+    }
+    pos = -1;
+    if (sscanf(k, "ain/label/%d%n", &n, &pos) == 1 && pos > 0 &&
+        k[pos] == '\0' && n >= 0 && n < AIN_MAX_CH) {
+        char w[BOX_LABEL_MAX]; dserv_msg_copy_cstr(m, w, sizeof w);
+        if (!strcmp(w, "off")) w[0] = '\0';
+        if (!dserv_label_valid(w)) return CFG_UNKNOWN;
+        snprintf(c->ain_label[n], BOX_LABEL_MAX, "%s", w);
         c->applied_count++; return CFG_LABEL;
     }
     pos = -1;
