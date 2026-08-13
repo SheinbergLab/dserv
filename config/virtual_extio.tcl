@@ -63,6 +63,7 @@ namespace eval vbox {
     # analog stream state
     variable ain
     array set ain {enable 0 rate 0 label loop batch 12 chans 0 mode continuous decimate 1}
+    variable ainlabel; array set ainlabel {}   ;# ain channel -> role label (v28)
     variable ain_next 0
     variable ain_buf {}
     variable ain_t0 0
@@ -323,6 +324,14 @@ namespace eval vbox {
             set ain(enable) [expr {$data != 0}]
             if { $ain(enable) && !$was } { ain_start $now }
             if { !$ain(enable) && $was } { log "AIN stop" }
+        } elseif { [regexp {^config/ain/label/(\d+)$} $leaf -> ch] } {
+            # per-CHANNEL role label (fw persist v28). Channel-scoped, not
+            # group-scoped, and echoed back on state/ so a consumer reads it
+            # the same way it reads any other announced leaf. "" clears.
+            variable ainlabel
+            if { $data eq "" } { array unset ainlabel $ch } \
+            else               { set ainlabel($ch) $data }
+            pub_str ain/label/$ch $now $data
         } elseif { [regexp {^config/ain/group/0/(\w+)$} $leaf -> key] } {
             switch -exact $key {
                 channels { set ain(chans) $data }
@@ -393,6 +402,13 @@ namespace eval vbox {
         pub_str obs/mode $now $obs_mode
         pub_int obs_leader $now [expr {$obs_mode eq "leader" ? 1 : 0}]
         pub_int obs_pin $now $obs_pin
+        # re-announce the ain labels: like the real box these are announced
+        # once per connect and never re-sent, so a page opened later needs the
+        # burst to carry them or the analog rows fall back to channel numbers.
+        variable ainlabel
+        foreach ch [lsort -integer [array names ainlabel]] {
+            pub_str ain/label/$ch $now $ainlabel($ch)
+        }
     }
 
     proc init {} {
