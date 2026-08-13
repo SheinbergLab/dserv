@@ -121,6 +121,57 @@ proc mesh_init_current_values {} {
 mesh_init_current_values
 
 #################################################################
+# Network path (published by the netmon subprocess on Linux boxes)
+#################################################################
+
+# netmon owns system/net/* — the live route toward the registry. Follow
+# it the same way we follow ess/*: the advertised heartbeat IP tracks
+# the path actually in use (wifi vs ethernet can flip when both have
+# addresses), and link telemetry rides along as customFields so the
+# registry can show a remote box's signal quality. On platforms without
+# netmon these dpoints never appear and mesh_hostaddr keeps its boot
+# value from system/hostaddr. All the platform-specific sensing lives
+# in netmonconf.tcl; nothing here execs anything.
+
+set net_dps {
+    system/net/ip system/net/type system/net/wifi/ssid system/net/wifi/bars
+}
+
+foreach dp $net_dps {
+    dservAddExactMatch $dp
+}
+
+proc mesh_net_handler { dpoint data } {
+    global mesh_hostaddr mesh_fields
+
+    if {$dpoint eq "system/net/ip"} {
+        if {$data ne "" && $data ne $mesh_hostaddr} {
+            set mesh_hostaddr $data
+            # Converge the registry promptly after a path flip
+            mesh_send_heartbeat
+        }
+        return
+    }
+
+    set field [dict get {
+        system/net/type      net_type
+        system/net/wifi/ssid net_ssid
+        system/net/wifi/bars net_bars
+    } $dpoint]
+    if {$data ne ""} {
+        dict set mesh_fields $field $data
+    } else {
+        if {[dict exists $mesh_fields $field]} {
+            dict unset mesh_fields $field
+        }
+    }
+}
+
+foreach dp $net_dps {
+    dpointSetScript $dp mesh_net_handler
+}
+
+#################################################################
 # HTTP Heartbeat
 #################################################################
 
@@ -313,6 +364,8 @@ proc mesh_configure { registry workgroup } {
     
     set mesh_registry $registry
     set mesh_workgroup $workgroup
+    # netmon watches the route toward the registry; publish it for them
+    catch { dservSet mesh/registry $registry }
     puts "Mesh configured: registry=$registry workgroup=$workgroup"
 }
 
@@ -369,6 +422,15 @@ proc mesh_heartbeat_now {} {
 #
 if { [file exists $dspath/local/mesh.tcl] } {
     source $dspath/local/mesh.tcl
+}
+
+# Pick up the network path netmon seeded before we started (netmon runs
+# earlier in dsconf.tcl; a safe no-op on boxes without it). Done here —
+# after mesh_configure has run — so an ip pickup can heartbeat usefully.
+foreach dp $net_dps {
+    if { [dservExists $dp] } {
+        mesh_net_handler $dp [dservGet $dp]
+    }
 }
 
 # Setup timer and start heartbeat

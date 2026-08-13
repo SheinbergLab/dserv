@@ -102,6 +102,7 @@ async function init() {
         initHostnameDisplay();
         initJuiceIndicator();
         initBatteryIndicator();
+        initNetStatusIndicator();
         initSyncDirtyBadge();
         
         // Small delay to ensure subscriptions are registered on server
@@ -156,6 +157,9 @@ function requestInitialData() {
           openephys/status
           ess/rmt_connected ess/rmt_host ess/stim_required
           system/hostname system/hostaddr system/os
+          system/net/state system/net/type system/net/iface system/net/ip
+          system/net/wifi/ssid system/net/wifi/bssid
+          system/net/wifi/signal_dbm system/net/wifi/bars
           powermon/pct powermon/charging powermon/hrs_remaining powermon/v powermon/a powermon/w
           juicer/juice_level juicer/reward_mls juicer/reward_number
           configs/list configs/tags configs/quick_picks configs/current
@@ -738,6 +742,157 @@ function initBatteryIndicator() {
 
     updateBatteryDisplay();
     log('Battery indicator initialized', 'info');
+}
+
+let netState = null;
+let netType = null;
+let netIface = null;
+let netIp = null;
+let netWifiSsid = null;
+let netWifiBssid = null;
+let netWifiSignalDbm = null;
+let netWifiBars = null;
+
+/**
+ * Build network status tooltip (wifi: ssid/bssid/signal; always iface + IP)
+ */
+function formatNetTooltip() {
+    const parts = [];
+    if (netState === 'down') parts.push('link down');
+    if (netType === 'wifi') {
+        parts.push('Wi-Fi');
+        if (netWifiSsid) parts.push(netWifiSsid);
+        if (netWifiBssid) parts.push(netWifiBssid);
+        if (netWifiSignalDbm != null) parts.push(`${netWifiSignalDbm} dBm`);
+    } else if (netType === 'ethernet') {
+        parts.push('Ethernet');
+    }
+    if (netIface) parts.push(netIface);
+    if (netIp) parts.push(netIp);
+    return parts.join(' · ') || '';
+}
+
+/**
+ * Update network status icon (wifi vs ethernet, down-slash) for
+ * the registry path published by netmon as system/net/*
+ */
+function updateNetStatusDisplay() {
+    const container = document.getElementById('net-status');
+    if (!container) return;
+
+    const known = netType === 'wifi' || netType === 'ethernet';
+    container.hidden = !known;
+    container.classList.toggle('is-wifi', netType === 'wifi');
+    container.classList.toggle('is-ethernet', netType === 'ethernet');
+    container.classList.toggle('is-down', netState === 'down');
+
+    for (let i = 0; i <= 4; i++) {
+        container.classList.remove(`signal-${i}`);
+    }
+    if (netType === 'wifi' && netState !== 'down') {
+        const bars = netWifiBars != null ? netWifiBars : 0;
+        container.classList.add(`signal-${bars}`);
+    }
+
+    container.title = known
+        ? `${formatNetTooltip()} (click for details)`
+        : '';
+}
+
+/**
+ * Initialize network status indicator from system/net/* datapoints
+ */
+function initNetStatusIndicator() {
+    const container = document.getElementById('net-status');
+    if (!container) return;
+
+    dpManager.subscribe('system/net/state', (data) => {
+        const raw = String(data.value ?? data.data ?? '').trim().toLowerCase();
+        netState = (raw === 'up' || raw === 'down') ? raw : null;
+        updateNetStatusDisplay();
+    });
+
+    dpManager.subscribe('system/net/type', (data) => {
+        const raw = String(data.value ?? data.data ?? '').trim().toLowerCase();
+        netType = (raw === 'wifi' || raw === 'ethernet') ? raw : null;
+        updateNetStatusDisplay();
+    });
+
+    dpManager.subscribe('system/net/iface', (data) => {
+        const raw = String(data.value ?? data.data ?? '').trim();
+        netIface = raw || null;
+        updateNetStatusDisplay();
+    });
+
+    dpManager.subscribe('system/net/ip', (data) => {
+        const raw = String(data.value ?? data.data ?? '').trim();
+        netIp = raw || null;
+        updateNetStatusDisplay();
+    });
+
+    dpManager.subscribe('system/net/wifi/ssid', (data) => {
+        const raw = String(data.value ?? data.data ?? '').trim();
+        netWifiSsid = raw || null;
+        updateNetStatusDisplay();
+    });
+
+    dpManager.subscribe('system/net/wifi/bssid', (data) => {
+        const raw = String(data.value ?? data.data ?? '').trim();
+        netWifiBssid = raw || null;
+        updateNetStatusDisplay();
+    });
+
+    dpManager.subscribe('system/net/wifi/signal_dbm', (data) => {
+        const raw = String(data.value ?? data.data ?? '').trim();
+        if (raw === '') {
+            netWifiSignalDbm = null;
+        } else {
+            const parsed = parseInt(raw, 10);
+            netWifiSignalDbm = Number.isNaN(parsed) ? null : parsed;
+        }
+        updateNetStatusDisplay();
+    });
+
+    dpManager.subscribe('system/net/wifi/bars', (data) => {
+        const raw = String(data.value ?? data.data ?? '').trim();
+        if (raw === '') {
+            netWifiBars = null;
+        } else {
+            const parsed = parseInt(raw, 10);
+            netWifiBars = Number.isNaN(parsed) ? null : Math.max(0, Math.min(4, parsed));
+        }
+        updateNetStatusDisplay();
+    });
+
+    updateNetStatusDisplay();
+
+    container.addEventListener('click', () => openNetStatusModal());
+    container.setAttribute('role', 'button');
+    container.tabIndex = 0;
+    container.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            openNetStatusModal();
+        }
+    });
+
+    log('Network status indicator initialized', 'info');
+}
+
+let netStatusModal = null;
+
+/**
+ * Open network status modal (interfaces; APs behind an explicit Scan)
+ */
+function openNetStatusModal() {
+    if (!connection || !connection.connected) {
+        log('Cannot open network status: not connected to dserv', 'error');
+        return;
+    }
+    if (!netStatusModal) {
+        netStatusModal = new NetStatusModal({ connection, dpManager, log });
+    }
+    netStatusModal.open();
 }
 
 /**

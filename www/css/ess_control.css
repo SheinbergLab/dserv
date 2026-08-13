@@ -202,6 +202,81 @@ body.ess-app {
     fill: var(--ess-error);
 }
 
+.ess-net-status {
+    position: relative;
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+    color: var(--ess-text-secondary);
+    margin-top: 2px;
+    cursor: pointer;
+}
+
+.ess-net-status[hidden] {
+    display: none;
+}
+
+.ess-net-status:hover,
+.ess-net-status:focus-visible {
+    color: var(--ess-text-primary);
+}
+
+.ess-net-icon {
+    width: 22px;
+    height: 14px;
+    display: none; /* pick via .is-wifi / .is-ethernet — SVG.hidden is unreliable in Firefox */
+}
+
+.ess-net-status.is-wifi .ess-net-wifi,
+.ess-net-status.is-ethernet .ess-net-ethernet {
+    display: block;
+}
+
+/* Wi-Fi strength: dim inactive arcs (class-based; avoid SVG.hidden) */
+.ess-net-status.is-wifi .ess-net-arc,
+.ess-net-status.is-wifi .ess-net-dot {
+    opacity: 1;
+    transition: opacity 0.2s ease;
+}
+
+.ess-net-status.is-wifi.signal-0 .ess-net-arc-1,
+.ess-net-status.is-wifi.signal-0 .ess-net-arc-2,
+.ess-net-status.is-wifi.signal-0 .ess-net-arc-3,
+.ess-net-status.is-wifi.signal-0 .ess-net-dot {
+    opacity: 0.25;
+}
+
+.ess-net-status.is-wifi.signal-1 .ess-net-arc-1,
+.ess-net-status.is-wifi.signal-1 .ess-net-arc-2,
+.ess-net-status.is-wifi.signal-1 .ess-net-arc-3 {
+    opacity: 0.25;
+}
+
+.ess-net-status.is-wifi.signal-2 .ess-net-arc-1,
+.ess-net-status.is-wifi.signal-2 .ess-net-arc-2 {
+    opacity: 0.25;
+}
+
+.ess-net-status.is-wifi.signal-3 .ess-net-arc-1 {
+    opacity: 0.25;
+}
+
+/* Link down (system/net/state): dim the last-known type icon and slash it */
+.ess-net-status.is-down .ess-net-wifi,
+.ess-net-status.is-down .ess-net-ethernet {
+    opacity: 0.35;
+}
+
+.ess-net-down {
+    position: absolute;
+    inset: 0;
+    color: var(--ess-error);
+}
+
+.ess-net-status.is-down .ess-net-down {
+    display: block;
+}
+
 .ess-status-bar h1 {
     margin: 0;
     font-size: 18px;
@@ -3391,6 +3466,195 @@ select.ess-param-select {
 
 .ess-modal-error {
     color: var(--ess-error);
+}
+
+/* Network status modal */
+.ess-net-modal {
+    width: 560px;
+}
+
+.ess-net-modal .ess-modal-body {
+    overflow-y: auto;
+}
+
+.ess-net-modal-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.ess-net-iface-card {
+    border: 1px solid var(--ess-border);
+    border-radius: 6px;
+    background: var(--ess-bg-panel);
+    padding: 10px 12px;
+}
+
+.ess-net-iface-card.is-current {
+    border-color: color-mix(in srgb, var(--ess-accent) 45%, var(--ess-border));
+}
+
+.ess-net-iface-card.is-clickable {
+    cursor: pointer;
+}
+
+.ess-net-iface-card.is-clickable:hover {
+    border-color: var(--ess-accent);
+}
+
+.ess-net-iface-card.is-clickable.is-disabled,
+.ess-net-modal-ap-table tr.is-clickable.is-disabled {
+    cursor: default;
+    opacity: 0.7;
+    pointer-events: none;
+}
+
+.ess-net-modal-ap-table tr.is-clickable {
+    cursor: pointer;
+}
+
+.ess-net-modal-ap-table tr.is-clickable:hover td {
+    background: rgba(124, 138, 255, 0.08);
+}
+
+.ess-net-modal-footer {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+}
+
+.ess-net-modal-hint {
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.4;
+    color: var(--ess-text-muted);
+}
+
+.ess-net-modal-footer-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+}
+
+.ess-net-modal-switching {
+    font-size: 12px;
+    color: var(--ess-text-secondary);
+    font-style: italic;
+    padding: 0 0 8px;
+}
+
+.ess-net-iface-header {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    flex-wrap: wrap;
+    font-size: 13px;
+    color: var(--ess-text-primary);
+}
+
+.ess-net-iface-name {
+    font-weight: 600;
+}
+
+.ess-net-iface-meta {
+    color: var(--ess-text-muted);
+    font-size: 12px;
+}
+
+.ess-net-iface-ip {
+    margin-left: auto;
+    color: var(--ess-text-secondary);
+}
+
+.ess-net-iface-card .ess-net-modal-ap-table {
+    margin-top: 8px;
+}
+
+.ess-net-iface-card .ess-net-modal-empty {
+    padding: 8px 0 2px;
+}
+
+.ess-net-modal-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+    margin-top: 4px;
+}
+
+.ess-net-modal-table th,
+.ess-net-modal-table td {
+    text-align: left;
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--ess-border);
+    vertical-align: top;
+}
+
+.ess-net-modal-table th {
+    color: var(--ess-text-muted);
+    font-weight: 600;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+
+.ess-net-modal-table tbody tr:last-child td {
+    border-bottom: none;
+}
+
+.ess-net-modal-mono {
+    font-family: 'SF Mono', Monaco, Consolas, monospace;
+    font-size: 11px;
+}
+
+.ess-net-modal-mark {
+    width: 1.2em;
+    color: var(--ess-accent);
+    text-align: center;
+    flex-shrink: 0;
+}
+
+.ess-net-iface-header .ess-net-modal-mark {
+    width: auto;
+    min-width: 0.85em;
+}
+
+.ess-net-modal-current td {
+    color: var(--ess-text-primary);
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.ess-net-modal-empty,
+.ess-net-modal-error,
+.ess-net-modal-scanning {
+    font-size: 12px;
+    color: var(--ess-text-muted);
+    padding: 8px 0;
+}
+
+.ess-net-modal-scanning {
+    font-style: italic;
+    padding: 10px 0 4px;
+}
+
+.ess-net-modal-error {
+    color: var(--ess-error);
+}
+
+/* Signal % only — reuse palette colors, no row fills */
+.ess-net-modal-signal.ess-net-signal-good {
+    color: var(--ess-success);
+    font-variant-numeric: tabular-nums;
+}
+
+.ess-net-modal-signal.ess-net-signal-fair {
+    color: var(--ess-warning);
+    font-variant-numeric: tabular-nums;
+}
+
+.ess-net-modal-signal.ess-net-signal-weak {
+    color: var(--ess-error);
+    font-variant-numeric: tabular-nums;
 }
 
 /* Manage Subjects modal */

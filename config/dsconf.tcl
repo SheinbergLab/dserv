@@ -264,6 +264,18 @@ set_hostinfo
 
 set host [dservGet system/hostaddr]
 
+# start the network-path monitor (config/netmonconf.tcl). Owns system/net/*
+# — the ESS Control net icon plus the interface/AP switcher — by watching the
+# route toward the mesh registry. GATED to Linux, ptp-style: everything it
+# does shells out to Linux tooling (ip/iw/nmcli), and the lesson stands that
+# a subprocess which loads unconditionally will eventually run somewhere it
+# should not. Where it doesn't run, system/net/* never appear and the UIs
+# keep the icon hidden. Started before mesh so mesh's init can pick up the
+# seeded path.
+if { $::tcl_platform(os) eq "Linux" } {
+    subprocess netmon "source [file join $dspath config/netmonconf.tcl]"
+}
+
 # Start subprocess to provide connection to stim
 subprocess stim "source [file join $dspath config/stimconf.tcl]"
 
