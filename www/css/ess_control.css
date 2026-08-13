@@ -434,22 +434,29 @@ body.ess-app {
 .ess-stim-status.connected .ess-stim-dot { background: var(--ess-success); }
 
 /* Only on a split rig: the chip then names another machine, and clicking it
-   opens that machine's dserv-agent panel. Underline the host rather than the
-   whole chip -- the host is the part that identifies what you're about to
-   manage, and "STIM: not connected" underlined reads like a broken link. */
+   opens that machine's dserv-agent panel.
+
+   Colour-only hover, matching the hostname beside it -- the two are the same
+   kind of thing (a machine name you can click to manage) and should not
+   announce themselves differently. Nothing is underlined now, which also
+   retires the old worry that "STIM: not connected" underlined read like a
+   broken link. muted -> primary is #707080 -> #e0e0e0, a wider jump than the
+   hostname's, so it carries on its own. */
 .ess-stim-status.clickable {
     cursor: pointer;
 }
 
-.ess-stim-status.clickable:hover,
-.ess-stim-status.clickable:focus-visible {
+.ess-stim-status.clickable:hover {
     color: var(--ess-text-primary);
 }
 
-.ess-stim-status.clickable:hover .ess-stim-host,
-.ess-stim-status.clickable:focus-visible .ess-stim-host {
-    text-decoration: underline;
-    text-underline-offset: 3px;
+/* Keyboard focus keeps a shape, for the reason the hostname does: colour is
+   the one cue a keyboard user cannot go looking for. Outlines the whole chip
+   rather than the host, since the chip is the click target. */
+.ess-stim-status.clickable:focus-visible {
+    color: var(--ess-text-primary);
+    outline: 2px solid var(--ess-accent);
+    outline-offset: 2px;
 }
 
 /* the disconnected chip keeps its red text on hover -- it is still an alarm */
