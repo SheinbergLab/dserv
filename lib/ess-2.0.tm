@@ -2710,19 +2710,27 @@ namespace eval ess {
     # on add_param's existing last-wins semantics, shows up in the variant
     # options editor, and lands in the file as PARAM record_streams for free:
     #
-    #     $sys add_param record_streams all variable string
+    #     $sys add_param record_streams eye variable string
     #
     # Values are a closed set, deliberately not a grammar:
-    #   all   (default)  every live analog stream
-    #   none             record no analog blocks
+    #   none  (default)  record no analog blocks
+    #   all              every live analog stream
     #   <names>          explicit group names, e.g. "eye joystick".
     #                    Qualify as <box>/<group> only when two live boxes
     #                    publish the same group name.
     #
-    # DEFAULT all, NOT none. The two mistakes are not symmetric: recording a
-    # stream you did not need costs disk, while failing to record one you did
-    # is unrecoverable and you find out at analysis. So forgetting to declare
-    # must fail toward keeping the data.
+    # DEFAULT none. Recording nothing you did not ask for is the safe half of
+    # this; the unsafe half -- silently NOT recording something you needed --
+    # is caught at EXTRACT time instead, where an analysis that expects a
+    # signal and does not find it fails immediately and loudly. That check is
+    # stronger than a default here could be, because it knows what the data is
+    # FOR. What this proc still guarantees is that a stream you DID declare can
+    # never go silently missing: an unavailable one refuses the open outright.
+    #
+    # Nothing here touches a stream that already has an owner. An extio group
+    # consumed by another subprocess (emconf's ain/eye path, sliderconf's
+    # ain/stick) keeps flowing to it regardless -- this only ever ADDS a
+    # logger match, and a logger match has no effect on delivery.
     #
     # Resolved against extio/ain/streams, extioconf's manifest of what is LIVE
     # (live judged by watchdog freshness -- a vanished box is absent from it,
@@ -2791,12 +2799,12 @@ namespace eval ess {
         # whole session and discovering afterwards that a declared signal is
         # missing is the failure this declaration exists to prevent. Refusing
         # here costs nothing to unwind -- nothing has been opened yet.
-        set want all
+        set want none
         set _p [$current(state_system) get_params]
         if { [dict exists $_p record_streams] } {
             set want [lindex [dict get $_p record_streams] 0]
         }
-        if { $want eq "" } { set want all }
+        if { $want eq "" } { set want none }
         set ain [ain_resolve_streams $want]
         if { [llength [dict get $ain missing]] ||
              [llength [dict get $ain ambiguous]] } {
