@@ -1,6 +1,15 @@
 {
   "components": [
     {
+      "id": "dlsh",
+      "name": "dlsh",
+      "description": "Tcl zipfs library (shared runtime)",
+      "repo": "SheinbergLab/dlsh",
+      "assetPattern": "dlsh.*\\.zip$",
+      "installCmd": "mkdir -p /usr/local/dlsh && cp {file} /usr/local/dlsh/dlsh.zip && echo {version} > /usr/local/dlsh/VERSION",
+      "versionFile": "/usr/local/dlsh/VERSION"
+    },
+    {
       "id": "dserv",
       "name": "dserv",
       "description": "Data server and experiment control backend",
@@ -28,15 +37,6 @@
       "package": "dserv-agent",
       "assetPattern": "dserv-agent_.*\\.deb$",
       "followsComponent": "dserv"
-    },
-    {
-      "id": "dlsh",
-      "name": "dlsh",
-      "description": "Tcl zipfs library (shared runtime)",
-      "repo": "SheinbergLab/dlsh",
-      "assetPattern": "dlsh.*\\.zip$",
-      "installCmd": "mkdir -p /usr/local/dlsh && cp {file} /usr/local/dlsh/dlsh.zip && echo {version} > /usr/local/dlsh/VERSION",
-      "versionFile": "/usr/local/dlsh/VERSION"
     }
   ]
 }
