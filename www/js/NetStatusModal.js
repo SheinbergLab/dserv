@@ -422,6 +422,9 @@ class NetStatusModal {
             if (type === 'wifi' && row.ssid) {
                 html += `<span class="ess-net-iface-meta">${this._escapeHtml(row.ssid)}</span>`;
             }
+            if (type === 'wifi' && row.bssid) {
+                html += `<span class="ess-net-iface-meta ess-net-modal-mono">${this._escapeHtml(row.bssid)}</span>`;
+            }
             html += `<span class="ess-net-iface-ip ess-net-modal-mono">${this._escapeHtml(row.ip || '')}</span>`;
             html += '</div>';
 
