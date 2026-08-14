@@ -320,6 +320,7 @@ type WSMessage struct {
 	Asset        string          `json:"asset,omitempty"`
 	Service      string          `json:"service,omitempty"`
 	StopServices []string        `json:"stopServices,omitempty"`
+	Profile      string          `json:"profile,omitempty"`
 	Payload      json.RawMessage `json:"payload,omitempty"`
 }
 
@@ -614,6 +615,8 @@ Environment:
 	mux.HandleFunc("/api/files/", agent.auth(agent.handleFiles))
 	mux.HandleFunc("/api/components", agent.auth(agent.handleComponents))
 	mux.HandleFunc("/api/components/", agent.auth(agent.handleComponentAction))
+	mux.HandleFunc("/api/retype", agent.auth(agent.handleRetype))
+	mux.HandleFunc("/api/retype/profiles", agent.auth(agent.handleRetypeProfiles))
 	mux.HandleFunc("/api/ess/browse-config", agent.auth(agent.handleESSBrowseConfig))
 	
 	// Mesh endpoints (reads from cache)
@@ -2511,6 +2514,28 @@ func (a *Agent) handleWSMessage(msg WSMessage) WSResponse {
 		go a.installComponent(*comp, msg.Asset, msg.StopServices)
 		resp.Success = true
 		resp.Data = map[string]string{"status": "started", "component": comp.ID}
+
+	case "retype_profiles":
+		registry := a.registryBase()
+		if registry == "" {
+			resp.Error = "no registry configured on this box (-registry flag or " + boxConfPath + ")"
+			return resp
+		}
+		profiles, err := a.fetchRegistryProfiles(registry)
+		if err != nil {
+			resp.Error = "could not list profiles from " + registry + ": " + err.Error()
+			return resp
+		}
+		resp.Success = true
+		resp.Data = map[string]interface{}{"registry": registry, "profiles": profiles}
+
+	case "retype":
+		if err := a.startRetype(msg.Profile); err != nil {
+			resp.Error = err.Error()
+			return resp
+		}
+		resp.Success = true
+		resp.Data = map[string]string{"status": "started", "profile": msg.Profile, "unit": retypeUnit}
 
 	case "mesh_peers":
 		resp.Success = true

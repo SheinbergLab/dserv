@@ -851,15 +851,21 @@ body.solo .agent-panel {
              this.el.panelOverlay.classList.remove('open');
              this.el.agentPanel.classList.remove('open');
              this.el.agentPanel.classList.remove('expanded');
-             if (this.panelWs && !this.panelUsingMainWs) { 
-		 this.panelWs.close(); 
+             if (this.panelWs && !this.panelUsingMainWs) {
+		 this.panelWs.close();
              }
              this.panelWs = null;
              this.panelUsingMainWs = false;
+             // A closed panel cannot show the outcome; stop the watcher rather
+             // than let it time out into an error toast on a box that is fine.
+             this.retypeTarget = null;
 	 }
 	 
 	 connectAgent(node) {
-             const isSameHost = node.isLocal || 
+             // Kept for reattach: a retype restarts the agent, and a remote
+             // panel socket does not reconnect by itself (see retypeWatch).
+             this.panelNode = node;
+             const isSameHost = node.isLocal ||
 				node.ipAddress === location.hostname ||
 				location.hostname === 'localhost' ||
 				location.hostname === '127.0.0.1';
@@ -914,8 +920,15 @@ body.solo .agent-panel {
                      this.panelWs?.send(JSON.stringify({type:'components'}));
 		 }
              }
-             else if (msg.type === 'install_progress') { 
-		 this.updateInstallWorkflow(msg.data); 
+             else if (msg.type === 'retype_profiles_response') {
+		 if (msg.error) { this.showToast('Retype: ' + msg.error, 'error'); }
+		 else if (msg.data) { this.retypeChoices(msg.data); }
+             }
+             else if (msg.type === 'retype_response') {
+		 this.retypeStarted(msg);
+             }
+             else if (msg.type === 'install_progress') {
+		 this.updateInstallWorkflow(msg.data);
              }
              else if (msg.type === 'install_complete') { 
 		 this.completeInstallWorkflow();
@@ -983,7 +996,7 @@ body.solo .agent-panel {
 			 <div class="panel-info-item"><div class="label">Arch</div><div class="value">${sys.arch||'—'}</div></div>
 			 <div class="panel-info-item"><div class="label">Uptime</div><div class="value">${sys.uptime||'—'}</div></div>
 			 <div class="panel-info-item"><div class="label">Load</div><div class="value">${sys.loadAvg||'—'}</div></div>
-			 <div class="panel-info-item"><div class="label">Profile</div><div class="value">${this.renderProfile(s.box)}</div></div>
+			 <div class="panel-info-item"><div class="label">Profile</div><div class="value" id="profile-cell">${this.renderProfile(s.box)}</div></div>
 			 ${this.renderDservRunning(d, comps)}
                      </div>
 		 </div>
@@ -1043,15 +1056,96 @@ body.solo .agent-panel {
 	 // the intended ?profile= both records one and converges the services
 	 // (retiring what the profile excludes) to match.
 	 renderProfile(box) {
+             // Mid-retype the recorded profile still says the OLD class until
+             // the bootstrap's step_record_identity lands; show the journey,
+             // not the stale value. retypeWatch clears retypeTarget when the
+             // new declaration arrives (or gives up and says so).
+             if (this.retypeTarget && box?.profile !== this.retypeTarget) {
+		 return `<span style="color:#fbbf24">retyping to ${this.esc(this.retypeTarget)}…</span>
+                     <button class="component-btn" style="margin-left:8px" onclick="app.loadLogs('dserv-retype')">Log</button>`;
+             }
+             const retypeBtn = `<button class="component-btn" style="margin-left:8px" onclick="app.retypeOpen()">Retype…</button>`;
              if (!box || !box.profile) {
-		 return '<span style="color:#71767b" title="No /etc/dserv-agent/box.conf — this box was provisioned before identities were recorded. Re-run the bootstrap with the intended ?profile= to record one and converge services to it.">unrecorded</span>';
+		 return `<span style="color:#71767b" title="No /etc/dserv-agent/box.conf — this box was provisioned before identities were recorded. Retype (or re-run the bootstrap) to record one and converge services to it.">unrecorded</span>${retypeBtn}`;
              }
              const mode = box.stimMode === 'windowed' ? ' · windowed' : '';
              const title = ['Declared in /etc/dserv-agent/box.conf',
 			    box.role ? `role ${box.role}` : '',
 			    box.provisioned ? `provisioned ${box.provisioned}` : '']
 		   .filter(Boolean).join(' · ');
-             return `<span title="${this.esc(title)}">${this.esc(box.profile)}${mode}</span>`;
+             return `<span title="${this.esc(title)}">${this.esc(box.profile)}${mode}</span>${retypeBtn}`;
+	 }
+
+	 retypeOpen() {
+             this.panelWs?.send(JSON.stringify({type:'retype_profiles'}));
+	 }
+
+	 // Swap the Profile cell for a selector built from what the registry
+	 // actually serves — the same list /setup/profiles prints, so the panel
+	 // can never offer a profile the registry would not resolve.
+	 retypeChoices(data) {
+             const cell = document.getElementById('profile-cell');
+             if (!cell) return;
+             this.retypeRegistry = data.registry;
+             const cur = this.panelStatus?.box?.profile || '';
+             const opts = (data.profiles || []).map(p =>
+		 `<option value="${this.esc(p.name)}" ${p.name === cur ? 'selected' : ''} title="${this.esc(p.description || '')}">${this.esc(p.name)}</option>`).join('');
+             cell.innerHTML = `<select id="retype-select" class="component-select">${opts}</select>
+		 <button class="component-btn update" onclick="app.retypeApply()">Apply</button>
+		 <button class="component-btn" onclick="app.renderPanel()">Cancel</button>`;
+	 }
+
+	 retypeApply() {
+             const p = document.getElementById('retype-select')?.value;
+             if (!p) return;
+             if (!confirm(`Retype this box to profile "${p}"?\n\nThis re-runs the provisioner from ${this.retypeRegistry}:\n• services the profile excludes are disabled\n• missing components are installed, outdated ones updated\n• the agent restarts (this panel reconnects on its own)\n\nLocal ESS scripts are kept (--skip-scripts).`)) {
+		 this.renderPanel();
+		 return;
+             }
+             this.panelWs?.send(JSON.stringify({type:'retype', profile: p}));
+	 }
+
+	 retypeStarted(msg) {
+             if (!msg.success) {
+		 this.showToast('Retype: ' + (msg.error || 'failed to start'), 'error');
+		 this.renderPanel();
+		 return;
+             }
+             this.retypeTarget = msg.data.profile;
+             this.showToast(`Retype to ${msg.data.profile} started`, 'success');
+             this.renderPanel();
+             this.retypeWatch(0);
+	 }
+
+	 // Poll until box.conf reports the new profile. The bootstrap restarts
+	 // the agent near its end: the borrowed main socket reconnects on its
+	 // own and only needs rebinding; a remote panel socket stays dead
+	 // (onclose is deliberately inert), so reattach it here.
+	 retypeWatch(n) {
+             if (!this.retypeTarget) return;
+             if (n > 80) { // ~4 min — the bootstrap is stuck or failed; keep the log pointer up
+		 this.showToast('Retype not recorded yet — check its log (dserv-retype)', 'error');
+		 this.retypeTarget = null;
+		 this.renderPanel();
+		 return;
+             }
+             setTimeout(() => {
+		 if (!this.retypeTarget) return;
+		 if (this.panelStatus?.box?.profile === this.retypeTarget) {
+                     this.showToast(`Retyped to ${this.retypeTarget}`, 'success');
+                     this.retypeTarget = null;
+                     this.renderPanel();
+                     this.panelWs?.send(JSON.stringify({type:'components'}));
+                     return;
+		 }
+		 if (this.panelUsingMainWs) {
+                     if (this.ws && this.connected) this.panelWs = this.ws;
+		 } else if (this.panelNode && (!this.panelWs || this.panelWs.readyState > 1)) {
+                     this.connectAgent(this.panelNode);
+		 }
+		 try { this.panelWs?.send(JSON.stringify({type:'status'})); } catch (e) {}
+		 this.retypeWatch(n + 1);
+             }, 3000);
 	 }
 
 	 renderComp(comp, services = {}) {
@@ -1182,7 +1276,9 @@ body.solo .agent-panel {
              this.showToast(`Sending ${action}...`);
 	 }
 	 
-	 loadLogs() { this.panelWs?.send(JSON.stringify({type:'logs'})); }
+	 // svc overrides the default (dserv) unit — the retype flow uses this to
+	 // pull journalctl -u dserv-retype into the same logs panel.
+	 loadLogs(svc) { this.panelWs?.send(JSON.stringify(svc ? {type:'logs', action: svc} : {type:'logs'})); }
 	 
 	 togglePanelExpand() {
              const panel = this.el.agentPanel;
