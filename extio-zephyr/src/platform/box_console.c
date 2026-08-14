@@ -274,15 +274,20 @@ static void dump_sink(void *ud, const char *line)
 	dump_buf[dump_len] = '\0';
 }
 
-int box_console_config_dump(const box_config_t *cfg, char *buf, int cap)
+int box_console_config_dump_form(const box_config_t *cfg, char *buf, int cap, int form)
 {
 	if (!buf || cap < 2) {
 		return 0;
 	}
 	dump_buf = buf; dump_cap = cap; dump_len = 0; dump_cut = 0;
 	buf[0] = '\0';
-	box_cli_dump_to(cfg, dump_sink, NULL);
+	box_cli_dump_to_form(cfg, dump_sink, NULL, form);
 	return dump_cut ? -dump_len : dump_len;
+}
+
+int box_console_config_dump(const box_config_t *cfg, char *buf, int cap)
+{
+	return box_console_config_dump_form(cfg, buf, cap, BOX_DUMP_CLI);
 }
 
 void box_console_set_ain_channels(int n)

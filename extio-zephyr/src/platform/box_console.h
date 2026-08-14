@@ -54,8 +54,24 @@ void box_console_set_ain_channels(int n);
  *
  * Returns bytes written, or NEGATIVE that count if the dump was TRUNCATED --
  * a clipped restore document that looks complete is worse than none. */
-#define BOX_CONFIG_DUMP_MAX 1536
+/* Sized against a MEASURED dump, not a guess. A modestly configured rig box
+ * (6 settings) is 228 bytes; a pathological one -- all 30 pins with mode,
+ * pulse, debounce, active_low AND a label, four full DI groups, four analog
+ * groups, eight analog labels -- is 4962. Covering that would cost ~10 kB of
+ * .bss (this buffer plus the frame buffer built from it) on a part already at
+ * ~92% RAM, to serve a configuration nobody has.
+ *
+ * 3072 covers every real config seen so far with room to spare, at ~3 kB. The
+ * residual limit is HONEST rather than hidden: the dump returns a negative
+ * byte count when it truncates, cmd/dump publishes that as state/cfg/dump_rc,
+ * and extio_cfg_export REFUSES to write a file for it. A short config stored
+ * as if whole is the one outcome this path must never produce. */
+#define BOX_CONFIG_DUMP_MAX 3072
 int box_console_config_dump(const box_config_t *cfg, char *buf, int cap);
+/* form = BOX_DUMP_CLI (console paste) or BOX_DUMP_DP (leaf/value pairs a host
+ * replays through extio_cfg_set). Negative return = TRUNCATED, and a truncated
+ * config is not a config -- callers must refuse to store it. */
+int box_console_config_dump_form(const box_config_t *cfg, char *buf, int cap, int form);
 
 
 /* Tell the CLI which pins this board refuses, so `pin N mode ...` is rejected

@@ -2167,6 +2167,121 @@ proc extio_cfg_reboot {box} {
     return "reboot sent to $box -- unsaved changes are lost by definition"
 }
 
+# ---- CONFIG EXPORT / IMPORT (fw >= v0.4.0+96) -------------------------------
+#
+# `cmd/dump 2` makes the box emit its own configuration as "<leaf> <value>"
+# pairs naming the config datapoint namespace exactly, so importing is a replay
+# through extio_cfg_set with no translation table on this side. The mapping
+# CLI->datapoint is not mechanical (pulse -> pulse_us, settle -> settle_ms,
+# `label N` -> pin/N/label), and a table here would be a second copy of
+# firmware knowledge that drifts -- which extio_cfg_writable already
+# demonstrates, having listed `channel` for months before the codec had a case
+# for it. tools/box_sim.c --roundtrip proves every emitted leaf is one the
+# codec accepts.
+#
+# IDENTITY IS NOT CONFIGURATION. `name` is not in the dump at all: applying it
+# mid-replay changes the box's datapoint prefix, so every later line is
+# addressed to a name it no longer answers to and is dropped silently (the
+# round-trip test caught exactly one setting out of thirty surviving). Renaming
+# stays extio_rename's committed operation. dserv/ip, dserv/port and net/* ARE
+# in the dump -- a genuine restore of the same box wants them -- but importing
+# them into a DIFFERENT box points it at the exporter's rig, so they are held
+# back unless asked for.
+set ::extio_cfg_identity_leaves {dserv/ip dserv/port net/mode net/ip net/mask net/gateway}
+
+# Ask <box> for its config and return the text. Writes it to <path> when given.
+# Synchronous-looking but async underneath (no event loop): the caller gets the
+# text through the callback chain, so the file form is the useful one.
+proc extio_cfg_export {box {path ""}} {
+    if { ![dservExists extio/$box/state/build] } {
+        error "extio_cfg_export: no box '$box' has announced itself"
+    }
+    set ::extio_export_path($box) $path
+    extio_request $box "export" dump 2 cfg/dump_dp {ne ""} 15000 \
+        extio_cfg_export_done extio_cfg_export_failed {cfg/dump_dp cfg/dump_rc}
+    return "export requested from $box"
+}
+
+proc extio_cfg_export_done {box text} {
+    set path ""
+    if { [info exists ::extio_export_path($box)] } { set path $::extio_export_path($box) }
+    unset -nocomplain ::extio_export_path($box)
+
+    # A TRUNCATED DUMP IS NOT A CONFIG. The box publishes the byte count signed
+    # (negative = it did not fit BOX_CONFIG_DUMP_MAX), and the text itself looks
+    # perfectly well-formed right up to where it stops -- so without this check
+    # a too-large config would be stored short and restore silently incomplete.
+    # Refuse rather than truncate: an export you cannot trust is worse than none.
+    set rc 0
+    if { [dservExists extio/$box/state/cfg/dump_rc] } {
+        set rc [dservGet extio/$box/state/cfg/dump_rc]
+    }
+    if { [string is integer -strict $rc] && $rc < 0 } {
+        puts "extio: $box export REFUSED -- dump truncated at [expr {-$rc}] bytes\
+              (BOX_CONFIG_DUMP_MAX). Nothing written."
+        return
+    }
+    if { $path eq "" } { puts "extio: $box config:\n$text"; return }
+    set f [open $path w]
+    puts $f "# extio config exported from $box on [clock format [clock seconds]]"
+    puts -nonewline $f $text
+    close $f
+    puts "extio: $box config -> $path ([string length $text] bytes)"
+}
+
+proc extio_cfg_export_failed {box why} {
+    unset -nocomplain ::extio_export_path($box)
+    puts "extio: $box export failed -- $why"
+}
+
+# Apply a previously exported config to <box>. Identity leaves (dserv target,
+# static net) are SKIPPED unless -identity is passed: cloning a rig's pin map
+# onto a second box is the common case, and carrying the exporter's dserv
+# address into it points the new box at the wrong host while looking configured.
+#
+# Does not save. extio_cfg_save is a separate, confirmed step -- same rule as
+# adoption, and it leaves a reboot as the undo for an import that went wrong.
+proc extio_cfg_import {box path args} {
+    set identity [expr {[lsearch -exact $args -identity] >= 0}]
+    if { ![dservExists extio/$box/state/build] } {
+        error "extio_cfg_import: no box '$box' has announced itself"
+    }
+    if { ![file readable $path] } { error "extio_cfg_import: cannot read $path" }
+    set f [open $path r]; set text [read $f]; close $f
+
+    set applied 0; set skipped {}; set refused {}
+    foreach line [split $text \n] {
+        set line [string trim $line]
+        if { $line eq "" || [string index $line 0] eq "#" } continue
+        set sp [string first " " $line]
+        if { $sp < 0 } { set leaf $line; set value "" } \
+        else { set leaf [string range $line 0 $sp-1]
+               set value [string trim [string range $line $sp+1 end]] }
+        if { !$identity && [lsearch -exact $::extio_cfg_identity_leaves $leaf] >= 0 } {
+            lappend skipped $leaf; continue
+        }
+        if { [catch { extio_cfg_set $box $leaf $value } e] } {
+            lappend refused "$leaf ($e)"; continue
+        }
+        incr applied
+    }
+    set msg "imported $applied setting(s) into $box from [file tail $path] (LIVE, not saved)"
+    if { [llength $skipped] } {
+        append msg "\n  identity held back (pass -identity to apply): [join $skipped {, }]"
+    }
+    if { [llength $refused] } {
+        append msg "\n  REFUSED: [join $refused {; }]"
+    }
+    # wifi/pass is never dumped by the firmware -- a documented hole, and the
+    # importer has to say so rather than let someone find out when the box
+    # cannot associate.
+    if { [string match "*wifi/ssid*" $text] } {
+        append msg "\n  NOTE: wifi/pass is never exported -- set it by hand on the target."
+    }
+    puts "extio: $msg"
+    return $msg
+}
+
 # ---- FACTORY RESET (fw >= v0.4.0+93) ----------------------------------------
 #
 # Erases the box's saved config and reboots it into its out-of-box state. The

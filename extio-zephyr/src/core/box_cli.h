@@ -265,8 +265,6 @@ static inline void box_cli_dump_line(const char *fmt, ...)
  * property worth having: the two forms cannot drift apart, because they are
  * written together or not at all. tools/box_sim.c --selftest then proves every
  * emitted leaf is one the codec actually accepts. */
-#define BOX_DUMP_CLI 0
-#define BOX_DUMP_DP  1
 static int box_cli_dump_form;                 /* set by box_cli_dump_to_form() */
 #define DUMP2(cli, dp, ...) box_cli_dump_line(box_cli_dump_form ? (dp) : (cli), ##__VA_ARGS__)
 #define DUMPCLI(...) do { if (!box_cli_dump_form) DUMPF(__VA_ARGS__); } while (0)

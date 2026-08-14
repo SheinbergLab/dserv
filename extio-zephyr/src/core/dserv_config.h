@@ -683,6 +683,13 @@ static inline const char *dserv_xport_str(uint8_t m)
 
 /* box_config_t.transport_mode (persisted policy; 0 default == auto). */
 enum { XMODE_AUTO = 0, XMODE_ETH = 1, XMODE_USB = 2 };
+
+/* Which syntax box_cli_dump emits. Lives HERE rather than in box_cli.h because
+ * that header is included by exactly one TU per binary (box_console.c), while
+ * the cmd/dump handler that selects the form is in main.c -- both include this
+ * one. CLI form pastes into a console; DP form is "<leaf> <value>" pairs naming
+ * the config datapoint namespace, for a host to replay. */
+enum { BOX_DUMP_CLI = 0, BOX_DUMP_DP = 1 };
 static inline const char *dserv_xmode_str(uint8_t m)
 { return m == XMODE_ETH ? "eth" : m == XMODE_USB ? "usb" : "auto"; }
 

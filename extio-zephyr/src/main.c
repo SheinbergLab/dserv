@@ -2337,16 +2337,41 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 			static uint8_t vf[BOX_CONFIG_DUMP_MAX + 128];
 			char nm[80];
 
-			int n = box_console_config_dump(&cfg, dtext, sizeof dtext);
-			dserv_state_name(&cfg, nm, sizeof nm, "cfg/dump");
+			/* `cmd/dump 2` asks for DATAPOINT form -- "<leaf> <value>"
+			 * pairs a host replays through extio_cfg_set. Anything else
+			 * keeps the CLI form byte for byte, so existing callers and
+			 * console paste are untouched. Separate leaf, because one key
+			 * holding two syntaxes would make a reader guess. */
+			int form = (dserv_msg_as_long(&m) == 2) ? BOX_DUMP_DP : BOX_DUMP_CLI;
+			const char *leaf = form == BOX_DUMP_DP ? "cfg/dump_dp" : "cfg/dump";
+
+			int n = box_console_config_dump_form(&cfg, dtext, sizeof dtext, form);
+			dserv_state_name(&cfg, nm, sizeof nm, leaf);
 			int vlen = dserv_msg_var_string(vf, sizeof vf, nm, 0, dtext);
+
+			/* THE BYTE COUNT, SIGNED, published FIRST so it is in place
+			 * before the text a reader will act on. Negative means the
+			 * dump did not fit BOX_CONFIG_DUMP_MAX -- and a truncated
+			 * config is not a config: silently storing one would produce a
+			 * restore that drops whatever fell off the end. The host has no
+			 * other way to know, since the text itself looks well-formed
+			 * right up to where it stops. */
+			{
+				char rn[80];
+				uint8_t rf[DSERV_MSG_LEN];
+
+				dserv_state_name(&cfg, rn, sizeof rn, "cfg/dump_rc");
+				dserv_msg_int(rf, rn, 0, (int32_t) n);
+				(void) box_uplink_send(rf, DSERV_MSG_LEN);
+			}
 
 			/* box_uplink_send returns 0 on success, NOT the byte count
 			 * (box_uplink.h) -- comparing against vlen reported every
 			 * successful send as a failure. */
 			if (vlen > 0 && box_uplink_send(vf, vlen) == 0) {
-				box_console_printf("cmd/dump -> %d bytes to state/cfg/dump%s\n",
-						   n < 0 ? -n : n, n < 0 ? " (TRUNCATED)" : "");
+				box_console_printf("cmd/dump -> %d bytes to state/%s%s\n",
+						   n < 0 ? -n : n, leaf,
+						   n < 0 ? " (TRUNCATED)" : "");
 			} else {
 				box_console_printf("cmd/dump -> send failed (%d)\n", vlen);
 			}
