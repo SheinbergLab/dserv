@@ -329,6 +329,8 @@ type WSMessage struct {
 	Service      string          `json:"service,omitempty"`
 	StopServices []string        `json:"stopServices,omitempty"`
 	Profile      string          `json:"profile,omitempty"`
+	Role         string          `json:"role,omitempty"` // time_role: grandmaster|client|ntp-client
+	Arg          string          `json:"arg,omitempty"`  // time_role: IFACE or SERVER
 	Payload      json.RawMessage `json:"payload,omitempty"`
 }
 
@@ -625,6 +627,8 @@ Environment:
 	mux.HandleFunc("/api/components/", agent.auth(agent.handleComponentAction))
 	mux.HandleFunc("/api/retype", agent.auth(agent.handleRetype))
 	mux.HandleFunc("/api/retype/profiles", agent.auth(agent.handleRetypeProfiles))
+	mux.HandleFunc("/api/time/status", agent.auth(agent.handleTimeStatus))
+	mux.HandleFunc("/api/time/role", agent.auth(agent.handleTimeRole))
 	mux.HandleFunc("/api/ess/browse-config", agent.auth(agent.handleESSBrowseConfig))
 	
 	// Mesh endpoints (reads from cache)
@@ -2560,6 +2564,33 @@ func (a *Agent) handleWSMessage(msg WSMessage) WSResponse {
 		go a.installComponent(*comp, msg.Asset, msg.StopServices)
 		resp.Success = true
 		resp.Data = map[string]string{"status": "started", "component": comp.ID}
+
+	case "time_status":
+		resp.Success = true
+		resp.Data = a.getTimeStatus()
+
+	case "time_candidates":
+		resp.Success = true
+		resp.Data = a.getTimeCandidates()
+
+	case "time_role":
+		switch msg.Action {
+		case "status":
+			// Read-only and quick; the full text goes to the panel's log
+			// viewer unparsed -- the tool's own words are the good ones.
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			out, _ := exec.CommandContext(ctx, ptpSetupPath, "status").CombinedOutput()
+			resp.Success = true
+			resp.Data = map[string]string{"output": string(out)}
+		default:
+			if err := a.startTimeRole(msg.Action, msg.Role, msg.Arg); err != nil {
+				resp.Error = err.Error()
+				return resp
+			}
+			resp.Success = true
+			resp.Data = map[string]string{"status": "started", "action": msg.Action}
+		}
 
 	case "retype_profiles":
 		registry := a.registryBase()
