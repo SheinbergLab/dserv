@@ -1089,23 +1089,46 @@ function scanGroups(b) {
   const bx = boxes.get(b) || {};
   const gmax = Number(get(b, 'groups/max')) || 4;
   const gslot = new Map();
+  const live = roster(b, 'groups/all');   /* authoritative when present -- see scanAinGroups */
   for (const k of Object.keys(bx)) {
     const m = /^group\/([^/]+)\/idx$/.exec(k);
     if (!m) continue;
+    if (live && !live.has(m[1])) continue;                           /* not in the roster: ghost */
     if (String(get(b, `group/${m[1]}/pins`, '')) === '') continue;   /* tombstone */
     gslot.set(+get(b, `group/${m[1]}/idx`), m[1]);
   }
   return { gmax, gslot };
 }
+/* The box's roster of group names that exist RIGHT NOW (fw >= v0.4.0+94), or
+ * null when the box predates it.
+ *
+ * ABSENT IS NOT EMPTY, and conflating them would hide every group on every
+ * older box. A missing key means "this firmware cannot tell you", so callers
+ * fall back to scanning; an empty STRING is a real answer meaning "none".
+ * Same discipline as the shelf's imgVersion. */
+function roster(b, leaf) {
+  const raw = get(b, leaf, null);
+  if (raw === null || raw === undefined) return null;
+  return new Set(String(raw).split(',').map(s => s.trim()).filter(Boolean));
+}
+
 function scanAinGroups(b) {
   const bx = boxes.get(b) || {};
   const agmax = Number(get(b, 'ain/groups/max')) || 4;
   const agslot = new Map();
+  /* Authoritative when present: per-name tombstones can only retract a group
+   * within one boot (they key off a static of what that boot published), so a
+   * group removed before a reboot -- or wiped by a factory reset -- leaves
+   * retained leaves that nothing can take back. A rig saw exactly this as an
+   * `eye` group surviving a factory reset. The roster names what IS, so
+   * anything absent from it is dead regardless of what dserv still holds. */
+  const live = roster(b, 'ain/groups/all');
   let agAnnounced = false;
   for (const k of Object.keys(bx)) {
     const m = /^ain\/group\/([^/]+)\/idx$/.exec(k);
     if (!m) continue;
     agAnnounced = true;
+    if (live && !live.has(m[1])) continue;                               /* not in the roster: ghost */
     if (String(get(b, `ain/group/${m[1]}/chans`, '')) === '') continue;  /* tombstone */
     agslot.set(+get(b, `ain/group/${m[1]}/idx`), m[1]);
   }
@@ -1114,6 +1137,7 @@ function scanAinGroups(b) {
     const m = /^ain\/([^/]+)$/.exec(k);
     if (!m || !Array.isArray(bx[k].v) || m[1] === 'dbg' || m[1] === 'group') continue;
     if ([...agslot.values()].includes(m[1])) continue;         /* has a real row */
+    if (live && !live.has(m[1])) continue;                     /* not in the roster: ghost */
     if (String(get(b, `ain/group/${m[1]}/chans`, null)) === '') continue;  /* tombstoned ghost */
     blobOnly.push(m[1]);
   }

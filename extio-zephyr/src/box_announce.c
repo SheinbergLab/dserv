@@ -257,6 +257,56 @@ void box_announce_silk(const box_config_t *c)
 #endif
 }
 
+/* THE ROSTER: the authoritative list of group names that exist RIGHT NOW,
+ * comma-separated, published even when empty.
+ *
+ * The per-name tombstones below can retract a group only within one boot --
+ * they fire off a static array of what THIS boot published, so a reboot
+ * (factory reset, power cycle after an edit) leaves the static empty, the
+ * config empty, and nothing to retract with. And they are keyed by NAME, so
+ * even in principle the box cannot tombstone a group whose name it has just
+ * forgotten. Reported from a rig 2026-08-14 as a factory-reset box still
+ * showing an `eye` analog group: gone from the box, still on dserv, and no
+ * mechanism on either side able to say so.
+ *
+ * A roster fixes that by construction. It names what IS, so a consumer can
+ * treat any ain/group/<name>/... leaf whose name is absent from it as dead,
+ * without the box having to remember what it used to be called. The empty
+ * string is the whole point: "this box has no groups" is a statement, and it
+ * is the one the tombstones could never make.
+ *
+ * ABSENT is not empty. Firmware predating this key publishes nothing, and a
+ * consumer must then fall back to scanning -- treating a missing roster as an
+ * empty one would hide every group on every older box. Same discipline as the
+ * shelf's imgVersion: absent means UNKNOWN, never NONE. */
+static void pub_roster(const box_config_t *c, const char *leaf,
+		       const char (*names)[BOX_LABEL_MAX + 4], int n)
+{
+	char roster[(BOX_LABEL_MAX + 5) * 4 + 1];   /* names + separators, 4 slots */
+	int rn = 0;
+
+	roster[0] = '\0';
+	for (int g = 0; g < n; g++) {
+		if (!names[g][0]) {
+			continue;
+		}
+		int k = snprintf(roster + rn, sizeof roster - rn, "%s%s",
+				 rn ? "," : "", names[g]);
+
+		/* Truncation would publish a roster that silently omits a real
+		 * group, and a consumer would then treat that group as dead --
+		 * strictly worse than the ghost this exists to kill. Stop at the
+		 * last name that fits; the buffer is sized for every slot at
+		 * maximum label length, so this is unreachable by construction
+		 * and present only so it cannot become reachable quietly. */
+		if (k < 0 || k >= (int) (sizeof roster - rn)) {
+			break;
+		}
+		rn += k;
+	}
+	pub_str(c, leaf, roster);
+}
+
 void box_announce_manifest(const box_config_t *c)
 {
 	box_announce_silk(c);   /* board-printed pin names; see above */
@@ -495,6 +545,8 @@ void box_announce_manifest(const box_config_t *c)
 		snprintf(leaf, sizeof leaf, "group/%s/idx", gn);
 		pub_int(c, leaf, g);
 	}
+	pub_roster(c, "groups/all", (const char (*)[BOX_LABEL_MAX + 4]) group_pub_name,
+		   BOX_NGROUPS);
 
 	/* ANALOG groups -- the analog twin of the DI block, and NEW: until this,
 	 * the manifest said nothing about them (only ain_en + ain/rate), so a
@@ -543,6 +595,8 @@ void box_announce_manifest(const box_config_t *c)
 		snprintf(leaf, sizeof leaf, "ain/group/%s/idx", gn);
 		pub_int(c, leaf, g);
 	}
+	pub_roster(c, "ain/groups/all", (const char (*)[BOX_LABEL_MAX + 4]) aingrp_pub_name,
+		   BOX_NAGROUPS);
 }
 
 /* ---- live levels, so a fresh host sees state without waiting for an edge ---- */
