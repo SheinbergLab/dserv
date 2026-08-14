@@ -481,6 +481,40 @@ static void pub_dbg(const char *leaf, uint32_t v)
 	pub_periodic_raw(leaf, v);
 }
 
+/* A RECEIPT: one-shot, and deliberately NOT routed through pub_periodic_raw.
+ *
+ * That path suppresses a value equal to the last one it sent, which is right
+ * for a counter sampled every second and catastrophic for an acknowledgement:
+ * two saves of an unchanged config produce the same byte count, the second
+ * would be swallowed as "unchanged", and a host waiting on it would conclude
+ * the box had stopped responding. A receipt's information is that it ARRIVED,
+ * not what it says -- so it must never be deduplicated.
+ *
+ * Also bypasses the dbg_level gate. A host cannot be told to raise a debug
+ * level before its writes become confirmable. */
+/* The save receipt. One datapoint, and the SIGN carries the outcome so a host
+ * never has to correlate two keys to know what happened:
+ *   > 0  saved, and the value is the blob size actually written
+ *   = 0  the flash write failed (the errno goes to the console; a host only
+ *        needs to know not to trust the config)
+ *   < 0  nothing was written and nothing is wrong: deferred behind an obs, or
+ *        a board with no persistence at all. Distinct from failure because the
+ *        right host response differs -- wait vs. report. */
+#define SAVED_DP        "cfg/saved"
+#define SAVED_FAILED     0
+#define SAVED_DEFERRED (-1)
+#define SAVED_NO_STORE (-2)
+
+static void pub_receipt(const char *leaf, int32_t v)
+{
+	uint8_t pf[DSERV_MSG_LEN];
+	char pn[80];
+
+	dserv_state_name(&cfg, pn, sizeof pn, leaf);
+	dserv_msg_int(pf, pn, 0, v);
+	box_pub_bulk(pf);
+}
+
 /* Which ain/dbg leaves are health. Named rather than flagged in the array so
  * the classification reads as one list instead of a column of booleans that
  * nobody checks against each other. */
@@ -2322,6 +2356,7 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 		if (box_obs_active()) {      /* never program flash mid-trial */
 			box_obs_defer(BOX_DEFER_SAVE);
 			box_console_printf("cmd/save -> deferred to end of obs\n");
+			pub_receipt(SAVED_DP, SAVED_DEFERRED);
 			return;
 		}
 		/* Persist the whole config blob so it survives reboot/power-cycle. */
@@ -2329,8 +2364,17 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 		uint32_t n = box_persist_serialize(&cfg, blob, sizeof blob);
 		int rc = box_flash_save(blob, n);
 		box_console_printf("cmd/save -> %s (%u bytes)\n", rc == 0 ? "ok" : "FAILED", n);
+		/* THE RECEIPT, and the reason it exists: until now a save reported
+		 * itself only to the CONSOLE, so a host had no way to tell "saved"
+		 * from "the command never arrived". extio_cfg_save cleared its unsaved
+		 * banner on send, which meant the UI reported success it had never
+		 * observed -- and a dropped cmd/save then looked exactly like a
+		 * successful one until the next reboot reverted the config. Cost an
+		 * evening on 2026-08-14. */
+		pub_receipt(SAVED_DP, rc == 0 ? (int32_t) n : SAVED_FAILED);
 #else
 		box_console_printf("cmd/save -> no persistence on this board\n");
+		pub_receipt(SAVED_DP, SAVED_NO_STORE);
 #endif
 	} else if (r == CFG_REBOOT) {
 		/* Warm reset: the firmware restarts. Portable on every board. NOTE this
@@ -2351,13 +2395,22 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 	}
 }
 
-static cfg_result_t feed(const uint8_t *frame, gpio_cmd_t *cmd)
+/* Takes the config to dispatch INTO, rather than always the live one.
+ *
+ * The boot smoke test used to feed the real `cfg`, so its two demo frames were
+ * still in the shipped configuration afterwards: `config/pin/5/mode=out` left
+ * D5 permanently marked as an output, and applied_count sat at 1 on a box
+ * nobody had configured. A brand-new board therefore announced pins its owner
+ * never set -- reported from the rig 2026-08-14 as "Outputs D5 D9 / Inputs A5
+ * on a fresh box". A self-test must not be able to leave residue in the thing
+ * it is testing. */
+static cfg_result_t feed(box_config_t *c, const uint8_t *frame, gpio_cmd_t *cmd)
 {
 	dserv_msg_t m;
 	if (dserv_msg_parse(frame, &m) != 0) {
 		return CFG_NONE;
 	}
-	return dserv_dispatch(&cfg, &m, cmd);
+	return dserv_dispatch(c, &m, cmd);
 }
 
 int main(void)
@@ -2488,11 +2541,21 @@ int main(void)
 
 	box_console_printf("\n=== extio core smoke test (Zephyr %s) ===\n", KERNEL_VERSION_STRING);
 
+	/* SCRATCH, seeded from the live config so the codec sees realistic input
+	 * while its mutations go nowhere.
+	 *
+	 * On the stack, not in .bss: this is ~1.2 kB used once at boot, and the
+	 * board with the smallest main stack running this code has 8 kB (every
+	 * board in boards/ overrides CONFIG_MAIN_STACK_SIZE; the 4096 in prj.conf
+	 * is only a fallback). Making it static would spend permanent RAM on a
+	 * boot-time self-test, and this part is already at ~92%. */
+	box_config_t smoke = cfg;
+
 	/* config datapoint: set pin 5 to output */
 	dserv_msg_int(f, "extio/box/config/pin/5/mode", 0, 1);
-	r = feed(f, &cmd);
+	r = feed(&smoke, f, &cmd);
 	box_console_printf("apply config/pin/5/mode=out    -> %-9s pin_mode[5]=%u\n",
-	       dserv_cfg_result_str(r), cfg.pin_mode[5]);
+	       dserv_cfg_result_str(r), smoke.pin_mode[5]);
 
 	/* No demo dserv target: leaving dserv_ip unset keeps eth from claiming the
 	 * uplink (it needs a configured target), so a bench box stays on USB and
@@ -2501,7 +2564,7 @@ int main(void)
 
 	/* transient command: box-timed pulse on pin 6 -> a gpio_cmd for the platform */
 	dserv_msg_int(f, "extio/box/cmd/do/6/pulse_us", 0, 500);
-	r = feed(f, &cmd);
+	r = feed(&smoke, f, &cmd);
 	box_console_printf("apply cmd/do/6/pulse_us=500    -> %-9s op=%d pin=%u value=%u\n",
 	       dserv_cfg_result_str(r), cmd.op, cmd.pin, cmd.value);
 
@@ -3500,6 +3563,11 @@ int main(void)
 				uint32_t bn = box_persist_serialize(&cfg, blob, sizeof blob);
 
 				int src = box_flash_save(blob, bn);
+				/* Second receipt for the same cmd/save: the first
+				 * said SAVED_DEFERRED, this one says what actually
+				 * happened. A host that waited through the obs gets
+				 * its answer instead of a deadline. */
+				pub_receipt(SAVED_DP, src == 0 ? (int32_t) bn : SAVED_FAILED);
 				if (src == 0) {
 					box_console_printf("deferred save -> ok (%u bytes)\n", bn);
 				} else {

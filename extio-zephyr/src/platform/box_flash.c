@@ -103,6 +103,33 @@ int box_flash_save(const uint8_t *blob, uint32_t len)
 	return 0;                  /* r == 0 means "same as stored" -- also success */
 }
 
+/* Delete the config record outright, so the next boot finds NOTHING and falls
+ * back to the compiled defaults -- a genuine out-of-box state.
+ *
+ * Deleting is NOT the same as saving a zeroed blob, and the difference is the
+ * whole reason this exists. A zeroed blob still LOADS, so it overwrites the
+ * defaults main() sets before the mount: console_mode goes to 0
+ * (= CONSOLE_MODE_CDC) and the console silently moves off the board UART, and
+ * the LED/button demo pins are wiped. A box "factory reset" that way comes
+ * back subtly different from one fresh off the reel -- and on a board whose
+ * console is the MCU-Link UART, unreachable.
+ *
+ * The OTA/boot breadcrumb (BOX_BOOT_ID) is deliberately left alone: it records
+ * which image is running and whether it is confirmed, which is a fact about
+ * the firmware, not user configuration. Wiping it would make a perfectly good
+ * box misreport its own OTA state. */
+int box_flash_clear(void)
+{
+	if (!mounted) {
+		return mount_err ? mount_err : -ENODEV;
+	}
+	int rc = nvs_delete(&fs, BOX_CFG_ID);
+
+	/* -ENOENT means there was nothing to delete, which is the state the caller
+	 * asked for. Report success rather than making "already factory" an error. */
+	return (rc == 0 || rc == -ENOENT) ? 0 : rc;
+}
+
 int box_flash_load(uint8_t *buf, uint32_t max)
 {
 	if (!mounted) {

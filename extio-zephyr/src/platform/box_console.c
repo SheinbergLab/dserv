@@ -519,9 +519,38 @@ static void run_line(box_config_t *cfg, const char *line)
 #endif
 		break;
 	case CLI_FACTORY:
+		/* ERASE THE STORE, not just the copy in RAM.
+		 *
+		 * box_cli.h has documented this as "caller erases storage + resets
+		 * cfg" since it was written, and the caller only ever did the second
+		 * half -- so `factory` looked like it worked and the next reboot
+		 * reloaded everything it claimed to have cleared. The obvious
+		 * workaround, `factory` then `save`, is worse than useless here: it
+		 * writes a ZEROED blob, which still loads, and console_mode 0 is
+		 * CONSOLE_MODE_CDC -- on a board consoled through the MCU-Link UART
+		 * that hands you a box you cannot talk to. */
 		memset(cfg, 0, sizeof *cfg);
+		/* Put back what main() sets before the store is mounted, so the RAM
+		 * state now equals a fresh boot rather than "all zeros". Without this
+		 * the console would move the moment the memset lands, before anyone
+		 * could reboot. */
+		cfg->console_mode = BOX_DEFAULT_CONSOLE_MODE;
 		box_gpio_apply_config(cfg);
-		box_console_write("factory reset\r\n");
+#if defined(BOX_HAVE_PERSIST)
+		{
+			int frc = box_flash_clear();
+
+			box_console_printf("factory reset -- store %s\r\n",
+					   frc == 0 ? "erased" : "ERASE FAILED");
+			if (frc != 0) {
+				box_console_printf("  err=%d -- saved config still on flash\r\n",
+						   frc);
+			}
+		}
+		box_console_write("reboot for a true out-of-box state\r\n");
+#else
+		box_console_write("factory reset (no persistent store on this board)\r\n");
+#endif
 		break;
 	case CLI_REBOOT:
 		box_console_write("rebooting\r\n");

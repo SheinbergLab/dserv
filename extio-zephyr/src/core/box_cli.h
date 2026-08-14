@@ -760,7 +760,14 @@ static inline cli_action_t box_cli_exec(box_config_t *c, const char *line,
                 !strcmp(w, "usb")  ? XMODE_USB  : -1;
         if (m < 0) { snprintf(out, outsz, "ERR mode auto|usb|eth\r\n"); return CLI_ERR; }
         c->transport_mode = (uint8_t) m; c->applied_count++;
-        snprintf(out, outsz, "OK mode=%s (GND strap overrides; save+reboot to apply)\r\n",
+        /* APPLIES NOW -- the arbiter re-reads transport_mode on every service
+         * pass (box_uplink.c desired()), so the transport switches within a
+         * pass of this line. The message used to say "save+reboot to apply",
+         * which was false in a way that cost real time: a person reads it,
+         * reboots WITHOUT saving, and both the mode and anything adopted since
+         * revert to defaults -- so the box comes back on USB looking like the
+         * change never took. Say what saving is actually for. */
+        snprintf(out, outsz, "OK mode=%s -- active now (GND strap overrides; `save` to keep it)\r\n",
                  dserv_xmode_str(c->transport_mode));
         return CLI_OK;
     }

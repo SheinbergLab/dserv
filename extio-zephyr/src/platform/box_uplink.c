@@ -645,6 +645,22 @@ int box_uplink_poll2(uint8_t *buf, int max, int *len, uint64_t *arr_us)
 			*len = n;
 		}
 	}
+#if defined(CONFIG_NETWORKING)
+	/* THE CONNECT-BACK IS NOT THE UPLINK, and this is where that stopped
+	 * being true. dserv's inbound channel is accepted and read regardless of
+	 * which transport the arbiter publishes over -- but its queue was drained
+	 * only through active->poll2, so on a USB-active box the frames piled up
+	 * unprocessed. That is a deadlock for a factory box: eth needs a target to
+	 * become active, the target arrives only on this channel, and this channel
+	 * was only serviced while eth was active. See box_net_eth_poll_inbound.
+	 *
+	 * Ordered AFTER the active transport rather than before it, so a box with
+	 * a real USB host sees no change in inbound priority; eth frames are
+	 * picked up in the gaps, which on a USB-active box is every pass. */
+	if (kind == BOX_UPLINK_RX_NONE && active != &uplink_eth) {
+		kind = box_net_eth_poll_inbound(buf, max, len, arr_us);
+	}
+#endif
 	k_mutex_unlock(&uplink_lock);
 	return kind;
 }

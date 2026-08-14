@@ -32,6 +32,10 @@ void box_flash_debug(int *pi_rc, uint32_t *pi_size, uint32_t *offset);
 
 /* Load the stored blob into buf (<= max). Returns byte count, or -1 if none/err. */
 int box_flash_load(uint8_t *buf, uint32_t max);
+/* Delete the saved config so the next boot uses the compiled defaults. NOT the
+ * same as saving a zeroed blob -- see the definition. Returns 0 also when
+ * there was nothing saved. */
+int box_flash_clear(void);
 
 /* A SECOND, small record, stored independently of the config blob: the OTA/boot
  * breadcrumb (box_boot.h). Same store, separate key.

@@ -783,6 +783,72 @@ void box_net_eth_rx_health(uint32_t *age_ms, uint32_t *respawns, uint32_t *stack
 	}
 }
 
+/* Deliver ONE queued inbound frame, and do nothing else.
+ *
+ * Split out of box_net_eth_poll2 so the service loop can drain this queue even
+ * when Ethernet is NOT the active uplink. It used to be reachable only through
+ * the arbiter's active->poll2, and that coupling was a deadlock:
+ *
+ *   eth becomes the active uplink only once a dserv target is configured
+ *   (u_eth_available), the target can only arrive over dserv's connect-back,
+ *   and connect-back frames were only DISPATCHED while eth was active.
+ *
+ * So a factory box -- which has no target, therefore sits on USB -- accepted
+ * the connect-back, counted the frames, queued them, and processed none of
+ * them. It could not be adopted over Ethernet at all; the only way in was the
+ * console. Diagnosed 2026-08-14 on a new FRDM-MCXN947: an adopt delivered four
+ * datapoints, state/cmds_rx advanced by exactly ONE (the +32 order fence
+ * screens only the frame that arrives to an empty queue), applied_count never
+ * moved, and all four frames were still sitting in eth_inq. Forcing `mode eth`
+ * drained them and the box adopted itself from the queue, which is what made
+ * the mechanism visible.
+ *
+ * Everything else poll2 does is deliberately NOT here. reannounce, srv_fresh
+ * and the client-socket EOF check all describe the OUTBOUND session; firing
+ * them while the eth uplink is unconnected would queue a manifest at a socket
+ * that does not exist. Inbound command delivery is a different channel and
+ * must not depend on which transport the arbiter picked to publish over. */
+int box_net_eth_poll_inbound(uint8_t *buf, int max, int *len, uint64_t *arr_us)
+{
+	eth_inq_item_t it;
+
+	*len = 0;
+	*arr_us = 0;
+
+	if (max < (int) DSERV_MSG_LEN ||
+	    k_msgq_get(&eth_inq, &it, K_NO_WAIT) != 0) {
+		return BOX_UPLINK_RX_NONE;
+	}
+
+	memcpy(buf, it.f, DSERV_MSG_LEN);
+	*len = (int) DSERV_MSG_LEN;
+	*arr_us = it.arr_us;
+	if (!it.screened) {
+		/* +32 fence deferral: the loop must run the FULL frame path
+		 * (count + fast handlers) in queue order. Signalled by kind so
+		 * the dispatcher knows. */
+		return BOX_UPLINK_RX_FRAME_RAW;
+	}
+	/* dbg/wake_us, reinterpreted (+29): queue residence time -- enqueue at
+	 * arrival to pop here. Small when the loop is keeping up; grows with
+	 * exactly the pass length that used to delay ARMING. The schedule
+	 * classes no longer ride it. */
+	{
+		uint64_t now = box_gpio_now_us();
+
+		if (it.arr_us && now > it.arr_us) {
+			uint32_t w = (uint32_t) (now - it.arr_us);
+
+			wake_last_us = w;
+			if (w > wake_max_us) {
+				wake_max_us = w;
+			}
+			wake_window++;
+		}
+	}
+	return BOX_UPLINK_RX_FRAME;
+}
+
 int box_net_eth_poll2(uint8_t *buf, int max, int *len, uint64_t *arr_us)
 {
 	*len = 0;
@@ -828,35 +894,12 @@ int box_net_eth_poll2(uint8_t *buf, int max, int *len, uint64_t *arr_us)
 	 * nothing inbound, but a dserv restart parks it in CLOSE_WAIT forever
 	 * and the arbiter would never reconnect -- the box goes silently
 	 * write-only, the very failure this file exists to fix). */
-	eth_inq_item_t it;
+	{
+		int kind = box_net_eth_poll_inbound(buf, max, len, arr_us);
 
-	if (max >= (int) DSERV_MSG_LEN &&
-	    k_msgq_get(&eth_inq, &it, K_NO_WAIT) == 0) {
-		memcpy(buf, it.f, DSERV_MSG_LEN);
-		*len = (int) DSERV_MSG_LEN;
-		*arr_us = it.arr_us;
-		if (!it.screened) {
-			/* +32 fence deferral: the loop must run the FULL frame
-			 * path (count + fast handlers) in queue order. Signalled
-			 * by kind so the dispatcher knows. */
-			return BOX_UPLINK_RX_FRAME_RAW;
+		if (kind != BOX_UPLINK_RX_NONE) {
+			return kind;
 		}
-		/* dbg/wake_us, reinterpreted (+29): queue residence time --
-		 * enqueue at arrival to pop here. Small when the loop is
-		 * keeping up; grows with exactly the pass length that used to
-		 * delay ARMING. The schedule classes no longer ride it. */
-		uint64_t now = box_gpio_now_us();
-
-		if (it.arr_us && now > it.arr_us) {
-			uint32_t w = (uint32_t) (now - it.arr_us);
-
-			wake_last_us = w;
-			if (w > wake_max_us) {
-				wake_max_us = w;
-			}
-			wake_window++;
-		}
-		return BOX_UPLINK_RX_FRAME;
 	}
 
 	if (sock >= 0) {

@@ -59,6 +59,9 @@ int box_net_eth_poll(uint8_t *buf, int max);
 /* +29 kind-based inbound: queued reader frames (with arrival stamps) plus the
  * client-socket EOF leg. See box_uplink.h for the BOX_UPLINK_RX_* contract. */
 int box_net_eth_poll2(uint8_t *buf, int max, int *len, uint64_t *arr_us);
+/* Inbound queue only -- safe to call when eth is NOT the active uplink, which
+ * is what makes a target-less box adoptable over Ethernet. See the definition. */
+int box_net_eth_poll_inbound(uint8_t *buf, int max, int *len, uint64_t *arr_us);
 
 /* Reader inbound-queue health: drops (host commands lost to a full queue --
  * nonzero is a real problem) and the depth watermark. */
