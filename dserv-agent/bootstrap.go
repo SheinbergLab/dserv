@@ -46,6 +46,19 @@ type BootstrapConfig struct {
 	AgentReleaseJSON string // dserv-agent release {tag, assets:[{name,url}]} as JSON
 	ProfileName      string
 	StimMode         string // "" = cage default (fullscreen service); "windowed" = dev
+
+	// ExplicitComponents is the raw ?components= list, empty when provisioning
+	// by profile. The script forwards it on the sudo re-fetch, which used to
+	// carry only ?profile= and silently resolved to the full incage set.
+	ExplicitComponents string
+
+	// RetireServices is a space-separated list of units owned by components
+	// this profile deliberately EXCLUDES. Provisioning by profile declares
+	// what the box IS, so a unit left enabled by its previous class (stim2 on
+	// a retyped dev Pi, dserv on a box demoted to a display) is drift the
+	// script turns off. Empty for ?components= runs, which are additive by
+	// intent and retire nothing.
+	RetireServices string
 }
 
 // bootstrapAsset is a release asset pre-resolved to a direct download URL.
@@ -241,6 +254,17 @@ REGISTRY_URL="{{.ServerURL}}"
 DEFAULT_WORKGROUP="{{.DefaultWG}}"
 PROFILE="{{.ProfileName}}"
 STIM_MODE="{{.StimMode}}"
+
+# Non-empty when this invocation used an explicit ?components= list rather
+# than a profile (PROFILE says "custom" then). Forwarded on the sudo re-fetch,
+# which otherwise carries only ?profile= and loses the list.
+COMPONENTS_ARG="{{.ExplicitComponents}}"
+
+# Units owned by components this profile deliberately excludes, resolved by
+# the registry. step_retire_services turns these OFF if it finds them; empty
+# for ?components= runs. See that step for why.
+RETIRE_SERVICES="{{.RetireServices}}"
+
 DSERV_INSTALL_DIR="/usr/local/dserv"
 LOG_FILE="/tmp/dserv-bootstrap-$(date +%Y%m%d-%H%M%S).log"
 
@@ -468,8 +492,14 @@ check_root() {
             # -f turns an HTTP error into a curl failure; the shebang test
             # rejects anything that came back but is not this script (proxy
             # interstitial, captive portal, error page).
+            # Forward the SHAPE of the original request too: an explicit
+            # component list is not a profile, and re-fetching ?profile=custom
+            # would resolve to the full set instead of the list the operator
+            # typed.
+            local refetch="${REGISTRY_URL}/setup?profile=${PROFILE}"
+            [[ -n "$COMPONENTS_ARG" ]] && refetch="${REGISTRY_URL}/setup?components=${COMPONENTS_ARG}"
             local script=""
-            script=$(curl -fsSL "${REGISTRY_URL}/setup?profile=${PROFILE}") || script=""
+            script=$(curl -fsSL "$refetch") || script=""
             if [[ -z "$script" || "${script:0:2}" != '#!' ]]; then
                 fail "Could not re-fetch the installer from ${REGISTRY_URL} to run as root — re-run this command under sudo yourself"
             fi
@@ -902,7 +932,22 @@ EOF
 }
 
 step_stim_launcher() {
-    if [[ "$STIM_MODE" != "windowed" ]] || ! has_component "$STIM_COMPONENT_ID"; then
+    if [[ "$STIM_MODE" != "windowed" ]]; then
+        # The reverse reclassification. A box leaving the windowed class
+        # (dev -> incage, dev -> server) must not keep the development
+        # launcher: it shadows nothing -- the cage unit execs
+        # /usr/local/stim2/stim2 directly -- but a leftover "stim2" command
+        # that opens a desktop window is exactly the identity confusion a
+        # retype exists to end. The marker comment is the ownership test, so
+        # a hand-written wrapper at the same path survives.
+        if [[ -f /usr/local/bin/stim2 ]] && \
+           grep -q "installed by the dserv bootstrap" /usr/local/bin/stim2 2>/dev/null; then
+            info "Removing windowed stim2 launcher (this box is no longer windowed)"
+            run rm -f /usr/local/bin/stim2
+        fi
+        return
+    fi
+    if ! has_component "$STIM_COMPONENT_ID"; then
         return
     fi
 
@@ -1132,6 +1177,55 @@ NMCONF
     fi
 }
 
+step_retire_services() {
+    # Turn OFF what the profile excludes. Every install step only ever turns
+    # things on, so without this a retype leaves the previous class running
+    # underneath the new one: the old dev Pi still starting fullscreen stim2
+    # on every boot, the box demoted to a display still running dserv.
+    # RETIRE_SERVICES is resolved by the registry from the components this
+    # profile does NOT include, and is empty for explicit ?components= runs.
+    # (The windowed case is different -- stim2 IS in the dev profile, its
+    # service just must not run -- and stays with step_stim_launcher and
+    # profile_services.)
+    local svc
+    for svc in $RETIRE_SERVICES; do
+        if systemctl is-enabled "$svc" &>/dev/null || \
+           systemctl is-active --quiet "$svc" 2>/dev/null; then
+            warn "Disabling ${svc}: the ${PROFILE} profile does not include it"
+            run systemctl disable --now "$svc" || \
+                warn "  could not disable ${svc}; do it by hand: systemctl disable --now ${svc}"
+        fi
+    done
+}
+
+step_record_identity() {
+    # The durable record of what this box was provisioned AS. Every other
+    # trace of the profile is a side effect -- which packages landed, which
+    # units are enabled -- so before this file existed a box could not be
+    # asked what it is, and a repurposed one kept its old behavior with
+    # nothing to flag the mismatch. Re-running the bootstrap with a different
+    # ?profile= rewrites it, which makes that re-run the retype operation of
+    # record. The agent reads this file and reports it on /api/status.
+    local installed_components
+    installed_components=$(echo "$COMPONENTS_JSON" | jq -r '[.components[].id] | join(",")')
+    write_file /etc/dserv-agent/box.conf <<EOF
+# Declared identity for this box -- written by the dserv bootstrap.
+# Retype: curl -sSL ${REGISTRY_URL}/setup?profile=<name> | bash -s -- --skip-scripts
+# (--skip-scripts keeps local work in ~/systems/ess)
+#
+# stim_mode "" = cage default (stim2.service fullscreen on its own X server);
+# "windowed" = development launcher, fullscreen unit disabled.
+profile=${PROFILE}
+stim_mode=${STIM_MODE}
+components=${installed_components}
+workgroup=${WORKGROUP}
+registry=${REGISTRY_URL}
+role=${ROLE}
+provisioned=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+EOF
+    ok "Recorded identity: profile=${PROFILE}${STIM_MODE:+ (${STIM_MODE})} in /etc/dserv-agent/box.conf"
+}
+
 step_start_services() {
     info "Starting services..."
 
@@ -1224,6 +1318,11 @@ main() {
     step_configure_dserv
     step_sync_scripts
     step_power_mgmt
+    # Retire before start: a unit the new profile excludes goes down before
+    # anything it might race with comes up. Identity is recorded before the
+    # services start so a failed start still leaves the box declared.
+    step_retire_services
+    step_record_identity
     step_start_services
     step_verify
 
@@ -1292,6 +1391,27 @@ func (a *Agent) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 	// Filter components based on profile or explicit list
 	components := a.filterComponents(profileName, explicitComponents)
 
+	// An explicit ?components= list is not a profile. Without this the banner,
+	// the recorded identity, and the sudo re-fetch all claim "incage" for a
+	// box that was given a hand-picked set.
+	if explicitComponents != "" {
+		profileName = "custom"
+	}
+
+	// Units owned by components the profile leaves out -- see RetireServices.
+	var retire []string
+	if explicitComponents == "" {
+		included := make(map[string]bool, len(components))
+		for _, c := range components {
+			included[c.ID] = true
+		}
+		for _, c := range a.components {
+			if c.Service != "" && !included[c.ID] {
+				retire = append(retire, c.Service)
+			}
+		}
+	}
+
 	// Pre-resolve each component's latest release server-side (shared cache),
 	// so fresh boxes download straight from GitHub's CDN without ever calling
 	// the rate-limited api.github.com.
@@ -1320,6 +1440,9 @@ func (a *Agent) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 		AgentReleaseJSON: string(agentJSON),
 		ProfileName:      profileName,
 		StimMode:         a.profileStimMode(profileName),
+
+		ExplicitComponents: explicitComponents,
+		RetireServices:     strings.Join(retire, " "),
 	}
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")

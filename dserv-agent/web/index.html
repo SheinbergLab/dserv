@@ -261,6 +261,7 @@ footer {
 .component-btn:hover { background: #3f4448; }
 .component-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .component-btn.update { background: #3b82f6; color: white; }
+.component-actions .follows-note { font-size: 11px; color: #71767b; white-space: nowrap; }
 
 /* Service controls within component */
 .component-service { 
@@ -982,6 +983,7 @@ body.solo .agent-panel {
 			 <div class="panel-info-item"><div class="label">Arch</div><div class="value">${sys.arch||'—'}</div></div>
 			 <div class="panel-info-item"><div class="label">Uptime</div><div class="value">${sys.uptime||'—'}</div></div>
 			 <div class="panel-info-item"><div class="label">Load</div><div class="value">${sys.loadAvg||'—'}</div></div>
+			 <div class="panel-info-item"><div class="label">Profile</div><div class="value">${this.renderProfile(s.box)}</div></div>
 			 ${this.renderDservRunning(d, comps)}
                      </div>
 		 </div>
@@ -1035,9 +1037,38 @@ body.solo .agent-panel {
              </div>`;
 	 }
 
+	 // The declared identity from /etc/dserv-agent/box.conf, written by the
+	 // bootstrap. Boxes provisioned before identities were recorded have no
+	 // file and show "unrecorded" -- the nudge that a bootstrap re-run with
+	 // the intended ?profile= both records one and converges the services
+	 // (retiring what the profile excludes) to match.
+	 renderProfile(box) {
+             if (!box || !box.profile) {
+		 return '<span style="color:#71767b" title="No /etc/dserv-agent/box.conf — this box was provisioned before identities were recorded. Re-run the bootstrap with the intended ?profile= to record one and converge services to it.">unrecorded</span>';
+             }
+             const mode = box.stimMode === 'windowed' ? ' · windowed' : '';
+             const title = ['Declared in /etc/dserv-agent/box.conf',
+			    box.role ? `role ${box.role}` : '',
+			    box.provisioned ? `provisioned ${box.provisioned}` : '']
+		   .filter(Boolean).join(' · ');
+             return `<span title="${this.esc(title)}">${this.esc(box.profile)}${mode}</span>`;
+	 }
+
 	 renderComp(comp, services = {}) {
              const c = comp.component || comp;
              const hasUpd = comp.updateAvailable;
+             // A component that FOLLOWS another (the agent rides the deferred
+             // migration dserv's postinst schedules) must not offer an Update
+             // of its own while the leader's -- which will drag it along -- is
+             // pending. The button returns when the leader is current and this
+             // one still lags: that is the migration-failed case the button
+             // repairs. A box without the leader installed (a display box's
+             // agent) is unaffected and updates itself as before.
+             const leaderStatus = c.followsComponent
+		   ? (this.panelComponents || []).find(x => (x.component || x).id === c.followsComponent)
+		   : null;
+             const followsPending = !!(hasUpd && leaderStatus && leaderStatus.installed && leaderStatus.updateAvailable);
+             const leaderName = leaderStatus ? ((leaderStatus.component || leaderStatus).name || c.followsComponent) : '';
              const inst = comp.installed;
              const hasService = !!c.service;
              const serviceStatus = services[c.service] || 'unknown';
@@ -1101,8 +1132,10 @@ body.solo .agent-panel {
                         <div class="component-version">${ver}</div>
                     </div>
                     <div class="component-actions">
-                        ${assets}
-                        <button class="component-btn ${hasUpd?'update':''}" onclick="app.install('${c.id}')" ${!comp.assets?.length?'disabled':''}>${btn}</button>
+                        ${followsPending
+			  ? `<span class="follows-note" title="A ${leaderName} install schedules the agent migration moments later; this package updates on its own. Update ${leaderName} and this follows.">updates with ${this.esc(leaderName)}</span>`
+			  : `${assets}
+                        <button class="component-btn ${hasUpd?'update':''}" onclick="app.install('${c.id}')" ${!comp.assets?.length?'disabled':''}>${btn}</button>`}
                     </div>
                 </div>
                 ${serviceHtml}

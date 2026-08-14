@@ -143,6 +143,16 @@ type Component struct {
 	InstallCmd   string   `json:"installCmd,omitempty"`
 	AssetPattern string   `json:"assetPattern,omitempty"`
 	Depends      []string `json:"depends,omitempty"`
+
+	// FollowsComponent names a component whose update drags this one along:
+	// dserv's postinst schedules a deferred agent migration after every dserv
+	// install, so while dserv itself has an update pending, an independent
+	// Update button here would duplicate work already scheduled. The panel
+	// renders "updates with <leader>" instead. The button stays when the
+	// leader is current and this component lags -- the migration-failed case,
+	// where the button is the remedy -- and when the leader is not installed
+	// at all (a display box's agent updates on its own).
+	FollowsComponent string `json:"followsComponent,omitempty"`
 }
 
 type ComponentStatus struct {
@@ -159,6 +169,22 @@ type StatusInfo struct {
 	Dserv    ServiceInfo       `json:"dserv"`
 	System   SystemInfo        `json:"system"`
 	Services map[string]string `json:"services,omitempty"`
+	Box      *BoxIdentity      `json:"box,omitempty"`
+}
+
+// BoxIdentity is the declared identity the bootstrap records in
+// /etc/dserv-agent/box.conf: what this box was provisioned AS, as opposed to
+// what happens to be installed or running. nil on boxes provisioned before
+// the file existed -- the panel renders those as "unrecorded", which is the
+// nudge to re-run the bootstrap with the intended ?profile= and converge.
+type BoxIdentity struct {
+	Profile     string `json:"profile,omitempty"`
+	StimMode    string `json:"stimMode,omitempty"`
+	Components  string `json:"components,omitempty"`
+	Workgroup   string `json:"workgroup,omitempty"`
+	Registry    string `json:"registry,omitempty"`
+	Role        string `json:"role,omitempty"`
+	Provisioned string `json:"provisioned,omitempty"`
 }
 
 type AgentInfo struct {
@@ -1373,7 +1399,62 @@ func (a *Agent) getStatus() StatusInfo {
 		Dserv:    a.getDservStatus(),
 		System:   a.getSystemInfo(),
 		Services: a.getAllServiceStatuses(),
+		Box:      readBoxIdentity(boxConfPath),
 	}
+}
+
+// boxConfPath is where the bootstrap's step_record_identity writes the box's
+// declared identity. Read per status call, not cached: the file changes when
+// someone retypes the box, and the panel should say so on its next refresh.
+const boxConfPath = "/etc/dserv-agent/box.conf"
+
+// readBoxIdentity parses the identity file: key=value lines, # comments.
+// Returns nil when the file is absent or carries no values -- the
+// pre-identity fleet -- so the status JSON omits the section entirely
+// instead of serving an empty one.
+func readBoxIdentity(path string) *BoxIdentity {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var id BoxIdentity
+	found := false
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key, val, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		val = strings.TrimSpace(val)
+		switch strings.TrimSpace(key) {
+		case "profile":
+			id.Profile = val
+		case "stim_mode":
+			id.StimMode = val
+		case "components":
+			id.Components = val
+		case "workgroup":
+			id.Workgroup = val
+		case "registry":
+			id.Registry = val
+		case "role":
+			id.Role = val
+		case "provisioned":
+			id.Provisioned = val
+		default:
+			continue
+		}
+		if val != "" {
+			found = true
+		}
+	}
+	if !found {
+		return nil
+	}
+	return &id
 }
 
 // Whether it's worth asking dserv anything. "unknown" means systemctl couldn't
