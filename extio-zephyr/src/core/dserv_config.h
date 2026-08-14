@@ -530,6 +530,60 @@ static inline int ain_group_bps(const box_config_t *c, int g)
     return bps < 1 ? 1 : bps;
 }
 
+/* ---- the SWEEP budget, which is a different cost from the block rate ----
+ *
+ * AIN_MAX_TOTAL_BPS bounds blocks put on the WIRE. It does not bound how often
+ * the converter runs, and with decimate x batch large enough those diverge
+ * completely: `ain rate 100000` with decimate 100 and batch 24 publishes about
+ * forty blocks a second -- comfortably inside the block budget -- while the
+ * sampler still converts a hundred thousand times a second. Reported from a rig
+ * 2026-08-14: setting the base rate to 100000 wedged the box until it was
+ * power-cycled. The block check passed it, because the block check was never
+ * about CPU.
+ *
+ * sweep(U) is the measured polled-LPADC cost for U UNION channels (CHEATSHEET:
+ * ~20 + 12*U us). The sampler runs cooperatively at priority -2 and everything
+ * else on the box lives in what it leaves behind, so budget it a fraction of
+ * one core. Modelled on the POLLED path even where hardware pacing is now the
+ * default: it is the more expensive of the two and it is the fallback, so a
+ * ceiling derived from it is safe for both.
+ *
+ * Enforced regardless of ain_en. Allowing an unsustainable rate to be stored
+ * while analog happens to be off just moves the wedge to whenever someone
+ * enables it, which is worse -- the refusal would arrive nowhere near the
+ * change that caused it. */
+#define AIN_SWEEP_FIXED_US    20
+#define AIN_SWEEP_PER_CH_US   12
+#define AIN_SWEEP_BUDGET_PCT  60
+
+static inline int ain_union_chans(const box_config_t *c)
+{
+    uint32_t m = 0;
+    int n = 0;
+
+    for (int g = 0; g < BOX_NAGROUPS; g++) m |= c->ain_group_chans[g];
+    while (m) { n += (int) (m & 1u); m >>= 1; }
+    return n;
+}
+
+/* Highest base scan rate the CURRENT channel set can sustain, in Hz. Counts a
+ * bare box as one channel: with no group defined the sweep is not free, and
+ * returning a ceiling of "whatever fits zero channels" would let a rate be set
+ * before the groups that make it impossible. */
+static inline int ain_rate_max(const box_config_t *c)
+{
+    int u = ain_union_chans(c);
+    int sweep = AIN_SWEEP_FIXED_US + AIN_SWEEP_PER_CH_US * (u ? u : 1);
+    long max = (long) AIN_SWEEP_BUDGET_PCT * 10000L / sweep;   /* pct% of 1e6 us */
+
+    if (max < 1) max = 1;
+    if (max > 65535) max = 65535;
+    return (int) max;
+}
+
+static inline int ain_sweep_ok(const box_config_t *c)
+{ return (int) c->ain_rate <= ain_rate_max(c); }
+
 static inline int ain_total_bps(const box_config_t *c)
 {
     int t = 0;
@@ -546,7 +600,7 @@ static inline int ain_total_bps(const box_config_t *c)
     do {                                                                   \
         saveT _old = (field);                                              \
         (field) = (val);                                                   \
-        if (ain_total_bps(c) > AIN_MAX_TOTAL_BPS) {                        \
+        if (ain_total_bps(c) > AIN_MAX_TOTAL_BPS || !ain_sweep_ok(c)) {    \
             (field) = _old;                                                \
             return CFG_UNKNOWN;                                            \
         }                                                                  \
@@ -965,7 +1019,11 @@ static inline cfg_result_t dserv_cfg__config(box_config_t *c, const char *k,
 
                 c->ain_group_chans[ng] = (uint8_t) mask;
                 (void) ain_batch_reclamp(c, ng);
-                if (ain_total_bps(c) > AIN_MAX_TOTAL_BPS) {
+                /* Sweep budget too: widening a group raises sweep(U), so a rate
+                 * that was affordable over two channels may not be over six.
+                 * This is the one edit that can break the budget without
+                 * touching the rate. */
+                if (ain_total_bps(c) > AIN_MAX_TOTAL_BPS || !ain_sweep_ok(c)) {
                     c->ain_group_chans[ng] = oldm;
                     c->ain_group_batch[ng] = oldb;
                     return CFG_UNKNOWN;

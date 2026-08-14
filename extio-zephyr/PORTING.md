@@ -5630,3 +5630,93 @@ eth-while-usb); `auto` is always allowed. The CLI `mode` verb keeps usb -- that
 path IS physical access, which is the only place usb-only makes sense (you need
 the USB cable anyway). So usb is deliberately console-only over the network,
 per the parity rule's documented-exception clause -- not a regression.
+
+---
+
+## 2026-08-14 — rig findings: one fixed, four open
+
+Five things a tester hit in one afternoon. The first is fixed in v0.4.0+97; the
+rest are recorded here with what was actually established, so whoever picks
+them up does not start from the symptom.
+
+### FIXED: a base scan rate could wedge the box until power-cycled
+
+`ain rate 100000` took the box out; it did not come back without a reboot.
+
+The cause is that `AIN_MAX_TOTAL_BPS` bounds the **block** rate -- frames put on
+the wire -- and nothing bounded the **sweep** rate. Those diverge completely
+once decimate and batch are large: 100000 Hz with decimate 100 and batch 24
+publishes about forty blocks a second, passes the block check comfortably, and
+still asks the converter to run a hundred thousand times a second. The block
+check was never about CPU.
+
+`ain_rate_max()` now derives a ceiling from the measured polled-LPADC sweep,
+`~20 + 12*U us` for U union channels, budgeted at 60% of a core, and
+`AIN_TRY_BPS` enforces it alongside the block budget. Widening a group is
+checked too -- it is the one edit that breaks the budget without touching the
+rate. Ceilings: 1 ch 18750 Hz, 2 ch 13636, 6 ch 6521 (so the documented 6 ch @
+10 kHz wedge config is refused and 6 ch @ 2 kHz still passes). Rig-verified:
+the rate stayed at 1000 and `cmds_rx` kept climbing.
+
+Note `ain_rate` is `uint16_t` and the datapoint path CLAMPS (`if (v > 65535) v
+= 65535`) rather than refusing, so 100000 arrives as 65535 before the budget
+check sees it. The refusal is correct either way, but a clamp that silently
+applies a different number than asked is worth removing on its own.
+
+### OPEN: `do 9 0` is accepted from the console and does nothing
+
+The CLI does validate -- `box_cli_do_ok` refuses a pin that is not an output --
+so pin 9 is passing `pin_is_output` on that box. Two candidates, not yet
+distinguished: firmware predating +91, where LED_PIN was seeded as an output;
+or the DT's `gpio-active-low` on the user LED inverting the write. Probably the
+same root as the D9 item below, since it is the same pin. Wants a look at
+box_gpio's handling of the active-low flag.
+
+### OPEN: extio.html shows D9 low when it is high, and does not follow console `do`
+
+NOT a missing mechanism -- `publish_do()` publishes `state/do/<pin>`, stamped at
+the instant the pin moved, and it works: setting `cmd/do/5` moves
+`extio/box/state/do/5` 0 -> 1. Two separate gaps sit behind the symptom.
+
+1. `publish_do` is SET-only and **from the datapoint path only**. A `do 5 1`
+   typed at the console moves the pin and publishes nothing, so the page cannot
+   follow it. That was deliberate for Pico parity; parity is now explicitly
+   waived (2026-08-14) since the two firmwares have diverged a long way and the
+   RP2350 has not been tested against recent changes. Wiring the CLI path to
+   publish is small, but note `publish_do` is static in main.c while the CLI
+   action is handled in box_console.c.
+
+2. A pin that has never been set has no `state/do/<pin>` at all, and the page
+   renders that absence as LOW. Unknown is not low -- same discipline as the
+   group roster and the shelf's imgVersion. This one is a page fix and carries
+   no timing risk.
+
+**Whatever is done here must not publish from the at_abs k_timer callback.**
+See main.c: inline publishing there put 127-254 us between two pins scheduled
+for the same instant (30/30 shots on a scope, median 208, sign varying). That
+path flags `abs_pub_pending` and lets the main loop publish, and it stays that
+way.
+
+### OPEN: extio.html shows D5 though the board does not have it
+
+Not reproduced. `state/pins/reserved` is published and the page may simply not
+honour it; alternatively "not valid" meant unconfigured rather than reserved.
+Wants `show` from the box in question before guessing.
+
+### OPEN (small): extio_cfg_set does not wait for the refusal the box publishes
+
+Seen while testing the rate guard: the host printed `set ain/rate = 100000 on
+box (LIVE, not saved)` for a value the firmware rejected and reverted.
+
+THE BOX REPORTS IT PROPERLY -- this is not a missing mechanism. It publishes
+`state/cfg/refused` (the leaf, named as the host wrote it) and
+`state/cfg/refused_n` (a counter), and prints `config REFUSED: <leaf>` to the
+console. Verified on the rig immediately after the refusal above:
+`cfg/refused = ain/rate`, `cfg/refused_n = 1`. extio-config.html already
+consumes this -- its pending-write ledger turns a commit into a green confirm
+or a red "box reports X".
+
+What is missing is only that `extio_cfg_set` returns before any of it arrives,
+so a SCRIPT believes a refused write landed. The counter is the thing to key
+on: read `refused_n` before the write, and treat an increment (with `refused`
+naming your leaf) as failure. Same shape as the `cmd/save` receipt.

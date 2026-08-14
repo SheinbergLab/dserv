@@ -111,6 +111,20 @@ static inline int box_cli_bps_ok(const box_config_t *c, char *out, int outsz)
                  bps, AIN_MAX_TOTAL_BPS);
         return 0;
     }
+    /* The OTHER budget, and the one that wedges rather than drops: blocks/s is
+     * what leaves on the wire, sweeps/s is what the converter costs. Name the
+     * ceiling for the CURRENT channel count -- "too high" without a number
+     * leaves the operator bisecting. */
+    if (!ain_sweep_ok(c)) {
+        snprintf(out, outsz,
+                 "ERR %u Hz over %d channel(s) is past the sampler budget; max %d Hz "
+                 "(sweep ~%dus each, %d%% of a core -- fewer channels or a lower rate)\r\n",
+                 (unsigned) c->ain_rate, ain_union_chans(c), ain_rate_max(c),
+                 AIN_SWEEP_FIXED_US + AIN_SWEEP_PER_CH_US *
+                     (ain_union_chans(c) ? ain_union_chans(c) : 1),
+                 AIN_SWEEP_BUDGET_PCT);
+        return 0;
+    }
     return 1;
 }
 
