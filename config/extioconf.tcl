@@ -147,6 +147,30 @@ proc extio_dserv__reply { s timeout_ms } {
 proc extio_adopt { boxip name via {port 4620} {demote_obs 1} } {
     # 1. make our dserv open a connect-back. The box gives %reg its own
     #    connection and settles before sending matches; copy that.
+    # 0. FORGET WHAT WE THINK WE KNOW, before claiming it.
+    #
+    # A box announces the groups, labels and pins it HAS; it never says "and
+    # nothing else". So every retained extio/<name>/* leaf from a previous life
+    # outlives the thing it described, and re-adoption cannot heal it -- the
+    # box has no way to retract a name it no longer knows. Reported from a rig
+    # 2026-08-14: a factory-reset box still showed an `eye` analog group,
+    # because the group was gone from the box and the datapoint was still here.
+    #
+    # The firmware's tombstones cannot cover this. box_announce.c retracts a
+    # removed group by publishing an empty chans leaf, but it is keyed off a
+    # STATIC array of what THIS BOOT published -- so a reset (or any group
+    # removal followed by a reboot) leaves the static empty, the config empty,
+    # and nothing to retract with. You cannot tombstone a name you have
+    # forgotten.
+    #
+    # Adoption is the right place to fix it because it is the moment we claim
+    # the box: whatever we held before describes a box under someone else's
+    # configuration, or under none. Self-healing, too -- step 4's cmd/announce
+    # repopulates the manifest a second and a half later, which is why that
+    # step already exists. Ordered FIRST so it cannot eat the config writes
+    # below.
+    catch { extio_clear $name }
+
     extio_dserv__require [extio_dserv_cmd [list "%reg $boxip 5010 1"]] \
         "%reg $boxip 5010"
     after 200
