@@ -533,13 +533,39 @@ async function otaUpdate(box) {
   /* channel read at CLICK time -- a baked onclick argument would outlive a
    * channel edit now that rebuilds are rare */
   const channel = String(get(box, 'channel', 'dev'));
+  /* CHECK BEFORE ASKING, so the warning below is reliable rather than
+   * conditional on the operator having pressed Check shelf first. One HTTPS
+   * fetch on a deliberate action is cheap; a downgrade warning that only
+   * appears sometimes is worse than none, because its absence starts to mean
+   * "safe". */
+  await checkShelf(box);
+  const seen = shelfSeen.get(box);
+  const verdict = seen ? shelfVerdict(seen.text) : '';
+
+  /* WARN, DO NOT BLOCK. Rolling a box back is a legitimate thing to want, and
+   * this page is not the place to forbid it -- but it must never be something
+   * you do by accident. MCUboot would refuse the swap anyway (state/ota/
+   * rejects +1), so without this the operator learns about it from a counter
+   * after the fact. Observed for real on 2026-08-14: the newest shelf image
+   * for a build predated the box in front of us. */
+  let warn = '';
+  if (verdict === 'shelf is older') {
+    warn = `\n\n⚠ THIS WOULD BE A DOWNGRADE.\n${seen.text}\n\n`
+         + `MCUboot will most likely refuse the swap and count a reject.\n`;
+  } else if (verdict === 'up to date') {
+    warn = `\n\n⚠ The shelf image is the one already running (${seen.text}).\n`
+         + `MCUboot rejects a swap to the same image.\n`;
+  } else if (verdict === 'cannot compare') {
+    warn = `\n\n⚠ Cannot tell whether this moves forward: ${seen.text}\n`;
+  }
+
   /* Says what the DRIVER does, not what the firmware requires. Both are true --
    * MCUboot does revert an unconfirmed trial on any reset -- but this button
    * runs extio_ota_update, whose lifecycle confirms automatically as soon as
    * the trial image re-announces (extio_ota_lc_booted). Telling the operator
    * they "must confirm" made a fully automatic sequence look like it was
    * waiting on them. The revert is the SAFETY NET here, not a chore. */
-  if (!confirm(`Update ${box} from the ${channel} shelf?\n\n`
+  if (!confirm(`Update ${box} from the ${channel} shelf?${warn}\n\n`
              + `The box reboots into a trial image and is confirmed automatically `
              + `once it comes back. If it never comes back, it reverts to the `
              + `current image by itself.`)) return;
@@ -565,11 +591,25 @@ async function otaUpdate(box) {
  * downgrade. Show both, stamp when we asked, let the reader judge. */
 const shelfSeen = new Map();   /* box -> {text, at} */
 
+/* extio_fw_check's first field is a closed set of four phrases (see the switch
+ * in extioconf.tcl). Colour keys off that rather than off a parallel
+ * comparison here -- the ordering lives in Tcl precisely so the page and a
+ * script cannot reach different verdicts about the same box. */
+const SHELF_COLOUR = {
+  'up to date':        'var(--ok)',
+  'update available':  'var(--accent)',
+  'shelf is older':    'var(--bad)',
+  'cannot compare':    'var(--warn)',
+};
+const shelfVerdict = text => String(text).split(' · ')[0];
+
 function shelfCell(b) {
   const s = shelfSeen.get(b);
   if (!s) return `<span class="age">not checked</span>`;
   const secs = Math.max(0, Math.round((Date.now() - s.at) / 1000));
-  return `${esc(s.text)} <span class="age">· checked ${secs}s ago</span>`;
+  const col = SHELF_COLOUR[shelfVerdict(s.text)];
+  const body = col ? `<span style="color:${col}">${esc(s.text)}</span>` : esc(s.text);
+  return `${body} <span class="age">· checked ${secs}s ago</span>`;
 }
 
 /* panelSig = null BEFORE EVERY renderPanel HERE, and it is not optional:

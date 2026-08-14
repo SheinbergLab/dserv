@@ -1116,6 +1116,29 @@ proc extio_shelf_pick {channel bbuild {version ""}} {
 # So this reports FACTS -- what is on the shelf, and when we last asked -- and
 # leaves the judgement to the person reading it. Making the comparison real
 # needs the image version recorded on the shelf at publish time.
+# Compare two MCUboot sem_vers ("maj.min.rev+build"). Returns -1/0/1, or ""
+# when either side is not a well-formed one.
+#
+# ORDERED, not just tested for equality, and that is the whole point of having
+# imgVersion on the shelf at all. Equality answers "is this the same image";
+# ordering answers "would updating move me forward", which is the question
+# actually being asked -- and on 2026-08-14 the honest answer for a real box
+# was "no, backwards", because the newest shelf image for its build predated
+# what was flashed on it.
+#
+# build_num is compared as a number, not a string: "+9" vs "+10" sorts wrong
+# lexically, and the build number is the field that moves on every cut.
+proc extio_imgver_cmp {a b} {
+    set re {^([0-9]+)\.([0-9]+)\.([0-9]+)\+([0-9]+)$}
+    if { ![regexp $re $a -> a1 a2 a3 a4] } { return "" }
+    if { ![regexp $re $b -> b1 b2 b3 b4] } { return "" }
+    foreach x [list $a1 $a2 $a3 $a4] y [list $b1 $b2 $b3 $b4] {
+        if { $x > $y } { return 1 }
+        if { $x < $y } { return -1 }
+    }
+    return 0
+}
+
 proc extio_fw_check {box} {
     if { ![dservExists extio/$box/state/build] } {
         error "extio_fw_check: box '$box' hasn't announced state/build yet (connected?)"
@@ -1135,27 +1158,67 @@ proc extio_fw_check {box} {
     }
     set img [dict get $pick img]
     set pub [dict get $pick published]
+    set imgver [expr {[dict exists $img imgVersion] ? [dict get $img imgVersion] : ""}]
     dservClear $pfx/error
     dservSet $pfx/version   [dict get $pick version]
+    dservSet $pfx/imgver    $imgver
     dservSet $pfx/published $pub
     dservSet $pfx/size      [expr {[dict exists $img binSize] ? [dict get $img binSize] : 0}]
     dservSet $pfx/sha       [expr {[dict exists $img binSha256] ? [dict get $img binSha256] : ""}]
     dservSet $pfx/checked   [clock seconds]
 
-    # LEAD WITH THE PUBLISH DATE, because the version string is a `git describe`
-    # of the dserv tree ("0.52.9-3-g08cea56c") and means nothing to anyone who
-    # is not the person who built it. A date is the one part of a shelf entry a
-    # reader can act on: they know roughly when their box was flashed, so they
-    # can tell whether the shelf is ahead of it. The version still shows,
-    # because it is what gets passed back to pin an update -- but it is the
-    # identifier, not the information.
+    # THE VERDICT IS NOT PUBLISHED, and that asymmetry is deliberate. Everything
+    # above is a fact about the shelf: it depends only on channel+build, so ten
+    # boxes of the same build share one answer and one fetch. The verdict also
+    # depends on what THIS box is running, so writing it under the shared key
+    # would let one box's comparison overwrite another's. It goes in the return
+    # value, to the caller who asked about this box.
+    set boxver ""
+    if { [dservExists extio/$box/state/fw_ver] } {
+        set boxver [dservGet extio/$box/state/fw_ver]
+    }
+    set cmp [expr {($imgver eq "" || $boxver eq "") ? "" : [extio_imgver_cmp $imgver $boxver]}]
+
     set when $pub
     if { $when ne "" && ![catch { clock scan $pub -format {%Y-%m-%dT%H:%M:%SZ} -gmt 1 } t] } {
         set when [clock format $t -format {%Y-%m-%d %H:%M} -gmt 1]
         append when "Z"
     }
-    if { $when eq "" } { return [dict get $pick version] }
-    return "published $when · [dict get $pick version]"
+
+    # THE FIRST FIELD IS A CONTRACT. It is always one of exactly four phrases,
+    # and callers -- including extio-config.html, which colours the row by it --
+    # match on the text before the first " · ". A machine token bolted on with a
+    # delimiter would read badly from dservctl; a phrase that is both the
+    # verdict and the sentence reads correctly in both places, which is why the
+    # set is closed and short rather than free prose.
+    #
+    # "cannot compare" is a first-class outcome, not a failure. A shelf image
+    # published before imgVersion existed, or an RP2350 .uf2 that has no
+    # MCUboot header, genuinely cannot be compared -- and saying so is the
+    # difference between an honest gap and a badge that is wrong.
+    switch -- $cmp {
+        1       { set verdict "update available" ; set detail "$imgver · you have $boxver" }
+        0       { set verdict "up to date"       ; set detail $imgver }
+        -1      { set verdict "shelf is older"   ; set detail "$imgver · you have $boxver ·\
+                                                               updating would DOWNGRADE" }
+        default {
+            set verdict "cannot compare"
+            if { $imgver eq "" } {
+                set detail "shelf entry has no image version"
+            } elseif { $boxver eq "" } {
+                set detail "box has not reported fw_ver"
+            } else {
+                set detail "unreadable versions (shelf $imgver, box $boxver)"
+            }
+        }
+    }
+
+    # The publish date and the git-describe version trail the verdict. The date
+    # is what a reader can act on when the comparison is unavailable; the
+    # version is the identifier that pins an update, not information.
+    set tail [dict get $pick version]
+    if { $when ne "" } { set tail "published $when · $tail" }
+    return "$verdict · $detail · $tail"
 }
 
 proc extio_ota_push_shelf {box {channel dev} {version ""}} {
