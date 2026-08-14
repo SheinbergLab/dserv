@@ -192,6 +192,7 @@ type BoxIdentity struct {
 	Workgroup   string `json:"workgroup,omitempty"`
 	Registry    string `json:"registry,omitempty"`
 	Role        string `json:"role,omitempty"`
+	TimeRole    string `json:"timeRole,omitempty"` // declared, with argument: "client eth0"
 	Provisioned string `json:"provisioned,omitempty"`
 }
 
@@ -1474,6 +1475,8 @@ func readBoxIdentity(path string) *BoxIdentity {
 			id.Registry = val
 		case "role":
 			id.Role = val
+		case "time_role":
+			id.TimeRole = val
 		case "provisioned":
 			id.Provisioned = val
 		default:

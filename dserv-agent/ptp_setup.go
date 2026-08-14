@@ -116,7 +116,9 @@ if [[ -z "$DESTDIR" ]]; then
         echo "[info] Installing linuxptp + ethtool..."
         export DEBIAN_FRONTEND=noninteractive
         apt-get update -qq || true
-        apt-get install -y linuxptp ethtool
+        # Wait for the dpkg lock instead of failing on it -- a bootstrap-driven
+        # role apply overlaps the deferred dserv-agent migration's apt run.
+        apt-get install -y -o DPkg::Lock::Timeout=300 linuxptp ethtool
     fi
 fi
 

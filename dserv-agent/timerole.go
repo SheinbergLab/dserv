@@ -16,6 +16,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -67,6 +68,11 @@ type TimeStatus struct {
 	Tracking      *ChronyTracking `json:"tracking,omitempty"`
 	ToolInstalled bool            `json:"toolInstalled"`
 	Registry      string          `json:"registry,omitempty"` // for the fetch hint / fallback
+
+	// Declared is box.conf's time_role, verbatim ("client eth0"). The panel
+	// compares it against the observed fields above and offers "Apply
+	// declared" on mismatch -- the declared-vs-observed loop for time.
+	Declared string `json:"declared,omitempty"`
 }
 
 // timeUnitInstances returns loaded instances of the four dserv time-unit
@@ -130,6 +136,9 @@ func chronyTracking() *ChronyTracking {
 
 func (a *Agent) getTimeStatus() TimeStatus {
 	ts := TimeStatus{Role: "none", Units: timeUnitInstances(), Registry: a.registryBase()}
+	if id := readBoxIdentity(boxConfPath); id != nil {
+		ts.Declared = id.TimeRole
+	}
 	if _, err := os.Stat(ptpSetupPath); err == nil {
 		ts.ToolInstalled = true
 	}
@@ -209,6 +218,45 @@ func (a *Agent) getTimeCandidates() TimeCandidates {
 		}
 	}
 	return tc
+}
+
+// updateBoxConfTimeRole keeps the declaration truthful after a panel-driven
+// change: a successful apply writes "role arg", a disable writes empty. Only
+// on boxes that HAVE a box.conf -- an unrecorded box's declaration store is
+// the bootstrap's to create, not a side effect of one panel action; the
+// write is skipped there and the caller logs it.
+//
+// Surgical: the time_role= line is replaced in place (or appended), every
+// other byte -- comments included -- preserved, atomic tmp+rename.
+func updateBoxConfTimeRole(path, value string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	lines := strings.Split(string(data), "\n")
+	found := false
+	for i, l := range lines {
+		if strings.HasPrefix(strings.TrimSpace(l), "time_role=") {
+			lines[i] = "time_role=" + value
+			found = true
+			break
+		}
+	}
+	if !found {
+		// Older box.conf without the key: append it before any trailing
+		// blank line so the file stays tidy.
+		insert := "time_role=" + value
+		if n := len(lines); n > 0 && strings.TrimSpace(lines[n-1]) == "" {
+			lines = append(lines[:n-1], insert, "")
+		} else {
+			lines = append(lines, insert)
+		}
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, []byte(strings.Join(lines, "\n")), 0644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 // One time-role operation at a time: two concurrent applies would race each
@@ -299,6 +347,22 @@ func (a *Agent) startTimeRole(action, role, arg string) error {
 			Data: map[string]interface{}{"action": action, "label": label, "output": strings.TrimSpace(string(out))}}
 		if err != nil && strings.TrimSpace(string(out)) == "" {
 			result.Error = err.Error()
+		}
+
+		// Keep the declaration truthful: the panel and the bootstrap must
+		// converge on one record, whichever hand made the change.
+		if err == nil {
+			declared := ""
+			if action == "apply" {
+				declared = role + " " + arg
+			}
+			if werr := updateBoxConfTimeRole(boxConfPath, declared); werr != nil {
+				if os.IsNotExist(werr) {
+					log.Printf("time_role: %s applied but box.conf absent (unrecorded box) -- declaration not written", label)
+				} else {
+					log.Printf("time_role: could not update %s: %v", boxConfPath, werr)
+				}
+			}
 		}
 		a.broadcast(result)
 	}()

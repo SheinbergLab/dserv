@@ -771,7 +771,11 @@ case "${1:-status}" in
               echo "NOTE: installing chrony replaces systemd-timesyncd (its measured jitter is why)."
           have apt-get || die "chrony is not installed and apt-get is unavailable -- install chrony by hand, then re-run"
           echo "Installing chrony..."
-          DEBIAN_FRONTEND=noninteractive apt-get install -y chrony >/dev/null \
+          # Lock::Timeout: a bootstrap-driven apply lands ~20 s before the
+          # deferred dserv-agent migration's own apt run -- wait for the dpkg
+          # lock rather than failing on it, same as the agent's install path.
+          DEBIAN_FRONTEND=noninteractive apt-get install -y \
+              -o DPkg::Lock::Timeout=300 chrony >/dev/null \
               || die "could not install chrony (try by hand: apt-get install -y chrony)"
       fi
 

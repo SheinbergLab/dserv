@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -20,6 +21,7 @@ components=dserv,stim2,dlsh,dserv-agent
 workgroup=sheinberg
 registry=https://dserv.net
 role=
+time_role=client eth0
 provisioned=2026-08-13T12:00:00Z
 `
 	if err := os.WriteFile(path, []byte(conf), 0644); err != nil {
@@ -50,6 +52,57 @@ provisioned=2026-08-13T12:00:00Z
 	}
 	if id.Provisioned != "2026-08-13T12:00:00Z" {
 		t.Errorf("Provisioned = %q", id.Provisioned)
+	}
+	if id.TimeRole != "client eth0" {
+		t.Errorf("TimeRole = %q, want \"client eth0\"", id.TimeRole)
+	}
+}
+
+// The write-back after a panel apply/disable: surgical line replace,
+// comments preserved byte-for-byte, append for pre-time_role files, and a
+// plain error (not a created file) for unrecorded boxes.
+func TestUpdateBoxConfTimeRole(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "box.conf")
+	orig := "# a comment worth preserving\nprofile=stim\ntime_role=ptp-client old\nrole=x\n"
+	if err := os.WriteFile(path, []byte(orig), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := updateBoxConfTimeRole(path, "ntp-client 192.168.88.29"); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := os.ReadFile(path)
+	want := "# a comment worth preserving\nprofile=stim\ntime_role=ntp-client 192.168.88.29\nrole=x\n"
+	if string(got) != want {
+		t.Errorf("replace: got %q, want %q", got, want)
+	}
+
+	// disable writes empty
+	if err := updateBoxConfTimeRole(path, ""); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = os.ReadFile(path)
+	if !strings.Contains(string(got), "\ntime_role=\n") {
+		t.Errorf("disable: time_role not emptied: %q", got)
+	}
+
+	// pre-time_role file: appended before the trailing blank line
+	path2 := filepath.Join(t.TempDir(), "box.conf")
+	os.WriteFile(path2, []byte("profile=dev\nrole=\n"), 0644)
+	if err := updateBoxConfTimeRole(path2, "client eth0"); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = os.ReadFile(path2)
+	if !strings.Contains(string(got), "time_role=client eth0") {
+		t.Errorf("append: %q", got)
+	}
+
+	// unrecorded box: error, no file created
+	missing := filepath.Join(t.TempDir(), "nope.conf")
+	if err := updateBoxConfTimeRole(missing, "client eth0"); !os.IsNotExist(err) {
+		t.Errorf("missing file: err = %v, want IsNotExist", err)
+	}
+	if _, err := os.Stat(missing); err == nil {
+		t.Error("missing file: write-back created a file it should not have")
 	}
 }
 

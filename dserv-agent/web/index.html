@@ -1209,6 +1209,22 @@ body.solo .agent-panel {
              } else {
 		 line = `NTP (${this.esc(ts.ntpDaemon||'?')}) — no dserv time role`;
              }
+             // The declared-vs-observed loop: box.conf's time_role against
+             // what is actually running. Matching = quiet check; mismatch =
+             // amber with the converge button; running-but-undeclared = the
+             // nudge that records exist for a reason.
+             let declaredLine = '';
+             if (ts.declared) {
+		 const sp = ts.declared.indexOf(' ');
+		 const dr = sp > 0 ? ts.declared.slice(0, sp) : ts.declared;
+		 const da = sp > 0 ? ts.declared.slice(sp + 1).trim() : '';
+		 const applied = dr === ts.role && (da === ts.iface || da === ts.server);
+		 declaredLine = applied
+                     ? `<div style="font-size:11px;color:#71767b;margin-bottom:6px">declared: ${this.esc(ts.declared)} <span style="color:#34d399">✓</span></div>`
+                     : `<div style="font-size:11px;color:#fbbf24;margin-bottom:6px">declared: ${this.esc(ts.declared)} — not what's running<button class="component-btn update" style="margin-left:8px" onclick="app.timeApplyDeclared()">Apply declared</button></div>`;
+             } else if (ts.role !== 'none') {
+		 declaredLine = '<div style="font-size:11px;color:#71767b;margin-bottom:6px">running role not declared in box.conf — panel changes record themselves; a retype with --time-role also records it</div>';
+             }
              const units = Object.entries(ts.units || {}).map(([u, s]) =>
 		 `<div style="font-family:'SF Mono',Monaco,monospace;font-size:11px;color:${s==='active'?'#8b98a5':'#f87171'}">${this.esc(u)} · ${this.esc(s)}</div>`).join('');
              const toolNote = ts.toolInstalled ? '' :
@@ -1216,6 +1232,7 @@ body.solo .agent-panel {
              const hasRole = ts.role !== 'none';
              return `
 		 <div style="font-size:13px;color:#e7e9ea;margin-bottom:8px">${line}</div>
+		 ${declaredLine}
 		 ${units}
 		 <div style="display:flex;gap:8px;margin-top:10px">
                      <button class="component-btn" onclick="app.timeSetOpen()">Set role…</button>
@@ -1261,8 +1278,13 @@ body.solo .agent-panel {
 		   ? document.getElementById('time-arg-server')?.value?.trim()
 		   : document.getElementById('time-arg-iface')?.value;
              if (!role || !arg) { this.showToast('Pick a role and its ' + (role === 'ntp-client' ? 'server' : 'interface'), 'error'); return; }
-             // The confirms echo the tool's own warnings; the tool still gets
-             // the final word at apply time (its refusals come back verbatim).
+             this.timeConfirmAndApply(role, arg);
+	 }
+
+	 // One confirm + send path for the form and for "Apply declared". The
+	 // confirms echo the tool's own warnings; the tool still gets the final
+	 // word at apply time (its refusals come back verbatim).
+	 timeConfirmAndApply(role, arg) {
              const warn = role === 'grandmaster'
 		   ? `Make this host the PTP GRANDMASTER on ${arg}?\n\nThis DEFINES the site's time. Exactly ONE host per site/segment runs this role — a second grandmaster joins the election and can re-base every box's timeline.`
 		   : role === 'client'
@@ -1270,6 +1292,13 @@ body.solo .agent-panel {
 		   : `Follow ${arg} over NTP (chrony)?\n\nchrony is installed if missing (displacing systemd-timesyncd) and pinned to this server with prefer+trust. Expect tens of microseconds on a wired LAN.`;
              if (!confirm(warn)) return;
              this.panelWs?.send(JSON.stringify({type:'time_role', action:'apply', role, arg}));
+	 }
+
+	 timeApplyDeclared() {
+             const d = this.panelTime?.declared || '';
+             const sp = d.indexOf(' ');
+             if (sp <= 0) { this.showToast('Declared time role has no argument', 'error'); return; }
+             this.timeConfirmAndApply(d.slice(0, sp), d.slice(sp + 1).trim());
 	 }
 
 	 timeDisable() {

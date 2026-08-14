@@ -278,6 +278,11 @@ AGENT_RELEASE_JSON='{{.AgentReleaseJSON}}'
 # ============ Parse Arguments ============
 
 ROLE=""
+# Declared time role WITH its argument, e.g. "grandmaster eth0",
+# "client eth0", "ntp-client 192.168.88.29". Recorded in box.conf and
+# applied by step_time_role through the registry's /ptp/setup, so it works
+# identically on a display box with no dserv package.
+TIME_ROLE=""
 WORKGROUP="${DEFAULT_WORKGROUP}"
 DRY_RUN=false
 SKIP_AGENT=false
@@ -288,6 +293,7 @@ ESS_USER_ARG=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --role)        ROLE="$2"; shift 2 ;;
+        --time-role)   TIME_ROLE="$2"; shift 2 ;;
         --workgroup)   WORKGROUP="$2"; shift 2 ;;
         --user)        ESS_USER_ARG="$2"; shift 2 ;;
         --dry-run)     DRY_RUN=true; shift ;;
@@ -301,6 +307,9 @@ while [[ $# -gt 0 ]]; do
             echo ""
             echo "Options:"
             echo "  --role ROLE          Box role (e.g., eyetracker, stim, control)"
+            echo "  --time-role \"R ARG\"  Declared time role, applied at the end:"
+            echo "                       \"grandmaster IFACE\" | \"client IFACE\" |"
+            echo "                       \"ntp-client SERVER\" (quote role+arg together)"
             echo "  --workgroup NAME     Workgroup name (default: ${DEFAULT_WORKGROUP})"
             echo "  --user USER          Local account owning the ESS systems tree"
             echo "                       (default: the user invoking sudo, else 'lab')"
@@ -465,18 +474,23 @@ check_root() {
     if [[ $EUID -ne 0 ]]; then
         if command -v sudo &>/dev/null; then
             info "Re-running with sudo..."
-            local args=""
-            [[ -n "$ROLE" ]]      && args="$args --role $ROLE"
-            [[ -n "$WORKGROUP" ]] && args="$args --workgroup $WORKGROUP"
-            [[ -n "$ESS_USER_ARG" ]] && args="$args --user $ESS_USER_ARG"
-            $DRY_RUN              && args="$args --dry-run"
-            $SKIP_AGENT           && args="$args --skip-agent"
+            # An ARRAY, not a string: --time-role's value contains a space
+            # ("client eth0"), and word-splitting a concatenated string would
+            # hand the role and its argument to the parser as separate flags.
+            # Every other flag rides along quoted correctly for free.
+            local -a fwd=()
+            [[ -n "$ROLE" ]]      && fwd+=(--role "$ROLE")
+            [[ -n "$TIME_ROLE" ]] && fwd+=(--time-role "$TIME_ROLE")
+            [[ -n "$WORKGROUP" ]] && fwd+=(--workgroup "$WORKGROUP")
+            [[ -n "$ESS_USER_ARG" ]] && fwd+=(--user "$ESS_USER_ARG")
+            $DRY_RUN              && fwd+=(--dry-run)
+            $SKIP_AGENT           && fwd+=(--skip-agent)
             # Must be forwarded, like every other flag here: this branch
             # re-fetches and re-runs the script as root, so anything missed
             # is silently dropped -- and the one being dropped here protects
             # a tree of local work.
-            $SKIP_SCRIPTS         && args="$args --skip-scripts"
-            $REINSTALL            && args="$args --reinstall"
+            $SKIP_SCRIPTS         && fwd+=(--skip-scripts)
+            $REINSTALL            && fwd+=(--reinstall)
 
             # Re-fetch into a variable and CHECK IT, rather than substituting
             # the download straight into bash -c.
@@ -503,7 +517,7 @@ check_root() {
             if [[ -z "$script" || "${script:0:2}" != '#!' ]]; then
                 fail "Could not re-fetch the installer from ${REGISTRY_URL} to run as root — re-run this command under sudo yourself"
             fi
-            exec sudo bash -c "$script" -- $args
+            exec sudo bash -c "$script" -- "${fwd[@]}"
         else
             fail "This script must be run as root"
         fi
@@ -1221,6 +1235,7 @@ components=${installed_components}
 workgroup=${WORKGROUP}
 registry=${REGISTRY_URL}
 role=${ROLE}
+time_role=${TIME_ROLE}
 provisioned=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 EOF
     ok "Recorded identity: profile=${PROFILE}${STIM_MODE:+ (${STIM_MODE})} in /etc/dserv-agent/box.conf"
@@ -1268,6 +1283,49 @@ step_start_services() {
         else
             warn "dserv-agent not running (journalctl -u dserv-agent)"
         fi
+    fi
+}
+
+step_time_role() {
+    [[ -z "$TIME_ROLE" ]] && return
+
+    # Converge the DECLARED time role, exactly as a human would: fetch the
+    # registry's own /ptp/setup installer and hand it the declaration. That
+    # detour is what makes this work on a display box with no dserv package,
+    # and keeps role semantics in one place -- dserv-ptp-setup still owns
+    # every preflight and refusal.
+    #
+    # Failures WARN, never abort: a box whose grandmaster happens to be down
+    # at provision time is still correctly provisioned -- the declaration is
+    # already recorded in box.conf, and the panel's "Apply declared" (or a
+    # re-run) converges it later.
+    local trole="${TIME_ROLE%% *}"
+    local targ="${TIME_ROLE#* }"
+    case "$trole" in
+        grandmaster|client|ntp-client) ;;
+        *) warn "Unknown time role '${trole}' (grandmaster|client|ntp-client) — recorded but not applied"; return ;;
+    esac
+    if [[ "$targ" == "$TIME_ROLE" || -z "$targ" ]]; then
+        warn "Time role '${trole}' needs an argument (IFACE or SERVER) — recorded but not applied"
+        return
+    fi
+
+    info "Applying declared time role: ${trole} ${targ}..."
+    local ts
+    ts=$(curl -fsSL "${REGISTRY_URL}/ptp/setup") || ts=""
+    if [[ -z "$ts" || "${ts:0:2}" != '#!' ]]; then
+        warn "Could not fetch ${REGISTRY_URL}/ptp/setup — apply later: dserv-ptp-setup ${trole} ${targ}"
+        return
+    fi
+    if $DRY_RUN; then
+        info "[dry-run] dserv-ptp-setup ${trole} ${targ}"
+        return
+    fi
+    if bash -c "$ts" ptp-setup "$trole" "$targ"; then
+        ok "Time role applied: ${trole} ${targ}"
+    else
+        warn "Time role apply did not complete — its own output above says why."
+        warn "  The declaration is recorded; converge later with: dserv-ptp-setup ${trole} ${targ}"
     fi
 }
 
@@ -1324,6 +1382,10 @@ main() {
     step_retire_services
     step_record_identity
     step_start_services
+    # After services: apt work from the component installs is done, so the
+    # role's own apt (linuxptp/chrony) contends only with the deferred agent
+    # migration -- both sides now wait on the dpkg lock instead of failing.
+    step_time_role
     step_verify
 
     local ip_addr
