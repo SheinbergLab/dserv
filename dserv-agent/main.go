@@ -565,6 +565,10 @@ Environment:
 		// Registry endpoints
 		mux.HandleFunc("/api/v1/heartbeat", agent.handleHeartbeat)
 		mux.HandleFunc("/api/v1/mesh", agent.handleMeshQuery)
+		// Agent self-reports (identity + time state), push-only: the
+		// registry cannot reach into rig LANs to ask.
+		mux.HandleFunc("/api/v1/boxes/report", agent.handleBoxReport)
+		mux.HandleFunc("/api/v1/boxes", agent.handleBoxesQuery)
 		mux.HandleFunc("/api/registry/status", agent.handleServerStatus)
 
 		// Cached GitHub release metadata for deployed agents + bootstrap
@@ -611,6 +615,10 @@ Environment:
 		}
 		// Start mesh polling loop
 		go agent.meshPollingLoop()
+		// ...and the self-report loop: identity + time state to the
+		// registry, first report immediately (an agent restart is the
+		// change notification for retypes and self-updates).
+		go agent.boxReportLoop()
 	} else if !cfg.ServerMode {
 		log.Printf("  Mesh: not configured (use --registry and --workgroup)")
 	}
@@ -1158,10 +1166,11 @@ func (a *Agent) handleWorkgroupPage(w http.ResponseWriter, r *http.Request) {
                 %s
             </tbody>
         </table>
+        %s
         <p class="footer"><a href="/">← dserv.net</a></p>
     </div>
 </body>
-</html>`, workgroup, workgroup, len(nodes), nodeRows.String())
+</html>`, workgroup, workgroup, len(nodes), nodeRows.String(), boxSectionHTML(workgroup))
 
 	w.Write([]byte(html))
 }

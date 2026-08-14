@@ -363,6 +363,8 @@ func (a *Agent) startTimeRole(action, role, arg string) error {
 					log.Printf("time_role: could not update %s: %v", boxConfPath, werr)
 				}
 			}
+			// The fleet view should not wait an interval to learn this.
+			go a.sendBoxReports()
 		}
 		a.broadcast(result)
 	}()
