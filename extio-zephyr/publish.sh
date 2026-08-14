@@ -70,11 +70,49 @@ DIRTY=0; case "$VERSION" in *-dirty) DIRTY=1 ;; esac
 SIZE=$(wc -c < "$BIN" | tr -d ' ')
 SUM=$(shasum -a 256 "$BIN" 2>/dev/null | cut -d' ' -f1 || sha256sum "$BIN" | cut -d' ' -f1)
 
+# THE IMAGE VERSION, READ OUT OF THE IMAGE.
+#
+# $VERSION above is `git describe` -- it names a publish, and no box has ever
+# heard of it. What a box reports is state/fw_ver, which box_boot.c renders as
+# "%u.%u.%u+%u" from the sem_ver in the MCUboot header it booted. Those are the
+# same four fields sitting in this file's header, so reading them here produces
+# the exact string the box will say about itself, and "is this box up to date?"
+# becomes answerable instead of a guess. (Before this, the only comparable-
+# looking strings were from different namespaces entirely -- and on 2026-08-14
+# the newest shelf image for a build was OLDER than the flashed box, so
+# comparing them would have advertised a downgrade.)
+#
+# NOT from extio-zephyr/VERSION, deliberately. That file is an input to the
+# build and can be edited afterwards; the header is an output and cannot. If
+# they ever disagree, the binary is right.
+#
+# Header layout, v1 (bootutil image.h), all little-endian: magic u32 =
+# 0x96f3b83d, load_addr u32, hdr_size u16, protect_tlv_size u16, img_size u32,
+# flags u32, then sem_ver { major u8, minor u8, revision u16, build_num u32 }
+# at offset 20. Empty output (bad magic, short file, no python3) is not fatal:
+# the field is optional and the shelf simply records nothing.
+IMGVER=$(python3 - "$BIN" 2>/dev/null <<'PY' || true
+import struct, sys
+with open(sys.argv[1], 'rb') as f:
+    h = f.read(28)
+if len(h) == 28:
+    magic, = struct.unpack_from('<I', h, 0)
+    if magic == 0x96f3b83d:
+        maj, mnr, rev, bld = struct.unpack_from('<BBHI', h, 20)
+        print(f"{maj}.{mnr}.{rev}+{bld}")
+PY
+)
+
 echo ">> shelf   $SHELF/api/firmware/extio/$CHANNEL"
 echo ">> build   $BUILD_KEY   (board=$BOARD_ID, from $BOARD_TARGET)"
 echo ">> version $VERSION  (dirty=$DIRTY)"
 echo ">> bin     $BIN"
 echo ">>          $SIZE bytes  sha256=$SUM"
+if [ -n "$IMGVER" ]; then
+  echo ">> imgver  $IMGVER  (from the MCUboot header -- what the box will report as fw_ver)"
+else
+  echo ">> imgver  (none -- no MCUboot header in this image; shelf records nothing)"
+fi
 
 [ "$DRY" = 1 ] && { echo ">> dry run, nothing sent"; exit 0; }
 
@@ -86,7 +124,7 @@ RESP=$(mktemp)
 CODE=$(curl -sS -o "$RESP" -w '%{http_code}' \
   -H "Authorization: Bearer $DSERV_AGENT_FIRMWARE_TOKEN" \
   -F "version=$VERSION" -F "build=$BUILD_KEY" -F "board=$BOARD_ID" \
-  -F "variant=$BUILD_KEY" -F "dirty=$DIRTY" \
+  -F "variant=$BUILD_KEY" -F "dirty=$DIRTY" -F "imgver=$IMGVER" \
   -F "ota=1" -F "bin=@$BIN" \
   "$SHELF/api/firmware/extio/$CHANNEL") \
   || { echo "!! push failed (curl error)" >&2; rm -f "$RESP"; exit 1; }

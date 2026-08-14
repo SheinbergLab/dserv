@@ -178,3 +178,68 @@ func TestFirmwareListAll(t *testing.T) {
 		t.Fatalf("channels = %+v", resp.Channels)
 	}
 }
+
+// publishImgVer drives a publish carrying an explicit imgver field.
+func publishImgVer(t *testing.T, a *Agent, channel, version, build, imgver string) *httptest.ResponseRecorder {
+	t.Helper()
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	_ = mw.WriteField("version", version)
+	_ = mw.WriteField("build", build)
+	_ = mw.WriteField("board", "frdm_mcxn947")
+	_ = mw.WriteField("variant", build)
+	_ = mw.WriteField("ota", "1")
+	if imgver != "" {
+		_ = mw.WriteField("imgver", imgver)
+	}
+	fw, err := mw.CreateFormFile("bin", "zephyr.signed.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fw.Write([]byte("fake signed slot image"))
+	mw.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/firmware/extio/"+channel, &body)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	rr := httptest.NewRecorder()
+	a.handleFirmwareAPI(rr, req)
+	return rr
+}
+
+// imgVersion is the only field on the shelf a running box can be compared
+// against (state/fw_ver), so it has to survive the round trip verbatim -- and
+// a malformed one has to be refused rather than stored, since a value that
+// could never equal a box's report is worse than no value at all.
+func TestFirmwareImgVersion(t *testing.T) {
+	a := newFwAgent(t)
+	build := "frdm_mcxn947_mcxn947_cpu0"
+
+	if rr := publishImgVer(t, a, "dev", "0.52.9-3-gabc", build, "0.4.0+91"); rr.Code != 200 {
+		t.Fatalf("publish: %d %s", rr.Code, rr.Body.String())
+	}
+	m, err := a.readManifest("dev", "0.52.9-3-gabc")
+	if err != nil {
+		t.Fatalf("readManifest: %v", err)
+	}
+	if len(m.Images) != 1 || m.Images[0].ImgVersion != "0.4.0+91" {
+		t.Fatalf("imgVersion = %+v", m.Images)
+	}
+
+	// Malformed: refuse, and do not record it.
+	for _, bad := range []string{"0.4.0", "v0.4.0+91", "0.4.0+91-dirty", "latest"} {
+		rr := publishImgVer(t, a, "dev", "0.52.9-4-gdef", build, bad)
+		if rr.Code != 400 {
+			t.Fatalf("imgver %q: got %d, want 400 (%s)", bad, rr.Code, rr.Body.String())
+		}
+	}
+
+	// OPTIONAL: an RP2350 publish has no MCUboot header and must still succeed,
+	// leaving the field empty rather than failing or inventing one.
+	if rr := publishImgVer(t, a, "dev", "0.52.9-5-gghi", build, ""); rr.Code != 200 {
+		t.Fatalf("publish without imgver: %d %s", rr.Code, rr.Body.String())
+	}
+	m, _ = a.readManifest("dev", "0.52.9-5-gghi")
+	if len(m.Images) != 1 || m.Images[0].ImgVersion != "" {
+		t.Fatalf("expected empty imgVersion, got %+v", m.Images)
+	}
+}

@@ -63,6 +63,10 @@ var (
 	fwBuildRe   = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`) // build.sh target name (unique key)
 	fwIdentRe   = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`) // board / variant tokens
 	fwFileRe    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*\.(uf2|bin)$`)
+	// MCUboot sem_ver, exactly as the firmware renders it: major.minor.rev+build.
+	// Tighter than fwVersionRe on purpose -- this field has ONE legal shape, and
+	// its whole value is being byte-comparable with what a box reports.
+	fwImgVerRe = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+\+[0-9]+$`)
 )
 
 // FirmwareImage is one build's artifact within a version. sha256 is the
@@ -92,6 +96,30 @@ type FirmwareImage struct {
 	Bin        string `json:"bin,omitempty"` // optional flat .bin filename (on-box updater)
 	BinSize    int64  `json:"binSize,omitempty"`
 	BinSHA256  string `json:"binSha256,omitempty"`
+
+	// ImgVersion is the MCUboot sem_ver carried in the .bin's own header --
+	// "0.4.0+91" -- and it is the ONLY field here that a running box can be
+	// compared against.
+	//
+	// Version (above, on the manifest) is `git describe` of the source tree:
+	// it identifies a publish, and no box knows or reports it. A box reports
+	// state/fw_ver, which box_boot.c renders as "%u.%u.%u+%u" from the four
+	// sem_ver fields in the image header it booted. So until this field
+	// existed there was nothing on the shelf comparable to what a box says
+	// about itself, and "is this box up to date?" could only be answered by
+	// eye. Worse than unanswerable: on 2026-08-14 the newest shelf image for
+	// a build was OLDER than the box in front of us, and any naive comparison
+	// of the strings that WERE available would have advertised a downgrade.
+	//
+	// Written by the publisher from the signed binary itself, never from a
+	// VERSION file -- a file can be edited after the build, the header cannot.
+	// The four components are integers, so consumers can order them properly
+	// rather than testing equality.
+	//
+	// OPTIONAL, and stays that way: RP2350 targets ship a .uf2 with no MCUboot
+	// header and have nothing to put here. Absent means "unknown", which
+	// consumers must treat as "cannot compare", never as "up to date".
+	ImgVersion string `json:"imgVersion,omitempty"`
 }
 
 // FirmwareManifest describes one published version and all its target images.
@@ -343,6 +371,7 @@ func (a *Agent) handleFirmwarePublish(w http.ResponseWriter, r *http.Request, ch
 	board := strings.TrimSpace(r.FormValue("board"))
 	variant := strings.TrimSpace(r.FormValue("variant"))
 	notes := strings.TrimSpace(r.FormValue("notes"))
+	imgver := strings.TrimSpace(r.FormValue("imgver"))
 	dirty := boolForm(r.FormValue("dirty"))
 	ota := boolForm(r.FormValue("ota"))
 
@@ -361,6 +390,15 @@ func (a *Agent) handleFirmwarePublish(w http.ResponseWriter, r *http.Request, ch
 	}
 	if variant != "" && !fwIdentRe.MatchString(variant) {
 		writeJSON(w, 400, map[string]string{"error": "invalid variant"})
+		return
+	}
+	// Optional -- an RP2350 publish has no MCUboot header to read. Rejected only
+	// when present and malformed: a field whose entire purpose is to be compared
+	// byte-for-byte with a box's state/fw_ver must not be allowed to hold
+	// something that could never equal one.
+	if imgver != "" && !fwImgVerRe.MatchString(imgver) {
+		writeJSON(w, 400, map[string]string{
+			"error": "invalid imgver (want MCUboot sem_ver, e.g. 0.4.0+91)"})
 		return
 	}
 	// Publish discipline: only the mutable dev channel accepts dirty builds
@@ -400,7 +438,8 @@ func (a *Agent) handleFirmwarePublish(w http.ResponseWriter, r *http.Request, ch
 	// So: EITHER file may be omitted, but NOT BOTH -- a version entry carrying
 	// neither artifact is a manifest row pointing at nothing, which is worse than a
 	// rejected publish because it looks like a successful release.
-	img := FirmwareImage{Build: build, Board: board, Variant: variant, OtaCapable: ota}
+	img := FirmwareImage{Build: build, Board: board, Variant: variant, OtaCapable: ota,
+		ImgVersion: imgver}
 
 	uf2Name, uf2Size, uf2Sum, err := saveFirmwareUpload(r, "uf2", versionDir, "uf2")
 	if err == nil {
