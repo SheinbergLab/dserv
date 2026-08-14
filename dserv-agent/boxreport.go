@@ -287,9 +287,12 @@ func fleetTableHTML(nodes []*MeshNode, reports []*BoxReport) (string, int) {
 		m := machines[k]
 		r := m.report
 
-		// Host links to the machine's own management panel when an agent
-		// reported (it serves the panel); otherwise to whatever the dserv
-		// heartbeat advertised.
+		// Host links to the box's day-to-day surface: ESS Control (dserv's
+		// web UI, :2565 by convention) wherever a dserv exists -- system
+		// management is one click inside it now, which makes it the more
+		// useful landing than the management panel. A display box has no
+		// :2565, so its name goes to the agent panel instead. The gear is
+		// the direct path to management for anyone who wants it first.
 		host := html.EscapeString(name[k])
 		ip := ""
 		if r != nil && r.IP != "" {
@@ -297,15 +300,17 @@ func fleetTableHTML(nodes []*MeshNode, reports []*BoxReport) (string, int) {
 		} else if m.node != nil {
 			ip = m.node.IP
 		}
-		if r != nil && ip != "" {
-			host = fmt.Sprintf(`<a href="http://%s/" target="_blank">%s</a>`, html.EscapeString(ip), host)
-		} else if m.node != nil {
-			scheme := "http"
-			if m.node.SSL {
-				scheme = "https"
+		hasDserv := m.node != nil || (r != nil && r.DservVersion != "")
+		if ip != "" {
+			eip := html.EscapeString(ip)
+			if hasDserv {
+				host = fmt.Sprintf(`<a href="http://%s:2565/ess_control.html" target="_blank">%s</a>`, eip, host)
+				if r != nil {
+					host += fmt.Sprintf(` <a href="http://%s/" target="_blank" title="management panel (dserv-agent)" style="text-decoration:none;font-size:12px">⚙</a>`, eip)
+				}
+			} else if r != nil {
+				host = fmt.Sprintf(`<a href="http://%s/" target="_blank">%s</a>`, eip, host)
 			}
-			host = fmt.Sprintf(`<a href="%s://%s:%d/" target="_blank">%s</a>`,
-				scheme, html.EscapeString(m.node.IP), m.node.Port, host)
 		}
 
 		identity := `<span style="color:#71767b">—</span>`
