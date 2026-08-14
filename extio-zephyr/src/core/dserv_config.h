@@ -416,6 +416,7 @@ typedef enum {
     CFG_PIPE_EN,
     CFG_BLE_LATENCY,
     CFG_DESC,
+    CFG_CHANNEL,
     CFG_LABEL,
     CFG_GROUP,
     CFG_AIN,        /* mcp/rate or ain/group/<g>/... analog-group config */
@@ -845,6 +846,16 @@ static inline cfg_result_t dserv_cfg__config(box_config_t *c, const char *k,
     if (strcmp(k, "desc") == 0) {
         dserv_msg_copy_cstr(m, c->desc, sizeof c->desc); c->applied_count++; return CFG_DESC;
     }
+    /* The firmware update channel this box tracks. Console-settable since v19
+     * and announced as state/channel, but with no config path until now -- so
+     * it was the ONE setting box_cli_dump emits that a host could read and not
+     * write back. A config export that silently drops it hands the next owner
+     * a box tracking the wrong firmware line, which is exactly the kind of
+     * quiet incompleteness a restore path must not have. */
+    if (strcmp(k, "channel") == 0) {
+        dserv_msg_copy_cstr(m, c->channel, sizeof c->channel); c->applied_count++;
+        return CFG_CHANNEL;
+    }
     if (strcmp(k, "name") == 0) {
         char w[BOX_NAME_MAX]; dserv_msg_copy_cstr(m, w, sizeof w);
         if (!dserv_name_valid(w)) return CFG_UNKNOWN;
@@ -1161,6 +1172,7 @@ static inline const char *dserv_cfg_result_str(cfg_result_t r)
     case CFG_PIPE_EN:    return "pipe_en";
     case CFG_BLE_LATENCY:return "ble_latency";
     case CFG_DESC:       return "desc";
+    case CFG_CHANNEL:    return "channel";
     case CFG_LABEL:      return "label";
     case CFG_GROUP:      return "group";
     case CFG_AIN:        return "ain";
