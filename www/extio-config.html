@@ -202,6 +202,28 @@ function onExtio(msg) {
     }
     return;
   }
+  /* Factory tombstone (extio/forgotten = "<name>"): the rename case above with
+   * no successor to follow. The box has erased itself and rebooted; it will
+   * come back as an unnamed stranger on the discovery beacon, not under this
+   * name. Without this the page that clicked Factory reset keeps showing a
+   * full, frozen panel for a box that no longer exists -- every value in it
+   * true five seconds ago and none of it true now, which is worse than an
+   * empty panel because it invites edits that will never land.
+   *
+   * Guarded by boxes.delete()'s return, so a retained tombstone replayed to a
+   * page that never knew this box, or that has since seen it re-adopted, is a
+   * no-op rather than a spurious removal -- and a re-adopted box repopulates
+   * from its own announce regardless. */
+  if (msg.name === 'extio/forgotten') {
+    const gone = String(msg.data !== undefined ? msg.data : msg.value || '')
+                   .split('\x00')[0].trim();
+    if (gone && boxes.delete(gone)) {
+      fleetHtml = null;
+      if (sel === gone) { sel = null; panelSig = null; renderFleet(); renderPanel(); }
+      else { renderFleet(); }
+    }
+    return;
+  }
   const m = /^extio\/([^/]+)\/state\/(.+)$/.exec(msg.name);
   if (!m) return;
   const [, box, leaf] = m;

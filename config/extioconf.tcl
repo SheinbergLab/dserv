@@ -2213,6 +2213,15 @@ proc extio_factory_done {box value} {
             # it republishes on its next announce.
             unset -nocomplain ::extio_cfg_dirty($box)
             catch { extio_clear $box }
+            # TOMBSTONE FOR EVERY OPEN PAGE, same mechanism as extio_rename.
+            # dserv never pushes deletions, so extio_clear empties the table
+            # while every browser keeps its own mirror -- a ghost card and a
+            # frozen panel describing a box that no longer exists under this
+            # name, including on the page that clicked the button. One retained
+            # key that all pages watch: drop <box>, and deselect if it was
+            # selected. Set AFTER the clear so it cannot be swept with the
+            # subtree it is announcing the death of.
+            dservSet extio/forgotten $box
             puts "extio: $box factory reset -- rebooting; it will reappear\
                   unadopted on the discovery beacon, ready to re-adopt"
         }
