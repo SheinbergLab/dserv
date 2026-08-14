@@ -85,6 +85,7 @@ func (a *Agent) handlePTPSetup(w http.ResponseWriter, r *http.Request) {
 #   curl -sSL %[1]s/ptp/setup | sudo bash -s -- candidates
 #   curl -sSL %[1]s/ptp/setup | sudo bash -s -- client IFACE
 #   curl -sSL %[1]s/ptp/setup | sudo bash -s -- grandmaster IFACE
+#   curl -sSL %[1]s/ptp/setup | sudo bash -s -- ntp-client SERVER   # no PTP NIC needed
 #
 # DSERV_PTP_DESTDIR=<dir> writes the files under <dir> and touches nothing
 # else (no apt, no systemctl, no role) -- a dry run you can diff.
@@ -155,6 +156,7 @@ echo "No role assigned -- that stays a deliberate step:"
 echo "  dserv-ptp-setup candidates          # interfaces that can actually do PTP"
 echo "  dserv-ptp-setup client IFACE        # follow the site's grandmaster"
 echo "  dserv-ptp-setup grandmaster IFACE   # define the site's time (ONE host per site)"
+echo "  dserv-ptp-setup ntp-client SERVER   # follow site time over NTP (no PTP NIC needed)"
 echo ""
 /usr/local/dserv/scripts/dserv-ptp-setup status || true
 `)

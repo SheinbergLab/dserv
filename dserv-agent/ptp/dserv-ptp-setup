@@ -5,7 +5,9 @@
 #   dserv-ptp-setup candidates        interfaces that can actually do PTP
 #   dserv-ptp-setup grandmaster IFACE this host defines the site's time
 #   dserv-ptp-setup client IFACE      this host follows the site's grandmaster
-#   dserv-ptp-setup disable           stop and disable both roles
+#   dserv-ptp-setup ntp-client SERVER this host follows site time over NTP
+#                                     (for hosts whose NIC cannot do PTP)
+#   dserv-ptp-setup disable           stop and disable every dserv time role
 #
 # WHY THIS IS NOT IN THE POSTINST. The package copies the unit TEMPLATES into
 # /etc/systemd/system, which is inert -- a template cannot start without an
@@ -30,6 +32,10 @@ GM_PTP=dserv-ptp4l@
 GM_PHC=dserv-phc2sys@
 CL_PTP=dserv-ptp4l-client@
 CL_PHC=dserv-phc2sys-client@
+
+# The NTP tier's one artifact: a chrony source pointing at the host that
+# serves this segment's time. Owned by the ntp-client role, removed by disable.
+NTP_CONF=/etc/chrony/conf.d/10-dserv-ntp-client.conf
 
 die() { echo "dserv-ptp-setup: $*" >&2; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
@@ -195,7 +201,10 @@ candidates() {
             _found=1
         fi
     done
-    [ "$_found" = 1 ] || echo "  (none -- this host cannot be a PTP node)"
+    [ "$_found" = 1 ] || {
+        echo "  (none -- this host cannot be a PTP node)"
+        echo "  It can still follow site time closely over NTP:  $0 ntp-client SERVER"
+    }
 }
 
 # Say out loud when the kernel is timestamping on a DIFFERENT clock than the one
@@ -315,6 +324,10 @@ status() {
     for _u in systemd-timesyncd.service chrony.service chronyd.service ntp.service ntpsec.service; do
         [ "$(systemctl is-active "$_u" 2>/dev/null)" = active ] && { echo "  NTP active: $_u"; _ts=1; }
     done
+    if [ -f "$NTP_CONF" ]; then
+        _s=$(sed -n 's/^server \([^ ]*\).*/\1/p' "$NTP_CONF" | head -1)
+        [ -n "$_s" ] && echo "  ntp-client tier: following $_s  ($NTP_CONF)"
+    fi
     for _u in $(role_instances); do
         case "$_u" in
           "$CL_PHC"*) [ "$(systemctl is-active "$_u" 2>/dev/null)" = active ] && {
@@ -734,6 +747,80 @@ case "${1:-status}" in
       echo "Making this host a PTP CLIENT on $2 (grandmaster found by BMCA; no address needed)."
       enable_pair "$CL_PTP" "$CL_PHC" "$2"
       ;;
+  ntp-client)
+      need_root "$@"
+      [ -n "$2" ] || die "usage: $0 ntp-client SERVER   (the host that serves this segment's time)"
+
+      # Mutually exclusive with a PTP role, for the same reason the PTP client
+      # stops NTP daemons: two disciplines steering CLOCK_REALTIME fight, and
+      # it reads as drift. Refuse rather than tear down -- dropping a PTP role
+      # is a site decision, not a side effect of asking for the weaker tier.
+      for _u in $(role_instances); do
+          [ "$(systemctl is-active "$_u" 2>/dev/null)" = active ] && \
+              die "this host has an active PTP role ($_u), which already steers the clock.
+   If the NTP tier is really what you want:  $0 disable   first."
+      done
+
+      # chrony, specifically -- measured doctrine, not preference: timesyncd
+      # fed the grandmaster's servo ~690x more noise than no source at all
+      # (numbers in systemd/chrony-grandmaster.conf), and ntpd would be a
+      # third daemon in a fleet standardized on chrony. Installing chrony
+      # displaces timesyncd via package conflict; say so before it happens.
+      if ! have chronyc; then
+          [ "$(systemctl is-active systemd-timesyncd 2>/dev/null)" = active ] && \
+              echo "NOTE: installing chrony replaces systemd-timesyncd (its measured jitter is why)."
+          have apt-get || die "chrony is not installed and apt-get is unavailable -- install chrony by hand, then re-run"
+          echo "Installing chrony..."
+          DEBIAN_FRONTEND=noninteractive apt-get install -y chrony >/dev/null \
+              || die "could not install chrony (try by hand: apt-get install -y chrony)"
+      fi
+
+      # Configure, then VERIFY BY REACH -- not a chronyd -Q precheck, which
+      # was measured to time out even against a live, allowed server when a
+      # chronyd daemon is resident, so it cannot discriminate. Writing first
+      # is safe: an unreachable source is merely unselectable, the distro
+      # pool keeps the clock, and disable removes the file.
+      cat > "$NTP_CONF" <<EOF
+# Written by dserv-ptp-setup ntp-client -- this host follows site time over
+# NTP because it has no PTP-capable NIC (see: dserv-ptp-setup candidates).
+#
+# prefer + trust pin selection to the site server even when internet pool
+# sources disagree: the figure of merit is coherence with the rig's timeline,
+# not absolute UTC, and the pool stays only as sanity candidates. minpoll 2 /
+# maxpoll 4 polls every 4-16 s -- cheap on a LAN, and frequent samples keep
+# the servo smooth. Expect tracking in the tens of microseconds on one wired
+# hop; remove with:  dserv-ptp-setup disable
+server $2 iburst minpoll 2 maxpoll 4 prefer trust
+EOF
+      systemctl restart chrony || die "chrony failed to restart (journalctl -u chrony)"
+      echo "Following $2 over NTP; waiting for it to answer (up to 30 s)..."
+
+      # Reach is the discriminator: 0 means not one query answered. -N keeps
+      # the source named exactly as configured so the match works for
+      # hostnames and addresses alike; CSV field 6 is reach (octal, but the
+      # only value that matters here is the literal 0). NOT waitsync -- that
+      # passes as soon as ANY source syncs, and the distro pool always will,
+      # which would report success for a dead site server.
+      _ok=; _i=0
+      while [ "$_i" -lt 15 ]; do
+          _reach=$(chronyc -N -c sources 2>/dev/null | awk -F, -v s="$2" '$3 == s { print $6; exit }')
+          if [ -n "$_reach" ] && [ "$_reach" != 0 ]; then _ok=1; break; fi
+          sleep 2; _i=$((_i + 1))
+      done
+      if [ -n "$_ok" ]; then
+          echo "$2 is answering; prefer+trust will keep selection pinned to it."
+      else
+          echo ""
+          echo "WARNING: $2 has not answered a single query in 30 s (reach 0)."
+          echo "  If it runs chrony, it does not even open udp/123 until an allow rule"
+          echo "  exists -- on $2 run:"
+          echo "    chronyc allow <this-subnet>"
+          echo "    echo 'allow <this-subnet>' > /etc/chrony/conf.d/20-serve-clients.conf"
+          echo "  This host keeps its distro NTP sources meanwhile. Re-check here with:"
+          echo "    chronyc sources          (or remove the role:  $0 disable)"
+      fi
+      chronyc sources 2>/dev/null || true
+      ;;
   disable)
       need_root "$@"
       for _p in "$GM_PTP" "$GM_PHC" "$CL_PTP" "$CL_PHC"; do
@@ -741,6 +828,15 @@ case "${1:-status}" in
               systemctl disable --now "$_u" 2>/dev/null || true
           done
       done
+      # The NTP tier's artifact goes too: disable means "no dserv time role",
+      # and chrony falls back to its distro defaults (the pool), which is a
+      # working time source -- not the orphaned state guarded against below.
+      if [ -f "$NTP_CONF" ]; then
+          rm -f "$NTP_CONF"
+          echo "removed the ntp-client source ($NTP_CONF); chrony reverts to its distro defaults."
+          systemctl try-restart chrony 2>/dev/null || true
+      fi
+
       # Do it, do not merely mention it. Leaving a host with no PTP role AND no
       # NTP daemon is the same "silently lost its time source" state that put the
       # rig Pi into 1970 -- and `disable` is exactly what you reach for when you
@@ -750,6 +846,6 @@ case "${1:-status}" in
       echo "disabled."
       status
       ;;
-  -h|--help|help) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//' ;;
+  -h|--help|help) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//' ;;
   *) die "unknown command '$1' (try: $0 --help)" ;;
 esac
