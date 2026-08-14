@@ -12,6 +12,14 @@ PROVISION_SRC=../wiznet-io/provision.sh
 PT_JSON_SRC=../wiznet-io/pt.json
 PT_PICO2W_SRC=../wiznet-io/pt-pico2w.json
 
+# The PTP role tooling (served at /ptp/setup) is embedded the same way: the
+# canonical sources live in ../scripts and ../systemd (they ship in the dserv
+# .deb), mirrored here so a display-only box can fetch them from the registry.
+PTP_FILES=ptp/dserv-ptp-setup ptp/dserv-ptp-select-phc \
+          ptp/dserv-ptp4l@.service ptp/dserv-phc2sys@.service \
+          ptp/dserv-ptp4l-client@.service ptp/dserv-phc2sys-client@.service \
+          ptp/chrony-grandmaster.conf
+
 # Build targets
 .PHONY: all build clean install uninstall sync-provision
 
@@ -26,9 +34,25 @@ pt.json: $(PT_JSON_SRC)
 pt-pico2w.json: $(PT_PICO2W_SRC)
 	cp $(PT_PICO2W_SRC) $@
 
-sync-provision: provision.sh pt.json pt-pico2w.json
+ptp/dserv-ptp-setup: ../scripts/dserv-ptp-setup
+	@mkdir -p ptp
+	cp $< $@
 
-build: provision.sh pt.json pt-pico2w.json
+ptp/dserv-ptp-select-phc: ../scripts/dserv-ptp-select-phc
+	@mkdir -p ptp
+	cp $< $@
+
+ptp/%.service: ../systemd/%.service
+	@mkdir -p ptp
+	cp $< $@
+
+ptp/chrony-grandmaster.conf: ../systemd/chrony-grandmaster.conf
+	@mkdir -p ptp
+	cp $< $@
+
+sync-provision: provision.sh pt.json pt-pico2w.json $(PTP_FILES)
+
+build: provision.sh pt.json pt-pico2w.json $(PTP_FILES)
 	go build $(LDFLAGS) -o $(BINARY) .
 
 # Cross-compile for common targets

@@ -1,0 +1,755 @@
+#!/bin/sh
+# dserv-ptp-setup -- put this host into a PTP role, once, deliberately.
+#
+#   dserv-ptp-setup [status]          what this host is doing now
+#   dserv-ptp-setup candidates        interfaces that can actually do PTP
+#   dserv-ptp-setup grandmaster IFACE this host defines the site's time
+#   dserv-ptp-setup client IFACE      this host follows the site's grandmaster
+#   dserv-ptp-setup disable           stop and disable both roles
+#
+# WHY THIS IS NOT IN THE POSTINST. The package copies the unit TEMPLATES into
+# /etc/systemd/system, which is inert -- a template cannot start without an
+# instance. Choosing the instance is a site decision the installer cannot make:
+#
+#   - the interface is unknowable at install time, and the obvious guess is
+#     wrong (the rig Pi's default route is wlan0 while PTP runs on eth0);
+#   - "grandmaster" is a NETWORK role, not a host preference. Auto-enabling it
+#     everywhere would put every dserv host into the election, and the winner
+#     would change as machines reboot -- silently re-basing the whole site's
+#     timeline, which is the clock step ptp/d_delta_us exists to detect;
+#   - hosts that cannot do hardware timestamping (Realtek, most USB NICs, VMs)
+#     would crash-loop forever behind Restart=always.
+#
+# WHY NOT IN dservctl. Every dservctl subcommand acts on whatever dserv you
+# point it at, possibly remote. This acts on THIS host and needs root. Same tool,
+# two different targets, is how you reconfigure the wrong machine at 2am.
+set -e
+
+SYSD=/etc/systemd/system
+GM_PTP=dserv-ptp4l@
+GM_PHC=dserv-phc2sys@
+CL_PTP=dserv-ptp4l-client@
+CL_PHC=dserv-phc2sys-client@
+
+die() { echo "dserv-ptp-setup: $*" >&2; exit 1; }
+have() { command -v "$1" >/dev/null 2>&1; }
+
+# ethtool and pmc live in /usr/sbin, which is NOT in a non-login shell's PATH --
+# so `command -v ethtool` answers "no" over `ssh host 'dserv-ptp-setup candidates'`
+# on a machine where ethtool is installed, and `candidates` then prints "ethtool
+# not installed" and silently downgrades to a weaker check. Resolve by path
+# instead. (The root-only subcommands got away with this because sudo's PATH does
+# include /usr/sbin; the read-only ones, which are the ones you run casually, did
+# not.)
+find_tool() {
+    for _p in "/usr/sbin/$1" "/sbin/$1" "/usr/bin/$1" "/bin/$1"; do
+        [ -x "$_p" ] && { echo "$_p"; return 0; }
+    done
+    command -v "$1" 2>/dev/null && return 0
+    return 1
+}
+ETHTOOL=$(find_tool ethtool || true)
+PMC=$(find_tool pmc || true)
+PHC_CTL=$(find_tool phc_ctl || true)
+
+# Any PTP clock that has never been SET reads as seconds-since-boot, so a
+# free-running PHC on a segment with no real grandmaster is indistinguishable
+# from an early-1970 wall clock -- which is exactly what it becomes once
+# phc2sys copies it into CLOCK_REALTIME. Anything at or after this floor has
+# demonstrably been set by something. Deliberately generous: a clock that is
+# merely a year stale is a different and far less destructive problem than one
+# that was never set at all, and this check is only trying to catch the latter.
+PLAUSIBLE_EPOCH=1735689600      # 2025-01-01T00:00:00Z
+
+need_root() { [ "$(id -u)" = 0 ] || die "must run as root (try: sudo $0 $*)"; }
+
+# The units name absolute paths in ExecStart, so check THOSE, not $PATH.
+#
+# Without this the failure is needlessly obscure: Type=simple means systemd
+# considers the start job successful as soon as it forks, the exec fails in the
+# child, and `enable --now` returns 0. The only symptom is enable_pair's 10 s
+# is-active check reporting "did not stay up", which sends you to journalctl to
+# discover a 203/EXEC you could have been told about before anything was enabled.
+deps_present() {
+    _missing=
+    for _b in /usr/sbin/ptp4l /usr/sbin/phc2sys; do
+        [ -x "$_b" ] || _missing="$_missing $_b"
+    done
+    [ -z "$_missing" ] || die \
+"missing:$_missing
+   These are the binaries the units exec. Install them:  apt install linuxptp ethtool"
+
+    # ethtool is not needed to RUN ptp4l, so it is fatal only where its absence
+    # can silently produce wrong time: a host with more than one PHC, where the
+    # kernel may be timestamping on a clock we can then neither see nor change.
+    if [ -z "$ETHTOOL" ]; then
+        _nphc=$(set -- /sys/class/ptp/ptp*; [ -e "$1" ] && echo $#) || _nphc=
+        if [ -n "$_nphc" ] && [ "$_nphc" -gt 1 ]; then
+            die "this host has $_nphc PTP clocks and no ethtool, so the timestamping clock
+   can be neither checked nor selected -- and the kernel's default is not always
+   the right one (see systemd/README.md). Install it:  apt install ethtool"
+        fi
+        echo "WARNING: ethtool not installed -- hardware-timestamp capability cannot be"
+        echo "         verified, only PHC presence.  apt install ethtool"
+    fi
+    [ -n "$PMC" ] || echo "NOTE: pmc not found; port state cannot be checked (it ships in linuxptp)."
+}
+
+units_present() {
+    [ -f "$SYSD/$GM_PTP.service" ] || die \
+"unit templates are not installed in $SYSD.
+   The dserv package copies them there in its postinst; if you are running from
+   a source tree:  sudo cp systemd/dserv-ptp*@.service $SYSD/ && sudo systemctl daemon-reload"
+}
+
+# Which PHC does this interface own, if any? Straight from sysfs, so it needs no
+# tools and is always available -- unlike ethtool, which is not installed by
+# default on a minimal Debian (office-stim had none).
+#
+# Two sysfs layouts exist. Most PCI NICs (igc/ixgbe/igb) register the clock
+# under .../device/ptp/ptpN. The RP1 southbridge NIC on a Pi 5 (macb driver)
+# registers it directly under the netdev itself, .../net/eth0/ptpN, with no
+# device/ptp path at all -- checking only the first form made a Pi 5 running
+# grandmaster on eth0 right now report itself as having no PHC.
+#
+# WHAT THIS IS NOT: the clock ptp4l will actually use. An interface can own more
+# than one PHC, and ptp4l asks the KERNEL (ETHTOOL_GET_TS_INFO), which since 6.13
+# answers with a settable "timestamp provider" that may point elsewhere -- on
+# hm-0 this function returned the MAC clock and passed preflight while ptp4l
+# opened the PHY clock and went FAULTY. Both clocks are found by design: what
+# this returns is the MAC's own, which is the one we WANT, and
+# dserv-ptp-select-phc is what makes the kernel agree. See provider_note().
+iface_phc() {
+    for _d in "/sys/class/net/$1/device/ptp"/ptp* "/sys/class/net/$1"/ptp*; do
+        [ -e "$_d" ] || continue
+        basename "$_d"; return 0
+    done
+    return 1
+}
+
+# Which PHC does the KERNEL say this interface timestamps on? This is
+# ETHTOOL_GET_TS_INFO -- literally the question ptp4l asks before it opens a
+# clock -- so it is the authoritative answer, and it is deliberately NOT the same
+# question as iface_phc() above. Empty when ethtool is missing, or when the
+# interface has no clock ("PTP Hardware Clock: none").
+#
+# TWO OUTPUT FORMATS, and the newer one does not merely add a line. Older ethtool
+# prints "PTP Hardware Clock: N". Since the 6.13 timestamp-provider work, newer
+# ethtool prints "Hardware timestamp provider index: N" INSTEAD -- the Pi 5 on
+# 6.18 emits no PTP-Hardware-Clock line at all, so matching only the old form
+# answers "no clock" for the host that has been this rig's grandmaster all along.
+# Both forms, or this check is a coin flip that depends on the distro.
+iface_phc_kernel() {
+    [ -n "$ETHTOOL" ] || return 1
+    _n=$("$ETHTOOL" -T "$1" 2>/dev/null | sed -n \
+         -e 's/^[[:space:]]*PTP Hardware Clock:[[:space:]]*\([0-9]\{1,\}\).*/\1/p' \
+         -e 's/^[[:space:]]*Hardware timestamp provider index:[[:space:]]*\([0-9]\{1,\}\).*/\1/p' \
+         | head -1)
+    [ -n "$_n" ] || return 1
+    echo "ptp$_n"
+}
+
+# Can this interface actually do PTP?
+#
+# A NIC with no PHC will start ptp4l happily and then report offsets of exactly
+# 0 forever, so this has to be checked and not assumed. NOTE the first version
+# returned SUCCESS when ethtool was missing, which listed every interface on the
+# host including a WiFi NIC -- a capability check that cannot run must never
+# answer "capable".
+#
+# ASK ETHTOOL FIRST, and do not gate on iface_phc(). Sysfs PHC presence is a
+# proxy for the kernel's answer, and it is not a complete one: it enumerates the
+# clocks an interface OWNS, and a clock can be owned by neither of the two places
+# it looks. On the i.MX95 (fsl_enetc4) the NETC timer is a PCI function of its
+# own -- 0001:00:18.0, shared by every port -- and eth0 is 0001:00:00.0, so the
+# timer is the netdev's SIBLING, under neither .../net/eth0/ptpN nor
+# .../net/eth0/device/ptp/ptpN. That host reported "cannot be a PTP node" while
+# ptp4l on the very same interface held ±40 ns against the rig grandmaster, and
+# preflight refused to configure it. Sysfs stays as the fallback for hosts with
+# no ethtool, where a proxy beats nothing.
+iface_capable() {
+    _if=$1
+    if [ -n "$ETHTOOL" ] && _t=$("$ETHTOOL" -T "$_if" 2>/dev/null); then
+        echo "$_t" | grep -q "hardware-transmit" || return 1
+        echo "$_t" | grep -q "hardware-receive"  || return 1
+        # A clock INDEX must be present: "PTP Hardware Clock: none" is a NIC that
+        # will start ptp4l happily and report offsets of exactly 0 forever.
+        iface_phc_kernel "$_if" >/dev/null || return 1
+        return 0
+    fi
+    iface_phc "$_if" >/dev/null
+}
+
+candidates() {
+    [ -n "$ETHTOOL" ] || echo "  (ethtool not installed -- checking PHC presence only;" \
+                              "\`apt install ethtool\` to also verify hw timestamping)"
+    _found=0
+    for _p in /sys/class/net/*; do
+        _if=$(basename "$_p")
+        case "$_if" in lo) continue ;; esac
+        if iface_capable "$_if"; then
+            # Prefer the interface's OWN clock (what we want it to use); fall
+            # back to the kernel's answer on hosts where it owns none directly.
+            echo "  $_if  ($(iface_phc "$_if" || iface_phc_kernel "$_if" || echo 'phc?'),"\
+                 "link $(cat "$_p/operstate" 2>/dev/null))"
+            _found=1
+        fi
+    done
+    [ "$_found" = 1 ] || echo "  (none -- this host cannot be a PTP node)"
+}
+
+# Say out loud when the kernel is timestamping on a DIFFERENT clock than the one
+# iface_phc found. Reporting only, and deliberately so: the ptp4l units correct
+# this from ExecStartPre, so preflight's job is to stop this being invisible, not
+# to mutate the interface behind the operator's back. Silent on pre-6.13 kernels,
+# which have no provider line to read.
+provider_note() {
+    _if=$1
+    [ -n "$ETHTOOL" ] || return 0
+    _want=$(iface_phc "$_if" 2>/dev/null | sed 's/^ptp//') || return 0
+    [ -n "$_want" ] || return 0
+    _have=$("$ETHTOOL" -T "$_if" 2>/dev/null \
+            | sed -n 's/.*[Pp]rovider index:[[:space:]]*\([0-9]\{1,\}\).*/\1/p' | head -1)
+    [ -n "$_have" ] || return 0
+    [ "$_have" = "$_want" ] && return 0
+    echo "NOTE: $_if is timestamping on ptp$_have ($(cat "/sys/class/ptp/ptp$_have/clock_name" 2>/dev/null)),"
+    echo "      not its own ptp$_want ($(cat "/sys/class/ptp/ptp$_want/clock_name" 2>/dev/null))."
+    echo "      The unit's ExecStartPre (dserv-ptp-select-phc) will switch it. If ptp4l still"
+    echo "      fails with SIOCSHWTSTAMP ERANGE, that switch did not take -- check ethtool -T."
+}
+
+enabled_of() { systemctl is-enabled "$1" 2>/dev/null | head -1; }
+
+# Every INSTANCE of our templates, loaded or merely enabled.
+#
+# NOT `systemctl list-unit-files`: that lists TEMPLATES (dserv-ptp4l@.service)
+# and never instances (dserv-ptp4l@enp86s0.service), so the first version of this
+# found only templates, skipped them, and reported "no role enabled" on a host
+# where both units were enabled AND active. A status command that cannot see the
+# thing it configures is worse than no status command.
+role_instances() {
+    { systemctl list-units --all --no-legend --no-pager \
+          "$GM_PTP*.service" "$GM_PHC*.service" "$CL_PTP*.service" "$CL_PHC*.service" 2>/dev/null \
+          | sed 's/^[^a-zA-Z]*//' | awk '{print $1}'
+      # enabled-but-never-started instances exist only as .wants symlinks
+      for _l in "$SYSD"/*.target.wants/dserv-ptp4l@*.service \
+                "$SYSD"/*.target.wants/dserv-phc2sys@*.service \
+                "$SYSD"/*.target.wants/dserv-ptp4l-client@*.service \
+                "$SYSD"/*.target.wants/dserv-phc2sys-client@*.service; do
+          [ -e "$_l" ] && basename "$_l"
+      done
+    } 2>/dev/null | sort -u
+}
+
+# PIDs systemd owns, so a healthy managed daemon is not reported as a conflict.
+managed_pid() {
+    for _u in $(role_instances); do
+        _m=$(systemctl show -p MainPID --value "$_u" 2>/dev/null)
+        [ "$_m" = "$1" ] && return 0
+    done
+    return 1
+}
+
+status() {
+    echo "== units =="
+    _any=0
+    for _u in $(role_instances); do
+        printf "  %-34s %s / %s\n" "$_u" "$(enabled_of "$_u")" "$(systemctl is-active "$_u" 2>/dev/null)"
+        _any=1
+    done
+    [ "$_any" = 1 ] || echo "  (no role enabled -- see: $0 candidates)"
+
+    echo "== conflicts =="
+    _c=0
+    # The distro's own linuxptp units. Two ptp4l on one PHC do not error -- they
+    # fight, and it reads as drift.
+    for _u in ptp4l@ phc2sys@ timemaster; do
+        for _e in $(systemctl list-units --no-legend --no-pager "${_u}*" 2>/dev/null | sed 's/^[^a-zA-Z]*//' | awk '{print $1}'); do
+            case "$_e" in dserv-*) continue ;; esac
+            echo "  DISTRO UNIT RUNNING: $_e"; _c=1
+        done
+    done
+    # ...and daemons nobody supervises. pgrep -x matches the process NAME, so it
+    # cannot match the shell running this script (the -af form did, and listed
+    # the caller's own command line as a conflict).
+    for _n in ptp4l phc2sys; do
+        for _pid in $(pgrep -x "$_n" 2>/dev/null); do
+            managed_pid "$_pid" && continue
+            echo "  HAND-STARTED: $(tr '\0' ' ' < /proc/$_pid/cmdline 2>/dev/null)"
+            echo "    ^ pid $_pid is not supervised -- will NOT survive a reboot"
+            _c=1
+        done
+    done
+    [ "$_c" = 0 ] && echo "  (none)"
+
+    # An enabled+active pair still tells you nothing about whether PTP WORKS --
+    # see the FAULTY note in enable_pair. Show the port state and which clock the
+    # kernel is actually timestamping on, because those are the two things that
+    # go wrong silently.
+    if [ -n "$PMC" ]; then
+        _st=$("$PMC" -u -b 0 "GET PORT_DATA_SET" 2>/dev/null \
+              | sed -n 's/.*portState[[:space:]]\{1,\}\([A-Z_]\{1,\}\).*/\1/p' | head -1)
+        [ -n "$_st" ] && {
+            echo "== port =="
+            echo "  portState $_st$([ "$_st" = FAULTY ] && echo '   <-- timestamping NOTHING; see: dserv-ptp-select-phc')"
+        }
+    fi
+    if [ -n "$ETHTOOL" ]; then
+        for _u in $(role_instances); do
+            case "$_u" in *@*.service) _i=${_u#*@}; _i=${_i%.service} ;; *) continue ;; esac
+            [ -e "/sys/class/net/$_i" ] || continue
+            _idx=$("$ETHTOOL" -T "$_i" 2>/dev/null \
+                   | sed -n 's/.*[Pp]rovider index:[[:space:]]*\([0-9]\{1,\}\).*/\1/p' | head -1)
+            [ -n "$_idx" ] && echo "  $_i timestamping on ptp$_idx ($(cat "/sys/class/ptp/ptp$_idx/clock_name" 2>/dev/null))"
+            break
+        done
+    fi
+
+    # NAME the source, do not just list NTP daemons. On a correctly configured
+    # client this section printed NOTHING -- the client's phc2sys unit Conflicts=
+    # every NTP daemon, so none is active, and a host whose time is arriving over
+    # PTP looked like a host with no time source at all. Silence is the one answer
+    # a status command must never give.
+    echo "== time source =="
+    _ts=0
+    for _u in systemd-timesyncd.service chrony.service chronyd.service ntp.service ntpsec.service; do
+        [ "$(systemctl is-active "$_u" 2>/dev/null)" = active ] && { echo "  NTP active: $_u"; _ts=1; }
+    done
+    for _u in $(role_instances); do
+        case "$_u" in
+          "$CL_PHC"*) [ "$(systemctl is-active "$_u" 2>/dev/null)" = active ] && {
+                          echo "  PTP: system clock steered from the PHC by $_u"; _ts=1; } ;;
+        esac
+    done
+    [ "$_ts" = 0 ] && echo "  (none -- clock is free-running)"
+    return 0
+}
+
+preflight() {
+    _role=$1; _if=$2
+    [ -n "$_if" ] || die "usage: $0 $_role IFACE   (see: $0 candidates)"
+    [ -e "/sys/class/net/$_if" ] || die "no such interface: $_if"
+    iface_capable "$_if" || die \
+"$_if has no PTP hardware clock, or no hardware timestamping. ptp4l would run
+   and report offsets of exactly 0 forever. Candidates on this host:
+$(candidates)"
+
+    provider_note "$_if"
+
+    for _u in ptp4l@ phc2sys@ timemaster; do
+        for _e in $(systemctl list-units --no-legend --no-pager "${_u}*" 2>/dev/null | sed 's/^[^a-zA-Z]*//' | awk '{print $1}'); do
+            case "$_e" in dserv-*) continue ;; esac
+            die "the distro unit $_e is running. Two ptp4l on one PHC fight and it
+   reads as drift, not as an error. Stop it first:  systemctl disable --now $_e"
+        done
+    done
+
+    # UNSUPERVISED daemons only. The first version matched any ptp4l/phc2sys,
+    # including the ones systemd had just started -- so re-running `grandmaster
+    # eth0` on a host where that role was already enabled died claiming its OWN
+    # units were "hand-started", listing the unit's ExecStart verbatim as the
+    # evidence. status() already knew better via managed_pid(); preflight did not.
+    _unmanaged=
+    for _n in ptp4l phc2sys; do
+        for _pid in $(pgrep -x "$_n" 2>/dev/null); do
+            managed_pid "$_pid" && continue
+            _unmanaged="$_unmanaged   $(tr '\0' ' ' < "/proc/$_pid/cmdline" 2>/dev/null)
+"
+        done
+    done
+    [ -z "$_unmanaged" ] || die "a hand-started ptp4l/phc2sys is already running:
+$_unmanaged   Kill it first, or systemd's copy will fight it for the same PHC."
+}
+
+# Retire the role we are LEAVING. Disable, not merely stop.
+#
+# THE BUG THIS CLOSES (rig Pi, 2026-08-09). enable_pair only ever ADDED: it
+# enabled the pair you asked for and left the previous role's .wants symlinks
+# standing. A host switched client -> grandmaster therefore ended up with all
+# FOUR units enabled, every one of them WantedBy=multi-user.target, with no
+# ordering between the two roles.
+#
+# That is not a harmless leftover, and it is not even weighted toward the role
+# you asked for. Conflicts= is declared on the CLIENT units only
+# (dserv-ptp4l-client@.service, dserv-phc2sys-client@.service), but systemd
+# reverses a conflict implicitly -- starting EITHER side stops the other -- so
+# the surviving role is decided by whatever systemd happens to start last. When
+# the client half won, its Conflicts= took chrony down with it, phc2sys steered
+# CLOCK_REALTIME to a from-zero PHC, and the host booted into 1970.
+#
+# Stopping is not enough and disabling is: Conflicts= already stops the loser at
+# runtime. What has to go is the symlink that re-arms it at the next boot.
+disable_role() {
+    _dp=$1; _dq=$2
+    _found=
+    for _u in $(role_instances); do
+        case "$_u" in "$_dp"*|"$_dq"*) _found="$_found $_u" ;; esac
+    done
+    [ -n "$_found" ] || return 0
+    echo "retiring the previous role:$_found"
+    # Deliberate word splitting: unit names cannot contain spaces, and
+    # systemctl takes them as separate arguments.
+    # shellcheck disable=SC2086
+    systemctl disable --now $_found 2>/dev/null || true
+}
+
+# Give a grandmaster its time source back.
+#
+# The client role's phc2sys unit declares Conflicts= on every NTP daemon, and
+# systemd does NOT restart a conflicted unit when the conflict goes away. So a
+# client -> grandmaster transition silently leaves the new grandmaster -- the
+# host that now DEFINES the site's time -- with no time source at all. This is
+# the second half of the 2026-08-09 failure: chrony was found `enabled` and
+# `inactive`, stopped hours earlier by a role change nobody connected to it.
+# Block until chrony has actually stepped the clock, and do not treat this as
+# politeness. phc2sys spends its ONE-TIME step allowance when it starts; an NTP
+# step landing AFTERWARDS leaves it facing a huge offset with no allowance left,
+# so it rails at max_adj and the error GROWS while the servo still reports s2
+# (seen on the rpi5 2026-08-09: -64000000 ppb, offset walking out at ~18 ms/s).
+# Every caller here runs BEFORE enable_pair for exactly that reason.
+wait_for_chrony() {
+    have chronyc || return 0
+    # ALL FOUR arguments. waitsync's interval defaults to 10 s, so the obvious
+    # `waitsync 30 0.1` is a 300 s stall, not a 30 s one; the trailing `0 1`
+    # sets max-skew unchecked and the poll to 1 s.
+    echo "waiting for chrony to converge (up to 30 s)..."
+    chronyc waitsync 30 0.1 0 1 >/dev/null 2>&1 \
+        || echo "NOTE: chrony has not converged yet -- if phc2sys ends up railed," \
+                "restart it: systemctl restart $GM_PHC$1.service"
+    return 0
+}
+
+# The grandmaster tuning drop-in, laid down by the command that MAKES a host a
+# grandmaster -- so the role and the tuning that role requires land together
+# instead of the tuning being a `cp` line printed in a NOTE that someone has to
+# remember. rpi500 ran as a grandmaster on stock chrony for exactly that reason.
+#
+# INSTALL-IF-ABSENT, NEVER OVERWRITE. The shipped server list is site-MEASURED --
+# the file's own header says "lowest measured delay from this host (30.4 ms)" --
+# so a rig on a different network may legitimately have edited it to servers that
+# are actually near it. Silently restoring our copy over that would replace a
+# measurement with a guess.
+install_gm_chrony_conf() {
+    _src=/usr/local/dserv/systemd/chrony-grandmaster.conf
+    _dst=/etc/chrony/conf.d/10-dserv-grandmaster.conf
+    [ -f "$_src" ] || return 0            # source checkout, not a packaged install
+    [ -d /etc/chrony/conf.d ] || return 0 # chrony not installed; the survey below says so
+    if [ -f "$_dst" ]; then
+        echo "chrony grandmaster tuning already present ($_dst) -- left as is."
+        return 0
+    fi
+    cp "$_src" "$_dst" 2>/dev/null || { echo "NOTE: could not write $_dst"; return 0; }
+    chmod 0644 "$_dst" 2>/dev/null || true
+    echo "installed chrony grandmaster tuning -> $_dst"
+    # It only takes effect on a reload, and the restart re-arms makestep -- which
+    # is precisely why this must happen here, ahead of enable_pair, rather than
+    # being left for the operator to do afterwards with phc2sys already running.
+    if [ "$(systemctl is-active chrony.service 2>/dev/null)" = active ]; then
+        systemctl restart chrony.service 2>/dev/null || true
+        wait_for_chrony "$1"
+    fi
+    return 0
+}
+
+# $1 = "wait" to block until the clock has actually been stepped, $2 = iface.
+# Only the grandmaster path needs the wait; `disable` starts no phc2sys, so
+# making it sit through a 30 s convergence wait would be latency for nothing.
+revive_ntp() {
+    _wait=$1
+    for _u in chrony.service chronyd.service systemd-timesyncd.service ntp.service ntpsec.service; do
+        [ "$(systemctl is-active "$_u" 2>/dev/null)" = active ] && return 0
+    done
+    for _u in chrony.service chronyd.service systemd-timesyncd.service ntp.service ntpsec.service; do
+        case "$(enabled_of "$_u")" in enabled|enabled-runtime|static) ;; *) continue ;; esac
+        echo "starting $_u -- a PTP client role had stopped it, and this host needs a time source."
+        systemctl start "$_u" 2>/dev/null || continue
+        [ "$_wait" = wait ] || return 0
+        case "$_u" in chrony.service|chronyd.service) wait_for_chrony "$2" ;; esac
+        return 0
+    done
+    return 0
+}
+
+enable_pair() {
+    _p=$1; _q=$2; _if=$3
+    case "$_p" in
+      "$GM_PTP") disable_role "$CL_PTP" "$CL_PHC" ;;
+      *)         disable_role "$GM_PTP" "$GM_PHC" ;;
+    esac
+    systemctl daemon-reload
+    systemctl enable --now "${_p}${_if}.service" "${_q}${_if}.service"
+    echo
+    echo "waiting 10 s for ptp4l to settle..."
+    sleep 10
+    systemctl is-active "${_p}${_if}.service" >/dev/null 2>&1 \
+        || die "${_p}${_if} did not stay up -- journalctl -u ${_p}${_if}"
+
+    # is-active is NOT sufficient, and finding that out cost a confusing hour.
+    # ptp4l can fail SIOCSHWTSTAMP, put port 1 into FAULTY, and then sit there
+    # RUNNING and healthy-looking forever, timestamping nothing. systemd sees a
+    # live process; the clock sees no PTP at all. Ask the daemon what its port is
+    # actually doing.
+    #
+    # Only FAULTY is fatal here. LISTENING/UNCALIBRATED are normal transients --
+    # a fresh client has not necessarily reached SLAVE within the settle window,
+    # and failing on that would be a flaky check, which is worse than none.
+    if [ -n "$PMC" ]; then
+        _st=$("$PMC" -u -b 0 "GET PORT_DATA_SET" 2>/dev/null \
+              | sed -n 's/.*portState[[:space:]]\{1,\}\([A-Z_]\{1,\}\).*/\1/p' | head -1)
+        case "$_st" in
+          FAULTY) die "${_p}${_if} is running but port 1 is FAULTY -- it is timestamping nothing.
+   Almost always the wrong PTP hardware clock: an interface can expose both a MAC
+   and a PHY PHC, and the PHY typically rejects --hwts_filter full with
+   SIOCSHWTSTAMP ERANGE. Check which clock is selected, and fix it with:
+       $ETHTOOL -T $_if | grep -i 'provider index'
+       dserv-ptp-select-phc $_if && systemctl restart ${_p}${_if}
+   Full log: journalctl -u ${_p}${_if}" ;;
+          "")     : ;;   # pmc gave no answer; not a reason to fail the setup
+          MASTER|SLAVE) echo "port 1 ($_if): $_st" ;;
+          *)      echo "port 1 ($_if): $_st (still settling; re-check with $0 status)" ;;
+        esac
+    fi
+    echo
+    status
+    # THIS host's own offset, from the local ptp4l over its UDS (-u -b 0), not
+    # from the segment. A setup command's closing number has to be about the
+    # machine you just set up, and the first version's was not: it asked the
+    # NETWORK (-i IFACE -b 1), which every PTP node on the wire answers, and
+    # printed whichever replied first -- on the rig that was an extio box, so
+    # `dserv-ptp-setup grandmaster` ended by reporting a box's offset as this
+    # machine's.
+    #
+    # NO -t 1, and that is not incidental. -t sets the transportSpecific field,
+    # and 1 means 802.1AS/gPTP; a ptp4l running the default 0 silently DISCARDS
+    # such a request instead of answering. So the old line could only ever have
+    # been answered by some OTHER node -- the wrong-host bug and the dead -t flag
+    # were the same mistake wearing two hats.
+    if [ -n "$PMC" ]; then
+        echo "== offset from master (this host) =="
+        _o=$("$PMC" -u -b 0 "GET CURRENT_DATA_SET" 2>/dev/null \
+             | grep -E 'offsetFromMaster|meanPathDelay|stepsRemoved' | sed 's/^[[:space:]]*/  /')
+        if [ -n "$_o" ]; then
+            echo "$_o"
+            # Role from the unit we were asked to enable, NOT from preflight's
+            # $_role: this script has no `local`, so that variable only survives
+            # into here by accident of shell scoping, which is not a contract.
+            case "$1" in
+              "$GM_PTP") echo "  (a grandmaster is its own reference, so 0 here is correct)" ;;
+            esac
+        else
+            echo "  (no answer from the local ptp4l yet)"
+        fi
+    fi
+    return 0
+}
+
+# Would following this segment actually destroy this host's clock?
+#
+# THE FAILURE THIS EXISTS TO PREVENT (rig Pi, 2026-08-09). `client eth0` was run
+# on a LAN whose only other nodes were a switch and one extio box -- no
+# grandmaster with real time anywhere on it. The PHC free-ran from zero, phc2sys
+# faithfully steered CLOCK_REALTIME down to match, and the host landed in 1970
+# with chrony stopped by Conflicts=. Every layer reported success: ptp4l locked,
+# phc2sys reached s2, systemd showed all green. The only visible symptom was
+# every extio box reading "offline 29h" in the GUI -- because dserv's epoch
+# anchor (captured once at startup, by design) had baked in the pre-boot clock,
+# so the whole rig looked dead while being perfectly healthy.
+#
+# THE CHECK IS A TRIAL, NOT A GUESS, and that distinction is the whole design.
+# ptp4l disciplines the PHC and never touches CLOCK_REALTIME -- only phc2sys
+# does. So we can start the ptp4l half alone, ask the segment what time it
+# actually serves, and refuse before anything is allowed near the system clock.
+# A trial that cannot hurt you is worth more than a heuristic that guesses.
+trial_cleanup() {
+    systemctl stop "${CL_PTP}$1.service" 2>/dev/null || true
+    # Put back what the trial displaced. Starting the client ptp4l trips its
+    # Conflicts= on the grandmaster's, so a REFUSAL must not leave the host
+    # stripped of the role it already had -- a preflight that damages the thing
+    # it declined to change is worse than no preflight.
+    [ "$2" = active ] && systemctl start "${GM_PTP}$1.service" 2>/dev/null || true
+    return 0
+}
+
+master_sane() {
+    _if=$1
+    if [ "${DSERV_PTP_SKIP_MASTER_CHECK:-0}" = 1 ]; then
+        echo "NOTE: DSERV_PTP_SKIP_MASTER_CHECK=1 -- not verifying the grandmaster's time."
+        return 0
+    fi
+    if [ -z "$PHC_CTL" ]; then
+        echo "NOTE: phc_ctl not found, so the grandmaster's time cannot be verified"
+        echo "      before this host follows it. If it comes up in 1970, that is why."
+        return 0
+    fi
+
+    _gm_was=$(systemctl is-active "${GM_PTP}${_if}.service" 2>/dev/null || true)
+    echo "trial: starting ${CL_PTP}${_if} alone -- ptp4l never touches CLOCK_REALTIME."
+    systemctl start "${CL_PTP}${_if}.service" \
+        || die "${CL_PTP}${_if} would not start -- journalctl -u ${CL_PTP}${_if}"
+
+    # UNCALIBRATED counts: it means a master has been found and we are still
+    # converging on it, which is already enough to read the time it serves.
+    _st=
+    _i=0
+    while [ "$_i" -lt 30 ]; do
+        # NOT `[ -n "$PMC" ] && _st=...`: that list is the last command in the
+        # loop body, so on a host with no pmc it returns non-zero and `set -e`
+        # kills the script mid-preflight.
+        if [ -n "$PMC" ]; then
+            _st=$("$PMC" -u -b 0 "GET PORT_DATA_SET" 2>/dev/null \
+                  | sed -n 's/.*portState[[:space:]]\{1,\}\([A-Z_]\{1,\}\).*/\1/p' | head -1)
+        fi
+        case "$_st" in SLAVE|UNCALIBRATED) break ;; esac
+        _i=$((_i + 1))
+        sleep 1
+    done
+
+    case "$_st" in
+      SLAVE|UNCALIBRATED) ;;
+      *)
+        trial_cleanup "$_if" "$_gm_was"
+        die "no grandmaster answered on $_if after ${_i}s (port state: ${_st:-unknown}).
+   A client with no master is not merely idle. Its PHC free-runs from zero and
+   phc2sys would steer this host's CLOCK_REALTIME down to it -- into 1970, with
+   your NTP daemon stopped by Conflicts=, and dserv's timestamps stranded on
+   whatever the clock read at startup. Bring the site's grandmaster up first,
+   then re-run this. To proceed anyway:
+       DSERV_PTP_SKIP_MASTER_CHECK=1 $0 client $_if" ;;
+    esac
+
+    _phc=$(iface_phc_kernel "$_if" || iface_phc "$_if" || true)
+    [ -n "$_phc" ] || { echo "NOTE: no PHC resolved for $_if -- proceeding unchecked."; return 0; }
+    _t=$("$PHC_CTL" "/dev/$_phc" get 2>/dev/null \
+         | sed -n 's/.*clock time is \([0-9]\{1,\}\)\..*/\1/p' | head -1)
+    case "$_t" in
+      ""|*[!0-9]*)
+        echo "NOTE: could not read a usable time from /dev/$_phc -- proceeding unchecked."
+        return 0 ;;
+    esac
+
+    if [ "$_t" -lt "$PLAUSIBLE_EPOCH" ]; then
+        trial_cleanup "$_if" "$_gm_was"
+        die "the grandmaster on $_if is serving $(date -u -d "@$_t" 2>/dev/null || echo "epoch $_t"),
+   which is a clock that was never SET -- it is counting from zero, almost
+   certainly a box or switch that won the election because no real time source
+   was on the segment. Following it would drag this host's system clock back
+   with it and stop your NTP daemon on the way. Refusing.
+   Fix the grandmaster first (dserv-ptp-setup grandmaster IFACE on the host that
+   has a time source), then re-run. To proceed anyway:
+       DSERV_PTP_SKIP_MASTER_CHECK=1 $0 client $_if"
+    fi
+    echo "grandmaster time on $_if looks sane: $(date -u -d "@$_t" 2>/dev/null || echo "epoch $_t")"
+    return 0
+}
+
+case "${1:-status}" in
+  status|"")    status ;;
+  candidates)   candidates ;;
+  grandmaster)
+      need_root "$@"; deps_present; units_present; preflight grandmaster "$2"
+      # BEFORE the survey below, not after: if this host is coming FROM the
+      # client role, its NTP daemon is currently stopped by that role's
+      # Conflicts=, and the survey would read that absence as "no NTP daemon
+      # installed" and print the wrong advice about a host that has chrony sitting
+      # right there, enabled. Retire the old role and restore its time source
+      # first, then ask what the time source is.
+      disable_role "$CL_PTP" "$CL_PHC"
+      install_gm_chrony_conf "$2"
+      revive_ntp wait "$2"
+      # The grandmaster's phc2sys pushes the SYSTEM clock into the PHC, so NTP
+      # here is the site's actual time source. This is the exact reverse of the
+      # client role, and the asymmetry is the easiest thing to get backwards.
+      #
+      # WHICH daemon matters more than WHETHER one is running, and this used to
+      # say the opposite. Measured on the i.MX95 grandmaster 2026-08-08, 120
+      # samples of its own phc2sys each:
+      #
+      #   chrony              sd     92 ns   |max|   647 ns
+      #   systemd-timesyncd   sd 53,042 ns   |max| 374,000 ns
+      #   no NTP at all       sd     77 ns   |max|   120 ns
+      #
+      # timesyncd was ~690x WORSE THAN NO TIME SOURCE AT ALL -- it is an SNTP
+      # client with no filtering, so ordinary path variation becomes hundreds of
+      # ppm of frequency thrash, and phc2sys pushes every bit of it into the PHC
+      # and out to every box. Picking a better SERVER does not fix that; it was
+      # tried first and changed nothing measurable.
+      _ntp_daemon=
+      for _u in chrony.service chronyd.service systemd-timesyncd.service ntp.service ntpsec.service; do
+          if [ "$(systemctl is-active "$_u" 2>/dev/null)" = active ]; then
+              _ntp_daemon=$_u; break                # chrony first: it wins if both
+          fi
+      done
+      case "$_ntp_daemon" in
+        chrony.service|chronyd.service) : ;;       # the good case, say nothing
+        "")
+          echo "NOTE: no NTP daemon active. The clock will free-run -- which is"
+          echo "      MUCH better than a bad one (see above), but it drifts in"
+          echo "      absolute terms. Install chrony for accuracy at no cost in"
+          echo "      stability:  apt install chrony"
+          echo "      then:  cp chrony-grandmaster.conf /etc/chrony/conf.d/10-dserv-grandmaster.conf" ;;
+        *)
+          echo "WARNING: $_ntp_daemon is this grandmaster's time source, and it"
+          echo "         will inject its jitter into every box on the rig."
+          echo "         Measured: timesyncd sd 53 us vs chrony sd 92 ns here."
+          echo "         Replace it:  apt install chrony   (removes timesyncd)"
+          echo "         then:  cp chrony-grandmaster.conf /etc/chrony/conf.d/10-dserv-grandmaster.conf" ;;
+      esac
+
+      # ORDER MATTERS, and getting it wrong strands phc2sys in a way that still
+      # reports "locked". phc2sys spends its ONE-TIME start-up step allowance
+      # (-F, 20 us) when it starts. If an NTP daemon completes its initial sync
+      # AFTERWARDS and steps CLOCK_REALTIME, phc2sys faces a huge offset with no
+      # step allowance left, and -S 1.0 refuses to step anything under a second
+      # -- so it can only slew, rails at max_adj, and the error GROWS. Seen on
+      # the rpi5 2026-08-09: freq pinned at -64000000 ppb (the Pi PHC's max_adj)
+      # while the offset walked out at ~18 ms/s, servo state still reading s2.
+      # Recovery is `systemctl restart dserv-phc2sys@<iface>`, which restores the
+      # allowance and steps straight back to +/-57 ns.
+      if [ -n "$_ntp_daemon" ] && [ "$(systemctl show -p ActiveEnterTimestampMonotonic --value "$_ntp_daemon" 2>/dev/null || echo 0)" -gt 0 ] 2>/dev/null; then
+          _up_s=$(( ( $(cut -d' ' -f1 /proc/uptime | cut -d. -f1) ) - \
+                    ( $(systemctl show -p ActiveEnterTimestampMonotonic --value "$_ntp_daemon" 2>/dev/null) / 1000000 ) ))
+          if [ "${_up_s:-999}" -lt 300 ]; then
+              echo "NOTE: $_ntp_daemon started ${_up_s}s ago and may not have stepped the"
+              echo "      clock yet. If it steps AFTER phc2sys starts, phc2sys cannot"
+              echo "      recover on its own (it rails at max_adj and still reports s2)."
+              echo "      Let it settle first, or afterwards run:"
+              echo "        systemctl restart $GM_PHC$2.service"
+          fi
+      fi
+
+      echo "Making this host the PTP GRANDMASTER on $2."
+      enable_pair "$GM_PTP" "$GM_PHC" "$2"
+      ;;
+  client)
+      need_root "$@"; deps_present; units_present; preflight client "$2"
+      master_sane "$2"
+      # ...and here NTP must go: phc2sys now steers CLOCK_REALTIME from the PHC,
+      # so an NTP daemon would steer the same clock against it. The unit declares
+      # Conflicts= so systemd stops them, but say so out loud -- a machine
+      # silently losing its NTP client is worth knowing about.
+      for _u in systemd-timesyncd.service chrony.service chronyd.service ntp.service ntpsec.service; do
+          [ "$(systemctl is-active "$_u" 2>/dev/null)" = active ] && \
+              echo "NOTE: $_u will be STOPPED -- on a client, PTP is the time source."
+      done
+      echo "Making this host a PTP CLIENT on $2 (grandmaster found by BMCA; no address needed)."
+      enable_pair "$CL_PTP" "$CL_PHC" "$2"
+      ;;
+  disable)
+      need_root "$@"
+      for _p in "$GM_PTP" "$GM_PHC" "$CL_PTP" "$CL_PHC"; do
+          for _u in $(systemctl list-units --no-legend --no-pager "${_p}*" 2>/dev/null | sed 's/^[^a-zA-Z]*//' | awk '{print $1}'); do
+              systemctl disable --now "$_u" 2>/dev/null || true
+          done
+      done
+      # Do it, do not merely mention it. Leaving a host with no PTP role AND no
+      # NTP daemon is the same "silently lost its time source" state that put the
+      # rig Pi into 1970 -- and `disable` is exactly what you reach for when you
+      # are already unsure what this machine's clock is doing, so a NOTE here was
+      # advice arriving at the worst possible moment to act on it.
+      revive_ntp
+      echo "disabled."
+      status
+      ;;
+  -h|--help|help) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//' ;;
+  *) die "unknown command '$1' (try: $0 --help)" ;;
+esac

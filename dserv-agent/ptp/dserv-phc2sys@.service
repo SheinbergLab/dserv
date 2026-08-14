@@ -1,0 +1,57 @@
+[Unit]
+# Rate-lock the %i PHC to the host system clock. Pairs with dserv-ptp4l@%i.
+#
+# WHY THIS IS NOT OPTIONAL. This host is the grandmaster, so its PHC is
+# free-running; measured drift against CLOCK_MONOTONIC is ~46 ppm on the Pi and
+# 0.230 ppm on office-stim WITHOUT this. dserv stamps from CLOCK_MONOTONIC plus a
+# constant, so an undisciplined PHC makes the PHC<->dserv mapping decay in
+# seconds. With phc2sys running, office-stim measured -0.3 ns/s (0.000 ppm),
+# moving the 1 us re-anchor interval from 4.35 s to ~3200 s.
+#
+# DIRECTION MATTERS, and is the opposite of most examples:
+#   -c %i -s CLOCK_REALTIME  = discipline the PHC (consumer) FROM the system
+#                              clock (source).
+# Linux applies the same frequency adjustment to CLOCK_MONOTONIC as to
+# CLOCK_REALTIME, so locking the PHC to the system clock also rate-locks it to
+# dserv's timebase -- which is the entire point. The boxes then follow the PHC.
+#
+# Consequence worth knowing: an NTP daemon (systemd-timesyncd, chrony) steering
+# the system clock is NOT a conflict here, because phc2sys only CONSUMES that
+# clock. The clash to avoid is the reverse (-s %i -c CLOCK_REALTIME), where
+# phc2sys and NTP would both steer the system clock and fight each other.
+#
+# -w waits for ptp4l to synchronise before disciplining, which is why this is
+# ordered after the ptp4l unit.
+Description=Rate-lock the %i PHC to the system clock (phc2sys)
+Documentation=file:/usr/local/dserv/extio-zephyr/PORTING.md
+Wants=network-online.target
+Wants=dserv-ptp4l@%i.service
+After=network-online.target time-sync.target dserv-ptp4l@%i.service
+
+# Wants=, not Requires=/BindsTo=. Both of those propagate STOP, and a unit
+# stopped by a dependency is not restarted by Restart= -- so every ptp4l restart
+# would silently strand phc2sys. Wants= only orders and pulls it in; phc2sys's
+# own -w waits for ptp4l, and Restart=always covers the rest.
+
+[Service]
+Type=simple
+# -S 1.0: STEP offsets over 1 s instead of slewing. Without it, the boot
+# order bites: phc2sys spends its one free first-step syncing the PHC to
+# the still-wrong boot clock, chrony then steps CLOCK_REALTIME, and
+# phc2sys drags the PHC across that gap at max slew (~65 ms/s) for many
+# minutes -- during which every extio D anchor is stale within a second
+# and all scheduled onsets land 'late' (officepi brownout, 2026-08-05:
+# 69 s residue = 18 min of dark obs LED). A >1 s offset means the
+# timeline is already unusable; stepping is strictly better. time-sync
+# ordering above narrows the window; -S closes it.
+ExecStart=/usr/sbin/phc2sys -c %i -s CLOCK_REALTIME -w -m -q -S 1.0
+Restart=always
+RestartSec=5
+
+# -m to stdout for journald; -q to suppress syslog, or every line lands in the
+# journal twice (see the ptp4l unit).
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1480,6 +1480,11 @@ func registerBootstrapHandlers(mux *http.ServeMux, agent *Agent) {
 	// Board-side sibling: curl -fsSL http://server/extio/setup | bash
 	mux.HandleFunc("/extio/setup", agent.handleExtioSetup)
 
+	// Time-role sibling: curl -sSL http://server/ptp/setup | sudo bash -s -- client IFACE
+	// (the PTP tooling ships in the dserv .deb; this is how a box WITHOUT
+	// dserv -- a stim-profile display box -- gets it. See ptp_setup.go.)
+	mux.HandleFunc("/ptp/setup", agent.handlePTPSetup)
+
 	mux.HandleFunc("/setup/", func(w http.ResponseWriter, r *http.Request) {
 		path := strings.TrimPrefix(r.URL.Path, "/setup")
 		path = strings.TrimPrefix(path, "/")

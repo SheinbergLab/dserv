@@ -1,0 +1,82 @@
+[Unit]
+# PTP grandmaster for the extio boxes. Templated on the interface, so one file
+# serves every site:  dserv-ptp4l@eth0  (rig Pi)  ·  dserv-ptp4l@enp86s0 (office).
+#
+# Deliberately NOT named ptp4l.service: Debian's linuxptp package ships units by
+# that name, and silently shadowing or being shadowed by a distro unit is a bad
+# failure for something whose whole job is to be trustworthy.
+#
+# --hwts_filter full is REQUIRED, and not just on one NIC. ptp4l asks for
+# HWTSTAMP_FILTER_PTP_V2_EVENT by default; a NIC that advertises only `none` and
+# `all` never honours it, so every event message arrives WITHOUT a timestamp and
+# mean_delay / offset_from_tt sit at 0 -- a confident-looking, meaningless
+# result. Both NICs measured so far are like this (Pi 5 macb, Intel I226-V igc).
+# Check `ethtool -T <iface>` on any new host before assuming the default works.
+#
+# ...but that filter list is a property of the selected CLOCK, not of the host.
+# An interface can expose several PHCs (a MAC clock and a PHY clock), and since
+# Linux 6.13 which one is used is a settable per-interface "timestamp provider"
+# whose default can be the wrong one -- on hm-0 (CM5, 6.18) it is the BCM PHY,
+# which offers {none, ptpv2-event}, rejects this flag with SIOCSHWTSTAMP ERANGE,
+# and drives phc2sys over MDIO at 215 us of read delay. If you land on that,
+# DO NOT drop --hwts_filter full: fix the clock. ExecStartPre below does it.
+#
+# --priority1 127 makes this host the grandmaster. The boxes are slaves and need
+# no configuration; they discipline their ENET 1588 counters to this PHC.
+#
+# NOTE on scheduling: no CPUSchedulingPolicy here, unlike dserv.service. Every
+# PTP figure in extio-zephyr/PORTING.md (±100 ns direct, ±352 ns through the
+# switch) was measured with ptp4l at DEFAULT priority. Adding RT scheduling would
+# invalidate that baseline and could contend with dserv's own fifo/60 threads.
+# Change it only alongside a re-measurement.
+Description=PTP grandmaster (ptp4l) on %i for extio time sync
+Documentation=file:/usr/local/dserv/extio-zephyr/PORTING.md
+Wants=network-online.target
+After=network-online.target sys-subsystem-net-devices-%i.device
+
+# Deliberately NOT BindsTo= the device. A dependency-stop is not a failure, so
+# Restart= does NOT recover from it -- a NIC flap or a driver reload would take
+# PTP down permanently and silently, which is the exact outcome these units
+# exist to prevent. `After=` orders startup; Restart=always rides out flaps
+# (ptp4l exits when the interface vanishes and is simply restarted until it
+# comes back).
+
+[Service]
+Type=simple
+# NO -2 HERE, AND THAT IS DELIBERATE -- it was added and then removed on
+# 2026-07-29, so this comment exists to stop it coming back.
+#
+# The MCXN947 boxes appeared to need L2 (-2) because UDP/IPv4 "never got an RX
+# timestamp". The real cause was a race in the Zephyr ENET_QOS driver's RX
+# context-descriptor handling, fixed by
+# extio-zephyr/patches/enet-qos-rx-timestamp-race.patch. Whether the timestamp
+# survived depended on instruction timing, i.e. it was BUILD-DETERMINISTIC, and the
+# L2-vs-UDP comparison changed the binary too -- so L2 got the credit for a lucky
+# code layout. With the patch, UDP/IPv4 converges 8/8 cold boots.
+#
+# Keeping the default transport matters for the FLEET: RW612 boxes do not override
+# it, so they speak UDP. One ptp4l on the default transport serves every box. Adding
+# -2 here silently stops every UDP box from syncing -- and a transport mismatch
+# produces TOTAL SILENCE rather than an error, which is harder to diagnose than the
+# bug it was meant to work around.
+# Point %i at its MAC's own PHC before ptp4l opens it (see the note above). The
+# leading `-` is load-bearing: this is a correction for one class of host, and it
+# must never be the reason PTP fails to start on the others. phc2sys is ordered
+# After= this unit and resolves `-c %i` through the same setting, so fixing it
+# here fixes both daemons.
+ExecStartPre=-/usr/local/dserv/scripts/dserv-ptp-select-phc %i
+ExecStart=/usr/sbin/ptp4l -i %i -H -m -q --priority1 127 --hwts_filter full
+Restart=always
+RestartSec=5
+
+# -m prints to stdout, which journald captures. -q is what actually stops the
+# DUPLICATION: -m does not disable syslog, so without it linuxptp logs every
+# message twice into the journal -- once via stdout and once via syslog. Verified
+# on the rig 2026-07-28 before adding it.
+# This replaces host/start_ptp.sh, which setsid'd into /tmp/ptp4l.log with no
+# supervision and did not survive a host reboot.
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

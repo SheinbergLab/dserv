@@ -1,0 +1,59 @@
+[Unit]
+# PTP CLIENT (slave) on %i -- the mirror of dserv-ptp4l@%i.
+#
+# Use this on a dserv host that is NOT the site's time source: a second
+# acquisition machine, a stim host, anything that must share the grandmaster's
+# timeline rather than define it. Exactly one host per site runs the
+# dserv-ptp4l@ (grandmaster) unit; everything else runs this.
+#
+# A CLIENT NEEDS NO ADDRESS. That is PTP's advantage over NTP: the grandmaster
+# announces, and BMCA elects it. The only value that must MATCH the grandmaster
+# is the domain number (0 by default, hence not spelled out here) -- get that
+# wrong and the client sees no master at all rather than a wrong one.
+#
+# -s (slaveOnly) is the whole difference, and it is a safety property, not a
+# preference: without it this host joins the election and can WIN, quietly
+# becoming the site's time source when the real grandmaster reboots. The
+# timeline would then re-base under everyone -- exactly the clock step
+# ptp/d_delta_us exists to detect. slaveOnly makes that impossible rather than
+# unlikely.
+#
+# --hwts_filter full for the same reason as the grandmaster unit: a NIC that
+# advertises only `none` and `all` never honours the default PTP_V2_EVENT
+# filter, and every event message arrives untimestamped while offsets sit at a
+# confident-looking 0. Check `ethtool -T %i` on any new host.
+#
+# And, as there, that filter list belongs to the selected CLOCK: an interface can
+# expose both a MAC and a PHY PHC, and the kernel's default choice can be the one
+# that rejects this flag outright (SIOCSHWTSTAMP ERANGE -> port FAULTY). The
+# ExecStartPre below picks the MAC's own clock; do not "fix" a FAULTY port by
+# deleting --hwts_filter full.
+Description=PTP client (ptp4l slaveOnly) on %i
+Documentation=file:/usr/local/dserv/extio-zephyr/PORTING.md
+Wants=network-online.target
+After=network-online.target sys-subsystem-net-devices-%i.device
+
+# Not BindsTo= the device -- see dserv-ptp4l@.service for why: a dependency-stop
+# is not a failure, so Restart= would not recover from a NIC flap.
+
+# Mutually exclusive with the grandmaster unit on the same interface. Two ptp4l
+# instances on one PHC fight, and it presents as drift rather than as an error.
+Conflicts=dserv-ptp4l@%i.service
+
+[Service]
+Type=simple
+# Same clock selection as the grandmaster unit -- a client is if anything more
+# exposed to getting this wrong, since a client on the wrong PHC still elects a
+# master and still prints offsets. See dserv-ptp4l@.service.
+ExecStartPre=-/usr/local/dserv/scripts/dserv-ptp-select-phc %i
+ExecStart=/usr/sbin/ptp4l -i %i -H -m -q -s --hwts_filter full
+Restart=always
+RestartSec=5
+
+# -q suppresses the syslog copy; without it -m makes journald record every line
+# twice. See the grandmaster unit.
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
