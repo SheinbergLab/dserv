@@ -785,7 +785,15 @@ async function saveConfigFile(box) {
    * gets a `# name ...` line from the firmware; an unnamed one, like the box
    * that prompted this, gets nothing at all without the header.) */
   const stamp = new Date().toISOString().slice(0, 10);
-  const head = `# extio config saved from ${box} on ${new Date().toISOString()}\n`
+  /* "saved from box" is ambiguous in the one case that matters: `box` is what
+   * dserv_cfg_name() returns for a box with NO name, not a name. A file headed
+   * "saved from box" therefore reads as though the name went missing, which is
+   * exactly how it was reported. The firmware emits a `# name <x>` line only
+   * when one is set, so its absence is the signal -- say so rather than leaving
+   * the reader to infer it. */
+  const named = /^# name /m.test(text);
+  const who = named ? box : `${box} (UNNAMED — "box" is the default identity)`;
+  const head = `# extio config saved from ${who} on ${new Date().toISOString()}\n`
              + `# running ${get(box, 'fw_ver', '?')} · board ${get(box, 'board', '?')}\n`
              + `# The box NAME is not carried: import must not rename. Use extio_rename.\n`
              + `# wifi/pass is never exported.\n`;
