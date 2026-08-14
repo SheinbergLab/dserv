@@ -2282,6 +2282,34 @@ proc extio_cfg_import {box path args} {
     return $msg
 }
 
+# The browser's half of import. The page reads a file the user picked, so the
+# TEXT arrives from the client rather than from a path on this host.
+#
+# BASE64 ON THE WIRE. A config is multi-line and contains spaces, braces in
+# labels are possible, and it rides a Tcl command string -- quoting it correctly
+# at every layer is the kind of thing that works until someone names a group
+# "a}b". Encoding sidesteps the whole class.
+#
+# Delegates to extio_cfg_import so there is ONE definition of what an import
+# means: the same identity filter, the same allowlist refusals, the same
+# wifi/pass note. A page that parsed the file itself would be a second
+# implementation, and it would drift the first time a leaf is added.
+proc extio_cfg_import_text {box b64 args} {
+    # -strict, because the lenient default SILENTLY DECODES GARBAGE: without it
+    # "!!!not base64!!!" comes back as bytes and gets imported as if it were a
+    # config. A malformed payload must fail here, not turn into a line the
+    # allowlist happens to refuse.
+    if { [catch { binary decode base64 -strict $b64 } text] } {
+        error "extio_cfg_import_text: payload is not valid base64"
+    }
+    set tmp [file join /tmp "extio_import_[pid]_$box.cfg"]
+    set f [open $tmp w]; puts -nonewline $f $text; close $f
+    set rc [catch { extio_cfg_import $box $tmp {*}$args } res]
+    catch { file delete $tmp }
+    if { $rc } { error $res }
+    return $res
+}
+
 # ---- FACTORY RESET (fw >= v0.4.0+93) ----------------------------------------
 #
 # Erases the box's saved config and reboots it into its out-of-box state. The

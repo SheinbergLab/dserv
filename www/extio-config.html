@@ -236,7 +236,20 @@ function onExtio(msg) {
   /* dserv's timestamp is microseconds; fall back to arrival time so a value
    * without one still ages rather than appearing frozen at zero. */
   noteServerClock(msg.timestamp);
+  /* A SHELF VERDICT IS ABOUT A SPECIFIC RUNNING IMAGE, so it expires the moment
+   * that image changes. Keyed off fw_ver rather than the OTA lifecycle on
+   * purpose: it also covers an SWD reflash, a manual push, and a revert -- any
+   * route by which the box comes back running something else. Without it the
+   * row keeps last check's answer, so the update you just installed still reads
+   * "update available".
+   *
+   * Only on a real CHANGE, and only for a box someone has already checked:
+   * fw_ver is republished on every announce, and re-fetching the shelf on each
+   * of those would turn a deliberate action into a poll. */
+  const prev = boxes.get(box)[leaf];
+  const changed = prev !== undefined && String(prev.v) !== String(v);
   boxes.get(box)[leaf] = { v, t: msg.timestamp || now() };
+  if (leaf === 'fw_ver' && changed && shelfSeen.has(box)) { checkShelf(box); }
   if (pendingSelect && box === pendingSelect) { pendingSelect = null; selectBox(box); return; }
   renderFleet();
   if (box === sel) schedulePanel();
@@ -560,9 +573,23 @@ async function otaUpdate(box) {
    * fetch on a deliberate action is cheap; a downgrade warning that only
    * appears sometimes is worse than none, because its absence starts to mean
    * "safe". */
-  await checkShelf(box);
+  /* REUSE A RECENT READING instead of fetching again. The overwhelmingly common
+   * flow is Check shelf, read it, click Update -- and re-fetching there gave a
+   * flaky link a second chance to fail while the click sat waiting on it. That
+   * is exactly what a rig reported on 2026-08-14: a good check, then Update,
+   * then "Connection timeout" a few seconds later, on an update that went on to
+   * succeed. Nothing can have changed on the shelf in the seconds since, so the
+   * second fetch bought nothing and cost the operator a scare.
+   *
+   * SHELF_REUSE_MS is short enough that a stale verdict cannot survive a real
+   * publish between checking and updating, and only a clean reading qualifies:
+   * a previous failure must not be reused as if it were an answer. */
+  const SHELF_REUSE_MS = 120000;
+  const have = shelfSeen.get(box);
+  const fresh = have && have.text && !have.err && (Date.now() - have.at) < SHELF_REUSE_MS;
+  const checked = fresh ? true : await checkShelf(box);
   const seen = shelfSeen.get(box);
-  const verdict = seen ? shelfVerdict(seen.text) : '';
+  const verdict = (checked && seen && seen.text) ? shelfVerdict(seen.text) : '';
 
   /* WARN, DO NOT BLOCK. Rolling a box back is a legitimate thing to want, and
    * this page is not the place to forbid it -- but it must never be something
@@ -579,6 +606,14 @@ async function otaUpdate(box) {
          + `MCUboot rejects a swap to the same image.\n`;
   } else if (verdict === 'cannot compare') {
     warn = `\n\n⚠ Cannot tell whether this moves forward: ${seen.text}\n`;
+  }
+  /* The pre-check exists to catch a downgrade. If it could not run, say so
+   * rather than letting its silence read as "checked, and fine" -- the update
+   * itself fetches the shelf too, so it may well fail next, and the operator
+   * should know which of the two they are watching. */
+  if (!checked) {
+    warn += `\n\n⚠ Could not reach the firmware shelf just now, so this was NOT\n`
+          + `checked for a downgrade. The update itself needs the shelf too.\n`;
   }
 
   /* Says what the DRIVER does, not what the firmware requires. Both are true --
@@ -629,9 +664,22 @@ function shelfCell(b) {
   const s = shelfSeen.get(b);
   if (!s) return `<span class="age">not checked</span>`;
   const secs = Math.max(0, Math.round((Date.now() - s.at) / 1000));
-  const col = SHELF_COLOUR[shelfVerdict(s.text)];
-  const body = col ? `<span style="color:${col}">${esc(s.text)}</span>` : esc(s.text);
-  return `${body} <span class="age">· checked ${secs}s ago</span>`;
+  let out = '';
+  if (s.text) {
+    const col = SHELF_COLOUR[shelfVerdict(s.text)];
+    out = col ? `<span style="color:${col}">${esc(s.text)}</span>` : esc(s.text);
+    out += ` <span class="age">· checked ${secs}s ago</span>`;
+  }
+  /* A FETCH FAILURE IS NOT A VERDICT. Rendering it in this row as if it were
+   * one told a rig that its freshly-updated box had something wrong with its
+   * firmware, when dserv.net had simply timed out -- and it overwrote the good
+   * reading taken moments earlier. Shown as a separate, subordinate line, and
+   * never in place of the last thing the shelf actually said. */
+  if (s.err) {
+    out += `${out ? '<br>' : ''}<span style="color:var(--warn)">could not reach the shelf`
+         + `</span> <span class="age">${esc(s.err)}</span>`;
+  }
+  return out;
 }
 
 /* panelSig = null BEFORE EVERY renderPanel HERE, and it is not optional:
@@ -642,19 +690,32 @@ function shelfCell(b) {
  * fetch runs, the result is stored, and the row keeps saying "not checked".
  * Same idiom as every other non-signature update on this page. */
 async function checkShelf(box) {
-  shelfSeen.set(box, { text: 'checking…', at: Date.now() });
+  const prev = shelfSeen.get(box);
+  shelfSeen.set(box, { text: prev && prev.text, at: Date.now(), busy: true });
   panelSig = null; renderPanel();
-  let text;
+
+  let text = null, err = null;
   try {
-    text = String(await conn.send(`extio_fw_check ${box}`, 'extio') || '');
+    const r = String(await conn.send(`extio_fw_check ${box}`, 'extio') || '');
     /* A Tcl error arrives RESOLVED as "!TCL_ERROR ..." rather than as a
-     * rejection -- show it instead of printing it as if it were a version. */
-    if (text.startsWith('!TCL_ERROR')) text = text.replace(/^!TCL_ERROR\s*/, 'failed: ');
+     * rejection. So does extio_fw_check's own "shelf check FAILED ..." string
+     * -- both mean WE COULD NOT ASK, which is a different fact from anything
+     * the shelf might have said, and must not replace it. Rigs are not always
+     * online (see DSERV_OFFLINE), so this is an ordinary condition, not an
+     * exception. */
+    if (r.startsWith('!TCL_ERROR') || r.startsWith('shelf check FAILED')) {
+      err = r.replace(/^!TCL_ERROR\s*/, '').replace(/^shelf check FAILED[^:]*:\s*/, '');
+    } else {
+      text = r;
+    }
   } catch (e) {
-    text = `failed: ${e.message || e}`;
+    err = e.message || String(e);
   }
-  shelfSeen.set(box, { text, at: Date.now() });
+  /* Keep the last thing the shelf actually said; a failed attempt only adds a
+   * note. checkShelfOk lets callers (otaUpdate) know the check did not land. */
+  shelfSeen.set(box, { text: text !== null ? text : (prev && prev.text), at: Date.now(), err });
   panelSig = null; renderPanel();
+  return err === null;
 }
 
 async function otaAbort(box)   { try { await conn.send(`extio_ota_abort ${box}`, 'extio'); } catch (e) {} renderPanel(); }
@@ -675,6 +736,87 @@ async function otaConfirm(box) {
  * Deliberately NOT gated on the dirty ledger the way Reboot is: unsaved
  * changes are the least of what this discards, and warning about them
  * specifically would understate it. */
+/* ---- config to a file the browser owns, and back ----
+ *
+ * Separate from the server-side extio_cfg_export/import, which write to
+ * config/boxes/ on the dserv host -- that is the rig's canonical, git-able
+ * record. This pair is the ad-hoc one: grab a config before wiping a box, move
+ * one between rigs, from whatever machine you happen to be browsing on. Worth
+ * being honest that a file in Downloads is NOT a backup: one laptop,
+ * unversioned, and two people end up with different copies.
+ *
+ * Export needs no new Tcl. The page already subscribes to extio/*, so the dump
+ * arrives in its own mirror; ask for it, wait for it, hand it to the browser. */
+async function saveConfigFile(box) {
+  const before = get(box, 'cfg/dump_dp', null);
+  await conn.send(`dservSet extio/${box}/cmd/dump 2`, 'extio').catch(() => {});
+
+  /* Wait for a dump NEWER than whatever was already there -- a retained dump
+   * from an earlier click would otherwise be downloaded as if it were current. */
+  const deadline = Date.now() + 8000;
+  let text = null;
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, 200));
+    const now = get(box, 'cfg/dump_dp', null);
+    if (now !== null && now !== before) { text = String(now); break; }
+  }
+  if (text === null) { alert(`${box} did not return a config within 8 s.`); return; }
+
+  /* THE TRUNCATION GUARD, DUPLICATED HERE ON PURPOSE. extio_cfg_export refuses
+   * a negative byte count, but this path never goes through it -- so without
+   * the same check the browser route would quietly bypass the one rule that
+   * stops a short config being saved as though it were whole. */
+  const rc = Number(get(box, 'cfg/dump_rc', 0));
+  if (rc < 0) {
+    alert(`${box}: config is too large to export (truncated at ${-rc} bytes).\n\n`
+        + `Nothing saved. Raising BOX_CONFIG_DUMP_MAX is the fix.`);
+    return;
+  }
+
+  const stamp = new Date().toISOString().slice(0, 10);
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], { type: 'text/plain' }));
+  a.download = `${box}-${stamp}.extio`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+/* Import sends the file to Tcl rather than parsing it here: the identity
+ * filter, the allowlist refusals and the wifi/pass note all live in
+ * extio_cfg_import, and a second copy in JavaScript would drift the first time
+ * a leaf is added. Base64 so multi-line text with braces or spaces in labels
+ * cannot break the Tcl command string. */
+function loadConfigFile(box) {
+  const inp = document.createElement('input');
+  inp.type = 'file';
+  inp.accept = '.extio,.cfg,.txt,text/plain';
+  inp.onchange = async () => {
+    const file = inp.files && inp.files[0];
+    if (!file) return;
+    const text = await file.text();
+    /* CONFIGURATION ONLY from this button, and Cancel means cancel.
+     *
+     * The first version offered identity-or-not as OK-vs-Cancel, which left no
+     * way to abort once a file was picked -- every answer imported something.
+     * Identity restore (dserv target, static network) is the rare case, only
+     * ever right for the SAME box, and applying it to a different one points
+     * it at the exporter's rig while looking configured. It stays on the host
+     * proc, where naming -identity is a deliberate act. */
+    if (!confirm(`Restore ${box} from ${file.name}?\n\n`
+               + `Applies configuration only — pins, groups, labels, analog.\n`
+               + `Identity (dserv target, static network) is NOT applied; for a\n`
+               + `same-box restore use:  extio_cfg_import ${box} <file> -identity\n\n`
+               + `Not saved to flash — check the result, then Save.`)) return;
+    const b64 = btoa(unescape(encodeURIComponent(text)));
+    try {
+      const r = await conn.send(`extio_cfg_import_text ${box} ${b64}`, 'extio');
+      alert(String(r).replace(/^!TCL_ERROR\s*/, 'failed: '));
+      await refreshDirty(box);
+    } catch (e) { alert('import failed: ' + (e.message || e)); }
+  };
+  inp.click();
+}
+
 async function doFactory(box) {
   const typed = prompt(
     `FACTORY RESET ${box}\n\n`
@@ -1312,9 +1454,18 @@ function fwSection(b) {
          routine control on the page. It belongs with the things that change what
          the box IS, behind a rule and below the fold. -->
     <div style="margin-top:22px;padding-top:14px;border-top:1px solid var(--line)">
+      <button data-ctl="${esc(b)}|btn/cfgsave" onclick="saveConfigFile('${b}')"
+        title="Download this box's configuration as a file">Save config…</button>
+      <button data-ctl="${esc(b)}|btn/cfgload" onclick="loadConfigFile('${b}')"
+        title="Apply a previously saved configuration file to this box">Restore config…</button>
       <button class="danger" data-ctl="${esc(b)}|btn/factory" onclick="doFactory('${b}')"
         title="Erase all saved configuration and reboot into the out-of-box state">Factory reset…</button>
-      <p class="note">Erases name, pins, groups, labels, analog setup and dserv target,
+      <p class="note"><b>Save / Restore</b> use a file in your browser's downloads —
+        handy, but not a backup: one machine, unversioned. The rig's canonical copy is
+        <code>extio_cfg_export &lt;box&gt; config/boxes/&lt;box&gt;.cfg</code> on the dserv host,
+        which can be committed. Restore does not save to flash; check the result, then Save.
+        <code>wifi/pass</code> is never exported.<br>
+        <b>Factory reset</b> erases name, pins, groups, labels, analog setup and dserv target,
         then reboots. The box comes back unadopted and appears on the fleet page as free.
         Nothing about it is recoverable.</p>
     </div>`;
