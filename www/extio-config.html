@@ -533,7 +533,16 @@ async function otaUpdate(box) {
   /* channel read at CLICK time -- a baked onclick argument would outlive a
    * channel edit now that rebuilds are rare */
   const channel = String(get(box, 'channel', 'dev'));
-  if (!confirm(`Update ${box} from the ${channel} shelf?\n\nThe box will reboot into a TRIAL boot and must be confirmed, or it reverts.`)) return;
+  /* Says what the DRIVER does, not what the firmware requires. Both are true --
+   * MCUboot does revert an unconfirmed trial on any reset -- but this button
+   * runs extio_ota_update, whose lifecycle confirms automatically as soon as
+   * the trial image re-announces (extio_ota_lc_booted). Telling the operator
+   * they "must confirm" made a fully automatic sequence look like it was
+   * waiting on them. The revert is the SAFETY NET here, not a chore. */
+  if (!confirm(`Update ${box} from the ${channel} shelf?\n\n`
+             + `The box reboots into a trial image and is confirmed automatically `
+             + `once it comes back. If it never comes back, it reverts to the `
+             + `current image by itself.`)) return;
   try { alert(await conn.send(`extio_ota_update ${box} ${channel}`, 'extio')); }
   catch (e) { alert('update failed to start: ' + (e.message || e)); }
   renderPanel();
@@ -1120,12 +1129,27 @@ function fwSection(b) {
    * page: between arm and confirm, ANY reset reverts. That is the safety
    * property working as designed, but it is also the state in which a box
    * quietly loses an update nobody realises was pending. */
+  /* WHO IS GOING TO CONFIRM THIS? The banner used to assume the answer was
+   * "you", which is only true for a hand-driven update. extio_ota_update's
+   * lifecycle confirms by itself the moment the trial image re-announces
+   * (extio_ota_lc_booted), so on the driven path this banner appears for a
+   * few seconds and resolves itself -- and telling the operator to press
+   * Confirm during that window invites a second confirm racing the driver's.
+   *
+   * lc is non-null exactly when extio_ota_update is driving, so use it: it is
+   * the same signal the lifecycle row already keys off. The button stays in
+   * both cases -- it is the fallback if the driver died mid-run -- but it
+   * stops being an instruction when nobody asked the operator for anything. */
+  const driven = lc !== null;
   const trialBanner = trial ? `<div id="dirty" style="background:#3a1f15;border-color:#7a3a36;color:#ffb4a8">
       <b>TRIAL BOOT — not yet permanent.</b> ${vspan(b, 'fw_ver', '?')} is running unconfirmed.
       Any reset reverts it to the previous image.
+      ${driven ? 'Confirming automatically — no action needed.' : ''}
       <button class="primary" style="margin-left:10px" data-ctl="${esc(b)}|btn/ota-confirm"
-              onclick="otaConfirm('${b}')">Confirm</button>
-      <span class="age" style="margin-left:8px">to reject: do not confirm — power cycle ·
+              onclick="otaConfirm('${b}')">Confirm${driven ? ' now' : ''}</button>
+      <span class="age" style="margin-left:8px">${driven
+        ? 'only needed if the update run died mid-flight'
+        : 'to reject: do not confirm — power cycle'} ·
         CLI: <code>dservctl extio "extio_ota_confirm ${b}"</code></span>
     </div>` : '';
 

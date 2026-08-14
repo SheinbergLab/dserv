@@ -1057,7 +1057,7 @@ proc extio_shelf_pick {channel bbuild {version ""}} {
     }
     set d [::yajl::json2dict $json]
 
-    set img ""; set pinned [expr {$version ne ""}]
+    set img ""; set entry {}; set pinned [expr {$version ne ""}]
     set tried {}
     foreach v [dict get $d versions] {
         if { ![dict exists $v version] } continue
@@ -1066,7 +1066,7 @@ proc extio_shelf_pick {channel bbuild {version ""}} {
         foreach im [dict get $v images] {
             if { ![dict exists $im build] || [dict get $im build] ne $bbuild } continue
             if { ![dict exists $im bin] || [dict get $im bin] eq "" } continue
-            set img $im; set version $vv; break
+            set img $im; set version $vv; set entry $v; break
         }
         if { $img ne "" } break
         lappend tried $vv
@@ -1082,8 +1082,10 @@ proc extio_shelf_pick {channel bbuild {version ""}} {
                Has an image for this build ever been published? Check\
                $base/api/firmware/extio/$channel"
     }
-    return [dict create version $version img $img pinned $pinned manifest $d \
-                        latest [expr {[dict exists $d latest] ? [dict get $d latest] : ""}]]
+    return [dict create version $version img $img entry $entry pinned $pinned manifest $d \
+                        latest [expr {[dict exists $d latest] ? [dict get $d latest] : ""}] \
+                        published [expr {[dict exists $entry publishedAt] \
+                                         ? [dict get $entry publishedAt] : ""}]]
 }
 
 # ---- "what is on the shelf for this box?" -----------------------------------
@@ -1132,12 +1134,28 @@ proc extio_fw_check {box} {
         return "shelf check FAILED for $box ($channel/$bbuild): $pick"
     }
     set img [dict get $pick img]
+    set pub [dict get $pick published]
     dservClear $pfx/error
-    dservSet $pfx/version [dict get $pick version]
-    dservSet $pfx/size    [expr {[dict exists $img binSize] ? [dict get $img binSize] : 0}]
-    dservSet $pfx/sha     [expr {[dict exists $img binSha256] ? [dict get $img binSha256] : ""}]
-    dservSet $pfx/checked [clock seconds]
-    return "$channel/$bbuild -> [dict get $pick version]"
+    dservSet $pfx/version   [dict get $pick version]
+    dservSet $pfx/published $pub
+    dservSet $pfx/size      [expr {[dict exists $img binSize] ? [dict get $img binSize] : 0}]
+    dservSet $pfx/sha       [expr {[dict exists $img binSha256] ? [dict get $img binSha256] : ""}]
+    dservSet $pfx/checked   [clock seconds]
+
+    # LEAD WITH THE PUBLISH DATE, because the version string is a `git describe`
+    # of the dserv tree ("0.52.9-3-g08cea56c") and means nothing to anyone who
+    # is not the person who built it. A date is the one part of a shelf entry a
+    # reader can act on: they know roughly when their box was flashed, so they
+    # can tell whether the shelf is ahead of it. The version still shows,
+    # because it is what gets passed back to pin an update -- but it is the
+    # identifier, not the information.
+    set when $pub
+    if { $when ne "" && ![catch { clock scan $pub -format {%Y-%m-%dT%H:%M:%SZ} -gmt 1 } t] } {
+        set when [clock format $t -format {%Y-%m-%d %H:%M} -gmt 1]
+        append when "Z"
+    }
+    if { $when eq "" } { return [dict get $pick version] }
+    return "published $when · [dict get $pick version]"
 }
 
 proc extio_ota_push_shelf {box {channel dev} {version ""}} {
