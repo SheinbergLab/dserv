@@ -33,6 +33,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -1209,6 +1210,12 @@ func (r *Registry) getNodes(workgroup string) []*MeshNode {
 		node.State = computeState(node.LastSeenAgo)
 		nodes = append(nodes, &node)
 	}
+	// Stable order at the source, for every consumer at once: this comes out
+	// of a map, and unsorted it made the /w/ page (10 s auto-refresh) and the
+	// mesh directory reshuffle their rows on every update.
+	sort.Slice(nodes, func(i, j int) bool {
+		return strings.ToLower(nodes[i].Hostname) < strings.ToLower(nodes[j].Hostname)
+	})
 	return nodes
 }
 
