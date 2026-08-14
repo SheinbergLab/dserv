@@ -2424,8 +2424,24 @@ int main(void)
 	 * on the RT1062 is a known hazard. Demo pins for now; a loaded config
 	 * re-applies after the mount. */
 	int cfg_loaded = 0;
-	cfg.pin_mode[LED_PIN] = 1;   /* demo output   */
-	cfg.pin_mode[BTN_PIN] = 3;   /* demo in_pullup */
+	/* NO DEMO PINS. These used to be seeded here --
+	 *
+	 *     cfg.pin_mode[LED_PIN] = 1;   cfg.pin_mode[BTN_PIN] = 3;
+	 *
+	 * -- scaffolding from the first bring-up, so a bare board did something
+	 * visible. The cost only became clear once boxes started being handed to
+	 * other people: they are indistinguishable in the announced manifest from
+	 * pins the OWNER configured, so a factory box reports "Outputs D9 /
+	 * Inputs A5" and invites the question of who set them. Worse, they are not
+	 * even stable -- the first `cmd/save` promotes them from firmware default
+	 * to persisted user config, while box_gpio_boot_pulse's comment records
+	 * the opposite case (a saved config zeroing LED_PIN). A default that means
+	 * something different depending on when you last saved is not a default.
+	 *
+	 * Nothing is lost. The boot heartbeat does NOT read pin_mode -- that is
+	 * exactly why box_gpio_boot_pulse exists -- so the LED still blinks three
+	 * times on a virgin box. The button is simply unconfigured until someone
+	 * asks for it, which is what every other pad on the board already does. */
 
 	/* Bring the platform up BEFORE any printk. On boards whose console is the
 	 * box's own USB CDC (see the board overlays), output produced before the
@@ -2593,7 +2609,13 @@ int main(void)
 	box_console_printf("=== codec smoke test done ===\n\n");
 
 	/* ---- block #3: GPIO (already initialised above, before the console) ---- */
-	box_console_printf("gpio: pin %d=out (LED), pin %d=in_pullup\n", LED_PIN, BTN_PIN);
+	/* The board's own LED and button, reported as HARDWARE FACTS rather than
+	 * as configuration -- they are no longer seeded into cfg (see main()), and
+	 * saying "pin 9=out" for a pad nobody has configured is the same lie the
+	 * manifest used to tell. */
+	box_console_printf("gpio: board LED=pin %d (heartbeat only), button=pin %d"
+			   " -- neither configured; `pin N mode ...` to use them\n",
+			   LED_PIN, BTN_PIN);
 
 	/* Boot heartbeat: three hardware-timed LED pulses (the hardware counter
 	 * drops each falling edge, not software). */
