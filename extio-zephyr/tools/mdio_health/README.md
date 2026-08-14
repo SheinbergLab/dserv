@@ -3,6 +3,11 @@
 A standalone Zephyr app that resets the PHY itself and then hammers its ID
 registers, reporting a **success rate** rather than a pass/fail.
 
+> **Identifying a known board takes no flashing.** Every board's PHY verdict is
+> already recorded against its MCU-Link probe serial in **`BOARDS.md`** — run
+> `sh whichboard.sh` first. Only reach for the app below when you need a fresh
+> reading, or the serial is one we have never seen.
+
     cd ~/zephyrproject && west build -b frdm_rw612 \
         /Users/sheinb/src/dserv/extio-zephyr/tools/mdio_health -d /tmp/build-mdio
     west flash -d /tmp/build-mdio --dev-id <probe-serial>
