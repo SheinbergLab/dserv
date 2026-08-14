@@ -1019,6 +1019,127 @@ proc extio_ota_clear {box} {
 # So the whole release loop is: build.sh <t> --tbyb --push  ->  one call per box.
 #   dservctl extio "extio_ota_push_shelf <box>"            ;# latest on dev
 #   dservctl extio "extio_ota_push_shelf <box> stable"
+# Resolve what a box of build <bbuild> would update to on <channel>, or verify
+# a pinned <version>. Returns a dict: version, img (the image entry), latest
+# (the channel pointer, for reporting), pinned, manifest.
+#
+# SHARED between extio_ota_push_shelf and extio_fw_check deliberately. "What
+# would this box update to?" and "what does the page show as available?" must
+# be the same question answered by the same code -- a display that resolves
+# versions its own way is a second implementation that will eventually disagree
+# with the button next to it, and the disagreement would surface as a user
+# pressing Update and getting a different image than the one they read.
+#
+# NOT simply `latest`, and that distinction became load-bearing the moment the
+# shelf held two families. `latest` is a single per-channel pointer moved by
+# whoever published most recently, but a version only contains the images that
+# publish built -- so pushing an MCXN947 image makes `dev/latest` a version with
+# no RP2350 image in it, and every Pico box asking for latest gets "no OTA
+# (.bin) image for build 'dual'". Observed 2026-07-30, immediately, on the first
+# MCXN947 publish: one family's release silently broke the other family's
+# default update path.
+#
+# So walk the versions newest-first and take the first that HAS an image for
+# this build. That is what "latest" means from a given box's point of view.
+#
+# AN EXPLICIT version ARGUMENT IS NEVER OVERRIDDEN -- if the caller pinned a
+# version and it lacks the image, that is an error worth reporting, not
+# something to silently substitute. Pinning exists to say "this exact one".
+#
+# Relies on the shelf listing `versions` newest-first, which is the order the
+# agent writes and the API returns.
+proc extio_shelf_pick {channel bbuild {version ""}} {
+    package require yajltcl
+    set base $::extio_fw_shelf_url
+    set url "$base/api/firmware/extio/$channel"
+    if { [catch { https_get $url -timeout 15000 } json] } {
+        error "extio_shelf_pick: shelf fetch failed ($url): $json"
+    }
+    set d [::yajl::json2dict $json]
+
+    set img ""; set pinned [expr {$version ne ""}]
+    set tried {}
+    foreach v [dict get $d versions] {
+        if { ![dict exists $v version] } continue
+        set vv [dict get $v version]
+        if { $pinned && $vv ne $version } continue
+        foreach im [dict get $v images] {
+            if { ![dict exists $im build] || [dict get $im build] ne $bbuild } continue
+            if { ![dict exists $im bin] || [dict get $im bin] eq "" } continue
+            set img $im; set version $vv; break
+        }
+        if { $img ne "" } break
+        lappend tried $vv
+        if { $pinned } break
+    }
+    if { $img eq "" } {
+        if { $pinned } {
+            error "extio_shelf_pick: no OTA (.bin) image for build '$bbuild' in\
+                   $channel/$version (version was pinned explicitly)"
+        }
+        error "extio_shelf_pick: no OTA (.bin) image for build '$bbuild' anywhere in\
+               channel '$channel' -- searched [llength $tried] version(s): [join $tried {, }].\
+               Has an image for this build ever been published? Check\
+               $base/api/firmware/extio/$channel"
+    }
+    return [dict create version $version img $img pinned $pinned manifest $d \
+                        latest [expr {[dict exists $d latest] ? [dict get $d latest] : ""}]]
+}
+
+# ---- "what is on the shelf for this box?" -----------------------------------
+#
+# ON DEMAND, NEVER POLLED. The shelf is a public HTTPS endpoint and this runs on
+# a rig that must not depend on it: a periodic fetch would put an internet round
+# trip on a machine whose job is running experiments, and would fail loudly on
+# every offline rig for no benefit. The page asks when a person asks.
+#
+# Keyed by CHANNEL+BUILD rather than by box, because the answer depends on
+# nothing else -- ten boxes of the same build share one result, and one fetch
+# serves them all.
+#
+# WHAT THIS DELIBERATELY DOES NOT DO IS SAY "UP TO DATE". The two version
+# strings are from different namespaces and are not comparable:
+#
+#   box state/fw_ver  0.4.0+91              MCUboot header, from extio-zephyr/VERSION
+#   shelf version     0.52.9-3-g08cea56c    git describe, from publish.sh
+#
+# and the shelf's per-image fields (build/board/variant/binSize/binSha256)
+# carry no image version at all. state/fw is worse than useless here -- nothing
+# defines BOX_FW_VERSION in the Zephyr builds, so it is the literal string
+# "dev" on every box. Comparing any of these would produce a badge that is
+# right by accident. Worse than absent: on 2026-08-14 the newest shelf image
+# for this build was OLDER than the flashed box, so a naive "update available"
+# would have invited a downgrade.
+#
+# So this reports FACTS -- what is on the shelf, and when we last asked -- and
+# leaves the judgement to the person reading it. Making the comparison real
+# needs the image version recorded on the shelf at publish time.
+proc extio_fw_check {box} {
+    if { ![dservExists extio/$box/state/build] } {
+        error "extio_fw_check: box '$box' hasn't announced state/build yet (connected?)"
+    }
+    set bbuild [string map {/ _} [dservGet extio/$box/state/build]]
+    set channel "dev"
+    if { [dservExists extio/$box/state/channel] } {
+        set c [dservGet extio/$box/state/channel]
+        if { $c ne "" } { set channel $c }
+    }
+    set pfx "extio/shelf/$channel/$bbuild"
+
+    if { [catch { extio_shelf_pick $channel $bbuild } pick] } {
+        dservSet $pfx/error   $pick
+        dservSet $pfx/checked [clock seconds]
+        return "shelf check FAILED for $box ($channel/$bbuild): $pick"
+    }
+    set img [dict get $pick img]
+    dservClear $pfx/error
+    dservSet $pfx/version [dict get $pick version]
+    dservSet $pfx/size    [expr {[dict exists $img binSize] ? [dict get $img binSize] : 0}]
+    dservSet $pfx/sha     [expr {[dict exists $img binSha256] ? [dict get $img binSha256] : ""}]
+    dservSet $pfx/checked [clock seconds]
+    return "$channel/$bbuild -> [dict get $pick version]"
+}
+
 proc extio_ota_push_shelf {box {channel dev} {version ""}} {
     package require yajltcl
     set base $::extio_fw_shelf_url
@@ -1046,58 +1167,16 @@ proc extio_ota_push_shelf {box {channel dev} {version ""}} {
     # for the RP2350 targets, whose build names are flat words already.
     set bbuild [string map {/ _} $bbuild]
 
-    # 2. channel manifest (JSON is text -- https_get string return is fine here).
-    set url "$base/api/firmware/extio/$channel"
-    if { [catch { https_get $url -timeout 15000 } json] } {
-        error "extio_ota_push_shelf: shelf fetch failed ($url): $json"
-    }
-    set d [::yajl::json2dict $json]
+    # 2+3. resolve the version and image. SHARED with extio_fw_check -- see
+    # extio_shelf_pick: "what would this box update to" has to be answered by
+    # exactly the code that would do the updating, or the page and the button
+    # disagree, which is worse than not showing it.
+    set pick    [extio_shelf_pick $channel $bbuild $version]
+    set version [dict get $pick version]
+    set img     [dict get $pick img]
+    set pinned  [dict get $pick pinned]
+    set d       [dict get $pick manifest]
 
-    # 3. find the newest version carrying an OTA image for THIS box's build.
-    #
-    # NOT simply `latest`, and that distinction became load-bearing the moment the
-    # shelf held two families. `latest` is a single per-channel pointer moved by
-    # whoever published most recently, but a version only contains the images that
-    # publish built -- so pushing an MCXN947 image makes `dev/latest` a version with
-    # no RP2350 image in it, and every Pico box asking for latest gets "no OTA
-    # (.bin) image for build 'dual'". Observed 2026-07-30, immediately, on the first
-    # MCXN947 publish: one family's release silently broke the other family's
-    # default update path.
-    #
-    # So walk the versions newest-first and take the first that HAS an image for
-    # this build. That is what "latest" means from a given box's point of view.
-    #
-    # AN EXPLICIT version ARGUMENT IS NEVER OVERRIDDEN -- if the caller pinned a
-    # version and it lacks the image, that is an error worth reporting, not
-    # something to silently substitute. Pinning exists to say "this exact one".
-    #
-    # Relies on the shelf listing `versions` newest-first, which is the order the
-    # agent writes and the API returns.
-    set img ""; set pinned [expr {$version ne ""}]
-    set tried {}
-    foreach v [dict get $d versions] {
-        if { ![dict exists $v version] } continue
-        set vv [dict get $v version]
-        if { $pinned && $vv ne $version } continue
-        foreach im [dict get $v images] {
-            if { ![dict exists $im build] || [dict get $im build] ne $bbuild } continue
-            if { ![dict exists $im bin] || [dict get $im bin] eq "" } continue
-            set img $im; set version $vv; break
-        }
-        if { $img ne "" } break
-        lappend tried $vv
-        if { $pinned } break
-    }
-    if { $img eq "" } {
-        if { $pinned } {
-            error "extio_ota_push_shelf: no OTA (.bin) image for build '$bbuild' in\
-                   $channel/$version (version was pinned explicitly)"
-        }
-        error "extio_ota_push_shelf: no OTA (.bin) image for build '$bbuild' anywhere in\
-               channel '$channel' -- searched [llength $tried] version(s): [join $tried {, }].\
-               Has an image for this build ever been published? Check\
-               $base/api/firmware/extio/$channel"
-    }
     if { !$pinned && [dict exists $d latest] && [dict get $d latest] ne $version } {
         puts "extio_ota_push_shelf: channel latest is [dict get $d latest] (no '$bbuild'\
               image); using $version, the newest that has one"

@@ -538,6 +538,47 @@ async function otaUpdate(box) {
   catch (e) { alert('update failed to start: ' + (e.message || e)); }
   renderPanel();
 }
+/* ---- what's on the shelf for this box ----
+ *
+ * ON DEMAND. The shelf is a public HTTPS endpoint and a rig must not depend on
+ * it, so nothing here polls; the fetch happens when a person asks. Result is
+ * held in memory rather than read back from a datapoint because it is a
+ * host-computed FACT ABOUT THE SHELF, not box state -- putting it under
+ * extio/<box>/state/* would make it indistinguishable from something the box
+ * said, which is the confusion this page keeps having to undo. (extio_fw_check
+ * does publish it under extio/shelf/<channel>/<build>/* for scripts.)
+ *
+ * NO "up to date" VERDICT, deliberately: state/fw_ver is a MCUboot header
+ * version (0.4.0+91) and a shelf version is a git describe
+ * (0.52.9-3-g08cea56c). They are different namespaces, the shelf records no
+ * image version, and on 2026-08-14 the newest shelf image was OLDER than the
+ * flashed box -- so any automatic comparison would have advertised a
+ * downgrade. Show both, stamp when we asked, let the reader judge. */
+const shelfSeen = new Map();   /* box -> {text, at} */
+
+function shelfCell(b) {
+  const s = shelfSeen.get(b);
+  if (!s) return `<span class="age">not checked</span>`;
+  const secs = Math.max(0, Math.round((Date.now() - s.at) / 1000));
+  return `${esc(s.text)} <span class="age">· checked ${secs}s ago</span>`;
+}
+
+async function checkShelf(box) {
+  shelfSeen.set(box, { text: 'checking…', at: Date.now() });
+  renderPanel();
+  let text;
+  try {
+    text = String(await conn.send(`extio_fw_check ${box}`, 'extio') || '');
+    /* A Tcl error arrives RESOLVED as "!TCL_ERROR ..." rather than as a
+     * rejection -- show it instead of printing it as if it were a version. */
+    if (text.startsWith('!TCL_ERROR')) text = text.replace(/^!TCL_ERROR\s*/, 'failed: ');
+  } catch (e) {
+    text = `failed: ${e.message || e}`;
+  }
+  shelfSeen.set(box, { text, at: Date.now() });
+  renderPanel();
+}
+
 async function otaAbort(box)   { try { await conn.send(`extio_ota_abort ${box}`, 'extio'); } catch (e) {} renderPanel(); }
 async function otaConfirm(box) {
   try { alert(await conn.send(`extio_ota_confirm ${box}`, 'extio')); }
@@ -1107,9 +1148,11 @@ function fwSection(b) {
       <tr><th>staged</th><td>${vspan(b, 'ota/staged_ver')}</td>
           <th>history</th><td class="age">${vspan(b, 'ota/updates', '0')} updates ·
               ${vspan(b, 'ota/reverts', '0')} reverts · ${vspan(b, 'ota/rejects', '0')} rejects</td></tr>
+      <tr><th>shelf</th><td colspan="3">${shelfCell(b)}</td></tr>
       ${lcRow}
     </table>
     <div style="display:flex;gap:10px;margin-top:10px">
+      <button onclick="checkShelf('${b}')">Check shelf</button>
       <button ${busy || dead ? 'disabled' : ''} data-ctl="${esc(b)}|btn/ota-update"
               onclick="otaUpdate('${b}')">
         Update from ${vspan(b, 'channel', 'dev')} shelf</button>
