@@ -773,9 +773,24 @@ async function saveConfigFile(box) {
     return;
   }
 
+  /* PROVENANCE. extio_cfg_export writes this header server-side; the browser
+   * path took the raw datapoint and so produced a file recording neither which
+   * box it came from nor when. The filename carries the name, but a filename is
+   * the first thing lost to a rename or a copy.
+   *
+   * It also states the omission. The box's NAME is deliberately absent from the
+   * body -- applying it mid-replay changes the datapoint prefix and silently
+   * drops every later line -- and a reader comparing this file against a box
+   * has no way to know that was a choice rather than a gap. (A named box also
+   * gets a `# name ...` line from the firmware; an unnamed one, like the box
+   * that prompted this, gets nothing at all without the header.) */
   const stamp = new Date().toISOString().slice(0, 10);
+  const head = `# extio config saved from ${box} on ${new Date().toISOString()}\n`
+             + `# running ${get(box, 'fw_ver', '?')} · board ${get(box, 'board', '?')}\n`
+             + `# The box NAME is not carried: import must not rename. Use extio_rename.\n`
+             + `# wifi/pass is never exported.\n`;
   const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([text], { type: 'text/plain' }));
+  a.href = URL.createObjectURL(new Blob([head + text], { type: 'text/plain' }));
   a.download = `${box}-${stamp}.extio`;
   a.click();
   URL.revokeObjectURL(a.href);
