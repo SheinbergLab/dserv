@@ -162,6 +162,14 @@ type ComponentStatus struct {
 	LatestVersion  string    `json:"latestVersion,omitempty"`
 	UpdateAvail    bool      `json:"updateAvailable"`
 	Assets         []string  `json:"assets,omitempty"`
+
+	// Migrating: this component lags its leader, but the deferred migration
+	// that will fix it is already scheduled or running -- the ~20-60 s window
+	// right after a dserv install, before the dserv-agent-migrate unit fires
+	// and restarts the agent. The panel must keep saying "updating with
+	// dserv" here instead of re-offering an Update button whose click would
+	// collide with the migration's apt transaction on the dpkg lock.
+	Migrating bool `json:"migrating,omitempty"`
 }
 
 type StatusInfo struct {
@@ -2019,7 +2027,28 @@ func (a *Agent) getComponentStatus(comp Component) ComponentStatus {
 			status.UpdateAvail = status.Installed && status.CurrentVersion != status.LatestVersion
 		}
 	}
+	if comp.FollowsComponent != "" && status.UpdateAvail && migrationScheduled() {
+		status.Migrating = true
+	}
 	return status
+}
+
+// migrationScheduled reports whether dserv's deferred agent migration -- the
+// transient dserv-agent-migrate timer/service pair its postinst arms with
+// systemd-run --on-active=20 -- is waiting to fire or currently running. The
+// timer reads "active" while counting down; the service while executing.
+// --collect garbage-collects both on completion, so absence + a still-lagging
+// agent means the migration failed and the Update button is genuinely the
+// remedy again.
+func migrationScheduled() bool {
+	for _, u := range []string{"dserv-agent-migrate.timer", "dserv-agent-migrate.service"} {
+		out, _ := exec.Command("systemctl", "is-active", u).Output()
+		switch strings.TrimSpace(string(out)) {
+		case "active", "activating", "reloading":
+			return true
+		}
+	}
+	return false
 }
 
 func (a *Agent) getInstalledVersion(comp Component) string {

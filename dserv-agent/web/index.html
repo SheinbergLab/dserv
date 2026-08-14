@@ -1163,8 +1163,14 @@ body.solo .agent-panel {
              const leaderStatus = c.followsComponent
 		   ? (this.panelComponents || []).find(x => (x.component || x).id === c.followsComponent)
 		   : null;
-             const followsPending = !!(hasUpd && leaderStatus && leaderStatus.installed && leaderStatus.updateAvailable);
-             const leaderName = leaderStatus ? ((leaderStatus.component || leaderStatus).name || c.followsComponent) : '';
+             // comp.migrating covers the window the leader-pending test cannot:
+             // right after the leader's install completes, the leader reads
+             // current while the follower still lags -- but the deferred
+             // migration is armed (the agent checked its timer), so the button
+             // must stay away rather than invite a click that races it.
+             const migrating = !!comp.migrating;
+             const followsPending = migrating || !!(hasUpd && leaderStatus && leaderStatus.installed && leaderStatus.updateAvailable);
+             const leaderName = leaderStatus ? ((leaderStatus.component || leaderStatus).name || c.followsComponent) : (c.followsComponent || '');
              const inst = comp.installed;
              const hasService = !!c.service;
              const serviceStatus = services[c.service] || 'unknown';
@@ -1229,7 +1235,9 @@ body.solo .agent-panel {
                     </div>
                     <div class="component-actions">
                         ${followsPending
-			  ? `<span class="follows-note" title="A ${leaderName} install schedules the agent migration moments later; this package updates on its own. Update ${leaderName} and this follows.">updates with ${this.esc(leaderName)}</span>`
+			  ? (migrating
+			     ? `<span class="follows-note" style="color:#fbbf24" title="The deferred agent migration is scheduled and fires ~20s after the ${this.esc(leaderName)} install; the agent restarts and this panel reconnects on its own. Pressing Update now would race it for the dpkg lock.">updating with ${this.esc(leaderName)} now…</span>`
+			     : `<span class="follows-note" title="A ${this.esc(leaderName)} install schedules the agent migration moments later; this package updates on its own. Update ${this.esc(leaderName)} and this follows.">updates with ${this.esc(leaderName)}</span>`)
 			  : `${assets}
                         <button class="component-btn ${hasUpd?'update':''}" onclick="app.install('${c.id}')" ${!comp.assets?.length?'disabled':''}>${btn}</button>`}
                     </div>
