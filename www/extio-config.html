@@ -641,6 +641,32 @@ async function otaConfirm(box) {
   catch (e) { alert('confirm failed: ' + (e.message || e)); }
 }
 
+/* TYPE THE NAME. Not a second confirm() -- two dialogs in a row train people to
+ * click through both, and this is the one action on the page with no undo: the
+ * box loses its name, pins, groups, labels, analog config and dserv target,
+ * and comes back as an unadopted stranger. Typing the name is the only
+ * confirmation that cannot be satisfied by reflex, and it is the same
+ * discipline the firmware enforces on the wire (cmd/factory takes the box's
+ * name, never 1) -- so the dialog is teaching the real rule, not inventing a
+ * ceremony for the UI.
+ *
+ * Deliberately NOT gated on the dirty ledger the way Reboot is: unsaved
+ * changes are the least of what this discards, and warning about them
+ * specifically would understate it. */
+async function doFactory(box) {
+  const typed = prompt(
+    `FACTORY RESET ${box}\n\n`
+  + `Erases its saved configuration -- name, pins, groups, labels, analog `
+  + `setup and dserv target -- and reboots it.\n\n`
+  + `It comes back unadopted and will appear on the fleet page as free, `
+  + `ready to adopt again. Nothing about this is recoverable.\n\n`
+  + `Type the box name to confirm:`);
+  if (typed === null) return;                       /* cancelled */
+  if (typed.trim() !== box) { alert(`"${typed}" is not "${box}" — nothing done.`); return; }
+  try { alert(await conn.send(`extio_factory ${box}`, 'extio')); }
+  catch (e) { alert('factory reset failed to start: ' + (e.message || e)); }
+}
+
 async function doReboot(box) {
   if (dirty.size && !confirm(`${dirty.size} unsaved change(s) will be LOST. Reboot anyway?`)) return;
   await conn.send(`extio_cfg_reboot ${box}`, 'extio');
@@ -1650,6 +1676,8 @@ function buildPanel(b) {
       <button class="danger" data-ctl="${esc(b)}|btn/reboot" onclick="doReboot('${b}')">Reboot</button>
       <button data-ctl="${esc(b)}|btn/refresh" onclick="conn.send('extio_cfg_announce ${b}','extio')"
         title="Ask the box to re-publish everything now">Refresh from box</button>
+      <button class="danger" data-ctl="${esc(b)}|btn/factory" onclick="doFactory('${b}')"
+        title="Erase all saved configuration and reboot into the out-of-box state">Factory reset…</button>
     </div>
   `;
   return html;

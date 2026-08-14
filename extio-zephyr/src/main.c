@@ -505,6 +505,19 @@ static void pub_dbg(const char *leaf, uint32_t v)
 #define SAVED_DEFERRED (-1)
 #define SAVED_NO_STORE (-2)
 
+/* The factory-reset receipt. Same sign convention as the save receipt:
+ *   1  erased; the box is rebooting into its out-of-box state
+ *   0  the erase itself failed -- config is still on flash
+ *  -1  refused: the payload did not name this box (see the handler)
+ *  -2  refused: mid-obs
+ *  -3  no persistent store on this board */
+#define FACT_DP          "cfg/factory"
+#define FACT_DONE        1
+#define FACT_ERASE_FAIL  0
+#define FACT_BAD_NAME  (-1)
+#define FACT_IN_OBS    (-2)
+#define FACT_NO_STORE  (-3)
+
 static void pub_receipt(const char *leaf, int32_t v)
 {
 	uint8_t pf[DSERV_MSG_LEN];
@@ -2375,6 +2388,70 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 #else
 		box_console_printf("cmd/save -> no persistence on this board\n");
 		pub_receipt(SAVED_DP, SAVED_NO_STORE);
+#endif
+	} else if (r == CFG_FACTORY) {
+		/* REMOTE FACTORY RESET -- and the payload must NAME THE BOX.
+		 *
+		 * `cmd/factory 1` is deliberately not accepted. Every other command
+		 * on this path takes 1 (save, reboot, announce), so a 1 here is one
+		 * copy-paste from an irreversible wipe -- and datapoints are RETAINED,
+		 * while extio/box is the DEFAULT NAME shared by every box nobody has
+		 * renamed yet. A stale retained `cmd/factory=1` would be a landmine
+		 * for the next factory box that adopts to this dserv. Requiring the
+		 * current name makes the command unusable by accident and impossible
+		 * to leave lying around aimed at a box that does not exist yet.
+		 *
+		 * This exists at all only because a factory box can now be adopted
+		 * over Ethernet (box_net_eth_poll_inbound). Before that fix a remote
+		 * reset stranded the box: no target, so the arbiter parked on USB, so
+		 * nothing could reach it without the console this command exists to
+		 * make unnecessary. Recoverability is the precondition, not a bonus.
+		 */
+		char who[BOX_NAME_MAX];
+
+		dserv_msg_copy_cstr(&m, who, sizeof who);
+		if (strcmp(who, dserv_cfg_name(&cfg)) != 0) {
+			pub_receipt(FACT_DP, FACT_BAD_NAME);
+			box_console_printf("cmd/factory -> REFUSED: payload '%s' is not this"
+					   " box's name ('%s'). Send the name, not 1.\n",
+					   who, dserv_cfg_name(&cfg));
+			return;
+		}
+		/* REFUSED mid-obs, not deferred. cmd/save defers because a save that
+		 * lands after the trial is still the save you asked for; a factory
+		 * reset that fires at the end of an obs is not something anyone
+		 * wants delivered late. */
+		if (box_obs_active()) {
+			pub_receipt(FACT_DP, FACT_IN_OBS);
+			box_console_printf("cmd/factory -> REFUSED: obs in progress\n");
+			return;
+		}
+#if defined(BOX_HAVE_PERSIST)
+		{
+			int frc = box_flash_clear();
+
+			if (frc != 0) {
+				pub_receipt(FACT_DP, FACT_ERASE_FAIL);
+				box_console_printf("cmd/factory -> ERASE FAILED (err=%d);"
+						   " config still on flash\n", frc);
+				return;
+			}
+		}
+		/* RECEIPT FIRST, THEN IDENTITY. Published before cfg is zeroed,
+		 * because dserv_state_name() builds the datapoint from cfg->name --
+		 * after the memset this box is "box" again, and the acknowledgement
+		 * would land under a name the host never asked about. */
+		pub_receipt(FACT_DP, FACT_DONE);
+		box_console_printf("cmd/factory -> store erased, rebooting\n");
+		box_pub_flush(K_MSEC(300));
+		memset(&cfg, 0, sizeof cfg);
+		cfg.console_mode = BOX_DEFAULT_CONSOLE_MODE;
+		box_gpio_apply_config(&cfg);
+		k_msleep(100);                        /* let the console drain */
+		sys_reboot(SYS_REBOOT_WARM);
+#else
+		pub_receipt(FACT_DP, FACT_NO_STORE);
+		box_console_printf("cmd/factory -> no persistent store on this board\n");
 #endif
 	} else if (r == CFG_REBOOT) {
 		/* Warm reset: the firmware restarts. Portable on every board. NOTE this

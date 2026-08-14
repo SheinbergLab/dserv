@@ -2143,6 +2143,72 @@ proc extio_cfg_reboot {box} {
     return "reboot sent to $box -- unsaved changes are lost by definition"
 }
 
+# ---- FACTORY RESET (fw >= v0.4.0+93) ----------------------------------------
+#
+# Erases the box's saved config and reboots it into its out-of-box state. The
+# box comes back unnamed, with no dserv target, beaconing as free -- so it is
+# adoptable again from the fleet page without a console or a serial cable.
+# That recoverability is why this exists remotely at all: before
+# box_net_eth_poll_inbound (+90) a target-less box parked on USB and could not
+# be adopted over Ethernet, so a remote reset stranded it.
+#
+# THE PAYLOAD IS THE BOX'S NAME, not 1, and the firmware refuses anything else.
+# Every other cmd/* takes 1, datapoints are RETAINED, and extio/box is the
+# default namespace shared by every box nobody has renamed -- so a stale
+# `cmd/factory=1` would be a landmine for the next factory box that adopts
+# here. Sending the name is what makes the command impossible to fire by
+# accident or to leave lying around aimed at a box that does not exist yet.
+proc extio_factory {box} {
+    if { ![dservExists extio/$box/state/build] } {
+        error "extio_factory: no box '$box' has announced itself"
+    }
+    # Same guard as extio_rename, for the same reason: an OTA mid-flight owns
+    # the box's flash and its reboot, and this takes both.
+    if { [info exists ::extio_ota_lc($box,phase)]
+         && $::extio_ota_lc($box,phase) ni {idle done failed} } {
+        error "extio_factory: $box has an OTA in '$::extio_ota_lc($box,phase)'\
+               -- not while that runs"
+    }
+    extio_request $box "factory" factory $box cfg/factory {ne ""} 15000 \
+        extio_factory_done extio_factory_failed {cfg/factory}
+    return "factory reset sent to $box -- erasing config and rebooting"
+}
+
+proc extio_factory_done {box value} {
+    if { ![string is integer -strict $value] } {
+        puts "extio: $box factory returned an unreadable receipt '$value'"
+        return
+    }
+    switch -- $value {
+        1 {
+            # The box is rebooting into a DIFFERENT IDENTITY: it comes back
+            # unnamed (extio/box), so everything retained under this name is a
+            # ghost describing hardware that will never answer to it again.
+            # Same cleanup extio_rename does after a rename, for the same
+            # reason -- and harmless when the box was already unnamed, since
+            # it republishes on its next announce.
+            unset -nocomplain ::extio_cfg_dirty($box)
+            catch { extio_clear $box }
+            puts "extio: $box factory reset -- rebooting; it will reappear\
+                  unadopted on the discovery beacon, ready to re-adopt"
+        }
+        0  { puts "extio: $box FACTORY FAILED -- flash erase error; config is still\
+                   on the box (see its console for the errno)" }
+        -1 { puts "extio: $box refused factory -- name mismatch. This is a BUG in\
+                   extio_factory, which is supposed to send the box's own name." }
+        -2 { puts "extio: $box refused factory -- an obs is running. Try again when\
+                   the trial ends." }
+        -3 { puts "extio: $box has no persistent store -- nothing to erase" }
+        default { puts "extio: $box factory returned $value (unknown receipt)" }
+    }
+}
+
+proc extio_factory_failed {box why} {
+    puts "extio: $box factory NOT confirmed -- $why. The box may or may not have\
+          erased; check its console, or look for it on the discovery beacon with\
+          target 0.0.0.0."
+}
+
 # ============================================================================
 # RENAME -- one committed operation, not a config edit
 # ============================================================================
