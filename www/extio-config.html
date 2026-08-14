@@ -1282,7 +1282,20 @@ function fwSection(b) {
     </div>
     <p class="note">${dead ? 'Box is offline — an update cannot be started.' :
       'Stage → verify → arm → trial boot → confirm, driven by <code>extio_ota_update</code>. ' +
-      'A box will refuse an image it is already running, so the shelf version must differ.'}</p>`;
+      'A box will refuse an image it is already running, so the shelf version must differ.'}</p>
+
+    <!-- Factory reset lives HERE, not in the floating action bar. That bar rides
+         the bottom of the viewport next to Save, which people click constantly,
+         so an irreversible wipe was permanently one slip away from the most
+         routine control on the page. It belongs with the things that change what
+         the box IS, behind a rule and below the fold. -->
+    <div style="margin-top:22px;padding-top:14px;border-top:1px solid var(--line)">
+      <button class="danger" data-ctl="${esc(b)}|btn/factory" onclick="doFactory('${b}')"
+        title="Erase all saved configuration and reboot into the out-of-box state">Factory reset…</button>
+      <p class="note">Erases name, pins, groups, labels, analog setup and dserv target,
+        then reboots. The box comes back unadopted and appears on the fleet page as free.
+        Nothing about it is recoverable.</p>
+    </div>`;
 }
 
 /* Memo on the structure SIGNATURE, not on the rendered HTML: renderPanel runs
@@ -1700,8 +1713,6 @@ function buildPanel(b) {
       <button class="danger" data-ctl="${esc(b)}|btn/reboot" onclick="doReboot('${b}')">Reboot</button>
       <button data-ctl="${esc(b)}|btn/refresh" onclick="conn.send('extio_cfg_announce ${b}','extio')"
         title="Ask the box to re-publish everything now">Refresh from box</button>
-      <button class="danger" data-ctl="${esc(b)}|btn/factory" onclick="doFactory('${b}')"
-        title="Erase all saved configuration and reboot into the out-of-box state">Factory reset…</button>
     </div>
   `;
   return html;
