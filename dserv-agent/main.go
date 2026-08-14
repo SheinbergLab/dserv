@@ -825,7 +825,10 @@ func (a *Agent) handleLandingPage(w http.ResponseWriter, r *http.Request) {
 	// works for the boards already in service -- this only stops promoting it.
 	// Restore from git history (or write the NXP equivalent) when there is a
 	// board bootstrap worth sending people to.
-	extioCard := ""
+	// No extio card, deliberately: /extio/setup still serves the RP2350/WIZnet
+	// provisioning flow, but that hardware is being superseded by the NXP
+	// boxes, which do not provision via picotool. Advertise a board path here
+	// again when one exists for them.
 
 	// Profiles, straight from the same list the bootstrap resolves against, so
 	// this page cannot advertise a profile that does not exist. incage is the
@@ -955,7 +958,22 @@ func (a *Agent) handleLandingPage(w http.ResponseWriter, r *http.Request) {
             </div>
             <p class="note">Point the control box at it with <code>ESS_RMT_HOST</code>; its STIM chip then links straight here for updates.</p>
           </div>
-          __EXTIO_CARD__
+        </div>
+
+        <h2>Lab time</h2>
+        <div class="cards">
+          <div class="card">
+            <div class="card-head">
+              <h3>Put a box on the site clock</h3>
+              <span class="platform">Linux · PTP / NTP</span>
+            </div>
+            <p class="card-desc">One tool, three roles: a <strong>grandmaster</strong> defines a site&rsquo;s time, PTP <strong>clients</strong> follow it at microseconds on NICs that can hardware-timestamp, and the <strong>ntp-client</strong> tier (chrony) covers boxes that can&rsquo;t &mdash; still tens of microseconds on a wired LAN. Ships in the dserv package; this fetches it for boxes without one. Everything installs inert: assigning a role stays a deliberate, per-host step.</p>
+            <div class="cmd">
+              <code>curl -sSL __BASE__/ptp/setup | sudo bash</code>
+              <button class="copy" data-cmd="curl -sSL __BASE__/ptp/setup | sudo bash">Copy</button>
+            </div>
+            <p class="note">Then <code>dserv-ptp-setup candidates</code>, and one of <code>grandmaster IFACE</code> &middot; <code>client IFACE</code> &middot; <code>ntp-client SERVER</code> &mdash; or append the role to the curl: <code>| sudo bash -s -- client eth0</code>.</p>
+          </div>
         </div>
 
         <h2>Other profiles</h2>
@@ -990,7 +1008,6 @@ func (a *Agent) handleLandingPage(w http.ResponseWriter, r *http.Request) {
 </body>
 </html>`
 
-	html = strings.ReplaceAll(html, "__EXTIO_CARD__", extioCard)
 	html = strings.ReplaceAll(html, "__OTHER_PROFILES__", otherProfiles)
 	html = strings.ReplaceAll(html, "__BASE__", base)
 
