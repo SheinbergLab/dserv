@@ -1068,12 +1068,14 @@ body.solo .agent-panel {
              if (!box || !box.profile) {
 		 return `<span style="color:#71767b" title="No /etc/dserv-agent/box.conf — this box was provisioned before identities were recorded. Retype (or re-run the bootstrap) to record one and converge services to it.">unrecorded</span>${retypeBtn}`;
              }
+             // Role inline, not tooltip-only: "which machine is the grandmaster"
+             // is exactly the question a panel gets opened to answer.
              const mode = box.stimMode === 'windowed' ? ' · windowed' : '';
+             const role = box.role ? ` · <span style="color:#fbbf24">${this.esc(box.role)}</span>` : '';
              const title = ['Declared in /etc/dserv-agent/box.conf',
-			    box.role ? `role ${box.role}` : '',
 			    box.provisioned ? `provisioned ${box.provisioned}` : '']
 		   .filter(Boolean).join(' · ');
-             return `<span title="${this.esc(title)}">${this.esc(box.profile)}${mode}</span>${retypeBtn}`;
+             return `<span title="${this.esc(title)}">${this.esc(box.profile)}${mode}${role}</span>${retypeBtn}`;
 	 }
 
 	 retypeOpen() {
