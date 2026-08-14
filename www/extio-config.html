@@ -572,9 +572,16 @@ function shelfCell(b) {
   return `${esc(s.text)} <span class="age">· checked ${secs}s ago</span>`;
 }
 
+/* panelSig = null BEFORE EVERY renderPanel HERE, and it is not optional:
+ * renderPanel() rebuilds the DOM only when panelSignature() changes, and
+ * shelfSeen is deliberately not in that signature (it is host state, not box
+ * state -- putting it there would make an unrelated shelf check invalidate the
+ * panel mid-edit). Without the reset both calls below are silent no-ops: the
+ * fetch runs, the result is stored, and the row keeps saying "not checked".
+ * Same idiom as every other non-signature update on this page. */
 async function checkShelf(box) {
   shelfSeen.set(box, { text: 'checking…', at: Date.now() });
-  renderPanel();
+  panelSig = null; renderPanel();
   let text;
   try {
     text = String(await conn.send(`extio_fw_check ${box}`, 'extio') || '');
@@ -585,7 +592,7 @@ async function checkShelf(box) {
     text = `failed: ${e.message || e}`;
   }
   shelfSeen.set(box, { text, at: Date.now() });
-  renderPanel();
+  panelSig = null; renderPanel();
 }
 
 async function otaAbort(box)   { try { await conn.send(`extio_ota_abort ${box}`, 'extio'); } catch (e) {} renderPanel(); }
