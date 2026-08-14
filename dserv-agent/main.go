@@ -1049,39 +1049,16 @@ func (a *Agent) handleWorkgroupPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// ONE table, one row per machine -- the mesh heartbeat (dserv liveness)
+	// and the agent's self-report (identity, time, versions) are two
+	// properties of the same box, not two populations. See fleetTableHTML.
 	nodes := a.registry.getNodes(workgroup)
-	
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	
-	var nodeRows strings.Builder
-	if len(nodes) == 0 {
-		nodeRows.WriteString(`<tr><td colspan="4" style="text-align:center;color:#71767b;padding:40px;">No active nodes</td></tr>`)
-	} else {
-		for _, n := range nodes {
-			stateColor := "#34d399" // green for active
-			if n.State == "stale" {
-				stateColor = "#fbbf24" // yellow
-			} else if n.State == "unresponsive" {
-				stateColor = "#f87171" // red
-			}
-			
-			// Link to the node's web interface
-			scheme := "http"
-			if n.SSL {
-				scheme = "https"
-			}
-			nodeURL := fmt.Sprintf("%s://%s:%d/", scheme, n.IP, n.Port)
-			
-			nodeRows.WriteString(fmt.Sprintf(`
-				<tr>
-					<td><a href="%s" target="_blank">%s</a></td>
-					<td><code>%s</code></td>
-					<td>%d</td>
-					<td><span style="color:%s">●</span> %s</td>
-				</tr>`,
-				nodeURL, n.Hostname, n.IP, n.Port, stateColor, n.State))
-		}
+	fleet, machineCount := fleetTableHTML(nodes, getBoxReports(workgroup))
+	if machineCount == 0 {
+		fleet = `<p style="text-align:center;color:#71767b;padding:40px;">No machines have reported yet</p>`
 	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 
 	html := fmt.Sprintf(`<!DOCTYPE html>
 <html>
@@ -1153,25 +1130,12 @@ func (a *Agent) handleWorkgroupPage(w http.ResponseWriter, r *http.Request) {
 <body>
     <div class="container">
         <h1>%s</h1>
-        <p class="subtitle">%d node(s) registered • auto-refreshes every 10s</p>
-        <table>
-            <thead>
-                <tr>
-                    <th>Hostname</th>
-                    <th>IP Address</th>
-                    <th>Port</th>
-                    <th>State</th>
-                </tr>
-            </thead>
-            <tbody>
-                %s
-            </tbody>
-        </table>
+        <p class="subtitle">%d machine(s) • auto-refreshes every 10s</p>
         %s
         <p class="footer"><a href="/">← dserv.net</a></p>
     </div>
 </body>
-</html>`, workgroup, workgroup, len(nodes), nodeRows.String(), boxSectionHTML(workgroup))
+</html>`, workgroup, workgroup, machineCount, fleet)
 
 	w.Write([]byte(html))
 }

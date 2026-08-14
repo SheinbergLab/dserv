@@ -228,47 +228,128 @@ func timeCellHTML(r *BoxReport) string {
 	return obs + fmt.Sprintf(` <span style="color:#fbbf24" title="declared but not running">⇢ declared: %s</span>`, html.EscapeString(declared))
 }
 
-// boxSectionHTML renders the workgroup page's Boxes table + the grandmaster
-// line. GMs are COUNTED and NAMED, never auto-alarmed: this workgroup
+// fleetTableHTML renders ONE ROW PER MACHINE, joined from the page's two
+// independent reporters: dserv's mesh heartbeat (proof a dserv is alive)
+// and the agent's self-report (what the machine IS -- which exists even
+// where dserv does not). Rendering them as two tables put officepi in both
+// and stim boxes only in one, which read as two different populations
+// instead of two properties of the same fleet. dserv liveness is a cell
+// now, not a table.
+//
+// GMs are COUNTED and NAMED, never auto-alarmed: this workgroup
 // legitimately runs three (rig switch, office segment, one island), and no
 // per-workgroup or per-subnet rule can tell those apart -- two of the
 // segments even share 192.168.88.0/24. A declared segment= label is the
 // future fix; until then the human who knows the topology reads the list.
-func boxSectionHTML(workgroup string) string {
-	reports := getBoxReports(workgroup)
-	if len(reports) == 0 {
-		return ""
+func fleetTableHTML(nodes []*MeshNode, reports []*BoxReport) (string, int) {
+	type machine struct {
+		node   *MeshNode
+		report *BoxReport
 	}
+	// Hostnames arrive from two stacks that disagree about suffixes (Go's
+	// os.Hostname says MacBook-Air.local, a heartbeat may not) -- normalize
+	// or one machine splits back into two rows.
+	key := func(h string) string { return strings.TrimSuffix(strings.ToLower(h), ".local") }
+
+	machines := map[string]*machine{}
+	name := map[string]string{} // key -> display name (first seen wins)
+	for _, n := range nodes {
+		k := key(n.Hostname)
+		machines[k] = &machine{node: n}
+		name[k] = n.Hostname
+	}
+	for _, r := range reports {
+		k := key(r.Hostname)
+		if m, ok := machines[k]; ok {
+			m.report = r
+		} else {
+			machines[k] = &machine{report: r}
+			name[k] = r.Hostname
+		}
+	}
+	keys := make([]string, 0, len(machines))
+	for k := range machines {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
 
 	var gms []string
 	var rows strings.Builder
-	for _, r := range reports {
-		if r.Time != nil && r.Time.Role == "grandmaster" {
-			gms = append(gms, fmt.Sprintf("%s (%s)", r.Hostname, r.Time.Iface))
-		}
+	for _, k := range keys {
+		m := machines[k]
+		r := m.report
 
-		profile := `<span style="color:#71767b">unrecorded</span>`
-		if r.Box != nil && r.Box.Profile != "" {
-			profile = html.EscapeString(r.Box.Profile)
-			if r.Box.StimMode == "windowed" {
-				profile += " · windowed"
+		// Host links to the machine's own management panel when an agent
+		// reported (it serves the panel); otherwise to whatever the dserv
+		// heartbeat advertised.
+		host := html.EscapeString(name[k])
+		ip := ""
+		if r != nil && r.IP != "" {
+			ip = r.IP
+		} else if m.node != nil {
+			ip = m.node.IP
+		}
+		if r != nil && ip != "" {
+			host = fmt.Sprintf(`<a href="http://%s/" target="_blank">%s</a>`, html.EscapeString(ip), host)
+		} else if m.node != nil {
+			scheme := "http"
+			if m.node.SSL {
+				scheme = "https"
 			}
-			if r.Box.Role != "" {
-				profile += fmt.Sprintf(` · <span style="color:#fbbf24">%s</span>`, html.EscapeString(r.Box.Role))
+			host = fmt.Sprintf(`<a href="%s://%s:%d/" target="_blank">%s</a>`,
+				scheme, html.EscapeString(m.node.IP), m.node.Port, host)
+		}
+
+		identity := `<span style="color:#71767b">—</span>`
+		timeCell := `<span style="color:#71767b">—</span>`
+		agentCell := `<span style="color:#71767b">no agent report</span>`
+		if r != nil {
+			identity = `<span style="color:#71767b">unrecorded</span>`
+			if r.Box != nil && r.Box.Profile != "" {
+				identity = html.EscapeString(r.Box.Profile)
+				if r.Box.StimMode == "windowed" {
+					identity += " · windowed"
+				}
+				if r.Box.Role != "" {
+					identity += fmt.Sprintf(` · <span style="color:#fbbf24">%s</span>`, html.EscapeString(r.Box.Role))
+				}
 			}
+			timeCell = timeCellHTML(r)
+			if r.Time != nil && r.Time.Role == "grandmaster" {
+				gms = append(gms, fmt.Sprintf("%s (%s)", r.Hostname, r.Time.Iface))
+			}
+			age := time.Since(r.ReceivedAt).Round(time.Second)
+			ageColor := "#34d399"
+			if age > 10*time.Minute {
+				ageColor = "#f87171"
+			} else if age > 3*time.Minute {
+				ageColor = "#fbbf24"
+			}
+			agentCell = fmt.Sprintf(`%s · <span style="color:%s">%s ago</span>`,
+				html.EscapeString(r.AgentVersion), ageColor, age)
 		}
 
-		age := time.Since(r.ReceivedAt).Round(time.Second)
-		ageColor := "#34d399"
-		if age > 10*time.Minute {
-			ageColor = "#f87171"
-		} else if age > 3*time.Minute {
-			ageColor = "#fbbf24"
-		}
-
-		versions := html.EscapeString(r.AgentVersion)
-		if r.DservVersion != "" {
-			versions = "dserv " + html.EscapeString(r.DservVersion) + " · agent " + versions
+		// dserv liveness from the heartbeat (its absence on a display box is
+		// correct, not missing data); version from the agent's report, which
+		// asks the running dserv itself.
+		dservCell := `<span style="color:#71767b">—</span>`
+		if m.node != nil {
+			stateColor := "#34d399"
+			switch m.node.State {
+			case "stale":
+				stateColor = "#fbbf24"
+			case "unresponsive":
+				stateColor = "#f87171"
+			}
+			ver := ""
+			if r != nil && r.DservVersion != "" {
+				ver = " " + html.EscapeString(r.DservVersion)
+			}
+			dservCell = fmt.Sprintf(`<span style="color:%s">●</span>%s <span style="color:#71767b">%s</span>`,
+				stateColor, ver, html.EscapeString(m.node.State))
+		} else if r != nil && r.DservVersion != "" {
+			// Installed (the agent could ask it) but not heartbeating.
+			dservCell = fmt.Sprintf(`%s <span style="color:#71767b">(no heartbeat)</span>`, html.EscapeString(r.DservVersion))
 		}
 
 		rows.WriteString(fmt.Sprintf(`
@@ -277,11 +358,10 @@ func boxSectionHTML(workgroup string) string {
                     <td><code>%s</code></td>
                     <td>%s</td>
                     <td>%s</td>
+                    <td style="font-size:12px">%s</td>
                     <td style="font-size:12px;color:#8b98a5">%s</td>
-                    <td><span style="color:%s">%s ago</span></td>
                 </tr>`,
-			html.EscapeString(r.Hostname), html.EscapeString(r.IP), profile,
-			timeCellHTML(r), versions, ageColor, age))
+			host, html.EscapeString(ip), identity, timeCell, dservCell, agentCell))
 	}
 
 	gmLine := ""
@@ -290,13 +370,13 @@ func boxSectionHTML(workgroup string) string {
 			len(gms), html.EscapeString(strings.Join(gms, ", ")))
 	}
 
-	return fmt.Sprintf(`
-        <h2 style="font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:1.5px;color:#71767b;margin:36px 0 6px">Boxes</h2>
+	table := fmt.Sprintf(`
         %s
         <table>
             <thead>
-                <tr><th>Host</th><th>IP</th><th>Identity</th><th>Time</th><th>Versions</th><th>Reported</th></tr>
+                <tr><th>Host</th><th>IP</th><th>Identity</th><th>Time</th><th>dserv</th><th>Agent</th></tr>
             </thead>
             <tbody>%s</tbody>
         </table>`, gmLine, rows.String())
+	return table, len(machines)
 }
