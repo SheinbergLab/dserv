@@ -246,10 +246,18 @@ func fleetTableHTML(nodes []*MeshNode, reports []*BoxReport) (string, int) {
 		node   *MeshNode
 		report *BoxReport
 	}
-	// Hostnames arrive from two stacks that disagree about suffixes (Go's
-	// os.Hostname says MacBook-Air.local, a heartbeat may not) -- normalize
-	// or one machine splits back into two rows.
-	key := func(h string) string { return strings.TrimSuffix(strings.ToLower(h), ".local") }
+	// Join on the SHORT hostname: the two stacks disagree about domain
+	// suffixes (Go's os.Hostname says MacBook-Air.local, dserv's heartbeat
+	// may say .lan or nothing), and any mismatch splits one machine into
+	// two rows. Everything before the first dot is the name this fleet
+	// actually uses; nobody runs two boxes distinguished only by domain.
+	key := func(h string) string {
+		h = strings.ToLower(h)
+		if i := strings.IndexByte(h, '.'); i > 0 {
+			h = h[:i]
+		}
+		return h
+	}
 
 	machines := map[string]*machine{}
 	name := map[string]string{} // key -> display name (first seen wins)

@@ -1066,7 +1066,6 @@ func (a *Agent) handleWorkgroupPage(w http.ResponseWriter, r *http.Request) {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>%s - dserv.net</title>
-    <meta http-equiv="refresh" content="10">
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -1134,6 +1133,19 @@ func (a *Agent) handleWorkgroupPage(w http.ResponseWriter, r *http.Request) {
         %s
         <p class="footer"><a href="/">← dserv.net</a></p>
     </div>
+    <script>
+    // Refresh WITHOUT the flicker a meta-refresh causes: fetch the page in
+    // the background and swap the content in place -- no navigation, no
+    // blank flash, scroll position preserved. On a fetch failure the last
+    // good view simply stays up.
+    setInterval(function () {
+        fetch(location.href).then(function (r) { return r.text(); }).then(function (t) {
+            var fresh = new DOMParser().parseFromString(t, 'text/html').querySelector('.container');
+            var cur = document.querySelector('.container');
+            if (fresh && cur) cur.innerHTML = fresh.innerHTML;
+        }).catch(function () {});
+    }, 10000);
+    </script>
 </body>
 </html>`, workgroup, workgroup, machineCount, fleet)
 
