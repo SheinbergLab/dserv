@@ -1225,7 +1225,11 @@ body.solo .agent-panel {
              } else if (ts.role !== 'none') {
 		 declaredLine = '<div style="font-size:11px;color:#71767b;margin-bottom:6px">running role not declared in box.conf — panel changes record themselves; a retype with --time-role also records it</div>';
              }
-             const units = Object.entries(ts.units || {}).map(([u, s]) =>
+             // Skip 'inactive': a retired role's disabled pair is correct
+             // history, not an alarm, and red-inactive rows read as trouble.
+             // failed/activating stay red -- those ARE trouble. Full status
+             // keeps the complete picture.
+             const units = Object.entries(ts.units || {}).filter(([, s]) => s !== 'inactive').map(([u, s]) =>
 		 `<div style="font-family:'SF Mono',Monaco,monospace;font-size:11px;color:${s==='active'?'#8b98a5':'#f87171'}">${this.esc(u)} · ${this.esc(s)}</div>`).join('');
              const toolNote = ts.toolInstalled ? '' :
 		 `<div style="font-size:11px;color:#71767b;margin-top:6px">time tooling not installed${ts.registry?` — Set role fetches it from ${this.esc(ts.registry)}`:''}</div>`;
