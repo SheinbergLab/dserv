@@ -309,7 +309,8 @@ while [[ $# -gt 0 ]]; do
             echo "  --role ROLE          Box role (e.g., eyetracker, stim, control)"
             echo "  --time-role \"R ARG\"  Declared time role, applied at the end:"
             echo "                       \"grandmaster IFACE\" | \"client IFACE\" |"
-            echo "                       \"ntp-client SERVER\" (quote role+arg together)"
+            echo "                       \"ntp-client SERVER\" (quote role+arg together;"
+            echo "                       re-runs preserve it; \"none\" clears it)"
             echo "  --workgroup NAME     Workgroup name (default: ${DEFAULT_WORKGROUP})"
             echo "  --user USER          Local account owning the ESS systems tree"
             echo "                       (default: the user invoking sudo, else 'lab')"
@@ -1213,6 +1214,25 @@ step_retire_services() {
 }
 
 step_record_identity() {
+    # A re-run WITHOUT --role/--time-role PRESERVES what box.conf already
+    # declares: an absent flag means "no change", not "erase" -- otherwise a
+    # routine components-only retype would silently strip declarations made
+    # earlier (and a preserved time_role also re-applies below, which is the
+    # convergence re-runs promise). Pass the literal word "none" to
+    # deliberately clear one.
+    local prev="${DSERV_BOX_CONF:-/etc/dserv-agent/box.conf}"
+    if [[ "$ROLE" == none ]]; then
+        ROLE=""
+    elif [[ -z "$ROLE" && -f "$prev" ]]; then
+        ROLE=$(sed -n 's/^role=//p' "$prev" | head -1)
+    fi
+    if [[ "$TIME_ROLE" == none ]]; then
+        TIME_ROLE=""
+    elif [[ -z "$TIME_ROLE" && -f "$prev" ]]; then
+        TIME_ROLE=$(sed -n 's/^time_role=//p' "$prev" | head -1)
+        [[ -n "$TIME_ROLE" ]] && info "Preserving declared time role: ${TIME_ROLE} (pass --time-role none to clear)"
+    fi
+
     # The durable record of what this box was provisioned AS. Every other
     # trace of the profile is a side effect -- which packages landed, which
     # units are enabled -- so before this file existed a box could not be
