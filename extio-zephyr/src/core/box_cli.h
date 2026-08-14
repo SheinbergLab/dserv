@@ -249,92 +249,138 @@ static inline void box_cli_dump_line(const char *fmt, ...)
 }
 #define DUMPF(...) box_cli_dump_line(__VA_ARGS__)
 
+/* TWO SYNTAXES, ONE WALK.
+ *
+ * CLI form pastes into a console. DP form is "<leaf> <value>" pairs naming the
+ * config datapoint namespace exactly, so a host replays a saved config with
+ * extio_cfg_set and needs no translation table of its own -- the mapping is
+ * NOT mechanical (pulse -> pulse_us, settle -> settle_ms, `label N` ->
+ * pin/N/label), and a host-side table would be a second copy of firmware
+ * knowledge that drifts. The extio_cfg_writable allowlist already demonstrates
+ * that failure mode: it listed `channel` for months while the codec had no
+ * case for it.
+ *
+ * DUMP2 takes BOTH forms on the same line with the SAME arguments, so a new
+ * dumped setting cannot compile without stating its leaf name. That is the
+ * property worth having: the two forms cannot drift apart, because they are
+ * written together or not at all. tools/box_sim.c --selftest then proves every
+ * emitted leaf is one the codec actually accepts. */
+#define BOX_DUMP_CLI 0
+#define BOX_DUMP_DP  1
+static int box_cli_dump_form;                 /* set by box_cli_dump_to_form() */
+#define DUMP2(cli, dp, ...) box_cli_dump_line(box_cli_dump_form ? (dp) : (cli), ##__VA_ARGS__)
+#define DUMPCLI(...) do { if (!box_cli_dump_form) DUMPF(__VA_ARGS__); } while (0)
+
 /* Emit the CLI commands that reproduce this config (only the non-default settings), so
  * pasting the output into a fresh box's console clones this setup. Ends with `save`.
  * Uses printf (not `out`) so a big config isn't bounded by the response buffer. Comment
  * (#) lines are ignored by box_cli_exec, so the whole capture pastes back cleanly. */
 static inline void box_cli_dump(const box_config_t *c)
 {
-    DUMPF("# extio box config dump -- paste into a new box's console to clone this setup\r\n");
-    DUMPF("# (uncomment the next line to wipe the target's existing config first)\r\n");
-    DUMPF("#factory\r\n");
-    if (c->name[0])                       DUMPF("name %s\r\n", c->name);
+    DUMPCLI("# extio box config dump -- paste into a new box's console to clone this setup\r\n");
+    if (box_cli_dump_form) DUMPF("# extio config (datapoint form): <leaf> <value> for extio_cfg_set\r\n");
+    DUMPCLI("# (uncomment the next line to wipe the target's existing config first)\r\n");
+    DUMPCLI("#factory\r\n");
+    /* NAME IS IDENTITY, NOT CONFIGURATION, and in DP form it is actively
+     * destructive: applying config/name mid-replay changes the box's own
+     * datapoint prefix, so every following extio/<old>/config/* write in the
+     * same batch is addressed to a name the box no longer answers to and is
+     * dropped -- silently, since a prefix miss is CFG_NONE, not an error.
+     * Caught by tools/box_sim.c --roundtrip, which saw exactly one setting
+     * survive an import.
+     *
+     * Renaming is already a committed operation with its own re-registration
+     * (extio_rename); a config import must not do it as a side effect. CLI form
+     * keeps it -- a console paste is sequential, interactive, and the operator
+     * chose the target. */
+    if (c->name[0]) {
+        DUMPCLI("name %s\r\n", c->name);
+        if (box_cli_dump_form) DUMPF("# name %s   (identity: use extio_rename, not import)\r\n", c->name);
+    }
 #ifdef BOX_HAVE_XPORT_POLICY
-    if (c->transport_mode)                DUMPF("mode %s\r\n", dserv_xmode_str(c->transport_mode));
+    if (c->transport_mode)                DUMP2("mode %s\r\n", "xport/mode %s\r\n", dserv_xmode_str(c->transport_mode));
 #endif
     if (c->net_mode == NET_MODE_STATIC) {
-        DUMPF("net mode static\r\n");
-        DUMPF("net ip %u.%u.%u.%u\r\n", c->net_ip[0], c->net_ip[1], c->net_ip[2], c->net_ip[3]);
+        DUMP2("net mode static\r\n", "net/mode static\r\n");
+        DUMP2("net ip %u.%u.%u.%u\r\n", "net/ip %u.%u.%u.%u\r\n", c->net_ip[0], c->net_ip[1], c->net_ip[2], c->net_ip[3]);
         if (c->net_gw[0] || c->net_gw[1] || c->net_gw[2] || c->net_gw[3])
-            DUMPF("net gateway %u.%u.%u.%u\r\n", c->net_gw[0], c->net_gw[1], c->net_gw[2], c->net_gw[3]);
+            DUMP2("net gateway %u.%u.%u.%u\r\n", "net/gateway %u.%u.%u.%u\r\n", c->net_gw[0], c->net_gw[1], c->net_gw[2], c->net_gw[3]);
         if (c->net_sn[0] || c->net_sn[1] || c->net_sn[2] || c->net_sn[3])
-            DUMPF("net mask %u.%u.%u.%u\r\n", c->net_sn[0], c->net_sn[1], c->net_sn[2], c->net_sn[3]);
+            DUMP2("net mask %u.%u.%u.%u\r\n", "net/mask %u.%u.%u.%u\r\n", c->net_sn[0], c->net_sn[1], c->net_sn[2], c->net_sn[3]);
     }
     if (c->dserv_ip[0] || c->dserv_ip[1] || c->dserv_ip[2] || c->dserv_ip[3])
-        DUMPF("dserv ip %u.%u.%u.%u\r\n", c->dserv_ip[0], c->dserv_ip[1], c->dserv_ip[2], c->dserv_ip[3]);
-    if (c->dserv_port)                    DUMPF("dserv port %u\r\n", c->dserv_port);
+        DUMP2("dserv ip %u.%u.%u.%u\r\n", "dserv/ip %u.%u.%u.%u\r\n", c->dserv_ip[0], c->dserv_ip[1], c->dserv_ip[2], c->dserv_ip[3]);
+    if (c->dserv_port)                    DUMP2("dserv port %u\r\n", "dserv/port %u\r\n", c->dserv_port);
     for (int i = 0; i < BOX_NPINS; i++) {
-        if (c->pin_mode[i])      DUMPF("pin %d mode %s\r\n",     i, dserv_mode_str(c->pin_mode[i]));
-        if (c->do_pulse_us[i])   DUMPF("pin %d pulse %u\r\n",    i, (unsigned) c->do_pulse_us[i]);
-        if (c->debounce_ms[i])   DUMPF("pin %d debounce %u\r\n", i, c->debounce_ms[i]);
-        if (di_active_low(c, i)) DUMPF("pin %d active_low 1\r\n", i);
-        if (c->pin_label[i][0])  DUMPF("label %d %s\r\n",        i, c->pin_label[i]);
+        if (c->pin_mode[i])      DUMP2("pin %d mode %s\r\n", "pin/%d/mode %s\r\n", i, dserv_mode_str(c->pin_mode[i]));
+        if (c->do_pulse_us[i])   DUMP2("pin %d pulse %u\r\n", "pin/%d/pulse_us %u\r\n", i, (unsigned) c->do_pulse_us[i]);
+        if (c->debounce_ms[i])   DUMP2("pin %d debounce %u\r\n", "pin/%d/debounce_ms %u\r\n", i, c->debounce_ms[i]);
+        if (di_active_low(c, i)) DUMP2("pin %d active_low 1\r\n", "pin/%d/active_low 1\r\n", i);
+        if (c->pin_label[i][0])  DUMP2("label %d %s\r\n", "pin/%d/label %s\r\n", i, c->pin_label[i]);
     }
-    if (c->desc[0])                       DUMPF("desc %s\r\n", c->desc);
-    if (c->channel[0])                    DUMPF("channel %s\r\n", c->channel);
+    if (c->desc[0])                       DUMP2("desc %s\r\n", "desc %s\r\n", c->desc);
+    if (c->channel[0])                    DUMP2("channel %s\r\n", "channel %s\r\n", c->channel);
     for (int g = 0; g < BOX_NGROUPS; g++)
         if (c->group_pins[g]) {
             char ps[96]; dserv_pins_str(c->group_pins[g], ps, sizeof ps);
-            DUMPF("group %d pins %s\r\n", g, ps);
-            if (c->group_label[g][0])     DUMPF("group %d label %s\r\n",  g, c->group_label[g]);
-            if (c->group_settle_ms[g])    DUMPF("group %d settle %u\r\n", g, c->group_settle_ms[g]);
-            if (c->group_quiet[g])        DUMPF("group %d quiet 1\r\n",   g);
+            DUMP2("group %d pins %s\r\n", "group/%d/pins %s\r\n", g, ps);
+            if (c->group_label[g][0])     DUMP2("group %d label %s\r\n", "group/%d/label %s\r\n", g, c->group_label[g]);
+            if (c->group_settle_ms[g])    DUMP2("group %d settle %u\r\n", "group/%d/settle_ms %u\r\n", g, c->group_settle_ms[g]);
+            if (c->group_quiet[g])        DUMP2("group %d quiet 1\r\n", "group/%d/quiet 1\r\n", g);
         }
-    if (obs_mirror_enabled(c))            DUMPF("obs pin %d\r\n", obs_mirror_pin(c));
-    if (c->obs_mode == OBS_MODE_LEADER)   DUMPF("obs mode leader\r\n");
-    if (sync_input_enabled(c))            DUMPF("sync pin %d\r\n", sync_input_pin(c));
-    if (c->wifi_ssid[0])                  DUMPF("wifi ssid %s\r\n", c->wifi_ssid);
+    if (obs_mirror_enabled(c))            DUMP2("obs pin %d\r\n", "obs/pin %d\r\n", obs_mirror_pin(c));
+    if (c->obs_mode == OBS_MODE_LEADER)   DUMP2("obs mode leader\r\n", "obs/mode leader\r\n");
+    if (sync_input_enabled(c))            DUMP2("sync pin %d\r\n", "sync/pin %d\r\n", sync_input_pin(c));
+    if (c->wifi_ssid[0])                  DUMP2("wifi ssid %s\r\n", "wifi/ssid %s\r\n", c->wifi_ssid);
     if (c->wifi_pass[0])                  DUMPF("# wifi pass <re-enter manually; not dumped>\r\n");
-    if (c->wifi_pm)                       DUMPF("wifi pm 1\r\n");
-    if (c->ain_en)                        DUMPF("ain enable 1\r\n");
-    if (c->ain_rate)                      DUMPF("ain rate %u\r\n", c->ain_rate);
-    if (c->ain_ovs)                       DUMPF("ain oversample %u\r\n", 1u << c->ain_ovs);
+    if (c->wifi_pm)                       DUMP2("wifi pm 1\r\n", "wifi/pm 1\r\n");
+    if (c->ain_en)                        DUMP2("ain enable 1\r\n", "ain/enable 1\r\n");
+    if (c->ain_rate)                      DUMP2("ain rate %u\r\n", "ain/rate %u\r\n", c->ain_rate);
+    if (c->ain_ovs)                       DUMP2("ain oversample %u\r\n", "ain/oversample %u\r\n", 1u << c->ain_ovs);
     for (int i = 0; i < AIN_MAX_CH; i++)
-        if (c->ain_label[i][0])           DUMPF("ain label %d %s\r\n", i, c->ain_label[i]);
-    if (c->ain_clk_ppm)                   DUMPF("ain clkppm %d\r\n", c->ain_clk_ppm);
-    if (c->dbg_level == DBG_LEVEL_FULL)   DUMPF("dbg level full\r\n");
-    if (c->dbg_level == DBG_LEVEL_OFF)    DUMPF("dbg level off\r\n");
-    if (c->ain_pace == AIN_PACE_POLLED)   DUMPF("ain pace polled\r\n");
-    if (c->ain_pace == AIN_PACE_STREAM)   DUMPF("ain pace stream\r\n");
+        if (c->ain_label[i][0])           DUMP2("ain label %d %s\r\n", "ain/label/%d %s\r\n", i, c->ain_label[i]);
+    if (c->ain_clk_ppm)                   DUMP2("ain clkppm %d\r\n", "ain/clk_ppm %d\r\n", c->ain_clk_ppm);
+    if (c->dbg_level == DBG_LEVEL_FULL)   DUMP2("dbg level full\r\n", "dbg/level full\r\n");
+    if (c->dbg_level == DBG_LEVEL_OFF)    DUMP2("dbg level off\r\n", "dbg/level off\r\n");
+    if (c->ain_pace == AIN_PACE_POLLED)   DUMP2("ain pace polled\r\n", "ain/pace polled\r\n");
+    if (c->ain_pace == AIN_PACE_STREAM)   DUMP2("ain pace stream\r\n", "ain/pace stream\r\n");
     for (int ag = 0; ag < BOX_NAGROUPS; ag++)
         if (c->ain_group_chans[ag]) {
             char cs[16]; dserv_pins_str(c->ain_group_chans[ag], cs, sizeof cs);
-            DUMPF("ain group %d channels %s\r\n", ag, cs);
-            if (c->ain_group_label[ag][0]) DUMPF("ain group %d label %s\r\n",    ag, c->ain_group_label[ag]);
-            if (c->ain_group_mode[ag])     DUMPF("ain group %d mode continuous\r\n", ag);
-            if (c->ain_group_deadband[ag]) DUMPF("ain group %d deadband %u\r\n", ag, c->ain_group_deadband[ag]);
-            if (c->ain_group_decimate[ag]) DUMPF("ain group %d decimate %u\r\n", ag, c->ain_group_decimate[ag]);
-            if (c->ain_group_batch[ag])    DUMPF("ain group %d batch %u\r\n",    ag, c->ain_group_batch[ag]);
-            if (c->ain_group_flags[ag] & AIN_GROUP_FLAG_AVG) DUMPF("ain group %d average 1\r\n", ag);
+            DUMP2("ain group %d channels %s\r\n", "ain/group/%d/channels %s\r\n", ag, cs);
+            if (c->ain_group_label[ag][0]) DUMP2("ain group %d label %s\r\n", "ain/group/%d/label %s\r\n", ag, c->ain_group_label[ag]);
+            if (c->ain_group_mode[ag])     DUMP2("ain group %d mode continuous\r\n", "ain/group/%d/mode continuous\r\n", ag);
+            if (c->ain_group_deadband[ag]) DUMP2("ain group %d deadband %u\r\n", "ain/group/%d/deadband %u\r\n", ag, c->ain_group_deadband[ag]);
+            if (c->ain_group_decimate[ag]) DUMP2("ain group %d decimate %u\r\n", "ain/group/%d/decimate %u\r\n", ag, c->ain_group_decimate[ag]);
+            if (c->ain_group_batch[ag])    DUMP2("ain group %d batch %u\r\n", "ain/group/%d/batch %u\r\n", ag, c->ain_group_batch[ag]);
+            if (c->ain_group_flags[ag] & AIN_GROUP_FLAG_AVG) DUMP2("ain group %d average 1\r\n", "ain/group/%d/average 1\r\n", ag);
         }
-    if (dserv_cfg_console_mode(c) == CONSOLE_MODE_UART) DUMPF("console uart\r\n");
-    if (c->oled_en)                       DUMPF("oled enable 1\r\n");
-    if (c->ble_en)                        DUMPF("ble enable 1\r\n");
-    if (c->pipe_en)                       DUMPF("ble pipe 1\r\n");
-    if (c->ble_latency)                   DUMPF("ble latency %u\r\n", c->ble_latency);
-    DUMPF("save\r\n");
-    DUMPF("# reboot   (uncomment / run to apply mode/net changes)\r\n");
+    if (dserv_cfg_console_mode(c) == CONSOLE_MODE_UART) DUMP2("console uart\r\n", "console uart\r\n");
+    if (c->oled_en)                       DUMP2("oled enable 1\r\n", "oled/enable 1\r\n");
+    if (c->ble_en)                        DUMP2("ble enable 1\r\n", "ble/enable 1\r\n");
+    if (c->pipe_en)                       DUMP2("ble pipe 1\r\n", "ble/pipe 1\r\n");
+    if (c->ble_latency)                   DUMP2("ble latency %u\r\n", "ble/latency %u\r\n", c->ble_latency);
+    DUMPCLI("save\r\n");
+    DUMPCLI("# reboot   (uncomment / run to apply mode/net changes)\r\n");
 }
 
 /* Same dump, delivered to a caller's sink instead of the console. Restores the
  * console target afterwards so the `dump` verb is unaffected. */
-static inline void box_cli_dump_to(const box_config_t *c, box_cli_emit_fn fn, void *ud)
+static inline void box_cli_dump_to_form(const box_config_t *c, box_cli_emit_fn fn,
+					void *ud, int form)
 {
 	box_cli_emit = fn;
 	box_cli_emit_ud = ud;
+	box_cli_dump_form = form;
 	box_cli_dump(c);
+	box_cli_dump_form = BOX_DUMP_CLI;   /* never leave DP form armed */
 	box_cli_emit = NULL;
 	box_cli_emit_ud = NULL;
+}
+
+static inline void box_cli_dump_to(const box_config_t *c, box_cli_emit_fn fn, void *ud)
+{
+	box_cli_dump_to_form(c, fn, ud, BOX_DUMP_CLI);
 }
 
 #if defined(BOX_NET_DUAL)
