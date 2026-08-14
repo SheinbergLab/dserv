@@ -509,9 +509,20 @@ let renamingTo = null;   /* {from, to} while a rename is in flight -- panel bann
  * rebuilds and even across a group slot going from creation row to real row. */
 const pendingByCtl = new Map();
 const PENDING_MS = 6000;   /* announce debounce 400 ms + box round-trip, ×margin */
+/* Save is now CONFIRMED, not assumed. extio_cfg_save waits for the box's
+ * state/cfg/saved receipt and clears the server-side ledger only when it
+ * arrives -- so this must NOT clear `dirty` locally. Doing so was the whole
+ * lie: a cmd/save that never reached the box (the deaf window after an
+ * adoption that lost its cmd/* match) emptied the banner exactly like a
+ * successful one, and the config reverted at the next reboot.
+ *
+ * refreshDirty re-reads the authoritative ledger. It is called once on the
+ * ack and again after the round trip, because the box's receipt lands
+ * asynchronously and the first read can beat it. */
 async function doSave(box) {
   await conn.send(`extio_cfg_save ${box}`, 'extio');
-  dirty.clear(); updateDirtyUi(); renderPanel();
+  await refreshDirty(box);
+  setTimeout(() => refreshDirty(box), 1500);
 }
 /* OTA. The lifecycle driver does the ordering, the retry-vs-fail decisions and
  * the deadlines (config/extioconf.tcl); the page is a window onto

@@ -54,12 +54,74 @@ foreach m { usbio timer } {
 # has TCP -- only UDP is missing -- and these are one-shot operator actions, not
 # a hot path, so blocking briefly is fine.
 
-proc extio_dserv_cmd { lines {host 127.0.0.1} {port 4620} } {
+# READ THE REPLY TO EACH LINE BEFORE SENDING THE NEXT, and do not close until
+# they have all been answered. This is not politeness, it is the difference
+# between an adoption that works and one that half-works.
+#
+# The original wrote every line into the socket and closed immediately. dserv
+# answers each '%' command with "<rc> ...\n" and the close raced its reader:
+# of the TWO %match lines this proc is called with, only the FIRST took effect.
+# Measured on the rig 2026-08-14, straight after an adopt:
+#
+#     %getmatch <box> 5010  ->  1 { extio/box/config/* }
+#
+# with extio/box/cmd/* simply absent. The failure is silent and lopsided --
+# config/* writes land so the box adopts, retargets and looks healthy, while
+# every cmd/* leaf (save, announce, reboot) vanishes for the ~30 s until the
+# box's own MATCH_REFRESH re-asserts its patterns through the firmware path
+# that already spaces and retries them. A Save clicked inside that window is
+# dropped, and (before the receipt below) reported as success.
+#
+# The firmware learned this exact lesson first -- box_net_eth_send_command()
+# waits for dserv's reply for precisely this reason, with a comment saying so.
+# This is the host side of the same rule.
+#
+# Bounded without an event loop: dserv's Tcl has no vwait/after-script (see
+# dservAfter), so the read is a non-blocking poll against a deadline with a
+# plain `after ms` sleep, which does work uninstalled. Returns the list of
+# reply lines; a caller that cares can check them, and extio_adopt does.
+proc extio_dserv_cmd { lines {host 127.0.0.1} {port 4620} {timeout_ms 600} } {
     set s [socket $host $port]
-    fconfigure $s -translation binary -blocking 1
-    foreach l $lines { puts -nonewline $s "$l\n" }
-    flush $s
-    close $s
+    fconfigure $s -translation binary -blocking 0
+    set replies {}
+    try {
+        foreach l $lines {
+            puts -nonewline $s "$l\n"
+            flush $s
+            lappend replies [extio_dserv__reply $s $timeout_ms]
+        }
+    } finally {
+        close $s
+    }
+    return $replies
+}
+
+# Every reply must be dserv's "1 ..." acceptance. Raises naming the command
+# that was refused, because the alternative -- returning a box that is half
+# routed -- is the failure mode this whole file keeps re-learning.
+proc extio_dserv__require { replies what } {
+    set i 0
+    foreach r $replies {
+        if { ![string match "1*" $r] } {
+            error "extio: dserv refused '$what' (line [incr i]): [expr {$r eq "" ? "no reply" : $r}]"
+        }
+        incr i
+    }
+    return 1
+}
+
+# One "<rc> ...\n" reply, or "" if the deadline passes with nothing complete.
+proc extio_dserv__reply { s timeout_ms } {
+    set deadline [expr {[clock milliseconds] + $timeout_ms}]
+    set acc ""
+    while { [clock milliseconds] < $deadline } {
+        append acc [read $s]
+        set nl [string first "\n" $acc]
+        if { $nl >= 0 } { return [string trim [string range $acc 0 $nl]] }
+        if { [eof $s] } break
+        after 5
+    }
+    return [string trim $acc]
 }
 
 # Adopt <name> at <boxip>, pointing it at <via> -- the address that reaches US
@@ -85,14 +147,21 @@ proc extio_dserv_cmd { lines {host 127.0.0.1} {port 4620} } {
 proc extio_adopt { boxip name via {port 4620} {demote_obs 1} } {
     # 1. make our dserv open a connect-back. The box gives %reg its own
     #    connection and settles before sending matches; copy that.
-    extio_dserv_cmd [list "%reg $boxip 5010 1"]
+    extio_dserv__require [extio_dserv_cmd [list "%reg $boxip 5010 1"]] \
+        "%reg $boxip 5010"
     after 200
 
     # 2. route the leaves the box actually consumes -- the same two patterns it
     #    asks for itself. Anything else never reaches its config handler.
-    extio_dserv_cmd [list \
+    #
+    #    BOTH are checked. Losing the second one silently is the bug this
+    #    check exists to make impossible: config/* alone leaves the box
+    #    adoptable, retargetable and completely deaf to cmd/*, which reads as
+    #    a healthy adoption right up until the first Save disappears.
+    extio_dserv__require [extio_dserv_cmd [list \
         "%match $boxip 5010 extio/$name/config/* 1" \
-        "%match $boxip 5010 extio/$name/cmd/* 1"]
+        "%match $boxip 5010 extio/$name/cmd/* 1"]] \
+        "%match $name config/* + cmd/*"
     after 200
 
     if { $demote_obs } { dservSet extio/$name/config/obs/mode mirror }
@@ -1855,10 +1924,58 @@ proc extio_cfg_announce {box} {
     return "announce requested from $box"
 }
 
+# THE LEDGER IS CLEARED BY THE BOX'S RECEIPT, NEVER BY THE SEND.
+#
+# This used to be `dservSet cmd/save 1` followed unconditionally by unsetting
+# the dirty list: fire and forget, with the UI reporting a success it had not
+# observed. A cmd/save that never arrived -- which is exactly what happens in
+# the ~30 s window after an adoption that lost its cmd/* match, and equally
+# after a rename the box has not taken -- looked identical to one that worked,
+# and the config quietly reverted on the next reboot. The rename comment below
+# has warned about this since +59; the honest fix is to wait for the box.
+#
+# state/cfg/saved is the receipt (firmware >= v0.4.0+89): >0 bytes written,
+# 0 the flash write failed, <0 nothing written but nothing wrong (deferred
+# behind an obs, or no persistence on this board). A deferred save publishes
+# twice -- SAVED_DEFERRED now, the real outcome when the obs ends -- so the
+# deadline here is generous enough to cover an ordinary trial.
+#
+# Async by construction: dserv's Tcl has no event loop to block on, so this
+# returns immediately and the ledger clears from the callback. The page polls
+# extio_cfg_dirty, so the banner and the Save button follow the box rather
+# than the click.
 proc extio_cfg_save {box} {
-    dservSet extio/$box/cmd/save 1
-    unset -nocomplain ::extio_cfg_dirty($box)
-    return "save sent to $box"
+    extio_request $box "save" save 1 cfg/saved {ne ""} 20000 \
+        extio_cfg_save_done extio_cfg_save_failed {cfg/saved}
+    return "save sent to $box -- waiting for the box to confirm"
+}
+
+proc extio_cfg_save_done {box value} {
+    if { ![string is integer -strict $value] } {
+        puts "extio: $box save returned an unreadable receipt '$value' -- ledger kept"
+        return
+    }
+    if { $value > 0 } {
+        unset -nocomplain ::extio_cfg_dirty($box)
+        puts "extio: $box saved ($value bytes)"
+    } elseif { $value == 0 } {
+        puts "extio: $box SAVE FAILED (flash write error -- see the box console\
+              for the errno). Unsaved changes kept in the ledger."
+    } elseif { $value == -1 } {
+        # Deferred behind an obs. The box publishes again when it lands, but
+        # THIS request is already resolved -- re-arm on the same receipt so the
+        # ledger still clears when the write actually happens.
+        puts "extio: $box save deferred to the end of the current obs"
+        extio_await $box "deferred save" cfg/saved {ne ""} 300000 \
+            extio_cfg_save_done extio_cfg_save_failed {cfg/saved}
+    } else {
+        puts "extio: $box has no persistent store -- nothing was saved"
+    }
+}
+
+proc extio_cfg_save_failed {box why} {
+    puts "extio: $box save NOT confirmed -- $why. Unsaved changes kept in the\
+          ledger; check `%getmatch <boxip> 5010` for extio/$box/cmd/*."
 }
 
 proc extio_cfg_reboot {box} {
