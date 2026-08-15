@@ -248,6 +248,22 @@ namespace eval ess {
             dpointAddScript    mouse/event/range ::ess::dial_mouse_range
             dservAddExactMatch mouse/event
             dpointAddScript    mouse/event ::ess::dial_mouse_sample
+
+            # SEED the range from its current value. Subscriptions fire on
+            # CHANGE only, and mouse/event/range is published once when the
+            # reader starts -- at boot, long before any system loads. So
+            # subscribing alone leaves dial_mouse_range_known 0 forever,
+            # and dial_mouse_sample then drops every sample on its second
+            # line: no cursor, no commit, and nothing on screen to say why.
+            #
+            # The device republishes on reconnect, so the subscription is
+            # still needed; this only covers the already-running case.
+            if { [dservExists mouse/event/range] } {
+                catch {
+                    dial_mouse_range mouse/event/range \
+                        [dservGet mouse/event/range]
+                }
+            }
         }
 
         dial_disarm
