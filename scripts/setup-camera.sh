@@ -26,7 +26,10 @@ if [[ "$(id -u)" -ne 0 ]]; then
   die "run as root (sudo $0)"
 fi
 
-[[ -f "$DSERV_SRC/modules/camera/camera.cpp" ]] || die "missing source: $DSERV_SRC/modules/camera/camera.cpp"
+# Building needs the camera *sources*, so the installed copy of this script
+# (/usr/local/dserv/scripts) cannot build from its own tree — point it at a checkout.
+[[ -f "$DSERV_SRC/modules/camera/camera.cpp" ]] || \
+  die "no camera source at $DSERV_SRC — run from a dserv git checkout, or set DSERV_SRC=/path/to/dserv"
 
 install_build_deps() {
   local missing=()
