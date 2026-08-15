@@ -70,6 +70,11 @@ namespace eval ess {
     variable dial_report_angle   -1.0
     variable dial_report_time    0
     variable dial_report_source  ""
+    # A simulated commit waiting to be consumed by the next dial_response.
+    # It must NOT be applied directly: dial_response is where a commit
+    # becomes the protocol's response, and short-circuiting that made the
+    # simulated angle unreachable (dial_response returns -1 once disarmed).
+    variable dial_pending        ""
 
     # ---------------------------------------------------------------------
     # angle helpers
@@ -265,6 +270,7 @@ namespace eval ess {
         set dial_report_angle  -1.0
         set dial_report_time   0
         set dial_report_source ""
+        set dial_pending       ""
 
         # Consume whatever is already sitting in the transports, so a commit
         # that landed before the window cannot be picked up as the first
@@ -444,8 +450,20 @@ namespace eval ess {
         variable dial_report_angle
         variable dial_report_time
         variable dial_report_source
+        variable dial_pending
 
         if { !$dial_active || $dial_armed_time == 0 } { return -1 }
+
+        # A simulated commit is consumed here like any other source, so it
+        # travels the identical path into the protocol.
+        if { $dial_pending ne "" } {
+            set dial_report_angle  $dial_pending
+            set dial_report_time   [now]
+            set dial_report_source simulate
+            set dial_pending       ""
+            set dial_armed_time    0
+            return $dial_report_angle
+        }
 
         foreach src $dial_sources {
             set a [dial_poll_$src]
@@ -488,11 +506,12 @@ namespace eval ess {
         variable dial_armed_time
         if { !$dial_active } { error "::ess::dial_simulate: no dial initialised" }
         if { $dial_armed_time == 0 } { error "::ess::dial_simulate: dial not armed" }
+        # Latch it and wake the state machine; dial_response consumes it on
+        # the next update. Applying it here instead would set the report and
+        # then make it unreachable -- dial_response returns -1 once the dial
+        # is disarmed, so the simulated angle never reached the protocol.
         set a [dial_clamp_arc [dial_norm2pi $angle_rad]]
-        variable dial_report_angle;  set dial_report_angle  $a
-        variable dial_report_time;   set dial_report_time   [now]
-        variable dial_report_source; set dial_report_source simulate
-        dial_disarm
+        variable dial_pending; set dial_pending $a
         do_update
         return $a
     }
