@@ -2027,11 +2027,23 @@ public:
 
   void apply_controls_to_request(Request *request) {
     ControlList &controls = request->controls();
-    
+
     // Apply brightness/contrast (these work with auto-exposure)
     controls.set(controls::Brightness, brightness_);
     controls.set(controls::Contrast, contrast_);
     controls.set(controls::Sharpness, sharpness_);
+
+    // Request::reuse() cleared the whole control list, so the frame-duration
+    // limit from set_camera_controls() only rode each request's FIRST trip.
+    // Without it AE is free to stretch frame duration (dark room: 33ms -> 66ms,
+    // i.e. 30fps -> 15fps) while status still claims hardware fps control.
+    if (hardware_fps_supported_ && target_fps_ > 0.0) {
+      int64_t frame_duration_us =
+	static_cast<int64_t>(1000000.0 / target_fps_);
+      controls.set(controls::FrameDurationLimits,
+		   Span<const int64_t, 2>({frame_duration_us,
+		       frame_duration_us}));
+    }
 
     // White balance control
     controls.set(controls::AwbEnable, auto_white_balance_);
