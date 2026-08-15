@@ -153,9 +153,18 @@ let sel = null;          // {kind:'adopted'|'available'|'saved', key}
 let subscribed = new Set();
 
 /* Live coordinates per datapoint, plus a short trail for the trace.
-   Capped at TRAIL_MAX points: a 1 kHz mouse would otherwise grow this
-   without bound between redraws. */
-const TRAIL_MAX = 240;
+
+   Pruned by TIME, not by point count. A count cap makes the trace mean
+   something different on every device: at 30 reports/s a 240-point trail
+   is eight seconds of history and draws a tangled scribble, while at
+   1000/s the same cap is a quarter of a second and draws a short clean
+   stroke. Two devices then look nothing alike for reasons that have
+   nothing to do with either one. A fixed time window makes them
+   comparable, and lets a slow device look honestly sparse.
+
+   TRAIL_MAX survives only as a memory guard for the 1 kHz case. */
+const TRAIL_SECONDS = 2.5;
+const TRAIL_MAX = 4000;
 const live = new Map();  // datapoint -> {x,y,ev,at,count,trail:[],range:[0,w,0,h]}
 
 /* Events arrive far faster than anyone can see — up to ~1000/s from a
@@ -188,14 +197,25 @@ function nums(d) {
     return String(raw ?? '').trim().split(/[\s,]+/).filter(s => s !== '').map(Number);
 }
 
+/* Drop trail points older than the window. Also called from the redraw
+   so a device that goes quiet fades out instead of leaving its last
+   stroke frozen on screen looking live. */
+function pruneTrail(l) {
+    const cut = Date.now() - TRAIL_SECONDS * 1000;
+    let i = 0;
+    while (i < l.trail.length && l.trail[i].at < cut) i++;
+    if (i) l.trail.splice(0, i);
+    if (l.trail.length > TRAIL_MAX) l.trail.splice(0, l.trail.length - TRAIL_MAX);
+}
+
 function onEvent(name, d) {
     /* uint16[3] = (x, y, event_type), same shape for every class. */
     const v = nums(d);
     if (v.length < 3 || v.some(isNaN)) return;
     const l = liveFor(name);
     l.x = v[0]; l.y = v[1]; l.ev = v[2]; l.at = Date.now(); l.count++;
-    l.trail.push({ x: v[0], y: v[1], down: v[2] !== 2 && v[2] !== 3 });
-    if (l.trail.length > TRAIL_MAX) l.trail.splice(0, l.trail.length - TRAIL_MAX);
+    l.trail.push({ x: v[0], y: v[1], down: v[2] !== 2 && v[2] !== 3, at: l.at });
+    pruneTrail(l);
     scheduleRender();
 }
 
@@ -615,10 +635,15 @@ function renderLive() {
     g.strokeStyle = '#2e343d'; g.lineWidth = 1;
     g.strokeRect(rx + 0.5, ry + 0.5, rw - 1, rh - 1);
 
+    if (l) pruneTrail(l);   /* so a device going quiet fades out */
+
     if (!l || !l.trail.length) {
         g.fillStyle = '#6b7280'; g.font = '13px -apple-system, sans-serif';
         g.textAlign = 'center';
-        g.fillText('no events yet', w / 2, h / 2);
+        /* "no events yet" is only true if there have never been any.
+           A device that has gone quiet is a different statement. */
+        g.fillText(Number(d.events) || (l && l.count)
+                   ? 'quiet — move the device' : 'no events yet', w / 2, h / 2);
         return;
     }
 
@@ -638,8 +663,18 @@ function renderLive() {
     const hint = $('tracehint');
     if (hint) {
         const evName = ['press', 'drag', 'release', 'move'][l.ev] || '?';
+        /* Report rate over the trail's own span rather than assuming the
+           window is full — otherwise a device that just started reads
+           artificially slow. This is the number that answers "is this
+           device quick enough", and it is only meaningful while the thing
+           is actually being moved. */
+        let rate = '';
+        if (l.trail.length > 1) {
+            const span = (l.trail[l.trail.length - 1].at - l.trail[0].at) / 1000;
+            if (span > 0.2) rate = `  ·  ~${Math.round((l.trail.length - 1) / span)}/s`;
+        }
         hint.textContent = `${l.x}, ${l.y}  ·  ${evName}` +
-            (age !== null ? `  ·  ${age < 1 ? 'now' : age + 's ago'}` : '');
+            (age !== null ? `  ·  ${age < 1 ? 'now' : age + 's ago'}` : '') + rate;
     }
 }
 
