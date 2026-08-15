@@ -47,6 +47,7 @@
               flex: 0 0 auto; }
   .row.live .dot { background: var(--green); }
   .row.idle .dot { background: var(--amber); }
+  .row.gone .dot { background: var(--red); }
   .row .nm { flex: 1 1 auto; min-width: 0; overflow: hidden;
              text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
   .row .cls { font-size: 11px; color: var(--faint); flex: 0 0 auto; }
@@ -256,6 +257,10 @@ const classNames = () => state.classes.map(c => c.name);
 const dpForClass = c => (state.classes.find(x => x.name === c) || {}).datapoint;
 
 function liveness(d) {
+    /* connected===0 means the hardware is gone and the reader is waiting
+       for it to reappear. That is a different state from "adopted but
+       nobody has touched it", and must not read as merely idle. */
+    if (d.connected !== undefined && !Number(d.connected)) return 'gone';
     const l = live.get(d.datapoint);
     if (!l || !l.at) return d.events > 0 ? 'idle' : '';
     return (Date.now() - l.at) < 2000 ? 'live' : 'idle';
@@ -376,6 +381,8 @@ function renderDetail() {
             <dt>extent</dt><dd>${d.screen_w || '—'} × ${d.screen_h || '—'}</dd>
             ${d.gain !== undefined ? `<dt>gain</dt><dd>${esc(d.gain)}</dd>` : ''}
             <dt>flags</dt><dd>
+              ${d.connected !== undefined && !Number(d.connected)
+                ? '<span class="chip bad">unplugged — waiting for it to return</span>' : ''}
               <span class="chip ${Number(d.grab) ? 'on' : ''}">${Number(d.grab) ? 'grabbed' : 'not grabbed'}</span>
               <span class="chip ${Number(d.kernel_ts) ? 'on' : 'warn'}">${Number(d.kernel_ts) ? 'kernel timestamps' : 'publish-time stamps'}</span>
             </dd>

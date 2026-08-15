@@ -2197,6 +2197,16 @@ static int input_list_cmd(ClientData data, Tcl_Interp *interp,
     Tcl_DictObjPut(interp, entry,
                    Tcl_NewStringObj("kernel_ts", -1),
                    Tcl_NewIntObj(d->kernel_ts_ok));
+    /* 0 = the device record still exists but its handle is gone: the
+       reader is inside device_reconnect waiting for the hardware to come
+       back (up to 120 s). Without this the device still lists as
+       "adopted" after an unplug, which is exactly the state a page whose
+       job is "show me it is working" must not misreport. Read without a
+       lock, like event_count — a stale pointer read shown in a UI is not
+       worth serializing the reader's teardown for. */
+    Tcl_DictObjPut(interp, entry,
+                   Tcl_NewStringObj("connected", -1),
+                   Tcl_NewIntObj(d->dev != NULL));
     Tcl_DictObjPut(interp, entry,
                    Tcl_NewStringObj("grab", -1),
                    Tcl_NewIntObj(d->grab));

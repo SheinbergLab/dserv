@@ -218,7 +218,7 @@ proc ::inputStatusJson {} {
     foreach d [inputList] {
         $j map_open
         foreach {k v} $d {
-            if { $k in {events kernel_ts grab screen_w screen_h gain} } {
+            if { $k in {events kernel_ts grab screen_w screen_h gain connected} } {
                 $j string $k number $v
             } else {
                 $j string $k string $v
