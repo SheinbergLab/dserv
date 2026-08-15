@@ -33,10 +33,23 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "QNX")
 else()
 	add_definitions(-DUSE_TCL_STUBS -DLINUX)
 	include_directories(../src /usr/local/include)
-	link_directories(/usr/local/lib)
+	link_directories(/usr/local/lib /usr/lib/aarch64-linux-gnu /usr/lib/x86_64-linux-gnu)
 	set(TCLLIB tclstub)
 endif()
 
+if(UNIX AND NOT APPLE)
+	find_path(TCL_INCLUDE_DIR tcl.h
+		PATHS /usr/include/tcl9.0 /usr/local/include /usr/include)
+	find_library(TCL_STUB_LIB NAMES tclstub9.0 tclstub
+		PATHS /usr/local/lib /usr/lib/aarch64-linux-gnu /usr/lib/x86_64-linux-gnu /usr/lib)
+	if(TCL_INCLUDE_DIR)
+		message(STATUS "Tcl headers: ${TCL_INCLUDE_DIR}")
+	endif()
+	if(TCL_STUB_LIB)
+		set(TCLLIB ${TCL_STUB_LIB})
+		message(STATUS "Tcl stub library: ${TCLLIB}")
+	endif()
+endif()
 
 include_directories(${TCL_INCLUDE_DIR} .)
 

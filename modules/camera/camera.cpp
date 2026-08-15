@@ -60,6 +60,7 @@ typedef struct camera_info_s {
 
 #include <libcamera/libcamera.h>
 #include <libcamera/control_ids.h>
+#include <libcamera/orientation.h>
 
 #ifdef HAS_JPEG
 #include <jpeglib.h>
@@ -108,6 +109,11 @@ private:
   float blue_gain_ = 1.0f;
   
   int rotation_ = 0;
+  bool hardware_orientation_ = false;
+  bool software_rotation_ = false;
+  unsigned int stride_ = 0;
+  unsigned int preview_stride_ = 0;
+  bool jpeg_input_is_bgr_ = false;
   
   bool preview_enabled_ = false;
   unsigned int preview_width_ = 0;
@@ -187,9 +193,97 @@ private:
   std::thread save_worker_thread_;
   std::mutex save_queue_mutex_;
   std::atomic<bool> save_worker_running_{false};
+  std::vector<uint8_t> rb_swap_row_;
+
+#ifdef HAS_JPEG
+  void set_jpeg_input_colorspace(jpeg_compress_struct* cinfo) const {
+    cinfo->input_components = 3;
+    cinfo->in_color_space = JCS_RGB;
+  }
+
+  void write_rgb_scanline(jpeg_compress_struct* cinfo,
+			  const uint8_t* src_row,
+			  int width) {
+    JSAMPROW row_pointer[1];
+    if (jpeg_input_is_bgr_) {
+      if (rb_swap_row_.size() < static_cast<size_t>(width * 3)) {
+	rb_swap_row_.resize(width * 3);
+      }
+      for (int x = 0; x < width; x++) {
+	rb_swap_row_[x * 3 + 0] = src_row[x * 3 + 2];
+	rb_swap_row_[x * 3 + 1] = src_row[x * 3 + 1];
+	rb_swap_row_[x * 3 + 2] = src_row[x * 3 + 0];
+      }
+      row_pointer[0] = rb_swap_row_.data();
+    } else {
+      row_pointer[0] = const_cast<uint8_t*>(src_row);
+    }
+    jpeg_write_scanlines(cinfo, row_pointer, 1);
+  }
+
+  // Rotate packed RGB888 rows (handles BGR channel order as stored in buffer).
+  std::vector<uint8_t> rotate_rgb888(const uint8_t* src,
+				     unsigned int width,
+				     unsigned int height,
+				     unsigned int src_stride,
+				     int degrees,
+				     unsigned int& out_width,
+				     unsigned int& out_height) const {
+    out_width = width;
+    out_height = height;
+    if (degrees == 0 || !src) {
+      std::vector<uint8_t> copy(height * src_stride);
+      for (unsigned int y = 0; y < height; y++) {
+	std::memcpy(copy.data() + y * width * 3,
+		    src + y * src_stride,
+		    width * 3);
+      }
+      return copy;
+    }
+
+    if (degrees == 90 || degrees == 270) {
+      out_width = height;
+      out_height = width;
+    }
+
+    std::vector<uint8_t> dst(out_width * out_height * 3);
+
+    for (unsigned int y = 0; y < height; y++) {
+      for (unsigned int x = 0; x < width; x++) {
+	unsigned int dst_x = x;
+	unsigned int dst_y = y;
+
+	switch (degrees) {
+	case 90:
+	  dst_x = y;
+	  dst_y = width - 1 - x;
+	  break;
+	case 180:
+	  dst_x = width - 1 - x;
+	  dst_y = height - 1 - y;
+	  break;
+	case 270:
+	  dst_x = height - 1 - y;
+	  dst_y = x;
+	  break;
+	default:
+	  break;
+	}
+
+	const uint8_t* sp = src + y * src_stride + x * 3;
+	uint8_t* dp = dst.data() + (dst_y * out_width + dst_x) * 3;
+	dp[0] = sp[0];
+	dp[1] = sp[1];
+	dp[2] = sp[2];
+      }
+    }
+
+    return dst;
+  }
+#endif
 
   void add_exif_orientation_to_jpeg(struct jpeg_compress_struct* cinfo) {
-    if (rotation_ == 0) return;  // No rotation needed
+    if (rotation_ == 0 || hardware_orientation_ || software_rotation_) return;
     
     // Minimal EXIF data with just orientation
     // This is a lightweight EXIF that only contains the orientation tag
@@ -450,7 +544,7 @@ public:
     stream_config.pixelFormat = preferred_format;
     stream_config.bufferCount = 4;
 
-    // Rpi supports flip but not rotation...
+    configure_rotation_strategy();
     
     // Configure preview stream if requested
     StreamConfiguration *preview_config_ptr = nullptr;
@@ -488,7 +582,24 @@ public:
       height_ = stream_config.size.height;
     }
 
-    // store the stream pointers after successful configuration    
+    stride_ = stream_config.stride;
+    // Pi/libcamera RGB888 buffers are BGR-ordered; USB MJPEG/YUYV differ.
+    jpeg_input_is_bgr_ =
+      !is_usb_camera &&
+      (stream_config.pixelFormat == formats::RGB888 ||
+       stream_config.pixelFormat == formats::BGR888);
+    if (jpeg_input_is_bgr_) {
+      std::cout << "JPEG encode will swap R/B (format "
+		<< stream_config.pixelFormat.toString() << ")" << std::endl;
+    }
+
+    if (preview_config_ptr) {
+      preview_stride_ = preview_config_ptr->stride;
+    } else {
+      preview_stride_ = preview_width_ * 3;
+    }
+
+    // store the stream pointers after successful configuration
     stream_ = stream_config.stream();
     if (preview_config_ptr) {
       preview_stream_ = preview_config_ptr->stream();
@@ -557,8 +668,9 @@ public:
       return false;
     }
     
-    // Check if already encoded
-    if (frame_ring_buffer_[buffer_index].has_preview_jpeg) {
+    // Check if already encoded (rotation is baked into pixels)
+    if (frame_ring_buffer_[buffer_index].has_preview_jpeg &&
+	!software_rotation_) {
       jpeg_output = frame_ring_buffer_[buffer_index].preview_jpeg_data;
       return true;
     }
@@ -575,10 +687,25 @@ public:
     
     jpeg_mem_dest(&cinfo, &jpeg_buffer, &jpeg_size);
     
-    cinfo.image_width = preview_width_;
-    cinfo.image_height = preview_height_;
-    cinfo.input_components = 3;
-    cinfo.in_color_space = JCS_RGB;
+    const auto& raw_data = frame_ring_buffer_[buffer_index].preview_raw_data;
+    int row_stride = preview_stride_ ? static_cast<int>(preview_stride_)
+				     : preview_width_ * 3;
+
+    unsigned int enc_width = preview_width_;
+    unsigned int enc_height = preview_height_;
+    std::vector<uint8_t> rotated;
+    const uint8_t* encode_src = raw_data.data();
+
+    if (software_rotation_) {
+      rotated = rotate_rgb888(raw_data.data(), preview_width_, preview_height_,
+			      row_stride, rotation_, enc_width, enc_height);
+      encode_src = rotated.data();
+      row_stride = static_cast<int>(enc_width * 3);
+    }
+
+    cinfo.image_width = enc_width;
+    cinfo.image_height = enc_height;
+    set_jpeg_input_colorspace(&cinfo);
     
     jpeg_set_defaults(&cinfo);
     jpeg_set_quality(&cinfo, jpeg_quality_, TRUE);
@@ -587,13 +714,10 @@ public:
 
     add_exif_orientation_to_jpeg(&cinfo);
     
-    const auto& raw_data = frame_ring_buffer_[buffer_index].preview_raw_data;
-    JSAMPROW row_pointer[1];
-    int row_stride = preview_width_ * 3;
-    
     while (cinfo.next_scanline < cinfo.image_height) {
-      row_pointer[0] = const_cast<uint8_t*>(&raw_data[cinfo.next_scanline * row_stride]);
-      jpeg_write_scanlines(&cinfo, row_pointer, 1);
+      const uint8_t* row =
+	encode_src + cinfo.next_scanline * row_stride;
+      write_rgb_scanline(&cinfo, row, enc_width);
     }
     
     jpeg_finish_compress(&cinfo);
@@ -630,10 +754,22 @@ public:
     
     jpeg_mem_dest(&cinfo, &jpeg_buffer, &jpeg_size);
     
-    cinfo.image_width = cfg.size.width;
-    cinfo.image_height = cfg.size.height;
-    cinfo.input_components = 3;
-    cinfo.in_color_space = JCS_RGB;
+    unsigned int enc_width = cfg.size.width;
+    unsigned int enc_height = cfg.size.height;
+    std::vector<uint8_t> rotated;
+    const uint8_t* encode_src = image_data_.data();
+    int row_stride = stride_ ? static_cast<int>(stride_) : cfg.size.width * 3;
+
+    if (software_rotation_) {
+      rotated = rotate_rgb888(image_data_.data(), cfg.size.width, cfg.size.height,
+			      row_stride, rotation_, enc_width, enc_height);
+      encode_src = rotated.data();
+      row_stride = static_cast<int>(enc_width * 3);
+    }
+
+    cinfo.image_width = enc_width;
+    cinfo.image_height = enc_height;
+    set_jpeg_input_colorspace(&cinfo);
     
     jpeg_set_defaults(&cinfo);
     jpeg_set_quality(&cinfo, jpeg_quality_, TRUE);
@@ -642,12 +778,9 @@ public:
 
     add_exif_orientation_to_jpeg(&cinfo);
     
-    JSAMPROW row_pointer[1];
-    int row_stride = cfg.size.width * 3;
-    
     while (cinfo.next_scanline < cinfo.image_height) {
-      row_pointer[0] = &image_data_[cinfo.next_scanline * row_stride];
-      jpeg_write_scanlines(&cinfo, row_pointer, 1);
+      const uint8_t* row = encode_src + cinfo.next_scanline * row_stride;
+      write_rgb_scanline(&cinfo, row, enc_width);
     }
     
     jpeg_finish_compress(&cinfo);
@@ -1610,10 +1743,22 @@ public:
     
     jpeg_mem_dest(&cinfo, &jpeg_buffer, &jpeg_size);
     
-    cinfo.image_width = cfg.size.width;
-    cinfo.image_height = cfg.size.height;
-    cinfo.input_components = 3;
-    cinfo.in_color_space = JCS_RGB;
+    unsigned int enc_width = cfg.size.width;
+    unsigned int enc_height = cfg.size.height;
+    std::vector<uint8_t> rotated;
+    const uint8_t* encode_src = rgb_data.data();
+    int row_stride = stride_ ? static_cast<int>(stride_) : cfg.size.width * 3;
+
+    if (software_rotation_) {
+      rotated = rotate_rgb888(rgb_data.data(), cfg.size.width, cfg.size.height,
+			      row_stride, rotation_, enc_width, enc_height);
+      encode_src = rotated.data();
+      row_stride = static_cast<int>(enc_width * 3);
+    }
+
+    cinfo.image_width = enc_width;
+    cinfo.image_height = enc_height;
+    set_jpeg_input_colorspace(&cinfo);
     
     jpeg_set_defaults(&cinfo);
     jpeg_set_quality(&cinfo, jpeg_quality_, TRUE);
@@ -1622,12 +1767,9 @@ public:
     
     add_exif_orientation_to_jpeg(&cinfo);
     
-    JSAMPROW row_pointer[1];
-    int row_stride = cfg.size.width * 3;
-    
     while (cinfo.next_scanline < cinfo.image_height) {
-      row_pointer[0] = const_cast<uint8_t*>(&rgb_data[cinfo.next_scanline * row_stride]);
-      jpeg_write_scanlines(&cinfo, row_pointer, 1);
+      const uint8_t* row = encode_src + cinfo.next_scanline * row_stride;
+      write_rgb_scanline(&cinfo, row, enc_width);
     }
     
     jpeg_finish_compress(&cinfo);
@@ -1909,7 +2051,7 @@ public:
     }
   }  
 
-  void set_rotation(int degrees) {   // ADD THIS
+  void set_rotation(int degrees) {
     if (degrees == 0 || degrees == 90 || degrees == 180 || degrees == 270) {
       rotation_ = degrees;
     } else {
@@ -1918,6 +2060,47 @@ public:
   }
   
   int get_rotation() const { return rotation_; }
+
+  const char* get_rotation_mode() const {
+    if (software_rotation_) return "software";
+    if (hardware_orientation_) return "hardware";
+    return "none";
+  }
+
+private:
+  void configure_rotation_strategy() {
+    hardware_orientation_ = false;
+    software_rotation_ = false;
+
+    if (rotation_ == 0) {
+      config_->orientation = Orientation::Rotate0;
+      return;
+    }
+
+    // Pi libcamera / rpicam only support hardware rotation of 0 or 180.
+    // 90/270 require a transpose the ISP cannot do; libcamera leaves those
+    // to the application (see libcamera orientation API notes).
+    if (rotation_ == 180) {
+      bool ok = false;
+      config_->orientation = orientationFromRotation(180, &ok);
+      if (ok) {
+	hardware_orientation_ = true;
+	std::cout << "Rotation 180° via libcamera hardware orientation" << std::endl;
+      } else {
+	software_rotation_ = true;
+	std::cerr << "Rotation 180°: hardware unavailable, using software" << std::endl;
+      }
+      return;
+    }
+
+    config_->orientation = Orientation::Rotate0;
+    software_rotation_ = true;
+    std::cout << "Rotation " << rotation_
+	      << "° via software (Pi libcamera hardware supports 0/180 only)"
+	      << std::endl;
+  }
+
+public:
 
   void set_sharpness(float s) { sharpness_ = s; }
   void set_auto_white_balance(bool enabled) {
@@ -2836,6 +3019,10 @@ extern "C" {
       Tcl_DictObjPut(interp, result,
 		     Tcl_NewStringObj("rotation", -1),
 		     Tcl_NewIntObj(info->capture->get_rotation()));
+
+      Tcl_DictObjPut(interp, result,
+		     Tcl_NewStringObj("rotation_mode", -1),
+		     Tcl_NewStringObj(info->capture->get_rotation_mode(), -1));
       
       
       double configured_fps = info->capture->get_configured_fps();
