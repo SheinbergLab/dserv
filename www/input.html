@@ -214,7 +214,16 @@ function onEvent(name, d) {
     if (v.length < 3 || v.some(isNaN)) return;
     const l = liveFor(name);
     l.x = v[0]; l.y = v[1]; l.ev = v[2]; l.at = Date.now(); l.count++;
-    l.trail.push({ x: v[0], y: v[1], down: v[2] !== 2 && v[2] !== 3, at: l.at });
+    /* Two clocks, on purpose. `at` is browser arrival, used only for the
+       "how long since I saw anything" readout and for trail ageing.
+       `ts` is the datapoint's OWN timestamp — the kernel's URB-completion
+       time — and is what every rate and gap figure is computed from.
+       Measuring intervals from arrival time would fold WebSocket and
+       browser scheduling jitter into a number people will read as a
+       property of the device. */
+    l.ts = (typeof d.timestamp === 'number') ? d.timestamp / 1000 : null;  /* us -> ms */
+    l.trail.push({ x: v[0], y: v[1], down: v[2] !== 2 && v[2] !== 3,
+                   at: l.at, ts: l.ts });
     pruneTrail(l);
 
     /* Peak-hold over a 0.5 s window. The rolling rate below averages the
@@ -225,13 +234,41 @@ function onEvent(name, d) {
        12-second averages, which says they are equivalent, while their
        peaks are 96 Hz and 81 Hz — the honest comparison, and near this
        mouse's 100 Hz low-speed ceiling. */
-    if (l.trail.length > 2) {
-        const now = l.at;
+    /* All timing figures below come from device timestamps (see above);
+       skip them entirely rather than silently fall back to arrival time
+       for a producer that publishes without one. */
+    if (l.trail.length > 2 && l.ts != null && l.trail[l.trail.length - 2].ts != null) {
+        const now = l.ts;
         let i = l.trail.length - 1;
-        while (i > 0 && now - l.trail[i - 1].at <= 500) i--;
-        const span = (now - l.trail[i].at) / 1000;
+        while (i > 0 && l.trail[i - 1].ts != null && now - l.trail[i - 1].ts <= 500) i--;
+        const span = (now - l.trail[i].ts) / 1000;
         const n = l.trail.length - 1 - i;
         if (span > 0.15 && n > 1) l.peak = Math.max(l.peak || 0, Math.round(n / span));
+
+        /* Worst inter-sample gap that represents DROPPED SAMPLES rather
+           than a still hand. This, not the mean rate, is what predicts
+           visible stepping when input drives a stimulus: a device
+           averaging 81 Hz still misses a frame wherever one gap exceeds
+           the frame period.
+
+           Nothing here can observe the hand, so "device stuttered" vs
+           "user stopped" is an INFERENCE, and it rests on one assumption:
+           that we were already sampling at a normal cadence and real
+           displacement occurred across the gap. A resume-after-pause has
+           a long gap and large displacement, but no preceding cadence, so
+           it is correctly ignored; a stutter mid-stroke has all three.
+           A device that stalls from the very first sample of a stroke is
+           the case this cannot catch. */
+        const p1 = l.trail[l.trail.length - 2];
+        const p2 = l.trail[l.trail.length - 3];
+        if (p1 && p2 && p1.ts != null && p2.ts != null) {
+            const gap = now - p1.ts;
+            const wasStreaming = (p1.ts - p2.ts) < 30;      /* ms — normal cadence */
+            const moved = Math.hypot(v[0] - p1.x, v[1] - p1.y) > 1;
+            if (gap > 0 && wasStreaming && moved) {
+                l.maxGap = Math.max(l.maxGap || 0, gap);
+            }
+        }
     }
     scheduleRender();
 }
@@ -721,6 +758,13 @@ function renderLive() {
             if (span > 0.2) rate = `  ·  ~${Math.round((l.trail.length - 1) / span)}/s`;
         }
         if (l.peak) rate += `  ·  peak ${l.peak}/s`;
+        /* Stated in frames, because that is the decision it informs: a
+           worst gap under one frame period means every frame gets a fresh
+           sample, and anything over it means visible stepping somewhere. */
+        if (l.maxGap) {
+            const f60 = (l.maxGap / (1000 / 60)).toFixed(1);
+            rate += `  ·  worst gap ${Math.round(l.maxGap)}ms (${f60} frames @60Hz)`;
+        }
         hint.textContent = `${l.x}, ${l.y}  ·  ${evName}` +
             (age !== null ? `  ·  ${age < 1 ? 'now' : age + 's ago'}` : '') + rate;
     }
