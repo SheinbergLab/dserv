@@ -2229,6 +2229,43 @@ static int input_classes_cmd(ClientData data, Tcl_Interp *interp,
   return TCL_OK;
 }
 
+/* inputRecenter ?class?  -- put a relative device's virtual cursor back in
+ * the middle of its extent. Default class is mouse; nothing else has one.
+ *
+ * Needed because a mouse is RELATIVE integrated into an ABSOLUTE cursor,
+ * so the cursor keeps whatever position the last trial left it at. Two
+ * consequences, both bad for a reporting task: the subject's previous
+ * answer anchors the next one, and over many trials the cursor random-walks
+ * into a corner and CLAMPS -- after which whole directions become
+ * unreportable because the cursor cannot move that way any more.
+ *
+ * Recentring between trials fixes both, and makes the first movement of a
+ * trial choose the direction, which is what the trackpad's press-then-drag
+ * did naturally. */
+static int input_recenter_cmd(ClientData data, Tcl_Interp *interp,
+                              int objc, Tcl_Obj *const objv[])
+{
+  input_state_t *st = (input_state_t *) data;
+  const char *want = (objc > 1) ? Tcl_GetString(objv[1]) : "mouse";
+  int n = 0;
+
+  pthread_mutex_lock(&st->devices_lock);
+  for (input_device_t *d = st->devices; d; d = d->next) {
+    if (strcmp(d->cls->name, want) != 0) continue;
+    /* Written from the Tcl thread while the reader thread may be adding to
+       them. A torn cursor for one sample is not worth a lock on the hot
+       path: the next sample lands within a millisecond and the cursor is
+       hidden at this point anyway. */
+    d->cur_x = d->screen_width  / 2;
+    d->cur_y = d->screen_height / 2;
+    n++;
+  }
+  pthread_mutex_unlock(&st->devices_lock);
+
+  Tcl_SetObjResult(interp, Tcl_NewIntObj(n));
+  return TCL_OK;
+}
+
 static int input_list_cmd(ClientData data, Tcl_Interp *interp,
                           int objc, Tcl_Obj *const objv[])
 {
@@ -2570,6 +2607,8 @@ int Dserv_input_Init(Tcl_Interp *interp)
                        input_validate_expectations_cmd, st, NULL);
   Tcl_CreateObjCommand(interp, "inputList",
                        input_list_cmd, st, NULL);
+  Tcl_CreateObjCommand(interp, "inputRecenter",
+                       input_recenter_cmd, st, NULL);
   Tcl_CreateObjCommand(interp, "inputClasses",
                        input_classes_cmd, st, NULL);
   Tcl_CreateObjCommand(interp, "inputProbe",

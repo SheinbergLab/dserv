@@ -97,6 +97,13 @@ namespace eval ess {
     # exactly as button_bind / joystick_bind do. Empty = unbound.
     variable dial_bound_sources  {}
 
+    # How far the virtual cursor must leave the centre before the dial
+    # takes a direction seriously. Below it the cursor stays HIDDEN, so a
+    # stray count does not silently pick an angle and the subject's first
+    # deliberate movement chooses the start -- which is what the trackpad's
+    # press-then-drag gave for free.
+    variable dial_start_radius   40
+
     variable dial_mouse_range_known 0
     variable dial_mouse_cx 0.0
     variable dial_mouse_cy 0.0
@@ -206,6 +213,7 @@ namespace eval ess {
         set dial_arc_halfwidth  180.0
         set dial_radius         0.0
         set dial_ring_tolerance 0.0
+        set dial_start_radius   40
         set dial_cursor_dpoint  ess/cursor
 
         foreach { k v } $args {
@@ -216,6 +224,7 @@ namespace eval ess {
                 -arc_halfwidth  { set dial_arc_halfwidth $v }
                 -radius         { set dial_radius $v }
                 -ring_tolerance { set dial_ring_tolerance $v }
+                -start_radius   { set dial_start_radius $v }
                 -cursor_dpoint  { set dial_cursor_dpoint $v }
                 default { error "::ess::dial_init: unknown option '$k'" }
             }
@@ -391,6 +400,16 @@ namespace eval ess {
         # for something else entirely, and joystick_reset clears its latch.
         variable dial_sources
         if { "joystick" in $dial_sources } { joystick_reset }
+
+        # Put the mouse's virtual cursor back in the middle. Without this
+        # each trial resumes at the PREVIOUS trial's answer, which anchors
+        # the next report, and the cursor eventually random-walks into a
+        # corner where it clamps and whole directions stop being
+        # reportable. Recentred, the trial starts from nothing and the
+        # subject's first movement picks the direction.
+        if { "mouse" in $dial_sources } {
+            catch { send input "inputRecenter mouse" }
+        }
     }
 
     proc dial_disarm {} {
@@ -567,7 +586,20 @@ namespace eval ess {
         # same as a touchscreen's ABS_Y), so flip it into the dial's world.
         set dx [expr {$x - $dial_mouse_cx}]
         set dy [expr {$dial_mouse_cy - $y}]
-        if { $dx == 0 && $dy == 0 } return
+
+        # Inside the start radius there is no meaningful direction yet, so
+        # show nothing rather than commit the cursor to whichever way a
+        # stray count happened to point. A PRESS in here is likewise not a
+        # response -- the subject has not chosen anything.
+        variable dial_start_radius
+        if { ($dx*$dx + $dy*$dy) < ($dial_start_radius*$dial_start_radius) } {
+            if { $dial_cursor_shown } {
+                set dial_cursor_shown 0
+                dial_cursor_update 0 0
+            }
+            return
+        }
+
         set angle [dial_clamp_arc [dial_norm2pi [expr {atan2($dy, $dx)}]]]
 
         if { $ev == 0 } {
