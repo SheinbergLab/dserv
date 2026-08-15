@@ -187,6 +187,7 @@ namespace eval ess {
         dial_disarm
         set dial_active 1
         dservSet ess/dial_active 1
+        dial_publish_geometry
     }
 
     proc dial_deinit {} {
@@ -199,6 +200,24 @@ namespace eval ess {
         dservSet ess/dial_active 0
     }
 
+    # Publish the dial's geometry so anything outside ess can DRAW it.
+    #
+    # The viz subprocess has no ess package -- it can only read datapoints
+    # and stimdg -- so a visualisation cannot ask the dial anything. Making
+    # the dial self-describing is what lets one shared viz serve every
+    # system that uses a dial, instead of each hand-rolling the ring, the
+    # arc and the cursor as ricochet, mp_pulsed and motionpatch each do now.
+    #
+    # ess/dial/geometry : "arc_center_deg,arc_halfwidth_deg,radius"
+    # ess/cursor        : "angle_rad,show"   (published live; see above)
+    proc dial_publish_geometry {} {
+        variable dial_arc_center
+        variable dial_arc_halfwidth
+        variable dial_radius
+        dservSet ess/dial/geometry \
+            "$dial_arc_center,$dial_arc_halfwidth,$dial_radius"
+    }
+
     # Per-trial geometry. Separate from dial_init because the arc and the
     # ring radius usually come from stimdg and change every trial, while the
     # deadband and source list do not.
@@ -207,6 +226,7 @@ namespace eval ess {
         variable dial_arc_halfwidth
         set dial_arc_center    $center_deg
         set dial_arc_halfwidth $halfwidth_deg
+        dial_publish_geometry
     }
 
     proc dial_set_radius { r { tolerance {} } } {
@@ -214,6 +234,7 @@ namespace eval ess {
         variable dial_ring_tolerance
         set dial_radius $r
         if { $tolerance ne "" } { set dial_ring_tolerance $tolerance }
+        dial_publish_geometry
     }
 
     # ---------------------------------------------------------------------
