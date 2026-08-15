@@ -273,16 +273,33 @@ namespace eval ess {
         dial_publish_geometry
     }
 
+    # Always publishes the gate, even when no dial was active.
+    #
+    # It used to return early in that case, which broke the panel across a
+    # dserv restart: a fresh interp has dial_active 0, so input_reset's
+    # dial_deinit published NOTHING, ess/dial_active did not exist, and the
+    # page's dservTouch had nothing to republish -- so a Dial panel left
+    # over from the previous system stayed on screen under a system with no
+    # dial at all.
+    #
+    # A gate datapoint has to be ASSERTED, not merely left unset: absent
+    # and false look identical to the publisher and completely different to
+    # a subscriber that already has a stale value. The other input tools
+    # (button, joystick, slider) already publish theirs unconditionally.
+    #
+    # Every step below is idempotent, so none of it needs guarding.
     proc dial_deinit {} {
         variable dial_active
-        if { !$dial_active } return
-        # Remove only OUR script; slider_process keeps its registration.
+        # Remove only OUR scripts; slider_process keeps its registration.
         catch { dpointRemoveScript slider/position ::ess::dial_slider_sample }
         catch { dpointRemoveScript mouse/event ::ess::dial_mouse_sample }
         catch { dpointRemoveScript mouse/event/range ::ess::dial_mouse_range }
         dial_disarm
         set dial_active 0
         dservSet ess/dial_active 0
+        # Clear the companions too, so the panel cannot show a previous
+        # system's sources or arc if it is ever displayed again.
+        dservSet ess/dial/sources {}
     }
 
     # Publish the dial's geometry so anything outside ess can DRAW it.
