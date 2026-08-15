@@ -5205,13 +5205,24 @@ namespace eval ess {
         lassign $data x y
         if { $x ne "" } { set slider_x $x }
         if { $y ne "" } { set slider_y $y }
-        # Wake the state machine on every sample in swipe mode (for
-        # live cursor tracking). In other modes (notably ain at kHz)
-        # the SM polls slider_x / slider_y from its own transitions,
-        # so we skip the wake to avoid burning cycles.
-        if { $slider_mode eq "swipe" } {
-            do_update
-        }
+        # NO wake here, in any mode.
+        #
+        # This used to wake the state machine on every sample in swipe mode,
+        # because the live cursor was computed inside a protocol's
+        # responded_swipe and the SM's tick was the only place that code
+        # could run. That made the SM's update rate the DEVICE's rate: fine
+        # for a 62.5 Hz trackpad, but 1000 updates a second the moment a
+        # 1 kHz mouse feeds the slider -- the accidental-polling pathology.
+        #
+        # Cursor work now lives in ::ess::dial_slider_sample, its own
+        # observer on slider/position (dpointAddScript), so it runs at the
+        # device's rate without involving the state machine at all. The SM
+        # is still woken by the swipe COMMIT and by engagement edges, which
+        # are events it must actually decide something about.
+        #
+        # A protocol doing its own cursor work outside the dial should add
+        # its own observer rather than reinstating this -- all three that
+        # used to (motionpatch, mp_pulsed, ricochet) are now on the dial.
     }
 
     # swipe-mode side channels (only published when slider is in swipe mode).
