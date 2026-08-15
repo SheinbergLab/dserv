@@ -276,6 +276,26 @@ function setMsg(text, cls) {
 
 /* --------------------------------------------------------------- lists */
 
+/* Tcl glob -> regex. inputKnownDevice patterns are Tcl globs, so the page
+   has to match them the same way the module will, or it would offer
+   settings for an entry that will not actually apply at next boot. */
+function globMatch(str, pat) {
+    const rx = '^' + String(pat)
+        .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+        .replace(/\*/g, '.*')
+        .replace(/\?/g, '.') + '$';
+    try { return new RegExp(rx).test(String(str)); } catch (e) { return false; }
+}
+
+/* The saved entry this device would be adopted under at next boot, if
+   any. Used to pre-fill the adopt form: having saved an extent once,
+   nobody should have to retype it to bring the same device back. */
+function savedFor(p) {
+    return state.saved.find(s => s.class === p.class &&
+        ((p.by_id && globMatch(p.by_id, s.pattern)) ||
+         (p.name  && globMatch(p.name,  s.pattern))));
+}
+
 const deviceByClass = c => state.devices.find(d => d.class === c);
 const classNames = () => state.classes.map(c => c.name);
 const dpForClass = c => (state.classes.find(x => x.name === c) || {}).datapoint;
@@ -487,6 +507,7 @@ function renderDetail() {
         if (!p) { sel = null; return renderDetail(); }
         const known = classNames().includes(p.class);
         const occupied = known && !!deviceByClass(p.class);
+        const sv = savedFor(p);
         const caps = Object.entries(p.caps || {}).filter(([, v]) => v).map(([k]) => k);
         const axes = Object.entries(p.axes || {})
               .map(([k, v]) => `${k} ${v[0]}..${v[1]}`).join('   ');
@@ -504,7 +525,10 @@ function renderDetail() {
              class, so there is nothing to adopt. The capability list above is
              what classification is testing against.</p>`
           : `
-          <form class="cfg" onsubmit="return false">${fieldsFor(p.class, {})}</form>
+          ${sv ? `<p class="hint">Settings below come from this rig's saved entry
+             <code>${esc(sv.pattern)}</code> — the one that would adopt this device
+             at next start.</p>` : ''}
+          <form class="cfg" onsubmit="return false">${fieldsFor(p.class, sv ? sv.opts : {})}</form>
           <div class="btns">
             <button id="badopt" class="primary" type="button" ${occupied ? 'disabled' : ''}>adopt now</button>
           </div>
@@ -515,10 +539,16 @@ function renderDetail() {
         if (known && !occupied) {
             $('badopt').onclick = () => act($('badopt'), async () => {
                 const opts = readFields(p.class);
-                /* Pin to the by-id name where there is one: it survives
-                   reboots and replugs, which /dev/input/eventN does not. */
-                const pat = p.by_id || p.name;
-                const patArg = pat ? ` -pattern {*${pat}*}` : '';
+                /* Reuse the saved entry's pattern when one matches, rather
+                   than deriving a fresh one — otherwise a later Save adds a
+                   SECOND entry identifying the same device a different way,
+                   and the rig ends up with two rules for one mouse.
+                   Failing that, pin to the by-id name: it survives reboots
+                   and replugs, which /dev/input/eventN does not. */
+                const pat = sv ? sv.pattern
+                          : p.by_id ? `*${p.by_id}*`
+                          : p.name  ? `*${p.name}*` : '';
+                const patArg = pat ? ` -pattern {${pat}}` : '';
                 await inputCmd(`inputOpen ${p.class} ${p.path} ${optsToArgs(opts)}${patArg}`);
                 sel = { kind: 'adopted', key: p.class };
                 setMsg('adopted — move it and watch the trace', 'ok');
