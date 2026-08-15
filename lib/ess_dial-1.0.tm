@@ -70,11 +70,31 @@ namespace eval ess {
     variable dial_report_angle   -1.0
     variable dial_report_time    0
     variable dial_report_source  ""
-    # A simulated commit waiting to be consumed by the next dial_response.
-    # It must NOT be applied directly: dial_response is where a commit
+    # A commit waiting to be consumed by the next dial_response, as
+    # {angle source}. Used by the sources that arrive ASYNCHRONOUSLY (the
+    # mouse observer, dial_simulate) rather than being polled.
+    #
+    # It carries its source rather than assuming one: a real mouse click
+    # and an operator's simulated click both land here, and conflating
+    # them would make a simulated trial indistinguishable from a subject's
+    # response in the data.
+    #
+    # It must NOT be applied directly -- dial_response is where a commit
     # becomes the protocol's response, and short-circuiting that made the
-    # simulated angle unreachable (dial_response returns -1 once disarmed).
+    # angle unreachable (dial_response returns -1 once disarmed).
     variable dial_pending        ""
+
+    # Mouse source. The mouse is an ABSOLUTE pointer in a declared extent,
+    # so the dial reads mouse/event straight rather than going through the
+    # slider's swipe machinery: direction is atan2 about the extent's
+    # centre, and radius is ignored (a dial only has an angle).
+    #
+    # That makes the interaction move-to-choose, click-to-select, with no
+    # button held while adjusting -- which is what a mouse is good at, and
+    # a nicer fit for "choose, adjust, select" than press-drag-release.
+    variable dial_mouse_range_known 0
+    variable dial_mouse_cx 0.0
+    variable dial_mouse_cy 0.0
 
     # ---------------------------------------------------------------------
     # angle helpers
@@ -169,9 +189,9 @@ namespace eval ess {
         }
 
         foreach s $dial_sources {
-            if { $s ni {swipe touch joystick} } {
+            if { $s ni {swipe touch joystick mouse} } {
                 error "::ess::dial_init: unknown source '$s'\
-                       (want swipe|touch|joystick)"
+                       (want swipe|touch|joystick|mouse)"
             }
         }
 
@@ -188,6 +208,14 @@ namespace eval ess {
             dservAddExactMatch slider/position
             dpointAddScript    slider/position ::ess::dial_slider_sample
         }
+        if { "mouse" in $dial_sources } {
+            variable dial_mouse_range_known
+            set dial_mouse_range_known 0
+            dservAddExactMatch mouse/event/range
+            dpointAddScript    mouse/event/range ::ess::dial_mouse_range
+            dservAddExactMatch mouse/event
+            dpointAddScript    mouse/event ::ess::dial_mouse_sample
+        }
 
         dial_disarm
         set dial_active 1
@@ -200,6 +228,8 @@ namespace eval ess {
         if { !$dial_active } return
         # Remove only OUR script; slider_process keeps its registration.
         catch { dpointRemoveScript slider/position ::ess::dial_slider_sample }
+        catch { dpointRemoveScript mouse/event ::ess::dial_mouse_sample }
+        catch { dpointRemoveScript mouse/event/range ::ess::dial_mouse_range }
         dial_disarm
         set dial_active 0
         dservSet ess/dial_active 0
@@ -408,6 +438,86 @@ namespace eval ess {
         return $angle
     }
 
+    # The extent's centre, from mouse/event/range ([0 max_x 0 max_y]).
+    # Needed before any angle can be computed, so a sample arriving first
+    # is simply dropped rather than measured from (0,0).
+    proc dial_mouse_range { dpoint data } {
+        variable dial_mouse_range_known
+        variable dial_mouse_cx
+        variable dial_mouse_cy
+        lassign $data minx maxx miny maxy
+        if { $maxx eq "" || $maxy eq "" } return
+        set dial_mouse_cx [expr {($minx + $maxx)/2.0}]
+        set dial_mouse_cy [expr {($miny + $maxy)/2.0}]
+        set dial_mouse_range_known 1
+    }
+
+    # Mouse as an absolute pointer: move to choose and adjust, click to
+    # select.
+    #
+    # MOVE (3) and DRAG (1) both steer -- whether a button happens to be
+    # held while adjusting should not change what the cursor does. PRESS
+    # (0) commits, because button-down is the moment of decision and gives
+    # the cleaner reaction time; RELEASE (2) is ignored so a click is one
+    # response, not two.
+    #
+    # Radius is ignored -- a dial has only an angle. A non-square extent
+    # therefore costs nothing: it means some directions are reachable at
+    # larger radius than others, while the angle itself stays true because
+    # pixels are square.
+    proc dial_mouse_sample { dpoint data } {
+        variable dial_active
+        variable dial_armed_time
+        variable dial_pi
+        variable dial_deadband_deg
+        variable dial_cursor_shown
+        variable dial_last_sent
+        variable dial_pending
+        variable dial_mouse_range_known
+        variable dial_mouse_cx
+        variable dial_mouse_cy
+
+        if { !$dial_active || $dial_armed_time == 0 } return
+        if { !$dial_mouse_range_known } return
+
+        lassign $data x y ev
+        if { $x eq "" || $y eq "" } return
+
+        # Published y grows DOWNWARD (mouse_reader keeps REL_Y's sense, the
+        # same as a touchscreen's ABS_Y), so flip it into the dial's world.
+        set dx [expr {$x - $dial_mouse_cx}]
+        set dy [expr {$dial_mouse_cy - $y}]
+        if { $dx == 0 && $dy == 0 } return
+        set angle [dial_clamp_arc [dial_norm2pi [expr {atan2($dy, $dx)}]]]
+
+        if { $ev == 0 } {
+            # SELECT. Latched as pending and consumed by dial_response, so
+            # a mouse commit takes the same path into the protocol as
+            # every other source.
+            set dial_pending [list $angle mouse]
+            do_update
+            return
+        }
+        if { $ev == 2 } return   ;# button-up is not a second response
+
+        # CHOOSE / ADJUST -- steer the cursor, do NOT wake the state
+        # machine (a 1 kHz mouse would otherwise drive the SM at 1 kHz).
+        set deadband [expr {$dial_deadband_deg*$dial_pi/180.0}]
+        if { !$dial_cursor_shown } {
+            set dial_cursor_shown 1
+            dial_cursor_update $angle 1
+            set dial_last_sent $angle
+        } elseif { abs([dial_angdiff $angle $dial_last_sent]) > $deadband } {
+            dial_cursor_update $angle 1
+            set dial_last_sent $angle
+        }
+    }
+
+    # Mouse commits arrive asynchronously via dial_mouse_sample latching
+    # dial_pending, which dial_response consumes before it polls sources.
+    # Nothing to poll here.
+    proc dial_poll_mouse {} { return "" }
+
     # 8-way joystick: a settled deflection reports its sector's direction.
     #
     # Sectors are 0-7 clockwise from up, so sector k points at 90-45k degrees.
@@ -457,9 +567,8 @@ namespace eval ess {
         # A simulated commit is consumed here like any other source, so it
         # travels the identical path into the protocol.
         if { $dial_pending ne "" } {
-            set dial_report_angle  $dial_pending
+            lassign $dial_pending dial_report_angle dial_report_source
             set dial_report_time   [now]
-            set dial_report_source simulate
             set dial_pending       ""
             set dial_armed_time    0
             return $dial_report_angle
@@ -511,7 +620,7 @@ namespace eval ess {
         # then make it unreachable -- dial_response returns -1 once the dial
         # is disarmed, so the simulated angle never reached the protocol.
         set a [dial_clamp_arc [dial_norm2pi $angle_rad]]
-        variable dial_pending; set dial_pending $a
+        variable dial_pending; set dial_pending [list $a simulate]
         do_update
         return $a
     }
