@@ -216,6 +216,23 @@ function onEvent(name, d) {
     l.x = v[0]; l.y = v[1]; l.ev = v[2]; l.at = Date.now(); l.count++;
     l.trail.push({ x: v[0], y: v[1], down: v[2] !== 2 && v[2] !== 3, at: l.at });
     pruneTrail(l);
+
+    /* Peak-hold over a 0.5 s window. The rolling rate below averages the
+       whole trail, so it is dragged down by every pause between strokes
+       and answers "how hard is this being used" rather than "what is this
+       device capable of". Comparing two devices needs the latter: an
+       optical mouse and a Magic Trackpad measured 31/s and 30/s on
+       12-second averages, which says they are equivalent, while their
+       peaks are 96 Hz and 81 Hz — the honest comparison, and near this
+       mouse's 100 Hz low-speed ceiling. */
+    if (l.trail.length > 2) {
+        const now = l.at;
+        let i = l.trail.length - 1;
+        while (i > 0 && now - l.trail[i - 1].at <= 500) i--;
+        const span = (now - l.trail[i].at) / 1000;
+        const n = l.trail.length - 1 - i;
+        if (span > 0.15 && n > 1) l.peak = Math.max(l.peak || 0, Math.round(n / span));
+    }
     scheduleRender();
 }
 
@@ -703,6 +720,7 @@ function renderLive() {
             const span = (l.trail[l.trail.length - 1].at - l.trail[0].at) / 1000;
             if (span > 0.2) rate = `  ·  ~${Math.round((l.trail.length - 1) / span)}/s`;
         }
+        if (l.peak) rate += `  ·  peak ${l.peak}/s`;
         hint.textContent = `${l.x}, ${l.y}  ·  ${evName}` +
             (age !== null ? `  ·  ${age < 1 ? 'now' : age + 's ago'}` : '') + rate;
     }
