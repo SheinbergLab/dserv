@@ -6,6 +6,7 @@ package require yajltcl
 package require tcljson
 package require dslog
 package require ess_paths
+package require ess_dial
 package require qpcs 3.42 ;# stim-event sync + variable-length binary push (dsSocketSendBytesVar)
 
 catch {System destroy}
@@ -1811,6 +1812,7 @@ namespace eval ess {
         button_deinit
         slider_deinit
         joystick_deinit
+        dial_deinit
     }
 
     proc do_update {args} {
