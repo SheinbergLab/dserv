@@ -106,6 +106,32 @@ namespace eval ess {
 
     # Has the subject chosen a direction yet this trial? The start radius
     # gates ACQUIRING one; it must not keep gating once one is chosen.
+    # --- stick source (velocity steering) --------------------------------
+    #
+    # Direct pointing with a thumbstick was tried first and was HARDER than
+    # the trackpad, which is what started this whole line of work. The
+    # reasons are structural, not tuning: a stick has ~1cm of travel, so
+    # atan2 of the deflection is twitchy near centre and only steady at
+    # full push -- precision depends on how hard you hold it -- and it
+    # self-centres, so releasing loses the direction and you can never park
+    # one and refine it.
+    #
+    # Integrating instead inverts all three: resolution comes from how LONG
+    # you hold rather than how far you push, a small deflection is a slow
+    # and therefore fine adjustment, and the cursor stays where it was left.
+    #
+    # Horizontal deflection drives rotation, deliberately: reaching for a
+    # left/right sweep to move round a circle is what people actually do --
+    # David did it with the mouse before this existed.
+    variable dial_stick_rate     180.0   ;# deg/s at full deflection
+    variable dial_stick_deadzone 0.08    ;# fraction of full scale
+    variable dial_stick_invert   0
+    variable dial_stick_commit_dp "extio/*/state/group/stick_select"
+    variable dial_stick_scale    0.0     ;# full-scale deflection, learned
+    variable dial_stick_last_ts  0
+    variable dial_stick_angle    0.0
+    variable dial_stick_moved    0
+
     variable dial_mouse_acquired 0
 
     variable dial_mouse_range_known 0
@@ -218,6 +244,10 @@ namespace eval ess {
         set dial_radius         0.0
         set dial_ring_tolerance 0.0
         set dial_start_radius   40
+        set dial_stick_rate     180.0
+        set dial_stick_deadzone 0.08
+        set dial_stick_invert   0
+        set dial_stick_commit_dp "extio/*/state/group/stick_select"
         set dial_cursor_dpoint  ess/cursor
 
         foreach { k v } $args {
@@ -229,15 +259,25 @@ namespace eval ess {
                 -radius         { set dial_radius $v }
                 -ring_tolerance { set dial_ring_tolerance $v }
                 -start_radius   { set dial_start_radius $v }
+                -stick_rate     { set dial_stick_rate $v }
+                -stick_deadzone { set dial_stick_deadzone $v }
+                -stick_invert   { set dial_stick_invert [expr {$v ? 1 : 0}] }
+                -stick_commit   { set dial_stick_commit_dp $v }
                 -cursor_dpoint  { set dial_cursor_dpoint $v }
                 default { error "::ess::dial_init: unknown option '$k'" }
             }
         }
 
+        # Both read slider/position and would fight over the cursor.
+        if { "swipe" in $dial_sources && "stick" in $dial_sources } {
+            error "::ess::dial_init: swipe and stick are alternative readings\
+                   of the same device -- choose one"
+        }
+
         foreach s $dial_sources {
-            if { $s ni {swipe touch joystick mouse} } {
+            if { $s ni {swipe touch joystick mouse stick} } {
                 error "::ess::dial_init: unknown source '$s'\
-                       (want swipe|touch|joystick|mouse)"
+                       (want swipe|touch|joystick|mouse|stick)"
             }
         }
 
@@ -254,6 +294,15 @@ namespace eval ess {
             dservAddExactMatch slider/position
             dpointAddScript    slider/position ::ess::dial_slider_sample
         }
+        if { "stick" in $dial_sources } {
+            variable dial_stick_scale
+            set dial_stick_scale 0.0
+            dservAddExactMatch slider/position
+            dpointAddScript    slider/position ::ess::dial_stick_sample
+            dservAddMatch      $dial_stick_commit_dp
+            dpointAddScript    $dial_stick_commit_dp ::ess::dial_stick_commit
+        }
+
         if { "mouse" in $dial_sources } {
             variable dial_mouse_range_known
             set dial_mouse_range_known 0
@@ -305,6 +354,9 @@ namespace eval ess {
         variable dial_active
         # Remove only OUR scripts; slider_process keeps its registration.
         catch { dpointRemoveScript slider/position ::ess::dial_slider_sample }
+        catch { dpointRemoveScript slider/position ::ess::dial_stick_sample }
+        variable dial_stick_commit_dp
+        catch { dpointRemoveScript $dial_stick_commit_dp ::ess::dial_stick_commit }
         catch { dpointRemoveScript mouse/event ::ess::dial_mouse_sample }
         catch { dpointRemoveScript mouse/event/range ::ess::dial_mouse_range }
         dial_disarm
@@ -396,6 +448,9 @@ namespace eval ess {
         set dial_pending       ""
         variable dial_mouse_acquired
         set dial_mouse_acquired 0
+        variable dial_stick_last_ts; set dial_stick_last_ts 0
+        variable dial_stick_moved;   set dial_stick_moved 0
+        variable dial_stick_angle;   set dial_stick_angle 0.0
 
         # Consume whatever is already sitting in the transports, so a commit
         # that landed before the window cannot be picked up as the first
@@ -639,6 +694,104 @@ namespace eval ess {
             set dial_last_sent $angle
         }
     }
+
+    # Velocity steering from a self-centring stick.
+    #
+    # Reads slider/position, so it inherits sliderconf's centre, deadzone,
+    # scale and invert calibration -- which is what makes integrating safe.
+    # An uncalibrated stick never rests at exactly zero, and an integrator
+    # turns that residue into a cursor that drifts with nobody touching it.
+    #
+    # dt comes from the DATAPOINT's timestamps, not a Tcl clock: the extio
+    # box stamps on a PTP-disciplined grid, so the rotation rate does not
+    # wander with scheduler jitter the way a timer-driven integrator would.
+    proc dial_stick_sample { dpoint data } {
+        variable dial_active
+        variable dial_armed_time
+        variable dial_pi
+        variable dial_deadband_deg
+        variable dial_cursor_shown
+        variable dial_last_sent
+        variable dial_stick_rate
+        variable dial_stick_deadzone
+        variable dial_stick_invert
+        variable dial_stick_scale
+        variable dial_stick_last_ts
+        variable dial_stick_angle
+        variable dial_stick_moved
+        variable dial_arc_center
+
+        if { !$dial_active || $dial_armed_time == 0 } return
+
+        lassign $data x y
+        if { $x eq "" } return
+
+        set ts [dservTimestamp $dpoint]
+        if { $dial_stick_last_ts == 0 } { set dial_stick_last_ts $ts; return }
+        set dt [expr {($ts - $dial_stick_last_ts)/1.0e6}]
+        set dial_stick_last_ts $ts
+        # A gap this large means samples were missed or the trial just
+        # started; integrating across it would jump the cursor.
+        if { $dt <= 0 || $dt > 0.25 } return
+
+        # Full scale is LEARNED from the largest deflection seen, so the
+        # rate is expressed relative to this stick's actual travel rather
+        # than to a calibration constant that would have to be maintained
+        # per rig.
+        set ax [expr {abs($x)}]
+        if { $ax > $dial_stick_scale } { set dial_stick_scale $ax }
+        if { $dial_stick_scale <= 0 } return
+
+        set f [expr {$x/$dial_stick_scale}]
+        if { abs($f) < $dial_stick_deadzone } return   ;# at rest: no drift
+        if { $dial_stick_invert } { set f [expr {-$f}] }
+
+        # First deflection of the trial starts the cursor at the arc centre
+        # -- the neutral choice -- and shows it. Until then there is nothing
+        # on screen, so the ball is not competing with a report cursor.
+        if { !$dial_stick_moved } {
+            set dial_stick_moved 1
+            set dial_stick_angle [expr {$dial_arc_center*$dial_pi/180.0}]
+        }
+
+        # Sign convention: deflect RIGHT to advance clockwise, which is what
+        # a left/right sweep to move round a circle intends.
+        set rate [expr {$dial_stick_rate*$dial_pi/180.0}]
+        set dial_stick_angle \
+            [dial_norm2pi [expr {$dial_stick_angle - $f*$rate*$dt}]]
+        set angle [dial_clamp_arc $dial_stick_angle]
+        set dial_stick_angle $angle       ;# park at the arc edge, do not wrap past it
+
+        set deadband [expr {$dial_deadband_deg*$dial_pi/180.0}]
+        if { !$dial_cursor_shown } {
+            set dial_cursor_shown 1
+            dial_cursor_update $angle 1
+            set dial_last_sent $angle
+        } elseif { abs([dial_angdiff $angle $dial_last_sent]) > $deadband } {
+            dial_cursor_update $angle 1
+            set dial_last_sent $angle
+        }
+    }
+
+    # The stick's own push-select. Commits the INTEGRATED angle -- not the
+    # deflection direction, which is what sliderconf's swipe path would
+    # commit and is a different answer entirely.
+    proc dial_stick_commit { dpoint data } {
+        variable dial_active
+        variable dial_armed_time
+        variable dial_pending
+        variable dial_stick_angle
+        variable dial_stick_moved
+
+        if { !$dial_active || $dial_armed_time == 0 } return
+        if { ![string is entier -strict $data] || $data == 0 } return
+        if { !$dial_stick_moved } return   ;# nothing steered yet: not a response
+
+        set dial_pending [list [dial_clamp_arc $dial_stick_angle] stick]
+        do_update
+    }
+
+    proc dial_poll_stick {} { return "" }
 
     # Mouse commits arrive asynchronously via dial_mouse_sample latching
     # dial_pending, which dial_response consumes before it polls sources.
