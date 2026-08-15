@@ -76,6 +76,12 @@ inputKnownDevice touchscreen *eGalax*                      \
 #     #   -screen_w/-screen_h  extent the virtual cursor is clamped to
 #     #   -gain                counts -> pixels, linear (no acceleration)
 #     #   -grab                EVIOCGRAB: hide the device from the desktop
+#     #   -move_every N        publish only every Nth MOTION sample. Button
+#     #                        press/release are never decimated, so click
+#     #                        timing keeps the device's full resolution.
+#     #                        Use to cut fan-out from a 1kHz mouse without
+#     #                        coarsening reaction times the way capping
+#     #                        usbhid.mousepoll would.
 #     #
 #     inputKnownDevice mouse *Logitech_USB_Optical_Mouse* \
 #         -screen_w 1920 -screen_h 1080 -gain 1.0 -grab 1
@@ -200,10 +206,85 @@ proc ::inputSavedDevices {} { return $::input_saved_devices }
 # contain spaces and braces, which is exactly where a hand-rolled parser
 # gets it wrong.
 #
+# Host-level input configuration that silently changes what every device
+# reports. usbhid.mousepoll overrides the polling interval for ALL HID
+# pointing devices, so a rig can measure 62.5 Hz off a 1000 Hz mouse and
+# conclude the hardware is slow — which is exactly what happened here on
+# 2026-08-15, when this rig sat at 4294967295. Surfacing it means the next
+# person reads the setting before believing a rate.
+#
+#   0        use each device's declared bInterval (the mainline default)
+#   1..N     force N ms for every mouse
+#   other    nonsense; on this rig it produced a 16 ms floor
+#
+# inputRequireHostPolling ?max_ms?
+#
+# Declare that this rig needs HID pointing devices polled at least this
+# often. Checked at startup; a rig that does not meet it says so loudly
+# instead of quietly reporting a rate that is the SETTING rather than the
+# hardware.
+#
+# Why declare-and-check rather than set-and-fix: usbhid.mousepoll only
+# affects devices probed AFTER it changes, and everything is enumerated
+# long before dserv starts. Writing it here would look like it worked and
+# change nothing until the next replug. The fix belongs on the kernel
+# command line, where it lands before enumeration — and usbhid is built
+# in on Raspberry Pi OS, so modprobe.d does not apply either.
+#
+# Raspberry Pi OS ships this capped at ~16 ms (62.5 Hz) to save CPU. On a
+# mains-powered rig that trade is usually not the one you want: it costs
+# every pointing device its report rate AND quantises button timestamps,
+# which is what a reaction time is measured from.
+#
+set ::input_required_poll_ms 0
+
+proc ::inputRequireHostPolling {{max_ms 1}} {
+    set ::input_required_poll_ms $max_ms
+}
+
+proc ::inputCheckHostPolling {} {
+    if { $::input_required_poll_ms <= 0 } return
+    set hc [::inputHostConfig]
+    if { ![dict exists $hc mousepoll] } return
+    set mp [dict get $hc mousepoll]
+
+    # 0 means "use each device's own bInterval", which is the best case.
+    if { $mp == 0 } return
+    if { $mp >= 1 && $mp <= $::input_required_poll_ms } return
+
+    puts stderr "input: WARNING host HID polling does not meet this rig's requirement"
+    puts stderr "input:   usbhid.mousepoll = $mp (need 0, or <= $::input_required_poll_ms)"
+    if { $mp > 255 || $mp < 0 } {
+        puts stderr "input:   that value is out of range — every pointing device is capped"
+    } else {
+        puts stderr "input:   every mouse is forced to ${mp}ms (max [expr {1000/$mp}] Hz)"
+    }
+    puts stderr "input:   fix: append usbhid.mousepoll=1 to /boot/firmware/cmdline.txt and reboot"
+    puts stderr "input:   (usbhid is built in; modprobe.d will NOT apply)"
+}
+
+proc ::inputHostConfig {} {
+    set f /sys/module/usbhid/parameters/mousepoll
+    if { ![file readable $f] } { return {} }
+    if { [catch { open $f r } fh] } { return {} }
+    set v [string trim [read $fh]]
+    close $fh
+    if { ![string is entier -strict $v] } { return {} }
+    return [dict create mousepoll $v]
+}
+
 proc ::inputStatusJson {} {
     package require yajltcl
     set j [yajl create #auto]
     $j map_open
+
+    set hc [::inputHostConfig]
+    $j string host map_open
+    if { [dict exists $hc mousepoll] } {
+        $j string mousepoll number [dict get $hc mousepoll]
+    }
+    $j string required_poll_ms number $::input_required_poll_ms
+    $j map_close
 
     $j string classes array_open
     foreach c [inputClasses] {
@@ -218,7 +299,7 @@ proc ::inputStatusJson {} {
     foreach d [inputList] {
         $j map_open
         foreach {k v} $d {
-            if { $k in {events kernel_ts grab screen_w screen_h gain connected} } {
+            if { $k in {events kernel_ts grab screen_w screen_h gain connected move_every} } {
                 $j string $k number $v
             } else {
                 $j string $k string $v
@@ -302,5 +383,11 @@ if { [dict size $discovered] > 0 } {
 
 # Fail startup loudly if any required class has no device.
 inputValidateExpectations
+
+# Warn loudly if the host's HID polling does not meet a declared
+# requirement. Not fatal: a capped rig still works, it just reports
+# slower rates than its hardware can — and the point is that nobody
+# should discover that by measuring and drawing the wrong conclusion.
+inputCheckHostPolling
 
 puts "input subprocess configured"

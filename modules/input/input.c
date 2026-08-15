@@ -90,6 +90,7 @@ typedef struct input_class_s {
      becomes invisible to the desktop pointer. */
   double gain;
   int grab;
+  int move_every;
 } input_class_t;
 
 typedef struct input_device_s {
@@ -152,6 +153,12 @@ typedef struct input_device_s {
   int grab;
   int cur_x, cur_y;
 
+  /* Publish only every Nth motion sample (1 = every one). Button
+     transitions are NEVER decimated — see mouse_reader. move_pending
+     counts motion syncs since the last publish. */
+  int move_every;
+  int move_pending;
+
   /* The inputKnownDevice glob this device was adopted under, if any.
      device_reconnect requires a replacement to match it too, so a class
      pinned to one specific device cannot silently adopt a different one
@@ -179,6 +186,7 @@ typedef struct known_device_s {
   char hdmi_output[32];
   double gain;
   int grab;
+  int move_every;
 } known_device_t;
 
 typedef struct input_state_s {
@@ -1070,6 +1078,23 @@ static void *mouse_reader(void *arg)
       if (ev.code != SYN_REPORT) break;
       if (!coords_changed && !button_changed) break;
 
+      /* Decimate MOTION only. A button transition always publishes, so
+         PRESS and RELEASE keep the full resolution of the device's own
+         timestamp — which is the whole point: at 1 kHz polling a click is
+         located to ~1 ms, and that is what a reaction time is made of.
+         Throttling at the USB layer instead (usbhid.mousepoll) would
+         coarsen those transitions too.
+         Skipping costs no position either: cur_x/cur_y keep integrating
+         in EV_REL, so the next published sample carries the full
+         accumulated displacement rather than a truncated one. */
+      if (!button_changed && d->move_every > 1) {
+        if (++d->move_pending < d->move_every) {
+          coords_changed = 0;
+          break;
+        }
+      }
+      d->move_pending = 0;
+
       if (d->cur_x < 0) d->cur_x = 0;
       if (d->cur_y < 0) d->cur_y = 0;
       if (d->cur_x > d->screen_width  - 1) d->cur_x = d->screen_width  - 1;
@@ -1188,6 +1213,7 @@ static input_device_t *open_device(input_state_t *st, input_class_t *cls,
     d->screen_height = cls->screen_height;
     d->gain = (cls->gain > 0.0) ? cls->gain : 1.0;
     d->grab = cls->grab;
+    d->move_every = (cls->move_every > 0) ? cls->move_every : 1;
     /* Start centred. With no absolute reference there is no better prior,
        and it keeps the first movement inside the extent in any direction.
        Re-centred by apply_known_overrides if that changes the extent. */
@@ -1291,6 +1317,7 @@ static void apply_known_overrides(input_device_t *d, known_device_t *kd,
     if (kd->screen_h > 0)  d->screen_height = kd->screen_h;
     if (kd->gain > 0.0)    d->gain          = kd->gain;
     if (kd->grab >= 0)     d->grab          = kd->grab;
+    if (kd->move_every > 0) d->move_every   = kd->move_every;
     /* Re-centre: the extent may just have changed under the cursor. */
     d->cur_x = d->screen_width  / 2;
     d->cur_y = d->screen_height / 2;
@@ -1875,7 +1902,7 @@ static int input_open_cmd(ClientData data, Tcl_Interp *interp,
     Tcl_WrongNumArgs(interp, 1, objv,
                      "class path ?-screen_w W? ?-screen_h H? ?-rotation R? "
                      "?-track_drag {0|1}? ?-gain G? ?-grab {0|1}? "
-                     "?-pattern glob?");
+                     "?-move_every N? ?-pattern glob?");
     return TCL_ERROR;
   }
 
@@ -1927,6 +1954,12 @@ static int input_open_cmd(ClientData data, Tcl_Interp *interp,
     } else if (strcmp(key, "-grab") == 0) {
       if (Tcl_GetIntFromObj(interp, val, &ival) != TCL_OK) bad = 1;
       else d->grab = ival ? 1 : 0;
+    } else if (strcmp(key, "-move_every") == 0) {
+      if (Tcl_GetIntFromObj(interp, val, &ival) != TCL_OK) bad = 1;
+      else if (ival < 1) {
+        Tcl_AppendResult(interp, "input: -move_every must be >= 1", NULL);
+        bad = 1;
+      } else d->move_every = ival;
     } else if (strcmp(key, "-pattern") == 0) {
       strncpy(d->match_pattern, Tcl_GetString(val),
               sizeof(d->match_pattern) - 1);
@@ -1974,7 +2007,7 @@ static int input_known_device_cmd(ClientData data, Tcl_Interp *interp,
     Tcl_WrongNumArgs(interp, 1, objv,
                      "class pattern ?-screen_w W? ?-screen_h H? "
                      "?-rotation R? ?-track_drag {0|1}? ?-hdmi_output name? "
-                     "?-gain G? ?-grab {0|1}?");
+                     "?-gain G? ?-grab {0|1}? ?-move_every N?");
     return TCL_ERROR;
   }
 
@@ -1999,6 +2032,7 @@ static int input_known_device_cmd(ClientData data, Tcl_Interp *interp,
   k->track_drag = -1;
   k->gain = -1.0;
   k->grab = -1;
+  k->move_every = -1;
 
   for (int i = 3; i < objc; i += 2) {
     const char *key = Tcl_GetString(objv[i]);
@@ -2015,6 +2049,10 @@ static int input_known_device_cmd(ClientData data, Tcl_Interp *interp,
     } else if (strcmp(key, "-grab") == 0) {
       if (Tcl_GetIntFromObj(interp, val, &ival) != TCL_OK) return TCL_ERROR;
       k->grab = ival ? 1 : 0;
+    } else if (strcmp(key, "-move_every") == 0) {
+      if (Tcl_GetIntFromObj(interp, val, &ival) != TCL_OK) return TCL_ERROR;
+      if (ival < 1) { Tcl_AppendResult(interp, "input: -move_every must be >= 1", NULL); return TCL_ERROR; }
+      k->move_every = ival;
     } else if (strcmp(key, "-screen_w") == 0) {
       if (Tcl_GetIntFromObj(interp, val, &ival) != TCL_OK) return TCL_ERROR;
       k->screen_w = ival;
@@ -2049,7 +2087,7 @@ static int input_configure_cmd(ClientData data, Tcl_Interp *interp,
     Tcl_WrongNumArgs(interp, 1, objv,
                      "class ?-rotation N? ?-screen_w W? ?-screen_h H? "
                      "?-track_drag {0|1}? ?-hdmi_output name? "
-                     "?-gain G? ?-grab {0|1}?");
+                     "?-gain G? ?-grab {0|1}? ?-move_every N?");
     return TCL_ERROR;
   }
 
@@ -2076,6 +2114,10 @@ static int input_configure_cmd(ClientData data, Tcl_Interp *interp,
     } else if (strcmp(key, "-grab") == 0) {
       if (Tcl_GetIntFromObj(interp, val, &ival) != TCL_OK) return TCL_ERROR;
       cls->grab = ival ? 1 : 0;
+    } else if (strcmp(key, "-move_every") == 0) {
+      if (Tcl_GetIntFromObj(interp, val, &ival) != TCL_OK) return TCL_ERROR;
+      if (ival < 1) { Tcl_AppendResult(interp, "input: -move_every must be >= 1", NULL); return TCL_ERROR; }
+      cls->move_every = ival;
     } else if (strcmp(key, "-rotation") == 0) {
       if (Tcl_GetIntFromObj(interp, val, &ival) != TCL_OK) return TCL_ERROR;
       cls->rotation = ival;
@@ -2239,6 +2281,9 @@ static int input_list_cmd(ClientData data, Tcl_Interp *interp,
       Tcl_DictObjPut(interp, entry,
                      Tcl_NewStringObj("gain", -1),
                      Tcl_NewDoubleObj(d->gain));
+      Tcl_DictObjPut(interp, entry,
+                     Tcl_NewStringObj("move_every", -1),
+                     Tcl_NewIntObj(d->move_every));
     }
     Tcl_ListObjAppendElement(interp, list, entry);
   }
@@ -2452,6 +2497,7 @@ static input_class_t *register_class(input_state_t *st,
   c->track_drag = 0;
   c->gain = 1.0;
   c->grab = 0;
+  c->move_every = 1;
   strncpy(c->hdmi_output, "HDMI-A-1", sizeof(c->hdmi_output) - 1);
   return c;
 }

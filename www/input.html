@@ -428,6 +428,8 @@ function fieldsFor(cls, vals) {
     }
     if (cls === 'mouse') {
         f += num('f_gain', 'gain (counts → px)', vals.gain !== undefined ? vals.gain : 1, '0.05');
+        f += num('f_move_every', 'publish every Nth move',
+                 vals.move_every !== undefined ? vals.move_every : 1);
     }
     if (cls === 'touchscreen') {
         f += `<div><label for="f_rotation">rotation</label>
@@ -457,6 +459,7 @@ function readFields(cls) {
         if (g('f_screen_h')) opts.screen_h = g('f_screen_h');
     }
     if (cls === 'mouse' && g('f_gain')) opts.gain = g('f_gain');
+    if (cls === 'mouse' && g('f_move_every')) opts.move_every = g('f_move_every');
     if (cls === 'touchscreen' && g('f_rotation')) opts.rotation = g('f_rotation');
     opts.grab = $('f_grab') && $('f_grab').checked ? '1' : '0';
     return opts;
@@ -472,6 +475,30 @@ const optsToArgs = o => Object.entries(o).map(([k, v]) => `-${k} ${v}`).join(' '
    It is only a proposal: the field is editable, because by-id names for
    some devices (Apple trackpads among them) carry a unit serial, and
    whether to pin that tightly is the operator's call, not a default. */
+/* Host HID polling, shown on every adopted device because it applies to
+   ALL of them and silently determines the ceiling. Without this on
+   screen, a rig measuring 62.5 Hz off a 1 kHz mouse reads as slow
+   hardware — which is how this rig was misread before the setting was
+   found. Reporting the number is the point; the warning is secondary. */
+function hostPollRow() {
+    const mp = state.host && state.host.mousepoll;
+    if (mp === undefined || mp === null) return '';
+    if (Number(mp) === 0) {
+        return `<dt>host polling</dt><dd>per-device <span class="chip on">bInterval</span></dd>`;
+    }
+    const n = Number(mp);
+    /* 1 ms is the fastest possible override and caps nothing in practice.
+       Anything larger forces a slower interval on every pointing device;
+       an out-of-range value is not a rate at all. */
+    const sane = n >= 1 && n <= 255;
+    const cls = (n === 1) ? 'on' : 'warn';
+    const detail = sane
+        ? `forced ${n}ms (max ${Math.round(1000 / n)} Hz for every mouse)`
+        : `value ${n} is out of range — every pointing device is capped`;
+    return `<dt>host polling</dt><dd><span class="chip ${sane && n === 1 ? 'on' : (sane ? 'warn' : 'bad')}">` +
+           `usbhid.mousepoll</span> ${esc(detail)}</dd>`;
+}
+
 function savePattern(d) {
     if (d.pattern) return d.pattern;
     if (d.by_id) return `*${d.by_id}*`;
@@ -507,6 +534,8 @@ function renderDetail() {
                 : `<dt>surface</dt><dd>waiting for range</dd>`;
             })()}
             ${d.gain !== undefined ? `<dt>gain</dt><dd>${esc(d.gain)}</dd>` : ''}
+            ${d.move_every > 1 ? `<dt>decimation</dt><dd>1 of every ${esc(d.move_every)} moves` +
+               ` <span class="chip">clicks undecimated</span></dd>` : ''}
             <dt>flags</dt><dd>
               ${d.connected !== undefined && !Number(d.connected)
                 ? '<span class="chip bad">unplugged — waiting for it to return</span>' : ''}
@@ -514,6 +543,7 @@ function renderDetail() {
               <span class="chip ${Number(d.kernel_ts) ? 'on' : 'warn'}">${Number(d.kernel_ts) ? 'kernel timestamps' : 'publish-time stamps'}</span>
             </dd>
             <dt>events</dt><dd id="evcount">${esc(d.events)}</dd>
+            ${hostPollRow()}
           </dl>
           <canvas id="trace"></canvas>
           <p id="tracehint">move the device — the dot should follow.</p>
@@ -548,6 +578,7 @@ function renderDetail() {
             if (d.screen_w) o.screen_w = d.screen_w;
             if (d.screen_h) o.screen_h = d.screen_h;
             if (d.gain !== undefined) o.gain = d.gain;
+            if (d.move_every > 1) o.move_every = d.move_every;
             o.grab = Number(d.grab) ? 1 : 0;
             await inputCmd(`inputSaveDevice ${d.class} {${pattern}} ${optsToArgs(o)}`);
             setMsg('saved — this device will be adopted at next start', 'ok');
