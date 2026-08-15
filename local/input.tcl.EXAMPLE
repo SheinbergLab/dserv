@@ -1,5 +1,5 @@
 #
-# Per-rig overrides for the input subprocess.
+# Per-rig device configuration for the input subprocess.
 #
 # Sourced from config/inputconf.tcl AFTER the built-in known-device table
 # is seeded (wch / ILITEK / eGalax touchscreens) and BEFORE
@@ -9,9 +9,23 @@
 # On a rig with only the standard known hardware attached, this file is
 # not needed — autodiscover just works. Use it to:
 #
-#   - declare what devices this rig must have (inputExpect)
 #   - teach the module about new hardware (inputKnownDevice)
+#   - name the dedicated mouse this rig answers with (see below)
+#   - declare what devices this rig must have (inputExpect)
 #   - override a default rotation or screen size per-rig
+#
+# SCOPE — this file runs in the INPUT subprocess, which has no `ess`
+# package. Any ::ess::* command here fails and takes the whole input
+# config with it: no autodiscover, no devices, and an input page that is
+# simply empty. Device DISCOVERY is this file's job. Which transport
+# answers a response mode is ess's, and lives in local/post-input.tcl
+# (::ess::dial_bind, ::ess::button_bind, ::ess::joystick_bind).
+#
+# COMPANION — local/input_devices.tcl is written by the input page's
+# "save for this rig" and sourced AFTER this file, so a page-saved entry
+# wins over one written here. That file is machine-owned: do not hand-edit
+# it. Adopting and saving from the page is usually easier than writing an
+# entry below, and it fills in the extent for you.
 #
 
 # --- Expectations ------------------------------------------------------
@@ -22,8 +36,46 @@
 # declaration for documentation / diagnostics but no enforcement.
 #
 # inputExpect touchscreen
-# inputExpect trackpad
+# inputExpect mouse
 # inputExpect trackpad -optional
+
+# --- A dedicated mouse (the one class that REQUIRES an entry) -----------
+#
+# Touchscreens and trackpads auto-enable on capability match. A mouse
+# never does: on a rig with a desktop, the first EV_REL device udev
+# enumerates is as likely to be the operator's mouse as the subject's,
+# and adopting that one with -grab would take the desktop pointer away
+# with no obvious cause. So a mouse is adopted only if an entry names it.
+#
+# Find the pattern with `send input "inputProbe"` or `ls /dev/input/by-id`,
+# and match the subject's device only. Two identical mice share a by-id
+# name — use by-path (physical port) if you ever need to tell them apart.
+#
+# inputKnownDevice mouse *Logitech_USB_Optical_Mouse* \
+#     -screen_w 1920 -screen_h 1080 -gain 1.0 -grab 1 -move_every 5
+#
+# Options:
+#   -screen_w W       extent the virtual cursor is clamped to. A mouse is
+#   -screen_h H       relative; these define the space it moves in, and
+#                     usually match the stimulus display.
+#   -gain G           counts -> pixels, LINEAR (no acceleration curve, so
+#                     the same hand movement always travels the same
+#                     distance and can be stated in a methods section)
+#   -grab 0|1         EVIOCGRAB: the kernel stops delivering this device
+#                     to anyone else, so the desktop pointer does not
+#                     follow the subject. Released when dserv exits.
+#   -move_every N     publish only every Nth MOTION sample. Button
+#                     press/release are never decimated, so click timing
+#                     keeps the device's full resolution. Use this rather
+#                     than capping usbhid.mousepoll, which would coarsen
+#                     the button timestamps too.
+#
+# RATE — Raspberry Pi OS caps HID polling at ~62.5 Hz. A 1 kHz mouse will
+# report at 62.5 Hz until usbhid.mousepoll=1 is on the kernel command line
+# (/boot/firmware/cmdline.txt; usbhid is built in, so modprobe.d does NOT
+# apply). The input page shows the current setting on every adopted
+# device — if it is not 0 or 1, the rate you measure is the setting rather
+# than the hardware.
 
 # --- Teaching the module about new hardware ----------------------------
 #
@@ -43,6 +95,10 @@
 #                     (default 0: only PRESS and RELEASE)
 #   -hdmi_output name HDMI connector name for rotation detection
 #                     (default HDMI-A-1)
+#   -grab 0|1         also available here: hide the panel from the desktop
+#
+# Trackpads need no entry at all — they auto-enable and publish their own
+# surface range. Add one only to set -grab, or to pin a specific device.
 
 # --- Overriding a built-in default -------------------------------------
 #
@@ -61,12 +117,7 @@
 #   send input "inputProbe"
 #
 # Or at startup by setting DSERV_INPUT_PROBE=1 in the environment / unit.
-
-# --- Which transport answers a dial ------------------------------------
 #
-# NOT HERE. ::ess::dial_bind lives in local/post-input.tcl.
-#
-# This file is sourced by the INPUT subprocess, which has no `ess` package,
-# so any ::ess::* command here fails and takes the whole input config with
-# it -- no autodiscover, no devices, an empty input page. Device adoption
-# is this file's job; deciding which transport answers a dial is ess's.
+# The input page shows the same information with live events, which is
+# usually the faster way in: it lists what was NOT adopted and why, and
+# lets you try a device before committing it to this file.
