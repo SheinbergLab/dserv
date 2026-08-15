@@ -2631,6 +2631,34 @@ static int dpoint_set_script_command (ClientData data, Tcl_Interp *interp,
   return TCL_OK;
 }
 
+/*
+ * dpointAddScript varname script
+ *
+ *   Register an ADDITIONAL script for varname, keeping any already there.
+ *   dpointSetScript stays "this is now the script": callers re-register to
+ *   change behaviour, and turning that into an append would silently
+ *   double-fire every existing registration.
+ *
+ *   Scripts run in registration order on the process thread. Publishing
+ *   from inside one enqueues a request that is drained on a LATER pass, so
+ *   two consumers of one datapoint never nest -- and a consumer that errors
+ *   does not stop the ones after it.
+ */
+static int dpoint_add_script_command (ClientData data, Tcl_Interp *interp,
+                                      int objc, Tcl_Obj *objv[])
+{
+  TclServer *tclserver = (TclServer *) data;
+
+  if (objc < 3) {
+    Tcl_WrongNumArgs(interp, 1, objv, "varname script");
+    return TCL_ERROR;
+  }
+
+  tclserver->dpoint_scripts.append(std::string(Tcl_GetString(objv[1])),
+                                   std::string(Tcl_GetString(objv[2])));
+  return TCL_OK;
+}
+
 static int dpoint_remove_script_command (ClientData data, Tcl_Interp *interp,
                          int objc, Tcl_Obj *objv[])
 {
@@ -2638,12 +2666,21 @@ static int dpoint_remove_script_command (ClientData data, Tcl_Interp *interp,
   Dataserver *ds = tclserver->ds;
   
   if (objc < 2) {
-    Tcl_WrongNumArgs(interp, 1, objv, "varname");
+    Tcl_WrongNumArgs(interp, 1, objv, "varname ?script?");
     return TCL_ERROR;
   }
-  
-  tclserver->dpoint_scripts.remove(std::string(Tcl_GetString(objv[1])));
-  
+
+  /* With a script argument, remove just that one and leave its siblings --
+     needed once a name can carry several. Without one, remove them all,
+     which is what this command has always done. */
+  if (objc > 2) {
+    tclserver->dpoint_scripts.remove_script(std::string(Tcl_GetString(objv[1])),
+                                            std::string(Tcl_GetString(objv[2])));
+  }
+  else {
+    tclserver->dpoint_scripts.remove(std::string(Tcl_GetString(objv[1])));
+  }
+
   return TCL_OK;
   }
 
@@ -2836,8 +2873,8 @@ static int dpoint_get_script_command (ClientData data, Tcl_Interp *interp,
   }
 
   std::string script;
-  if (!tclserver->dpoint_scripts.find(std::string(Tcl_GetString(objv[1])),
-                                      script)) {
+  if (!tclserver->dpoint_scripts.find_first(std::string(Tcl_GetString(objv[1])),
+                                            script)) {
     Tcl_SetObjResult(interp, Tcl_NewStringObj("", -1));
     return TCL_OK;                     /* not registered -> empty, not an error */
   }
@@ -3272,6 +3309,9 @@ static void add_tcl_commands(Tcl_Interp *interp, TclServer *tserv)
   
   Tcl_CreateObjCommand(interp, "dpointSetScript",
                (Tcl_ObjCmdProc *) dpoint_set_script_command,
+               tserv, NULL);
+  Tcl_CreateObjCommand(interp, "dpointAddScript",
+               (Tcl_ObjCmdProc *) dpoint_add_script_command,
                tserv, NULL);
   Tcl_CreateObjCommand(interp, "dpointRemoveScript",
                (Tcl_ObjCmdProc *) dpoint_remove_script_command,
@@ -3958,19 +3998,21 @@ static int process_requests(TclServer *tserv)
 	// The entry is deliberately still LOOKED UP: an empty exact entry keeps
 	// shadowing a wildcard script, so this change removes the cost without
 	// changing which script wins. Use dpointRemoveScript to actually remove.
-	std::string script;
-	if (tserv->dpoint_scripts.find(varname, script)) {
-	  if (!script.empty()) {
-	    ds_datapoint_t *dpoint = req.dpoint;
-	    const char *dpoint_script = script.c_str();
-	    int retcode = dpoint_tcl_script(interp, dpoint_script, dpoint);
-	  }
-	}
-	else if (tserv->dpoint_scripts.find_match(varname, script)) {
-	  if (!script.empty()) {
-	    ds_datapoint_t *dpoint = req.dpoint;
-	    const char *dpoint_script = script.c_str();
-	    int retcode = dpoint_tcl_script(interp, dpoint_script, dpoint);
+	// A name may carry several scripts (dpointAddScript). They run in
+	// registration order, and each is dispatched independently:
+	// dpoint_tcl_script's return code is deliberately not consulted, so
+	// one consumer erroring cannot silence the consumers after it. That
+	// matters now that two unrelated subsystems can share a datapoint --
+	// a broken one must not take the other down with it.
+	std::vector<std::string> scripts;
+	if (tserv->dpoint_scripts.find(varname, scripts) ||
+	    tserv->dpoint_scripts.find_match(varname, scripts)) {
+	  for (auto const &script : scripts) {
+	    if (!script.empty()) {
+	      ds_datapoint_t *dpoint = req.dpoint;
+	      const char *dpoint_script = script.c_str();
+	      int retcode = dpoint_tcl_script(interp, dpoint_script, dpoint);
+	    }
 	  }
 	}
 

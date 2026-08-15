@@ -149,7 +149,12 @@ void Dataserver::trigger(ds_datapoint_t *dpoint)
 {
   if (trigger_matches.is_match(dpoint->varname)) {
     std::string script;
-    if (trigger_scripts.find(dpoint->varname, script)) {
+    /* Triggers stay single-script: nothing appends to this registry (there
+       is no add-command for it, only replace), so find_first is exactly the
+       old behaviour. The multi-script support added to TriggerDict is for
+       dpoint scripts, where two independent consumers of one datapoint is a
+       real case. */
+    if (trigger_scripts.find_first(dpoint->varname, script)) {
       client_request_t client_request;
       client_request.type = REQ_TRIGGER;
       client_request.script = std::move(script);
