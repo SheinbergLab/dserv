@@ -104,6 +104,10 @@ namespace eval ess {
     # press-then-drag gave for free.
     variable dial_start_radius   40
 
+    # Has the subject chosen a direction yet this trial? The start radius
+    # gates ACQUIRING one; it must not keep gating once one is chosen.
+    variable dial_mouse_acquired 0
+
     variable dial_mouse_range_known 0
     variable dial_mouse_cx 0.0
     variable dial_mouse_cy 0.0
@@ -390,6 +394,8 @@ namespace eval ess {
         set dial_report_time   0
         set dial_report_source ""
         set dial_pending       ""
+        variable dial_mouse_acquired
+        set dial_mouse_acquired 0
 
         # Consume whatever is already sitting in the transports, so a commit
         # that landed before the window cannot be picked up as the first
@@ -587,18 +593,27 @@ namespace eval ess {
         set dx [expr {$x - $dial_mouse_cx}]
         set dy [expr {$dial_mouse_cy - $y}]
 
-        # Inside the start radius there is no meaningful direction yet, so
-        # show nothing rather than commit the cursor to whichever way a
-        # stray count happened to point. A PRESS in here is likewise not a
-        # response -- the subject has not chosen anything.
+        # The start radius gates ACQUIRING a direction, once per trial --
+        # not maintaining one.
+        #
+        # Gating it continuously made the cursor blink: sweeping the mouse
+        # horizontally to move round the circle carries the cursor straight
+        # through the centre, and every crossing dropped inside the radius
+        # and hid it. Once a direction has been chosen the cursor stays put
+        # and simply HOLDS its last angle through the dead zone, where
+        # there is no meaningful direction to update to.
         variable dial_start_radius
-        if { ($dx*$dx + $dy*$dy) < ($dial_start_radius*$dial_start_radius) } {
-            if { $dial_cursor_shown } {
-                set dial_cursor_shown 0
-                dial_cursor_update 0 0
-            }
+        variable dial_mouse_acquired
+        set inside [expr {($dx*$dx + $dy*$dy) <
+                          ($dial_start_radius*$dial_start_radius)}]
+
+        if { $inside && !$dial_mouse_acquired } {
+            # Nothing chosen yet: show nothing, and a PRESS here is not a
+            # response -- the subject has not picked anything.
             return
         }
+        if { $inside } { return }   ;# acquired: hold the last angle
+        set dial_mouse_acquired 1
 
         set angle [dial_clamp_arc [dial_norm2pi [expr {atan2($dy, $dx)}]]]
 
