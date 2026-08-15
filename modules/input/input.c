@@ -84,6 +84,12 @@ typedef struct input_class_s {
   int rotation;               /* -1 = auto-detect from HDMI */
   int track_drag;
   char hdmi_output[32];
+
+  /* Mouse class. gain multiplies relative counts into virtual pixels
+     (linear — see mouse_reader). grab takes EVIOCGRAB so the device
+     becomes invisible to the desktop pointer. */
+  double gain;
+  int grab;
 } input_class_t;
 
 typedef struct input_device_s {
@@ -127,6 +133,19 @@ typedef struct input_device_s {
   int screen_width, screen_height, rotation;
   int track_drag;
 
+  /* Per-device mouse state. cur_x/cur_y are the integrated virtual
+     cursor and live here (not in the reader) so a replug resumes where
+     the cursor was rather than teleporting it back to centre. */
+  double gain;
+  int grab;
+  int cur_x, cur_y;
+
+  /* The inputKnownDevice glob this device was adopted under, if any.
+     device_reconnect requires a replacement to match it too, so a class
+     pinned to one specific device cannot silently adopt a different one
+     of the same class after a replug. Empty = match on class alone. */
+  char match_pattern[INPUT_PATTERN_MAX];
+
   struct input_device_s *next;
 } input_device_t;
 
@@ -135,8 +154,9 @@ typedef struct input_expect_s {
   int required;               /* 1 = fail startup if missing, 0 = optional */
 } input_expect_t;
 
-/* Sentinels in known_device_t: -1 means "unset" for dims/track_drag;
-   rotation uses -2 = unset, -1 = auto-detect from HDMI, >=0 = explicit. */
+/* Sentinels in known_device_t: -1 means "unset" for dims/track_drag/grab;
+   rotation uses -2 = unset, -1 = auto-detect from HDMI, >=0 = explicit;
+   gain uses <= 0 = unset. */
 typedef struct known_device_s {
   char class_name[32];
   char pattern[INPUT_PATTERN_MAX];
@@ -145,6 +165,8 @@ typedef struct known_device_s {
   int rotation;
   int track_drag;
   char hdmi_output[32];
+  double gain;
+  int grab;
 } known_device_t;
 
 typedef struct input_state_s {
@@ -329,6 +351,27 @@ static void set_evdev_clock(input_device_t *d)
     fprintf(stderr,
             "input: %s: libevdev_set_clock_id(CLOCK_MONOTONIC) failed on %s:"
             " %s (errno=%d); falling back to publish-time timestamps\n",
+            d->cls->name, d->path, strerror(-rc), -rc);
+    fflush(stderr);
+  }
+}
+
+/* EVIOCGRAB: the kernel stops delivering this device's events to every
+   other reader, so libinput/X/Wayland never see it and the desktop
+   pointer does not move. Like the clock id this is a property of the open
+   fd, so it must be re-applied after a reconnect. The grab is dropped
+   automatically when the fd closes, including if dserv dies.
+
+   A failure is not fatal but is worth shouting about: the device still
+   works, it just is not exclusive any more — meaning it is also driving
+   the desktop cursor, which is precisely what -grab was asked to prevent. */
+static void apply_evdev_grab(input_device_t *d)
+{
+  int rc = libevdev_grab(d->dev, LIBEVDEV_GRAB);
+  if (rc != 0) {
+    fprintf(stderr,
+            "input: %s: EVIOCGRAB failed on %s: %s (errno=%d); device is"
+            " NOT exclusive and will also drive the desktop pointer\n",
             d->cls->name, d->path, strerror(-rc), -rc);
     fflush(stderr);
   }
@@ -617,6 +660,26 @@ static int device_reconnect(input_device_t *d)
           continue;
         }
 
+        /* A device adopted under a specific inputKnownDevice glob must
+           reconnect to a device matching that same glob. Class alone is
+           not enough: on a rig with two devices of one class, a replug
+           could otherwise resume on the wrong one — and for the mouse
+           class, which physical device this is is the entire point. */
+        if (d->match_pattern[0]) {
+          char rc_by_id[INPUT_PATH_MAX] = "";
+          find_by_id_name(path, rc_by_id, sizeof(rc_by_id));
+          const char *rc_name = libevdev_get_name(dev);
+          int pattern_ok =
+            (*rc_by_id && Tcl_StringMatch(rc_by_id, d->match_pattern)) ||
+            (rc_name && *rc_name &&
+             Tcl_StringMatch(rc_name, d->match_pattern));
+          if (!pattern_ok) {
+            libevdev_free(dev);
+            close(fd);
+            continue;
+          }
+        }
+
         /* Found a match. Adopt into d in place — keep the same
            input_device_t struct so the linked list, thread id, and
            point_name all remain valid. */
@@ -625,9 +688,10 @@ static int device_reconnect(input_device_t *d)
         strncpy(d->path, path, sizeof(d->path) - 1);
         d->path[sizeof(d->path) - 1] = '\0';
 
-        /* Clock id is a property of the open fd, not the device, so it
-           does not survive the replug and must be re-applied here. */
+        /* Clock id and grab are properties of the open fd, not of the
+           device, so neither survives the replug — re-apply both. */
         set_evdev_clock(d);
+        if (d->grab) apply_evdev_grab(d);
 
         /* Refresh axis ranges. Class-specific — mirrors open_device. */
         if (strcmp(d->cls->name, "touchscreen") == 0) {
@@ -810,6 +874,204 @@ static void *trackpad_reader(void *arg)
 }
 
 /*****************************************************************************
+ * Mouse class
+ *
+ * A relative pointing device used as dedicated subject input, distinct
+ * from any mouse driving the host's own desktop. Two things make it
+ * dedicated:
+ *
+ *   1. Adoption is opt-in by name. Unlike touchscreen and trackpad, a
+ *      mouse is never adopted on capability match alone (see
+ *      autodiscover_impl) — it needs an inputKnownDevice entry naming
+ *      it. On a rig with a desktop, the first EV_REL device udev happens
+ *      to enumerate is as likely to be the operator's mouse as the
+ *      subject's, and adopting that one with -grab would take the
+ *      desktop pointer away. "Dedicated" has to mean a named device.
+ *   2. Optional EVIOCGRAB (-grab 1), which makes the device invisible to
+ *      libinput/X/Wayland so it drives nothing but dserv.
+ *
+ * The device reports relative counts; every consumer downstream (touch
+ * windows, slider) works in absolute coordinates. So the reader
+ * integrates deltas into a virtual cursor, clamps it to a declared
+ * extent (-screen_w/-screen_h), and publishes absolute coordinates in
+ * the same uint16[3] shape the other classes use.
+ *
+ * gain is a plain linear multiplier, deliberately. Pointer acceleration
+ * makes screen displacement a function of hand *velocity*, so the same
+ * physical movement lands somewhere different depending on how fast it
+ * was made — unreproducible between trials and impossible to report in
+ * a methods section. A constant counts-to-pixels factor is the version
+ * a paradigm can actually describe.
+ *
+ * Event types extend the shared contract with MOVE, for motion while no
+ * button is held — the case with no touch-device equivalent:
+ *
+ *     0 PRESS   1 DRAG   2 RELEASE   3 MOVE
+ *
+ * Additive, and on a new datapoint, so no existing consumer is affected.
+ *****************************************************************************/
+
+#define MOUSE_EVENT_PRESS    0
+#define MOUSE_EVENT_DRAG     1
+#define MOUSE_EVENT_RELEASE  2
+#define MOUSE_EVENT_MOVE     3
+
+static int mouse_matches(struct libevdev *dev)
+{
+  /* Relative X/Y plus a primary button. Excluding ABS_MT_POSITION_X keeps
+     touchpads out — they advertise INPUT_PROP_POINTER and BTN_LEFT too,
+     and some also emit EV_REL — and INPUT_PROP_DIRECT keeps touchscreens
+     out. */
+  if (libevdev_has_property(dev, INPUT_PROP_DIRECT)) return 0;
+  if (libevdev_has_event_code(dev, EV_ABS, ABS_MT_POSITION_X)) return 0;
+  if (!libevdev_has_event_code(dev, EV_REL, REL_X)) return 0;
+  if (!libevdev_has_event_code(dev, EV_REL, REL_Y)) return 0;
+  if (!libevdev_has_event_code(dev, EV_KEY, BTN_LEFT)) return 0;
+  return 1;
+}
+
+static void publish_mouse_range(input_device_t *d)
+{
+  char range_name[INPUT_DPOINT_MAX];
+  snprintf(range_name, sizeof(range_name), "%s/range", d->point_name);
+
+  /* Unlike the trackpad's range this is declared rather than discovered:
+     it is the virtual extent the cursor is clamped to, not a physical
+     surface. Same shape and same purpose for consumers either way. */
+  int32_t vals[4];
+  vals[0] = 0;
+  vals[1] = d->screen_width  - 1;
+  vals[2] = 0;
+  vals[3] = d->screen_height - 1;
+  ds_datapoint_t *dp = dpoint_new(range_name,
+                                  tclserver_now(d->state->tclserver),
+                                  DSERV_INT,
+                                  sizeof(vals),
+                                  (unsigned char *) vals);
+  tclserver_set_point(d->state->tclserver, dp);
+}
+
+static void *mouse_reader(void *arg)
+{
+  input_device_t *d = (input_device_t *) arg;
+
+  /* Outer loop: one iteration per "incarnation" of the connected device,
+     re-entered after a successful reconnect. Note the virtual cursor
+     itself lives on d, not here, so a replug resumes where the cursor was
+     instead of teleporting it back to centre. */
+  for (;;) {
+    struct input_event ev;
+    /* Sub-pixel remainder. At gains below 1.0 a single count is worth
+       less than a pixel, and truncating each event independently would
+       discard slow movement entirely — the mouse would feel dead until
+       moved briskly. Carried across events within an incarnation. */
+    double frac_x = 0.0, frac_y = 0.0;
+    int button_down = 0;
+    int button_changed = 0;
+    int coords_changed = 0;
+    int rc;
+
+    publish_mouse_range(d);
+
+    do {
+    rc = libevdev_next_event(d->dev, LIBEVDEV_READ_FLAG_BLOCKING, &ev);
+    if (rc != LIBEVDEV_READ_STATUS_SUCCESS) continue;
+
+    switch (ev.type) {
+    case EV_REL:
+      if (ev.code == REL_X) {
+        double m = ev.value * d->gain + frac_x;
+        int step = (int) m;
+        frac_x = m - step;
+        if (step) { d->cur_x += step; coords_changed = 1; }
+      } else if (ev.code == REL_Y) {
+        /* REL_Y positive is downward — the same sense as a touchscreen's
+           ABS_Y — so no inversion here. */
+        double m = ev.value * d->gain + frac_y;
+        int step = (int) m;
+        frac_y = m - step;
+        if (step) { d->cur_y += step; coords_changed = 1; }
+      }
+      break;
+
+    case EV_KEY:
+      /* BTN_LEFT only. Other buttons are deliberately unmapped: this
+         class publishes a single contact to match the touch contract.
+         Add a separate datapoint rather than overloading vals[2] if a
+         paradigm ever needs the others. */
+      if (ev.code == BTN_LEFT) {
+        if (ev.value == 1 && !button_down) {
+          button_down = 1;
+          button_changed = 1;
+        } else if (ev.value == 0 && button_down) {
+          button_down = 0;
+          button_changed = 1;
+        }
+        /* ev.value == 2 is key autorepeat; mice do not generate it. */
+      }
+      break;
+
+    case EV_SYN:
+      if (ev.code != SYN_REPORT) break;
+      if (!coords_changed && !button_changed) break;
+
+      if (d->cur_x < 0) d->cur_x = 0;
+      if (d->cur_y < 0) d->cur_y = 0;
+      if (d->cur_x > d->screen_width  - 1) d->cur_x = d->screen_width  - 1;
+      if (d->cur_y > d->screen_height - 1) d->cur_y = d->screen_height - 1;
+
+      uint16_t vals[3];
+      vals[0] = (uint16_t) d->cur_x;
+      vals[1] = (uint16_t) d->cur_y;
+      if (button_changed) {
+        vals[2] = button_down ? MOUSE_EVENT_PRESS : MOUSE_EVENT_RELEASE;
+      } else {
+        vals[2] = button_down ? MOUSE_EVENT_DRAG : MOUSE_EVENT_MOVE;
+      }
+
+      /* One datapoint per input report. A 1000 Hz mouse in continuous
+         motion therefore produces ~1000/s for the duration of the
+         movement (it NAKs when still, so idle costs nothing). If that
+         rate ever becomes a problem for fan-out, decimate HERE — publish
+         every Nth MOVE — and never the PRESS/RELEASE transitions, which
+         are the timing-critical ones. */
+      ds_datapoint_t *dp = dpoint_new(d->point_name,
+                                      ev_time_us(d, &ev),
+                                      DSERV_SHORT,
+                                      sizeof(vals),
+                                      (unsigned char *) vals);
+      tclserver_set_point(d->state->tclserver, dp);
+
+      button_changed = 0;
+      coords_changed = 0;
+      break;
+    }
+  } while (rc >= 0);
+
+    if (rc < 0) {
+      fprintf(stderr,
+              "input: mouse_reader: read loop exited: %s (errno=%d,"
+              " path=%s, point=%s); attempting reconnect\n",
+              strerror(-rc), -rc, d->path, d->point_name);
+      fflush(stderr);
+    }
+
+    if (d->dev) { libevdev_free(d->dev); d->dev = NULL; }
+    if (d->fd >= 0) { close(d->fd); d->fd = -1; }
+
+    if (device_reconnect(d) < 0) {
+      fprintf(stderr,
+              "input: mouse_reader: reconnect timed out; giving up."
+              " Restart dserv after replugging.\n");
+      fflush(stderr);
+      return NULL;
+    }
+    /* Reconnect succeeded — outer for-loop reiterates: re-publishes
+       mouse range, resets per-incarnation state, re-enters read loop. */
+  }
+}
+
+/*****************************************************************************
  * Device lifecycle (Linux)
  *****************************************************************************/
 
@@ -864,6 +1126,16 @@ static input_device_t *open_device(input_state_t *st, input_class_t *cls,
     d->maxy = libevdev_get_abs_maximum(dev, ABS_MT_POSITION_Y);
     d->rangex = d->maxx - d->minx;
     d->rangey = d->maxy - d->miny;
+  } else if (strcmp(cls->name, "mouse") == 0) {
+    d->screen_width  = cls->screen_width;
+    d->screen_height = cls->screen_height;
+    d->gain = (cls->gain > 0.0) ? cls->gain : 1.0;
+    d->grab = cls->grab;
+    /* Start centred. With no absolute reference there is no better prior,
+       and it keeps the first movement inside the extent in any direction.
+       Re-centred by apply_known_overrides if that changes the extent. */
+    d->cur_x = d->screen_width  / 2;
+    d->cur_y = d->screen_height / 2;
   }
 
   pthread_mutex_lock(&st->devices_lock);
@@ -877,6 +1149,11 @@ static input_device_t *open_device(input_state_t *st, input_class_t *cls,
 static int start_device(input_device_t *d)
 {
   if (d->thread_running) return 0;
+
+  /* Grabbed here rather than in open_device so a per-device -grab from
+     inputKnownDevice is honoured: apply_known_overrides runs in between. */
+  if (d->grab) apply_evdev_grab(d);
+
   if (pthread_create(&d->thread_id, NULL, d->cls->reader, d) != 0) {
     return -1;
   }
@@ -933,6 +1210,12 @@ static void apply_known_overrides(input_device_t *d, known_device_t *kd,
                                   input_class_t *cls)
 {
   if (!kd) return;
+
+  /* Remember the glob this device was adopted under so device_reconnect
+     can require a replacement to match it too. */
+  strncpy(d->match_pattern, kd->pattern, sizeof(d->match_pattern) - 1);
+  d->match_pattern[sizeof(d->match_pattern) - 1] = '\0';
+
   if (strcmp(cls->name, "touchscreen") == 0) {
     if (kd->screen_w > 0)    d->screen_width  = kd->screen_w;
     if (kd->screen_h > 0)    d->screen_height = kd->screen_h;
@@ -946,6 +1229,14 @@ static void apply_known_overrides(input_device_t *d, known_device_t *kd,
         d->rotation = get_hdmi_rotation(hdmi);
       }
     }
+  } else if (strcmp(cls->name, "mouse") == 0) {
+    if (kd->screen_w > 0)  d->screen_width  = kd->screen_w;
+    if (kd->screen_h > 0)  d->screen_height = kd->screen_h;
+    if (kd->gain > 0.0)    d->gain          = kd->gain;
+    if (kd->grab >= 0)     d->grab          = kd->grab;
+    /* Re-centre: the extent may just have changed under the cursor. */
+    d->cur_x = d->screen_width  / 2;
+    d->cur_y = d->screen_height / 2;
   }
 }
 
@@ -989,17 +1280,39 @@ static int autodiscover_impl(input_state_t *st, Tcl_Interp *interp,
 
     known_device_t *kd = find_known_device(st, matched, by_id, lib_name);
 
-    /* Touchscreen needs dimensions from the known-device entry or from
-       class-level inputConfigure. Without either, skip with a warning —
-       inputValidateExpectations will then fail loudly if it was required. */
-    if (strcmp(matched->name, "touchscreen") == 0) {
+    /* A mouse is adopted only if an inputKnownDevice entry names it.
+       Capability match alone is not enough: on a rig with a desktop, the
+       first EV_REL device udev happens to enumerate is as likely to be
+       the operator's mouse as the subject's, and adopting that one with
+       -grab would take the desktop pointer away with no obvious cause.
+       Touchscreens and trackpads auto-enable because a rig has one of
+       each at most and neither is load-bearing for the desktop. */
+    if (strcmp(matched->name, "mouse") == 0 && !kd) {
+      fprintf(stderr,
+              "input: mouse at %s (%s%s%s) not adopted: no inputKnownDevice"
+              " entry matches it. Add one to local/input.tcl naming this"
+              " device to make it the dedicated mouse.\n",
+              path, lib_name ? lib_name : "?",
+              *by_id ? ", by-id " : "", *by_id ? by_id : "");
+      libevdev_free(dev);
+      close(fd);
+      continue;
+    }
+
+    /* Touchscreen and mouse both need an extent — the touchscreen to
+       scale raw device coords into screen coords, the mouse to bound its
+       virtual cursor — from the known-device entry or from class-level
+       inputConfigure. Without either, skip with a warning;
+       inputValidateExpectations then fails loudly if it was required. */
+    if (strcmp(matched->name, "touchscreen") == 0 ||
+        strcmp(matched->name, "mouse") == 0) {
       int sw = (kd && kd->screen_w > 0) ? kd->screen_w : matched->screen_width;
       int sh = (kd && kd->screen_h > 0) ? kd->screen_h : matched->screen_height;
       if (sw <= 0 || sh <= 0) {
         fprintf(stderr,
-                "input: touchscreen at %s (%s) has no known dimensions; "
+                "input: %s at %s (%s) has no known dimensions; "
                 "skipping. Add inputKnownDevice or inputConfigure to enable.\n",
-                path, lib_name ? lib_name : "?");
+                matched->name, path, lib_name ? lib_name : "?");
         libevdev_free(dev);
         close(fd);
         continue;
@@ -1119,6 +1432,10 @@ static const mac_known_trackpad_t *find_mac_known_trackpad(int vid, int pid)
 static int touchscreen_matches(void *dev) { (void)dev; return 0; }
 static void *touchscreen_reader(void *arg) { (void)arg; return NULL; }
 static int trackpad_matches(void *dev) { (void)dev; return 0; }
+/* Mouse is Linux-only for now: the macOS backend would need an IOKit HID
+   path with its own seize/report handling, as the trackpad one does. */
+static int mouse_matches(void *dev) { (void)dev; return 0; }
+static void *mouse_reader(void *arg) { (void)arg; return NULL; }
 
 /* ----- WPTP enable + report parsing helpers ------------------------- */
 
@@ -1510,7 +1827,8 @@ static int input_known_device_cmd(ClientData data, Tcl_Interp *interp,
   if (objc < 3 || (objc % 2) != 1) {
     Tcl_WrongNumArgs(interp, 1, objv,
                      "class pattern ?-screen_w W? ?-screen_h H? "
-                     "?-rotation R? ?-track_drag {0|1}? ?-hdmi_output name?");
+                     "?-rotation R? ?-track_drag {0|1}? ?-hdmi_output name? "
+                     "?-gain G? ?-grab {0|1}?");
     return TCL_ERROR;
   }
 
@@ -1533,12 +1851,25 @@ static int input_known_device_cmd(ClientData data, Tcl_Interp *interp,
   k->screen_h = -1;
   k->rotation = -2;
   k->track_drag = -1;
+  k->gain = -1.0;
+  k->grab = -1;
 
   for (int i = 3; i < objc; i += 2) {
     const char *key = Tcl_GetString(objv[i]);
     Tcl_Obj *val = objv[i + 1];
     int ival;
-    if (strcmp(key, "-screen_w") == 0) {
+    double dval;
+    if (strcmp(key, "-gain") == 0) {
+      if (Tcl_GetDoubleFromObj(interp, val, &dval) != TCL_OK) return TCL_ERROR;
+      if (dval <= 0.0) {
+        Tcl_AppendResult(interp, "input: -gain must be > 0", NULL);
+        return TCL_ERROR;
+      }
+      k->gain = dval;
+    } else if (strcmp(key, "-grab") == 0) {
+      if (Tcl_GetIntFromObj(interp, val, &ival) != TCL_OK) return TCL_ERROR;
+      k->grab = ival ? 1 : 0;
+    } else if (strcmp(key, "-screen_w") == 0) {
       if (Tcl_GetIntFromObj(interp, val, &ival) != TCL_OK) return TCL_ERROR;
       k->screen_w = ival;
     } else if (strcmp(key, "-screen_h") == 0) {
@@ -1571,7 +1902,8 @@ static int input_configure_cmd(ClientData data, Tcl_Interp *interp,
   if (objc < 2 || (objc % 2) != 0) {
     Tcl_WrongNumArgs(interp, 1, objv,
                      "class ?-rotation N? ?-screen_w W? ?-screen_h H? "
-                     "?-track_drag {0|1}? ?-hdmi_output name?");
+                     "?-track_drag {0|1}? ?-hdmi_output name? "
+                     "?-gain G? ?-grab {0|1}?");
     return TCL_ERROR;
   }
 
@@ -1586,8 +1918,19 @@ static int input_configure_cmd(ClientData data, Tcl_Interp *interp,
     const char *key = Tcl_GetString(objv[i]);
     Tcl_Obj *val = objv[i + 1];
     int ival;
+    double dval;
 
-    if (strcmp(key, "-rotation") == 0) {
+    if (strcmp(key, "-gain") == 0) {
+      if (Tcl_GetDoubleFromObj(interp, val, &dval) != TCL_OK) return TCL_ERROR;
+      if (dval <= 0.0) {
+        Tcl_AppendResult(interp, "input: -gain must be > 0", NULL);
+        return TCL_ERROR;
+      }
+      cls->gain = dval;
+    } else if (strcmp(key, "-grab") == 0) {
+      if (Tcl_GetIntFromObj(interp, val, &ival) != TCL_OK) return TCL_ERROR;
+      cls->grab = ival ? 1 : 0;
+    } else if (strcmp(key, "-rotation") == 0) {
       if (Tcl_GetIntFromObj(interp, val, &ival) != TCL_OK) return TCL_ERROR;
       cls->rotation = ival;
     } else if (strcmp(key, "-screen_w") == 0) {
@@ -1778,6 +2121,12 @@ static int input_probe_cmd(ClientData data, Tcl_Interp *interp,
     Tcl_DictObjPut(interp, caps, Tcl_NewStringObj("BTN_TOUCH", -1),
                    Tcl_NewIntObj(
                      libevdev_has_event_code(dev, EV_KEY, BTN_TOUCH)));
+    Tcl_DictObjPut(interp, caps, Tcl_NewStringObj("REL_X", -1),
+                   Tcl_NewIntObj(
+                     libevdev_has_event_code(dev, EV_REL, REL_X)));
+    Tcl_DictObjPut(interp, caps, Tcl_NewStringObj("BTN_LEFT", -1),
+                   Tcl_NewIntObj(
+                     libevdev_has_event_code(dev, EV_KEY, BTN_LEFT)));
     Tcl_DictObjPut(interp, info, Tcl_NewStringObj("caps", -1), caps);
 
     /* Axis ranges for the axes this device actually exposes — helpful
@@ -1854,6 +2203,8 @@ static input_class_t *register_class(input_state_t *st,
   c->screen_width = 0;
   c->screen_height = 0;
   c->track_drag = 0;
+  c->gain = 1.0;
+  c->grab = 0;
   strncpy(c->hdmi_output, "HDMI-A-1", sizeof(c->hdmi_output) - 1);
   return c;
 }
@@ -1897,6 +2248,8 @@ int Dserv_input_Init(Tcl_Interp *interp)
                  touchscreen_matches, touchscreen_reader);
   register_class(st, "trackpad", "mtouch/trackpad",
                  trackpad_matches, trackpad_reader);
+  register_class(st, "mouse", "mouse/event",
+                 mouse_matches, mouse_reader);
 
   Tcl_CreateObjCommand(interp, "inputAutodiscover",
                        input_autodiscover_cmd, st, NULL);

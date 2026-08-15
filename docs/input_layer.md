@@ -79,6 +79,50 @@ system that calls `::ess::touch_win_set` continue to work without change.
   Published once at device discovery from libevdev's axis info. Consumers
   (the slider subprocess) use this to map trackpad surface → stimulus space.
 
+### Mouse — new
+
+A relative pointing device used as **dedicated subject input**, distinct
+from any mouse driving the host's own desktop.
+
+- **`mouse/event`** — `uint16_t[3] = (x, y, event_type)`
+  where `event_type ∈ {0 = PRESS, 1 = DRAG, 2 = RELEASE, 3 = MOVE}`.
+  `MOVE` is motion with no button held — the case with no touch-device
+  equivalent. It is additive and on a new datapoint, so no existing
+  consumer is affected. Coordinates are a virtual cursor: relative counts
+  integrated and clamped to a declared extent.
+
+- **`mouse/event/range`** — `int32_t[4] = (min_x, max_x, min_y, max_y)`
+  Published at device open and after each reconnect. Unlike the
+  trackpad's range this is *declared*, not discovered — it is the extent
+  the cursor is clamped to (`-screen_w`/`-screen_h`), not a physical
+  surface. Same shape and purpose for consumers either way.
+
+Two properties make the mouse "dedicated":
+
+1. **Adoption is opt-in by name.** Unlike touchscreen and trackpad, a
+   mouse is never adopted on capability match alone — it requires an
+   `inputKnownDevice mouse <pattern>` entry. On a rig with a desktop, the
+   first `EV_REL` device udev enumerates is as likely to be the
+   operator's mouse as the subject's, and adopting that one with `-grab`
+   would take the desktop pointer away with no obvious cause.
+2. **Optional `EVIOCGRAB`** (`-grab 1`). The kernel then delivers the
+   device's events to dserv alone, so libinput/X/Wayland never see it.
+   The grab is released when the fd closes, including if dserv dies.
+
+`-gain` is a plain linear counts-to-pixels multiplier, deliberately.
+Pointer acceleration makes screen displacement a function of hand
+*velocity*, so the same physical movement lands somewhere different
+depending on how fast it was made — unreproducible between trials and
+impossible to state in a methods section.
+
+**Rate note.** One datapoint is published per input report. A 1000 Hz
+mouse in continuous motion therefore produces ~1000/s for the duration of
+the movement. Idle costs nothing: the device NAKs when it has nothing new
+and the NAK is absorbed by the host controller, producing no URB
+completion, no interrupt, and no kernel event. If the moving rate ever
+strains fan-out, decimate `MOVE` events in `mouse_reader` and never the
+`PRESS`/`RELEASE` transitions, which are the timing-critical ones.
+
 ### Slider — reframed
 
 The slider subprocess already publishes `slider/position`. It gains:
@@ -101,6 +145,7 @@ in `essconf.tcl:300-316`):
 |------|-------|--------|
 | `INPUT_PROP_DIRECT` + `ABS_X`/`ABS_Y` + `BTN_TOUCH` | touchscreen | `mtouch/event` |
 | `INPUT_PROP_POINTER` + `ABS_MT_POSITION_X`/`Y`, not `INPUT_PROP_DIRECT` | trackpad | `mtouch/trackpad` + `mtouch/trackpad/range` |
+| `REL_X`/`REL_Y` + `BTN_LEFT`, not `ABS_MT_POSITION_X` or `INPUT_PROP_DIRECT` | mouse | `mouse/event` + `mouse/event/range` |
 | (future) `BTN_TRIGGER` / `BTN_JOYSTICK` | gamepad | TBD |
 | (future) single-button HID | foot pedal / button box | TBD |
 | other | ignored | — |
@@ -128,12 +173,21 @@ inputKnownDevice touchscreen *eGalax* \
 pattern with different values (last-match-wins) overrides cleanly. Rigs
 with new hardware add their own `inputKnownDevice` entry.
 
-**Touchscreens without a known-device or class-level dimensions are
-skipped at autodiscover with a warning**; if the class was required via
-`inputExpect`, `inputValidateExpectations` then fails startup loudly.
+**Touchscreens and mice without a known-device or class-level dimensions
+are skipped at autodiscover with a warning**; if the class was required
+via `inputExpect`, `inputValidateExpectations` then fails startup loudly.
 Trackpads auto-enable purely from capability-bit classification — no
 dimensions needed (the device's own `ABS_MT_POSITION_*` range is
 published as `mtouch/trackpad/range`).
+
+**A mouse additionally requires a matching `inputKnownDevice` entry** even
+when dimensions come from `inputConfigure`: capability match alone never
+adopts one. See "Mouse" above for why.
+
+A device adopted under a known-device glob records that glob, and
+`device_reconnect` requires a replacement to match it too — so a class
+pinned to one physical device cannot silently resume on a different
+device of the same class after a replug.
 
 ## Event timestamps
 

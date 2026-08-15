@@ -18,8 +18,15 @@
 #   mtouch/trackpad/range  trackpad      int32[4] (min_x, max_x, min_y, max_y)
 #                          one-shot at device open; slider subprocess maps
 #                          surface coords into stimulus space using this.
+#   mouse/event            mouse        uint16[3] (x, y, event_type)
+#                          virtual cursor: relative counts integrated and
+#                          clamped to the declared -screen_w/-screen_h.
+#   mouse/event/range      mouse         int32[4] (min_x, max_x, min_y, max_y)
+#                          the declared extent, at open and each reconnect.
 #
-# Event type: 0 = PRESS, 1 = DRAG, 2 = RELEASE (same semantics for both).
+# Event type: 0 = PRESS, 1 = DRAG, 2 = RELEASE (same semantics for all),
+# plus 3 = MOVE for the mouse only — motion with no button held, which has
+# no touch-device equivalent.
 #
 # Timestamps are the kernel's event time (evdev ev.time, switched to
 # CLOCK_MONOTONIC at open), not the time the reader thread saw the event.
@@ -59,6 +66,19 @@ inputKnownDevice touchscreen *eGalax*                      \
 #     # Force a non-default rotation for the touchscreen on this rig
 #     inputKnownDevice touchscreen *ILITEK_ILITEK-TP* \
 #         -screen_w 1280 -screen_h 800 -rotation 180
+#
+#     # A dedicated subject mouse. Unlike touchscreen and trackpad, a
+#     # mouse is NEVER adopted on capability match alone -- it needs an
+#     # entry naming it, so the operator's desktop mouse can never be
+#     # picked up by accident. Find the pattern with `inputProbe` (or
+#     # `ls /dev/input/by-id`) and match the subject's device only.
+#     #
+#     #   -screen_w/-screen_h  extent the virtual cursor is clamped to
+#     #   -gain                counts -> pixels, linear (no acceleration)
+#     #   -grab                EVIOCGRAB: hide the device from the desktop
+#     #
+#     inputKnownDevice mouse *Logitech_USB_Optical_Mouse* \
+#         -screen_w 1920 -screen_h 1080 -gain 1.0 -grab 1
 #
 #     # Declare what this rig must have; startup fails if missing
 #     inputExpect touchscreen
