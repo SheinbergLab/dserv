@@ -5340,17 +5340,23 @@ namespace eval ess {
         set slider_swipe_time    0
         set slider_swipe_engaged 0
 
+        # AddScript, not SetScript: this registers OUR handler and must not
+        # clobber another subsystem's on the same datapoint. ::ess::dial
+        # observes slider/position too, and with SetScript whichever
+        # initialised second silently deleted the first -- which is exactly
+        # what happened to ricochet, where dial_init runs before slider_init.
+        # append() dedupes, so calling slider_init twice still registers once.
         dservAddExactMatch slider/position
-        dpointSetScript    slider/position ::ess::slider_process
+        dpointAddScript    slider/position ::ess::slider_process
 
         # Subscribe to swipe-mode side channels. Harmless in other modes
         # (sliderconf never publishes them outside swipe).
         dservAddExactMatch slider/swipe/angle
-        dpointSetScript    slider/swipe/angle ::ess::slider_swipe_process
+        dpointAddScript    slider/swipe/angle ::ess::slider_swipe_process
         dservAddExactMatch slider/swipe/mag
-        dpointSetScript    slider/swipe/mag ::ess::slider_swipe_mag_process
+        dpointAddScript    slider/swipe/mag ::ess::slider_swipe_mag_process
         dservAddExactMatch slider/swipe/engaged
-        dpointSetScript    slider/swipe/engaged ::ess::slider_swipe_engaged_process
+        dpointAddScript    slider/swipe/engaged ::ess::slider_swipe_engaged_process
 
         # Publish so the frontend can conditionally show the slider panel
         dservSet ess/slider_active 1
@@ -5358,6 +5364,13 @@ namespace eval ess {
 
     proc slider_deinit {} {
         variable slider_active
+        # Remove only OUR handlers, leaving any other subsystem's on the
+        # same datapoints (the dial's, notably).
+        catch { dpointRemoveScript slider/position ::ess::slider_process }
+        catch { dpointRemoveScript slider/swipe/angle ::ess::slider_swipe_process }
+        catch { dpointRemoveScript slider/swipe/mag ::ess::slider_swipe_mag_process }
+        catch { dpointRemoveScript slider/swipe/engaged \
+                    ::ess::slider_swipe_engaged_process }
         set slider_active 0
         dservSet ess/slider_active 0
     }
