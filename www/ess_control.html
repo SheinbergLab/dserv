@@ -148,6 +148,10 @@
                                     <span class="ess-input-label">resp</span>
                                     <span id="dial-resp-value" class="ess-joystick-readout">&mdash;</span>
                                 </div>
+                                <div class="ess-input-row">
+                                    <span class="ess-input-label">from</span>
+                                    <span id="dial-sources-value" class="ess-joystick-readout">&mdash;</span>
+                                </div>
                             </div>
                             <!-- Slider Controls (shown when slider_init is called) -->
                             <div id="virtual-slider-section" class="ess-input-section" style="display: none;">
@@ -712,6 +716,7 @@
              this.canvas = document.getElementById('dial-canvas');
              this.angleValue = document.getElementById('dial-angle-value');
              this.respValue = document.getElementById('dial-resp-value');
+             this.sourcesValue = document.getElementById('dial-sources-value');
              this.arcCenter = 0;      // degrees
              this.arcHalf = 180;      // degrees; 180 = whole circle
              this.cursorAngle = null; // radians, null = not shown
@@ -754,6 +759,16 @@
                  const active = parseInt(data.value) > 0;
                  this.section.style.display = active ? '' : 'none';
                  if (active) this.draw();
+             });
+
+             // Which transports feed this dial. Shown because the dial's
+             // input is otherwise invisible: with the swipe source the
+             // transport is the slider, so the Slider panel appears and
+             // looks unrelated; with the mouse source no slider panel
+             // appears at all. Naming it here makes both cases legible.
+             this.dpManager?.subscribe('ess/dial/sources', (data) => {
+                 const v = String(data.value ?? '').trim();
+                 this.sourcesValue.textContent = v === '' ? '\u2014' : v;
              });
 
              // "arc_center_deg,arc_halfwidth_deg,radius" -- republished by

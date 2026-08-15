@@ -220,6 +220,7 @@ namespace eval ess {
         dial_disarm
         set dial_active 1
         dservSet ess/dial_active 1
+        dial_publish_sources
         dial_publish_geometry
     }
 
@@ -245,6 +246,19 @@ namespace eval ess {
     #
     # ess/dial/geometry : "arc_center_deg,arc_halfwidth_deg,radius"
     # ess/cursor        : "angle_rad,show"   (published live; see above)
+    # Which sources this dial is listening to.
+    #
+    # Published because the dial's input is otherwise invisible: with
+    # -sources {swipe} the transport is the slider, so the operator ends up
+    # on the SLIDER panel to manage a DIAL, and with -sources {mouse} there
+    # is no slider panel at all and nothing says why. Stating it on the dial
+    # makes the slider panel legible as the swipe source's transport rather
+    # than a mystery.
+    proc dial_publish_sources {} {
+        variable dial_sources
+        dservSet ess/dial/sources $dial_sources
+    }
+
     proc dial_publish_geometry {} {
         variable dial_arc_center
         variable dial_arc_halfwidth
