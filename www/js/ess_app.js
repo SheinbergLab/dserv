@@ -22,6 +22,7 @@ let stimRenderer = null;
 let eyeSettings = null;
 let buttonControls = null;
 let joystickControls = null;
+let dialControls = null;
 let sliderControls = null;
 let projectSelector = null;
 let lastKnownHostname = null;
@@ -95,6 +96,7 @@ async function init() {
         initEyeSettings();
         initButtonControls();
         initJoystickControls();
+        initDialControls();
         initSliderControls();
 	initProjectSelector();
         initOpenEphysStatus();
@@ -152,6 +154,7 @@ function requestInitialData() {
           ess/params ess/datafile ess/sortby_columns ess/block_id
           ess/buttons/channels ess/slider_active slider/settings
           ess/joystick_active ess/joystick/dir ess/joystick/response
+          ess/dial_active ess/dial/geometry ess/cursor
           ess/session_stats
           em/settings em/source_active mesh/peers
           openephys/status
@@ -282,6 +285,16 @@ function initJoystickControls() {
     if (typeof JoystickControls !== 'undefined') {
         joystickControls = new JoystickControls(dpManager);
         log('Joystick Controls initialized', 'info');
+    }
+}
+
+/**
+ * Initialize the dial panel (shown when a system calls ::ess::dial_init)
+ */
+function initDialControls() {
+    if (typeof DialControls !== 'undefined') {
+        dialControls = new DialControls(dpManager);
+        log('Dial Controls initialized', 'info');
     }
 }
 

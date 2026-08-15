@@ -136,6 +136,19 @@
                                     <span id="joystick-resp-value" class="ess-joystick-readout">&mdash;</span>
                                 </div>
                             </div>
+                            <!-- Dial (shown when dial_init is called) -->
+                            <div id="virtual-dial-section" class="ess-input-section" style="display: none;">
+                                <div class="ess-input-section-title">Dial</div>
+                                <canvas id="dial-canvas" width="150" height="150"
+                                        style="display:block;margin:0 auto;cursor:crosshair"
+                                        title="click to report an angle (dial_simulate)"></canvas>
+                                <div class="ess-input-row">
+                                    <span class="ess-input-label">angle</span>
+                                    <span id="dial-angle-value" class="ess-joystick-readout">&mdash;</span>
+                                    <span class="ess-input-label">resp</span>
+                                    <span id="dial-resp-value" class="ess-joystick-readout">&mdash;</span>
+                                </div>
+                            </div>
                             <!-- Slider Controls (shown when slider_init is called) -->
                             <div id="virtual-slider-section" class="ess-input-section" style="display: none;">
                                 <div class="ess-input-section-title">Slider</div>
@@ -675,6 +688,144 @@
                  btn.classList.toggle('active', btn.dataset.dir === name);
              });
              this.centerBtn?.classList.toggle('active', dir < 0);
+         }
+     }
+
+     /*
+      * DialControls -- the ess_control widget for ::ess::dial.
+      *
+      * Same contract as the D-pad and button panels: a gate datapoint the
+      * state system publishes (ess/dial_active, set by dial_init and
+      * cleared by ::ess::input_reset), a live mirror of what the subject
+      * is doing, and a way to simulate a response without hardware.
+      *
+      * The dial is self-describing, so this widget is system-agnostic:
+      * ess/dial/geometry carries "arc_center_deg,arc_halfwidth_deg,radius"
+      * and ess/cursor carries "angle_rad,show". Nothing here knows about
+      * ricochet or mp_pulsed -- any system that calls dial_init gets the
+      * panel, drawn to its own arc.
+      */
+     class DialControls {
+         constructor(dpManager) {
+             this.dpManager = dpManager;
+             this.section = document.getElementById('virtual-dial-section');
+             this.canvas = document.getElementById('dial-canvas');
+             this.angleValue = document.getElementById('dial-angle-value');
+             this.respValue = document.getElementById('dial-resp-value');
+             this.arcCenter = 0;      // degrees
+             this.arcHalf = 180;      // degrees; 180 = whole circle
+             this.cursorAngle = null; // radians, null = not shown
+             this.bindCanvas();
+             this.setupSubscriptions();
+             this.draw();
+         }
+
+         sendEssCommand(cmd) {
+             try {
+                 const conn = this.dpManager?.connection;
+                 if (conn && conn.connected && conn.ws) {
+                     conn.ws.send(`send ess {${cmd}}`);
+                 }
+             } catch (error) {
+                 console.error('DialControls: failed to send command:', error);
+             }
+         }
+
+         // dial_simulate runs the SAME arc rules as a real commit, so a
+         // click in an excluded wedge cannot report something a subject
+         // could not have chosen.
+         bindCanvas() {
+             this.canvas?.addEventListener('click', (e) => {
+                 const r = this.canvas.getBoundingClientRect();
+                 const cx = r.width / 2, cy = r.height / 2;
+                 // canvas y grows downward; the dial's world has y up
+                 const dx = (e.clientX - r.left) - cx;
+                 const dy = cy - (e.clientY - r.top);
+                 let a = Math.atan2(dy, dx);
+                 if (a < 0) a += 2 * Math.PI;
+                 this.sendEssCommand(`::ess::dial_simulate ${a.toFixed(6)}`);
+             });
+         }
+
+         setupSubscriptions() {
+             // Show/hide on whether the loaded system called dial_init
+             this.dpManager?.subscribe('ess/dial_active', (data) => {
+                 // fail closed: NaN/empty must hide, so > 0 not !== 0
+                 const active = parseInt(data.value) > 0;
+                 this.section.style.display = active ? '' : 'none';
+                 if (active) this.draw();
+             });
+
+             // "arc_center_deg,arc_halfwidth_deg,radius" -- republished by
+             // dial_set_arc / dial_set_radius, so the panel follows a
+             // per-trial arc without knowing whose trial it is
+             this.dpManager?.subscribe('ess/dial/geometry', (data) => {
+                 const v = String(data.value ?? '').split(',').map(Number);
+                 if (v.length < 2 || v.some(isNaN)) return;
+                 this.arcCenter = v[0];
+                 this.arcHalf = v[1];
+                 this.draw();
+             });
+
+             // "angle_rad,show" -- real swipes, touches and simulated
+             // commits all land here, so the panel mirrors the real cursor
+             this.dpManager?.subscribe('ess/cursor', (data) => {
+                 const parts = String(data.value ?? '').split(',');
+                 const a = parseFloat(parts[0]);
+                 const show = parseInt(parts[1]) > 0;
+                 this.cursorAngle = (show && !isNaN(a)) ? a : null;
+                 this.angleValue.textContent = this.cursorAngle === null
+                     ? '\u2014'
+                     : `${Math.round(this.cursorAngle * 180 / Math.PI)}\u00b0`;
+                 this.draw();
+             });
+         }
+
+         draw() {
+             const c = this.canvas;
+             if (!c) return;
+             const g = c.getContext('2d');
+             const w = c.width, h = c.height;
+             const cx = w / 2, cy = h / 2, R = Math.min(w, h) / 2 - 12;
+             g.clearRect(0, 0, w, h);
+
+             // canvas angles grow clockwise with y down; the dial's world
+             // has y up, so every angle is negated on the way in
+             const toCanvas = (rad) => -rad;
+
+             // full ring, faint: the circle the report lives on
+             g.strokeStyle = '#3a4048';
+             g.lineWidth = 2;
+             g.beginPath();
+             g.arc(cx, cy, R, 0, 2 * Math.PI);
+             g.stroke();
+
+             // reportable arc, bright -- shows the subject's real choices
+             const half = this.arcHalf * Math.PI / 180;
+             if (half < Math.PI - 1e-6) {
+                 const ctr = this.arcCenter * Math.PI / 180;
+                 g.strokeStyle = '#60a5fa';
+                 g.lineWidth = 3;
+                 g.beginPath();
+                 g.arc(cx, cy, R, toCanvas(ctr + half), toCanvas(ctr - half));
+                 g.stroke();
+             }
+
+             // live cursor
+             if (this.cursorAngle !== null) {
+                 const a = toCanvas(this.cursorAngle);
+                 const x = cx + R * Math.cos(a), y = cy + R * Math.sin(a);
+                 g.strokeStyle = '#4ade80';
+                 g.lineWidth = 2;
+                 g.beginPath();
+                 g.moveTo(cx, cy);
+                 g.lineTo(x, y);
+                 g.stroke();
+                 g.fillStyle = '#4ade80';
+                 g.beginPath();
+                 g.arc(x, y, 5, 0, 2 * Math.PI);
+                 g.fill();
+             }
          }
      }
 
