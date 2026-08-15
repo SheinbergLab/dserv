@@ -205,6 +205,19 @@ static input_class_t *find_class(input_state_t *st, const char *name)
   return NULL;
 }
 
+/* Does this device still hold a live handle on its hardware? Same
+   question on both platforms, different member: a device whose reader is
+   inside device_reconnect (Linux) or whose IOKit device has gone (macOS)
+   still exists as a record but is not connected to anything. */
+static int device_connected(input_device_t *d)
+{
+#ifdef __linux__
+  return d->dev != NULL;
+#else
+  return d->hid_device != NULL;
+#endif
+}
+
 #ifdef __linux__
 /* Is this /dev/input node already adopted? Lets inputProbe mark which of
    the enumerated devices are in use, so the page can offer only the rest.
@@ -213,7 +226,13 @@ static int path_is_open(input_state_t *st, const char *path)
 {
   pthread_mutex_lock(&st->devices_lock);
   for (input_device_t *d = st->devices; d; d = d->next) {
-    if (strcmp(d->path, path) == 0) {
+    /* Only a LIVE handle claims a node. A device inside device_reconnect
+       still carries the path it was last seen at, but the kernel has
+       already freed that node and may have given it to something else
+       entirely — which is exactly what happens the moment anything new is
+       plugged in. Matching on the stale path reported an unrelated
+       device as adopted, and hid it from the page's available list. */
+    if (device_connected(d) && strcmp(d->path, path) == 0) {
       pthread_mutex_unlock(&st->devices_lock);
       return 1;
     }
@@ -2206,7 +2225,7 @@ static int input_list_cmd(ClientData data, Tcl_Interp *interp,
        worth serializing the reader's teardown for. */
     Tcl_DictObjPut(interp, entry,
                    Tcl_NewStringObj("connected", -1),
-                   Tcl_NewIntObj(d->dev != NULL));
+                   Tcl_NewIntObj(device_connected(d)));
     Tcl_DictObjPut(interp, entry,
                    Tcl_NewStringObj("grab", -1),
                    Tcl_NewIntObj(d->grab));

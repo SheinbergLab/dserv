@@ -72,8 +72,12 @@
      release buttons below the fold, and a control you have to scroll to
      find on a page whose whole job is "adopt this, then save it" is a
      control people will not find. */
+  /* Width/height are set from the device's extent in renderLive; these
+     are only the pre-first-paint fallback. margin:auto centres the box
+     once it is narrower than the panel (a tall extent hitting the cap). */
   #trace { width: 100%; aspect-ratio: 16 / 10; max-height: 46vh;
-           background: #12141a; border: 1px solid var(--card-edge);
+           margin: 0 auto; background: #12141a;
+           border: 1px solid var(--card-edge);
            border-radius: 8px; display: block; }
   #tracehint { font-size: 12px; color: var(--faint); margin-top: 6px; }
 
@@ -380,7 +384,20 @@ function renderDetail() {
             <dt>by-id</dt><dd>${esc(d.by_id || '—')}</dd>
             <dt>node</dt><dd>${esc(d.path)}</dd>
             <dt>pinned to</dt><dd>${esc(d.pattern || 'class only')}</dd>
-            <dt>extent</dt><dd>${d.screen_w || '—'} × ${d.screen_h || '—'}</dd>
+            ${(() => {
+              /* A mouse has a DECLARED extent; a trackpad has a
+                 DISCOVERED surface range and no extent at all. Showing
+                 "— × —" for the latter reads as missing config rather
+                 than as not-applicable. */
+              if (d.screen_w > 0 && d.screen_h > 0) {
+                  return `<dt>extent</dt><dd>${d.screen_w} × ${d.screen_h}</dd>`;
+              }
+              const lr = (live.get(d.datapoint) || {}).range;
+              return lr
+                ? `<dt>surface</dt><dd>${lr[1] - lr[0] + 1} × ${lr[3] - lr[2] + 1}` +
+                  ` <span class="chip">from device</span></dd>`
+                : `<dt>surface</dt><dd>waiting for range</dd>`;
+            })()}
             ${d.gain !== undefined ? `<dt>gain</dt><dd>${esc(d.gain)}</dd>` : ''}
             <dt>flags</dt><dd>
               ${d.connected !== undefined && !Number(d.connected)
@@ -520,12 +537,28 @@ function renderLive() {
             : [0, Math.max(1, d.screen_w - 1), 0, Math.max(1, d.screen_h - 1)];
     const spanX = Math.max(1, r[1] - r[0]), spanY = Math.max(1, r[3] - r[2]);
 
-    /* Shape the box to the extent, so a 16:9 screen or a wide trackpad
+    /* Shape the box to the extent, so a 16:9 screen or a 4:3 trackpad
        surface is drawn in its own proportions and the dot's motion is
-       geometrically faithful to the hand's. Only written when it changes
-       — assigning every frame would reflow on every mouse event. */
-    const wantAR = (spanX / spanY).toFixed(4);
-    if (c.dataset.ar !== wantAR) { c.dataset.ar = wantAR; c.style.aspectRatio = wantAR; }
+       geometrically faithful to the hand's.
+       Sized explicitly rather than with CSS aspect-ratio: with
+       `width:100%` and a `max-height` cap, the cap wins on height while
+       the width holds, so the element silently renders at the wrong
+       ratio (observed 1.74 for a 1.33 surface). Computing both edges
+       here gives an exactly-shaped, centred box with no dead bars.
+       Only written when it changes — assigning every frame would reflow
+       on every input event. */
+    const availW = c.parentElement ? c.parentElement.clientWidth : 0;
+    const maxH = Math.round((window.innerHeight || 700) * 0.46);
+    if (availW > 0) {
+        let cw = availW, ch = Math.round(cw * spanY / spanX);
+        if (ch > maxH) { ch = maxH; cw = Math.round(ch * spanX / spanY); }
+        const key = cw + 'x' + ch;
+        if (c.dataset.box !== key) {
+            c.dataset.box = key;
+            c.style.width = cw + 'px';
+            c.style.height = ch + 'px';
+        }
+    }
 
     /* Backing store at device pixels so the dot is not a blurry blob on a
        HiDPI rig, which is most of them. */
