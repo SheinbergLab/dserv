@@ -370,6 +370,20 @@ function readFields(cls) {
 
 const optsToArgs = o => Object.entries(o).map(([k, v]) => `-${k} ${v}`).join(' ');
 
+/* The glob a save should propose. An adopted device already pinned to a
+   pattern keeps it; otherwise fall back to the by-id name, WILDCARDED —
+   the same form the adopt path builds, so a device saved from here and
+   one adopted from "available" are identified the same way rather than
+   one being a bare literal.
+   It is only a proposal: the field is editable, because by-id names for
+   some devices (Apple trackpads among them) carry a unit serial, and
+   whether to pin that tightly is the operator's call, not a default. */
+function savePattern(d) {
+    if (d.pattern) return d.pattern;
+    if (d.by_id) return `*${d.by_id}*`;
+    return d.class && d.path ? '' : '';
+}
+
 function renderDetail() {
     const el = $('detail');
     if (!sel) { el.innerHTML = '<div class="empty">select a device on the left</div>'; return; }
@@ -409,12 +423,22 @@ function renderDetail() {
           </dl>
           <canvas id="trace"></canvas>
           <p id="tracehint">move the device — the dot should follow.</p>
+          <form class="cfg" onsubmit="return false" style="grid-template-columns:1fr">
+            <div>
+              <label for="f_pattern">match at next boot</label>
+              <input id="f_pattern" type="text" value="${esc(savePattern(d))}">
+            </div>
+          </form>
           <div class="btns">
             <button id="bsave" class="primary" type="button">save for this rig</button>
             <button id="brelease" class="danger" type="button">release</button>
           </div>
           <p class="hint">saving writes <code>local/input_devices.tcl</code>, which is
-             re-applied at every dserv start. Releasing drops the grab immediately.</p>
+             re-applied at every dserv start. Releasing drops the grab immediately.
+             ${/[0-9A-Z]{8,}/.test(savePattern(d))
+               ? '<br><strong>Note:</strong> this pattern contains what looks like a unit ' +
+                 'serial, so it will match only this exact device. Widen it if you want ' +
+                 'any device of the same model to match.' : ''}</p>
           <div id="msg"></div>`;
         $('brelease').onclick = () => act($('brelease'), async () => {
             await inputCmd(`inputClose ${d.class}`);
@@ -422,10 +446,10 @@ function renderDetail() {
             setMsg('released', 'ok');
         });
         $('bsave').onclick = () => act($('bsave'), async () => {
-            const pattern = d.pattern || (d.by_id ? d.by_id : null);
+            const pattern = ($('f_pattern') ? $('f_pattern').value : '').trim();
             if (!pattern) throw new Error(
-                'no stable pattern for this device (no by-id name) — adopt it from ' +
-                '"available" so a pattern is recorded, or add an entry by hand');
+                'no pattern to match on. A device with no by-id name needs one typed ' +
+                'here — without it, nothing identifies this device at next boot');
             const o = {};
             if (d.screen_w) o.screen_w = d.screen_w;
             if (d.screen_h) o.screen_h = d.screen_h;
