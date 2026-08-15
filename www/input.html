@@ -338,12 +338,16 @@ function fieldsFor(cls, vals) {
                   .map(([v, t]) => `<option value="${v}" ${String(vals.rotation ?? '') === v ? 'selected' : ''}>${t}</option>`).join('')}
               </select></div>`;
     }
-    if (cls === 'mouse') {
-        f += `<div class="checkline" style="align-self:end">
-                <input id="f_grab" type="checkbox" ${Number(vals.grab) ? 'checked' : ''}>
-                <label for="f_grab" style="margin:0">grab (hide from desktop)</label>
-              </div>`;
-    }
+    /* Offered for EVERY class, not just mouse. A trackpad used as subject
+       input wants to be hidden from the desktop exactly as much as a
+       mouse does — that is what the LIBINPUT_IGNORE_DEVICE udev rule in
+       the trackpad onboarding recipe has been doing by hand. The module
+       has always applied -grab per device regardless of class; only this
+       form was restricting it. */
+    f += `<div class="checkline" style="align-self:end">
+            <input id="f_grab" type="checkbox" ${Number(vals.grab) ? 'checked' : ''}>
+            <label for="f_grab" style="margin:0">grab (hide from desktop)</label>
+          </div>`;
     return f;
 }
 
@@ -354,11 +358,9 @@ function readFields(cls) {
         if (g('f_screen_w')) opts.screen_w = g('f_screen_w');
         if (g('f_screen_h')) opts.screen_h = g('f_screen_h');
     }
-    if (cls === 'mouse') {
-        if (g('f_gain')) opts.gain = g('f_gain');
-        opts.grab = $('f_grab') && $('f_grab').checked ? '1' : '0';
-    }
+    if (cls === 'mouse' && g('f_gain')) opts.gain = g('f_gain');
     if (cls === 'touchscreen' && g('f_rotation')) opts.rotation = g('f_rotation');
+    opts.grab = $('f_grab') && $('f_grab').checked ? '1' : '0';
     return opts;
 }
 
@@ -411,7 +413,7 @@ function renderDetail() {
             if (d.screen_w) o.screen_w = d.screen_w;
             if (d.screen_h) o.screen_h = d.screen_h;
             if (d.gain !== undefined) o.gain = d.gain;
-            if (d.class === 'mouse') o.grab = Number(d.grab) ? 1 : 0;
+            o.grab = Number(d.grab) ? 1 : 0;
             await inputCmd(`inputSaveDevice ${d.class} {${pattern}} ${optsToArgs(o)}`);
             setMsg('saved — this device will be adopted at next start', 'ok');
         });
