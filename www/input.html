@@ -171,9 +171,21 @@ function liveFor(name) {
     return l;
 }
 
+/* A multi-element datapoint arrives from DatapointManager as a real JS
+   ARRAY ([1627, 132, 3]), not the space-separated text `dservctl get`
+   prints. Accept both: String() on an array yields "1627,132,3", which a
+   whitespace split turns into a single token and silently drops every
+   event — which is precisely what happened before this was tested against
+   a live rig. */
+function nums(d) {
+    const raw = d.data ?? d.value;
+    if (Array.isArray(raw)) return raw.map(Number);
+    return String(raw ?? '').trim().split(/[\s,]+/).filter(s => s !== '').map(Number);
+}
+
 function onEvent(name, d) {
     /* uint16[3] = (x, y, event_type), same shape for every class. */
-    const v = String(d.data ?? d.value ?? '').trim().split(/\s+/).map(Number);
+    const v = nums(d);
     if (v.length < 3 || v.some(isNaN)) return;
     const l = liveFor(name);
     l.x = v[0]; l.y = v[1]; l.ev = v[2]; l.at = Date.now(); l.count++;
@@ -183,7 +195,7 @@ function onEvent(name, d) {
 }
 
 function onRange(name, d) {
-    const v = String(d.data ?? d.value ?? '').trim().split(/\s+/).map(Number);
+    const v = nums(d);
     if (v.length < 4 || v.some(isNaN)) return;
     liveFor(name).range = v;   // [min_x, max_x, min_y, max_y]
     scheduleRender();
