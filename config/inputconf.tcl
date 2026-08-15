@@ -90,9 +90,25 @@ inputKnownDevice touchscreen *eGalax*                      \
 #     inputExpect touchscreen
 #     inputExpect trackpad -optional
 #
+# Guarded, for the same reason the generated file below is: a rig that
+# comes up with NO INPUT DEVICES because of one bad line in a local file is
+# far worse than one that warns and carries on. Before this guard, a single
+# unknown command here aborted the whole config script -- so
+# inputAutodiscover never ran, nothing was adopted, and the input page was
+# simply empty with no indication why.
+#
+# NOTE this file is sourced in the INPUT subprocess, which has no `ess`
+# package. ::ess::* commands (dial_bind, button_bind, joystick_bind) belong
+# in a local/post-*.tcl file -- essconf.tcl sources those inside the ess
+# interp. local/post-input.tcl is the one for input routing.
 set local_input [file join $dspath local input.tcl]
 if { [file exists $local_input] } {
-    source $local_input
+    if { [catch { source $local_input } err] } {
+        puts stderr "input: ERROR in $local_input: $err"
+        puts stderr "input: continuing WITHOUT it -- devices below may be\
+                     unconfigured. ::ess::* commands do not exist here;\
+                     those belong in local/post-input.tcl."
+    }
 }
 
 #
@@ -299,7 +315,7 @@ proc ::inputStatusJson {} {
     foreach d [inputList] {
         $j map_open
         foreach {k v} $d {
-            if { $k in {events kernel_ts grab screen_w screen_h gain connected move_every} } {
+            if { $k in {events kernel_ts grab grab_ok screen_w screen_h gain connected move_every} } {
                 $j string $k number $v
             } else {
                 $j string $k string $v

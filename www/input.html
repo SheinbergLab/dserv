@@ -529,8 +529,8 @@ function detailSignature() {
         const d = deviceByClass(sel.key);
         if (!d) return 'adopted:missing';
         return ['adopted', d.class, d.path, d.by_id, d.pattern, d.connected,
-                d.grab, d.kernel_ts, d.screen_w, d.screen_h, d.gain,
-                d.move_every].join('|');
+                d.grab, d.grab_ok, d.kernel_ts, d.screen_w, d.screen_h,
+                d.gain, d.move_every].join('|');
     }
     if (sel.kind === 'available') {
         const p = state.probe.find(x => x.path === sel.key);
@@ -587,7 +587,11 @@ function renderDetail(force) {
             <dt>flags</dt><dd>
               ${d.connected !== undefined && !Number(d.connected)
                 ? '<span class="chip bad">unplugged — waiting for it to return</span>' : ''}
-              <span class="chip ${Number(d.grab) ? 'on' : ''}">${Number(d.grab) ? 'grabbed' : 'not grabbed'}</span>
+              ${!Number(d.grab)
+                ? '<span class="chip">not grabbed</span>'
+                : Number(d.grab_ok)
+                  ? '<span class="chip on">grabbed</span>'
+                  : '<span class="chip bad">GRAB FAILED — desktop still sees this device</span>'}
               <span class="chip ${Number(d.kernel_ts) ? 'on' : 'warn'}">${Number(d.kernel_ts) ? 'kernel timestamps' : 'publish-time stamps'}</span>
             </dd>
             <dt>events</dt><dd id="evcount">${esc(d.events)}</dd>

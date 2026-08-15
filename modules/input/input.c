@@ -108,6 +108,12 @@ typedef struct input_device_s {
      what a saved per-rig entry should be written against. */
   char by_id[INPUT_PATH_MAX];
 
+  /* Did EVIOCGRAB actually succeed? d->grab is what was REQUESTED; this is
+     what happened. Reporting the request as though it were the outcome let
+     the page claim "grabbed" while the desktop was still receiving the
+     device -- the one failure mode a grab indicator exists to catch. */
+  int grab_ok;
+
   /* Events published since this device was opened. The page uses it to
      answer "has this device EVER produced anything", which a live
      subscription alone cannot tell you on a fresh page load. Written by
@@ -425,6 +431,7 @@ static void set_evdev_clock(input_device_t *d)
 static void apply_evdev_grab(input_device_t *d)
 {
   int rc = libevdev_grab(d->dev, LIBEVDEV_GRAB);
+  d->grab_ok = (rc == 0);
   if (rc != 0) {
     fprintf(stderr,
             "input: %s: EVIOCGRAB failed on %s: %s (errno=%d); device is"
@@ -2271,6 +2278,11 @@ static int input_list_cmd(ClientData data, Tcl_Interp *interp,
     Tcl_DictObjPut(interp, entry,
                    Tcl_NewStringObj("grab", -1),
                    Tcl_NewIntObj(d->grab));
+    /* Requested vs achieved. They differ when EVIOCGRAB fails, which is
+       exactly when the desktop is still driving off this device. */
+    Tcl_DictObjPut(interp, entry,
+                   Tcl_NewStringObj("grab_ok", -1),
+                   Tcl_NewIntObj(d->grab_ok));
     Tcl_DictObjPut(interp, entry,
                    Tcl_NewStringObj("screen_w", -1),
                    Tcl_NewIntObj(d->screen_width));
