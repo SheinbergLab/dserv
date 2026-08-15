@@ -135,6 +135,38 @@ Trackpads auto-enable purely from capability-bit classification — no
 dimensions needed (the device's own `ABS_MT_POSITION_*` range is
 published as `mtouch/trackpad/range`).
 
+## Event timestamps
+
+All classes stamp published events with the **kernel's** event time
+(`ev.time`), not the time the reader thread got round to the event.
+
+`libevdev_set_clock_id(dev, CLOCK_MONOTONIC)` is applied at every open
+(it is a property of the open fd, so `device_reconnect` re-applies it).
+That puts `ev.time` on exactly the base dserv uses — dserv time is
+`steady_clock` plus a fixed epoch offset, and `steady_clock` is
+`CLOCK_MONOTONIC` on Linux — so `ev_time_us()` is a unit conversion via
+`tclserver_clock_epoch_offset_us()`, not an approximation. This is the
+same mechanism `modules/gpio_input/gpio_input.c` uses for
+`gpio_v2_line_event.timestamp_ns`; evdev's default of `CLOCK_REALTIME`
+would *not* be comparable, since it steps.
+
+Every event in an evdev packet carries that packet's timestamp, so the
+value is read off the `SYN_REPORT` that triggers the publish.
+
+This changes the **meaning** of these timestamps from "when dserv learned"
+to "when the host received the report". Sessions either side of the change
+differ by the old bias (a blocking-read wakeup plus scheduler latency),
+which matters when comparing old data to new. What remains is the device's
+own USB polling interval (`bInterval`): the report sat in the device until
+the host's next IN token, and no host-side change can recover that. It is
+a fixed quantization rather than a variable delay, which is the point —
+and it makes the device's polling rate, not the software path, the lever
+worth pulling on response-time precision.
+
+If the clock switch fails, the reader falls back to publish-time stamps
+rather than emitting `CLOCK_REALTIME` values on a monotonic scale, and
+says so on stderr.
+
 ## Rig init
 
 ### `config/inputconf.tcl` (new subprocess entry point)

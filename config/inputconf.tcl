@@ -21,6 +21,10 @@
 #
 # Event type: 0 = PRESS, 1 = DRAG, 2 = RELEASE (same semantics for both).
 #
+# Timestamps are the kernel's event time (evdev ev.time, switched to
+# CLOCK_MONOTONIC at open), not the time the reader thread saw the event.
+# See docs/input_layer.md, "Event timestamps".
+#
 # Consumers (touch_windows processor, ess state systems via
 # ::ess::touch_win_set, slider subprocess) see no change for existing
 # paths. Trackpad consumption is opt-in by subscribing to mtouch/trackpad.

@@ -22,10 +22,20 @@
 #include <pthread.h>
 #include <dirent.h>
 #include <limits.h>
+#include <time.h>
 
 #ifdef __linux__
 #include <libevdev/libevdev.h>
 #include <linux/input.h>
+
+/* Portable accessors for the event timestamp. Kernels >= 4.16 define
+   these to cope with 32-bit time_t builds where input_event carries bare
+   __sec/__usec instead of a struct timeval. Older headers don't, so
+   alias them ourselves. */
+#ifndef input_event_sec
+#define input_event_sec  time.tv_sec
+#define input_event_usec time.tv_usec
+#endif
 #endif
 
 #ifdef __APPLE__
@@ -85,6 +95,12 @@ typedef struct input_device_s {
   int fd;
   char path[INPUT_PATH_MAX];
   char point_name[INPUT_DPOINT_MAX];
+
+  /* 1 once the device's evdev clock has been switched to CLOCK_MONOTONIC,
+     which is what makes ev.time comparable to dserv time. Until then (or
+     if the switch failed) readers must fall back to tclserver_now().
+     See ev_time_us. */
+  int kernel_ts_ok;
 
 #ifdef __linux__
   struct libevdev *dev;
@@ -255,6 +271,70 @@ static int get_hdmi_rotation(const char *output_name)
 }
 
 /*****************************************************************************
+ * Event timestamps
+ *****************************************************************************/
+
+/* Kernel event time -> dserv timebase.
+ *
+ * ev.time is stamped by the kernel input core when the HID/USB layer
+ * processes the report — i.e. at URB completion, in interrupt context.
+ * tclserver_now() at the publish site instead recorded when *this thread*
+ * got round to the event: a blocking-read wakeup plus whatever the
+ * scheduler did in between. That landed in every touch- and trackpad-
+ * referenced number as a silent positive bias. Same argument, and the
+ * same fix, as gpio_input.c's move to event.timestamp_ns.
+ *
+ * Same timebase, exactly: set_evdev_clock() switches the device to
+ * CLOCK_MONOTONIC (evdev's default is CLOCK_REALTIME, which would NOT be
+ * comparable — it steps), and dserv time is steady_clock plus a fixed
+ * epoch offset, with steady_clock == CLOCK_MONOTONIC on Linux. So this is
+ * a unit conversion, not an approximation. See tclserver_api.h.
+ *
+ * Every event in one evdev packet carries that packet's timestamp, so
+ * reading it off the SYN_REPORT that triggers the publish gives the time
+ * of the report the values came from.
+ *
+ * Falls back to now() if the clock switch failed or the driver reported no
+ * time, so a device can never publish a timestamp on the wrong scale.
+ *
+ * NOTE this changes the MEANING of these timestamps from "when dserv
+ * learned" to "when the host received the report" — an improvement, but
+ * sessions either side of it differ by that bias, which matters when
+ * comparing old data to new. What remains is the device's own polling
+ * interval (USB bInterval): the report sat in the device until the host's
+ * next IN token, and no host-side change can recover that. It is a fixed
+ * quantization rather than a variable delay, which is the point. */
+static uint64_t ev_time_us(input_device_t *d, const struct input_event *ev)
+{
+  if (!d->kernel_ts_ok ||
+      (ev->input_event_sec == 0 && ev->input_event_usec == 0)) {
+    return tclserver_now(d->state->tclserver);
+  }
+
+  return (uint64_t) (tclserver_clock_epoch_offset_us() +
+                     (int64_t) ev->input_event_sec * 1000000 +
+                     (int64_t) ev->input_event_usec);
+}
+
+/* Ask the kernel to stamp this device's events in CLOCK_MONOTONIC.
+   Must be re-applied after every open — it is a property of the open
+   file description, not of the device — so both open_device and
+   device_reconnect call it. Records the outcome on d so ev_time_us can
+   fall back rather than publish CLOCK_REALTIME values as monotonic. */
+static void set_evdev_clock(input_device_t *d)
+{
+  int rc = libevdev_set_clock_id(d->dev, CLOCK_MONOTONIC);
+  d->kernel_ts_ok = (rc == 0);
+  if (rc != 0) {
+    fprintf(stderr,
+            "input: %s: libevdev_set_clock_id(CLOCK_MONOTONIC) failed on %s:"
+            " %s (errno=%d); falling back to publish-time timestamps\n",
+            d->cls->name, d->path, strerror(-rc), -rc);
+    fflush(stderr);
+  }
+}
+
+/*****************************************************************************
  * Touchscreen class (lifted from touch.c)
  *****************************************************************************/
 
@@ -361,7 +441,7 @@ static void *touchscreen_reader(void *arg)
         }
 
         ds_datapoint_t *dp = dpoint_new(d->point_name,
-                                        tclserver_now(d->state->tclserver),
+                                        ev_time_us(d, &ev),
                                         DSERV_SHORT,
                                         sizeof(vals),
                                         (unsigned char *) vals);
@@ -372,7 +452,7 @@ static void *touchscreen_reader(void *arg)
         vals[1] = y;
         vals[2] = 2;  /* RELEASE */
         ds_datapoint_t *dp = dpoint_new(d->point_name,
-                                        tclserver_now(d->state->tclserver),
+                                        ev_time_us(d, &ev),
                                         DSERV_SHORT,
                                         sizeof(vals),
                                         (unsigned char *) vals);
@@ -545,6 +625,10 @@ static int device_reconnect(input_device_t *d)
         strncpy(d->path, path, sizeof(d->path) - 1);
         d->path[sizeof(d->path) - 1] = '\0';
 
+        /* Clock id is a property of the open fd, not the device, so it
+           does not survive the replug and must be re-applied here. */
+        set_evdev_clock(d);
+
         /* Refresh axis ranges. Class-specific — mirrors open_device. */
         if (strcmp(d->cls->name, "touchscreen") == 0) {
           d->minx = libevdev_get_abs_minimum(dev, ABS_X);
@@ -670,7 +754,7 @@ static void *trackpad_reader(void *arg)
         }
 
         ds_datapoint_t *dp = dpoint_new(d->point_name,
-                                        tclserver_now(d->state->tclserver),
+                                        ev_time_us(d, &ev),
                                         DSERV_SHORT,
                                         sizeof(vals),
                                         (unsigned char *) vals);
@@ -681,7 +765,7 @@ static void *trackpad_reader(void *arg)
         vals[1] = (uint16_t) (y - d->miny);
         vals[2] = 2;  /* RELEASE */
         ds_datapoint_t *dp = dpoint_new(d->point_name,
-                                        tclserver_now(d->state->tclserver),
+                                        ev_time_us(d, &ev),
                                         DSERV_SHORT,
                                         sizeof(vals),
                                         (unsigned char *) vals);
@@ -757,6 +841,8 @@ static input_device_t *open_device(input_state_t *st, input_class_t *cls,
   d->dev = dev;
   strncpy(d->path, path, INPUT_PATH_MAX - 1);
   strncpy(d->point_name, cls->datapoint, INPUT_DPOINT_MAX - 1);
+
+  set_evdev_clock(d);
 
   if (strcmp(cls->name, "touchscreen") == 0) {
     d->minx = libevdev_get_abs_minimum(dev, ABS_X);
