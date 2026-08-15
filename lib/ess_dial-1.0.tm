@@ -92,6 +92,11 @@ namespace eval ess {
     # That makes the interaction move-to-choose, click-to-select, with no
     # button held while adjusting -- which is what a mouse is good at, and
     # a nicer fit for "choose, adjust, select" than press-drag-release.
+    # Rig-level source binding, set in local/ and NOT cleared by
+    # input_reset -- bindings describe the rig and persist across systems,
+    # exactly as button_bind / joystick_bind do. Empty = unbound.
+    variable dial_bound_sources  {}
+
     variable dial_mouse_range_known 0
     variable dial_mouse_cx 0.0
     variable dial_mouse_cy 0.0
@@ -146,6 +151,30 @@ namespace eval ess {
     # lifecycle
     # ---------------------------------------------------------------------
 
+    # ::ess::dial_bind ?sources?
+    #
+    # Declare which transports this RIG answers a dial with; returns the
+    # current binding when called with no argument.
+    #
+    # This is the rig's business, not the protocol's. A subject reports
+    # with a trackpad on one rig and a dedicated mouse on another, and
+    # nothing about the experiment changes -- so a protocol that names its
+    # hardware needs a different copy per rig, which is the thing local/
+    # exists to prevent. Same split as button_bind / joystick_bind:
+    # binding is the rig's, activation (dial_init) is the system's.
+    #
+    #   # local/input.tcl on a rig with a dedicated mouse
+    #   ::ess::dial_bind {mouse touch}
+    #
+    # A protocol may still pass -sources explicitly when the response mode
+    # genuinely requires a particular transport; that wins over the binding.
+    proc dial_bind { args } {
+        variable dial_bound_sources
+        if { [llength $args] == 0 } { return $dial_bound_sources }
+        set dial_bound_sources [lindex $args 0]
+        return $dial_bound_sources
+    }
+
     # ::ess::dial_init ?-sources {swipe touch}?
     #                  ?-deadband_deg N?
     #                  ?-arc_center DEG? ?-arc_halfwidth DEG?
@@ -165,9 +194,13 @@ namespace eval ess {
         variable dial_ring_tolerance
         variable dial_cursor_dpoint
 
-        # defaults on every init, so a protocol that omits an option gets the
-        # documented value rather than whatever the previous protocol set
-        set dial_sources        {swipe touch}
+        # defaults on every init, so a protocol that omits an option gets
+        # the documented value rather than whatever the previous protocol
+        # set. Sources default to the RIG's binding when it has one, so a
+        # protocol need not -- and should not -- name hardware.
+        variable dial_bound_sources
+        set dial_sources        [expr {[llength $dial_bound_sources] ?
+                                       $dial_bound_sources : {swipe touch}}]
         set dial_deadband_deg   2.0
         set dial_arc_center     0.0
         set dial_arc_halfwidth  180.0

@@ -61,3 +61,25 @@
 #   send input "inputProbe"
 #
 # Or at startup by setting DSERV_INPUT_PROBE=1 in the environment / unit.
+
+# --- Which transport answers a dial ------------------------------------
+#
+# A subject reports a direction with a trackpad on one rig and a dedicated
+# mouse on another; nothing about the experiment changes. So the transport
+# is declared HERE, per rig, not in the protocol -- same split as
+# button_bind / joystick_bind, and for the same reason: bindings describe
+# the rig and persist across systems, while *_init is the loaded system's
+# job.
+#
+# Sources: mouse | swipe | touch | joystick (any combination; first to
+# commit wins). Unset, a dial defaults to {swipe touch}.
+#
+#   # rig with a dedicated subject mouse (see also the mouse entry above)
+#   ::ess::dial_bind {mouse touch}
+#
+#   # rig answering with the trackpad
+#   ::ess::dial_bind {swipe touch}
+#
+# NOTE the mouse source needs usbhid.mousepoll on the kernel command line
+# to report faster than ~62.5 Hz -- Raspberry Pi OS caps it. See
+# docs/input_layer.md, "Event timestamps".
