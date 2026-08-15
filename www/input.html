@@ -505,8 +505,56 @@ function savePattern(d) {
     return d.class && d.path ? '' : '';
 }
 
-function renderDetail() {
+/* Structural identity of the detail pane.
+ *
+ * The pane is rebuilt by innerHTML, which destroys its <input> elements --
+ * so rebuilding on the 5 s poll wiped whatever was half-typed into the
+ * adopt form. You had five seconds to type a screen width.
+ *
+ * So rebuild ONLY when the structure changes, never on a timer. Everything
+ * that legitimately changes often -- the event counter, the trace, the age
+ * readout -- is written into the standing DOM by renderLive instead, and
+ * is deliberately absent from this signature. Config values (extent, gain,
+ * grab, decimation) ARE included: they change rarely, and when they do the
+ * form genuinely should be rebuilt to show them.
+ *
+ * Note this does NOT gate on focus. Where click focus lands is platform
+ * policy -- Safari focuses almost nothing, Chrome focuses everything -- so
+ * a focus gate is invisible on one machine and freezes the panel on
+ * another. Structure is the honest thing to key on.
+ */
+function detailSignature() {
+    if (!sel) return 'none';
+    if (sel.kind === 'adopted') {
+        const d = deviceByClass(sel.key);
+        if (!d) return 'adopted:missing';
+        return ['adopted', d.class, d.path, d.by_id, d.pattern, d.connected,
+                d.grab, d.kernel_ts, d.screen_w, d.screen_h, d.gain,
+                d.move_every].join('|');
+    }
+    if (sel.kind === 'available') {
+        const p = state.probe.find(x => x.path === sel.key);
+        if (!p) return 'available:missing';
+        const sv = savedFor(p);
+        return ['available', p.path, p.class, p.adopted,
+                !!deviceByClass(p.class), sv ? sv.pattern : ''].join('|');
+    }
+    if (sel.kind === 'saved') {
+        const sv = state.saved[sel.key];
+        return ['saved', sel.key, sv ? sv.pattern : '', sv ? sv.class : ''].join('|');
+    }
+    return 'unknown';
+}
+
+let lastDetailSig = null;
+
+function renderDetail(force) {
     const el = $('detail');
+    const sig = detailSignature();
+    if (!force && sig === lastDetailSig && el.dataset.built === '1') return;
+    lastDetailSig = sig;
+    el.dataset.built = '1';
+
     if (!sel) { el.innerHTML = '<div class="empty">select a device on the left</div>'; return; }
 
     if (sel.kind === 'adopted') {
@@ -564,12 +612,12 @@ function renderDetail() {
                  'serial, so it will match only this exact device. Widen it if you want ' +
                  'any device of the same model to match.' : ''}</p>
           <div id="msg"></div>`;
-        $('brelease').onclick = () => act($('brelease'), async () => {
+        $('brelease').onclick = () => act($('brelease'), async (say) => {
             await inputCmd(`inputClose ${d.class}`);
             sel = null;
-            setMsg('released', 'ok');
+            say('released', 'ok');
         });
-        $('bsave').onclick = () => act($('bsave'), async () => {
+        $('bsave').onclick = () => act($('bsave'), async (say) => {
             const pattern = ($('f_pattern') ? $('f_pattern').value : '').trim();
             if (!pattern) throw new Error(
                 'no pattern to match on. A device with no by-id name needs one typed ' +
@@ -581,7 +629,7 @@ function renderDetail() {
             if (d.move_every > 1) o.move_every = d.move_every;
             o.grab = Number(d.grab) ? 1 : 0;
             await inputCmd(`inputSaveDevice ${d.class} {${pattern}} ${optsToArgs(o)}`);
-            setMsg('saved — this device will be adopted at next start', 'ok');
+            say('saved — this device will be adopted at next start', 'ok');
         });
         renderLive();
         return;
@@ -622,7 +670,7 @@ function renderDetail() {
              : 'Adopts for this session only — nothing is written until you save.'}</p>`}
           <div id="msg"></div>`;
         if (known && !occupied) {
-            $('badopt').onclick = () => act($('badopt'), async () => {
+            $('badopt').onclick = () => act($('badopt'), async (say) => {
                 const opts = readFields(p.class);
                 /* Reuse the saved entry's pattern when one matches, rather
                    than deriving a fresh one — otherwise a later Save adds a
@@ -636,7 +684,7 @@ function renderDetail() {
                 const patArg = pat ? ` -pattern {${pat}}` : '';
                 await inputCmd(`inputOpen ${p.class} ${p.path} ${optsToArgs(opts)}${patArg}`);
                 sel = { kind: 'adopted', key: p.class };
-                setMsg('adopted — move it and watch the trace', 'ok');
+                say('adopted — move it and watch the trace', 'ok');
             });
         }
         return;
@@ -659,10 +707,10 @@ function renderDetail() {
             <button id="bforget" class="danger" type="button">forget</button>
           </div>
           <div id="msg"></div>`;
-        $('bforget').onclick = () => act($('bforget'), async () => {
+        $('bforget').onclick = () => act($('bforget'), async (say) => {
             await inputCmd(`inputForgetDevice ${s.class} {${s.pattern}}`);
             sel = null;
-            setMsg('forgotten', 'ok');
+            say('forgotten', 'ok');
         });
         return;
     }
@@ -671,9 +719,21 @@ function renderDetail() {
 async function act(btn, fn) {
     btn.disabled = true;
     setMsg('');
-    try { await fn(); await refresh(); }
-    catch (e) { setMsg(e.message, 'err'); }
-    finally { btn.disabled = false; }
+    /* An action usually changes the structure, so the refresh below
+       rebuilds the pane and takes #msg with it -- which is why the
+       "adopted" confirmation never appeared. Carry the message across the
+       rebuild and re-apply it after. */
+    let pending = null, cls = 'ok';
+    const capture = (m, c) => { pending = m; cls = c || 'ok'; };
+    try {
+        await fn(capture);
+        await refresh();
+    } catch (e) {
+        pending = e.message; cls = 'err';
+    } finally {
+        btn.disabled = false;
+        if (pending !== null) setMsg(pending, cls);
+    }
 }
 
 /* --------------------------------------------------------------- trace */
