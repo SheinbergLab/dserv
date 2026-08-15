@@ -43,6 +43,10 @@
            cursor: pointer; }
   button:hover:not(:disabled) { border-color: var(--faint); }
   button:disabled { opacity: 0.45; cursor: default; }
+  #rate { background: var(--off); color: var(--ink); border: 1px solid var(--card-edge);
+          border-radius: 6px; padding: 5px 8px; font: inherit; font-size: 13px; }
+  #rate:disabled { opacity: 0.45; }
+  label[for="rate"] { font-size: 12px; color: var(--faint); margin-left: 6px; }
   #status { margin-left: auto; font-size: 12px; padding: 3px 10px; border-radius: 10px;
             background: var(--off); color: var(--muted); }
   #status.live { background: #14351f; color: var(--green); }
@@ -70,14 +74,24 @@
   <div class="card">
     <div id="stage">
       <img id="shot" alt="camera snapshot" title="click for full resolution">
-      <div id="empty">no snapshot yet — <code>start</code> begins ~1 frame/sec
-        on <code>camera/preview</code></div>
+      <div id="empty">no snapshot yet — <code>start</code> begins publishing
+        snapshots on <code>camera/preview</code></div>
     </div>
     <div id="caption"><span id="info"></span><span id="age"></span></div>
     <div id="controls">
       <button id="bstart">Start</button>
       <button id="bstop">Stop</button>
       <button id="bfull">Full frame</button>
+      <label for="rate">every</label>
+      <select id="rate">
+        <option value="0.5">0.5 s</option>
+        <option value="1" selected>1 s</option>
+        <option value="2">2 s</option>
+        <option value="5">5 s</option>
+        <option value="10">10 s</option>
+        <option value="30">30 s</option>
+        <option value="60">60 s</option>
+      </select>
       <span id="status">unknown</span>
     </div>
     <div id="err"></div>
@@ -146,6 +160,30 @@ function onFull(d) {
 function closeLightbox() { $('lightbox').classList.remove('open'); }
 
 function onInfo(d)   { $('info').textContent = d.value || ''; }
+
+function onInterval(d) {
+    const s = parseFloat(d.value);
+    if (!(s > 0)) return;
+    const sel = $('rate');
+    /* snap to a stock option when within 5%; otherwise show the actual
+       (skip-rate quantized) value as a temporary option */
+    const stock = [...sel.options].find(o =>
+        o.dataset.custom === undefined && Math.abs(parseFloat(o.value) - s) / s < 0.05);
+    let custom = [...sel.options].find(o => o.dataset.custom !== undefined);
+    if (stock) {
+        if (custom) custom.remove();
+        sel.value = stock.value;
+    } else {
+        if (!custom) {
+            custom = document.createElement('option');
+            custom.dataset.custom = '1';
+            sel.appendChild(custom);
+        }
+        custom.value = s;
+        custom.textContent = `${s} s`;
+        sel.value = String(s);
+    }
+}
 function onStatus(d) {
     const s = d.value || 'unknown';
     $('status').textContent = s;
@@ -189,11 +227,14 @@ async function init() {
     dp.subscribe('camera/full', onFull);
     dp.subscribe('camera/frame_info', onInfo);
     dp.subscribe('camera/status', onStatus);
+    dp.subscribe('camera/interval', onInterval);
     /* subscriptions fire on CHANGE only — seed the retained values */
-    ['camera/preview', 'camera/frame_info', 'camera/status'].forEach(n => dp.sendGet(n));
+    ['camera/preview', 'camera/frame_info', 'camera/status', 'camera/interval']
+        .forEach(n => dp.sendGet(n));
 
     $('bstart').onclick = () => camCmd($('bstart'), 'start');
     $('bstop').onclick = () => camCmd($('bstop'), 'stop');
+    $('rate').onchange = () => camCmd($('rate'), `set_interval ${$('rate').value}`);
     const grabFull = () => {
         fullPending = true;
         $('bfull').disabled = true;

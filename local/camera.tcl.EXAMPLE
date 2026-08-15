@@ -5,14 +5,16 @@
 # subprocess (config/cameraconf.tcl) when dserv starts.
 #
 # Datapoints published:
-#   camera/preview     JPEG snapshot, ~1/sec (view at /camera.html)
+#   camera/preview     JPEG snapshot, every snapshot_interval s (view at /camera.html)
 #   camera/full        full-resolution JPEG, on demand via grab_full
 #   camera/frame_info  human-readable line per snapshot
-#   camera/status      continuous | stopped
+#   camera/status      continuous | stopped | error: ...
+#   camera/interval    actual seconds between snapshots (skip-rate quantized)
 #
 # Available commands (send camera <cmd>):
 #  start ?camera_id?           - Start camera streaming
 #  stop                        - Stop camera streaming
+#  set_interval secs           - Seconds between snapshots (live, no restart)
 #  grab_full                   - Publish latest frame full-res to camera/full
 #  check_status                - Get camera status
 #  check_ring_buffer           - Get ring buffer status
@@ -22,6 +24,36 @@
 #  publish_frame frame_id datapoint ?format? - Publish frame
 
 set last_frame_id -1
+
+# Stream runs at stream_fps; snapshots publish every snapshot_interval seconds
+# (rounded to a whole number of skipped frames). Changing snapshot_interval
+# while streaming takes effect immediately via set_interval.
+set stream_fps 30.0
+set snapshot_interval 1.0
+
+# Compute the skip rate for the current interval, apply it, and publish the
+# actual (quantized) interval to camera/interval. Before the camera is
+# initialized the module call errors — the chosen interval still publishes
+# and start's own apply_interval picks it up. Any OTHER failure must
+# propagate: publishing an interval that did not apply is how a page ends
+# up trusting a rate the stream is not running at.
+proc apply_interval {} {
+    set skip [expr {max(1, round($::stream_fps * $::snapshot_interval))}]
+    if {[catch {cameraSetFrameSkipRate $skip} err]} {
+        if {![string match "*not initialized*" $err]} { error $err }
+    }
+    set actual [expr {$skip / $::stream_fps}]
+    dservSet camera/interval [format %.3g $actual]
+    return $actual
+}
+
+proc set_interval {secs} {
+    if {![string is double -strict $secs] || $secs <= 0 || $secs > 3600} {
+        error "set_interval: expected seconds in (0, 3600], got \"$secs\""
+    }
+    set ::snapshot_interval $secs
+    return [apply_interval]
+}
 
 # Called once per non-skipped frame (~1/sec with the rates set in start)
 proc my_frame_handler {frame_id timestamp_ms width height ppm_size ae_settled datapoint_prefix} {
@@ -50,8 +82,8 @@ proc start { { camera_id 0 } } {
     # libcamera hardware orientation supports 0 and 180 only.
     # cameraSetRotation 90
 
-    # Native 1920x1080 @ 30Hz; preview 640x360 keeps the 16:9 aspect
-    if {[catch {cameraConfigure 1920 1080 30.0 640 360} result]} {
+    # Native 1920x1080 @ stream_fps; preview 640x360 keeps the 16:9 aspect
+    if {[catch {cameraConfigure 1920 1080 $::stream_fps 640 360} result]} {
         puts "Error configuring camera: $result"
         dservSet camera/status "error: $result"
         return
@@ -82,9 +114,9 @@ proc start { { camera_id 0 } } {
         return
     }
 
-    # ~1 snapshot/sec: process 1 of every 30 frames from the 30Hz stream,
-    # callback on every processed frame
-    cameraSetFrameSkipRate 30
+    # Publish cadence: skip rate from snapshot_interval, callback on every
+    # processed frame
+    apply_interval
 
     if {[catch {cameraStartContinuousCallback my_frame_handler "camera" 1} result]} {
         puts "Error starting continuous callback: $result"
@@ -93,7 +125,7 @@ proc start { { camera_id 0 } } {
     }
 
     dservSet camera/status continuous
-    puts "Camera started - ~1 JPEG/sec to camera/preview"
+    puts "Camera started - JPEG every $::snapshot_interval s to camera/preview"
 }
 
 # stop streaming

@@ -3151,8 +3151,9 @@ extern "C" {
     if (Tcl_GetIntFromObj(interp, objv[1], &rate) != TCL_OK)
       return TCL_ERROR;
     
-    if (rate < 1 || rate > 100) {
-      Tcl_AppendResult(interp, "Invalid skip rate (1-100)", NULL);
+    // Upper bound is generous on purpose: at 30fps, 1800 = one frame/minute.
+    if (rate < 1 || rate > 10000) {
+      Tcl_AppendResult(interp, "Invalid skip rate (1-10000)", NULL);
       return TCL_ERROR;
     }
     
