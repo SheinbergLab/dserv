@@ -1,0 +1,602 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>input devices</title>
+<link rel="stylesheet" href="css/page_nav.css">
+<style>
+  /* Same palette as extio.html so the pages read as one family. The
+     LAYOUT deliberately differs: extio is a grid of homogeneous box cards
+     you scan, this is master/detail, because the job here is a workflow
+     (pick a device, configure it, watch it work, save it) on at most a
+     handful of heterogeneous devices — and the trace surface, which is the
+     whole point, needs room a 330px card cannot give it. */
+  :root {
+    --bg: #16181d; --card: #21252c; --card-edge: #2e343d; --ink: #e8eaed;
+    --muted: #9aa3af; --faint: #6b7280; --green: #4ade80; --blue: #60a5fa;
+    --amber: #fbbf24; --red: #f87171; --off: #3a4048;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  header { display: flex; align-items: baseline; gap: 14px; padding: 14px 22px;
+           border-bottom: 1px solid var(--card-edge); }
+  header h1 { font-size: 17px; font-weight: 600; margin: 0; }
+  #conn { margin-left: auto; font-size: 12px; color: var(--muted); }
+  #conn .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+               background: var(--off); margin-right: 6px; }
+  #conn.ok .dot { background: var(--green); }
+  #conn.bad .dot { background: var(--red); }
+
+  #wrap { display: grid; grid-template-columns: minmax(300px, 380px) 1fr;
+          gap: 18px; padding: 18px 22px; align-items: start; }
+  @media (max-width: 860px) { #wrap { grid-template-columns: 1fr; } }
+
+  .panel { background: var(--card); border: 1px solid var(--card-edge);
+           border-radius: 10px; padding: 14px 16px; }
+  .panel h2 { font-size: 12px; font-weight: 600; text-transform: uppercase;
+              letter-spacing: .06em; color: var(--faint); margin: 0 0 10px; }
+  .sect + .sect { margin-top: 18px; }
+
+  .row { display: flex; align-items: center; gap: 9px; padding: 7px 9px;
+         border-radius: 7px; cursor: pointer; border: 1px solid transparent; }
+  .row:hover { background: #262b33; }
+  .row.sel { background: #262b33; border-color: #3d4653; }
+  .row .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--off);
+              flex: 0 0 auto; }
+  .row.live .dot { background: var(--green); }
+  .row.idle .dot { background: var(--amber); }
+  .row .nm { flex: 1 1 auto; min-width: 0; overflow: hidden;
+             text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+  .row .cls { font-size: 11px; color: var(--faint); flex: 0 0 auto; }
+  .row.dim .nm { color: var(--faint); }
+
+  .chip { display: inline-block; font-size: 11px; padding: 1px 8px;
+          border-radius: 6px; background: var(--off); color: var(--muted); }
+  .chip.on { background: #14351f; color: var(--green); }
+  .chip.warn { background: #3a2c10; color: var(--amber); }
+  .chip.bad { background: #3f1d1d; color: var(--red); }
+
+  .kv { display: grid; grid-template-columns: 110px 1fr; gap: 4px 12px;
+        font-size: 13px; margin-bottom: 14px; }
+  .kv dt { color: var(--faint); }
+  .kv dd { margin: 0; font-family: ui-monospace, Menlo, monospace;
+           overflow-wrap: anywhere; }
+
+  /* The trace. This is the reassurance: numbers changing prove a datapoint
+     is moving, a dot that follows your hand proves the whole chain — device,
+     driver, classification, reader thread, coordinate mapping — is right. */
+  /* Capped as well as ratio'd: on a wide pane 16/10 pushes the save and
+     release buttons below the fold, and a control you have to scroll to
+     find on a page whose whole job is "adopt this, then save it" is a
+     control people will not find. */
+  #trace { width: 100%; aspect-ratio: 16 / 10; max-height: 46vh;
+           background: #12141a; border: 1px solid var(--card-edge);
+           border-radius: 8px; display: block; }
+  #tracehint { font-size: 12px; color: var(--faint); margin-top: 6px; }
+
+  form.cfg { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+             gap: 10px 14px; margin: 14px 0; }
+  form.cfg label { font-size: 12px; color: var(--faint); display: block; }
+  form.cfg input, form.cfg select {
+      width: 100%; background: #141720; color: var(--ink); border: 1px solid #38405a;
+      border-radius: 5px; padding: 4px 7px; font: inherit; font-size: 13px; }
+  .checkline { display: flex; align-items: center; gap: 7px; font-size: 13px; }
+  .checkline input { width: auto; }
+
+  .btns { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+  button { background: #141720; color: var(--ink); border: 1px solid #38405a;
+           border-radius: 6px; padding: 5px 13px; font: inherit; font-size: 13px;
+           cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--blue); }
+  button:disabled { opacity: .45; cursor: default; }
+  button.primary { border-color: #2f6d43; background: #16301f; color: var(--green); }
+  button.danger:hover:not(:disabled) { border-color: var(--red); color: var(--red); }
+
+  #msg { font-size: 13px; margin-top: 10px; min-height: 19px; }
+  #msg.err { color: var(--red); }
+  #msg.ok { color: var(--green); }
+  .hint { font-size: 12px; color: var(--faint); margin: 8px 0 0; }
+  .empty { color: var(--faint); font-size: 13px; padding: 6px 9px; }
+  code { font-family: ui-monospace, Menlo, monospace; color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>input devices</h1>
+  <div id="page-nav-container"></div>
+  <span id="conn"><span class="dot"></span><span id="conn-msg">connecting</span></span>
+</header>
+
+<div id="wrap">
+  <div class="panel" id="left">
+    <div class="sect">
+      <h2>adopted</h2>
+      <div id="adopted"></div>
+    </div>
+    <div class="sect">
+      <h2>available</h2>
+      <div id="available"></div>
+    </div>
+    <div class="sect">
+      <h2>saved for this rig</h2>
+      <div id="saved"></div>
+    </div>
+  </div>
+
+  <div class="panel" id="right">
+    <div id="detail"><div class="empty">select a device on the left</div></div>
+  </div>
+</div>
+
+<script src="js/ws_manager.js"></script>
+<script src="js/DatapointManager.js"></script>
+<script src="js/PageNav.js"></script>
+<script>
+'use strict';
+
+PageNav.init('page-nav-container', 'input');
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g,
+    c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+let conn = null, dp = null;
+let state = { classes: [], devices: [], probe: [], saved: [] };
+let sel = null;          // {kind:'adopted'|'available'|'saved', key}
+let subscribed = new Set();
+
+/* Live coordinates per datapoint, plus a short trail for the trace.
+   Capped at TRAIL_MAX points: a 1 kHz mouse would otherwise grow this
+   without bound between redraws. */
+const TRAIL_MAX = 240;
+const live = new Map();  // datapoint -> {x,y,ev,at,count,trail:[],range:[0,w,0,h]}
+
+/* Events arrive far faster than anyone can see — up to ~1000/s from a
+   1 kHz mouse in motion. Coalesce to animation frames: the model updates
+   on every event (so the counter and the trail are complete), but the DOM
+   and canvas are touched once per frame. */
+let rafPending = false;
+function scheduleRender() {
+    if (rafPending) return;
+    rafPending = true;
+    requestAnimationFrame(() => { rafPending = false; renderLive(); });
+}
+
+function liveFor(name) {
+    let l = live.get(name);
+    if (!l) { l = { x: 0, y: 0, ev: -1, at: 0, count: 0, trail: [], range: null };
+              live.set(name, l); }
+    return l;
+}
+
+function onEvent(name, d) {
+    /* uint16[3] = (x, y, event_type), same shape for every class. */
+    const v = String(d.data ?? d.value ?? '').trim().split(/\s+/).map(Number);
+    if (v.length < 3 || v.some(isNaN)) return;
+    const l = liveFor(name);
+    l.x = v[0]; l.y = v[1]; l.ev = v[2]; l.at = Date.now(); l.count++;
+    l.trail.push({ x: v[0], y: v[1], down: v[2] !== 2 && v[2] !== 3 });
+    if (l.trail.length > TRAIL_MAX) l.trail.splice(0, l.trail.length - TRAIL_MAX);
+    scheduleRender();
+}
+
+function onRange(name, d) {
+    const v = String(d.data ?? d.value ?? '').trim().split(/\s+/).map(Number);
+    if (v.length < 4 || v.some(isNaN)) return;
+    liveFor(name).range = v;   // [min_x, max_x, min_y, max_y]
+    scheduleRender();
+}
+
+function subscribeClasses() {
+    for (const c of state.classes) {
+        const dpt = c.datapoint;
+        if (subscribed.has(dpt)) continue;
+        subscribed.add(dpt);
+        dp.subscribe(dpt, d => onEvent(dpt, d));
+        dp.subscribe(dpt + '/range', d => onRange(dpt, d));
+        /* subscriptions fire on CHANGE only — seed whatever is retained,
+           so a page opened mid-session shows the last known position and
+           the declared range rather than an empty box. */
+        dp.sendGet(dpt);
+        dp.sendGet(dpt + '/range');
+    }
+}
+
+/* ---------------------------------------------------------------- data */
+
+async function refresh() {
+    let raw;
+    try {
+        raw = await conn.evalAsync('send input {inputStatusJson}');
+    } catch (e) { return setMsg('status query failed: ' + e.message, 'err'); }
+    /* `send` reports a cross-interp error as a SUCCESSFUL result string
+       prefixed "!TCL_ERROR " rather than rejecting — check for it. */
+    if (typeof raw === 'string' && raw.startsWith('!TCL_ERROR')) {
+        return setMsg(raw.replace(/^!TCL_ERROR\s*/, ''), 'err');
+    }
+    try { state = JSON.parse(raw); }
+    catch (e) { return setMsg('could not parse status: ' + e.message, 'err'); }
+    subscribeClasses();
+    renderAll();
+}
+
+async function inputCmd(script) {
+    const r = await conn.evalAsync(`send input {${script}}`);
+    if (typeof r === 'string' && r.startsWith('!TCL_ERROR')) {
+        throw new Error(r.replace(/^!TCL_ERROR\s*/, ''));
+    }
+    return r;
+}
+
+function setMsg(text, cls) {
+    const m = $('msg');
+    if (!m) return;
+    m.textContent = text || '';
+    m.className = cls || '';
+}
+
+/* --------------------------------------------------------------- lists */
+
+const deviceByClass = c => state.devices.find(d => d.class === c);
+const classNames = () => state.classes.map(c => c.name);
+const dpForClass = c => (state.classes.find(x => x.name === c) || {}).datapoint;
+
+function liveness(d) {
+    const l = live.get(d.datapoint);
+    if (!l || !l.at) return d.events > 0 ? 'idle' : '';
+    return (Date.now() - l.at) < 2000 ? 'live' : 'idle';
+}
+
+function renderAdopted() {
+    const el = $('adopted');
+    if (!state.devices.length) {
+        el.innerHTML = '<div class="empty">none</div>';
+        return;
+    }
+    el.innerHTML = state.devices.map(d => `
+      <div class="row ${liveness(d)} ${sel && sel.kind === 'adopted' && sel.key === d.class ? 'sel' : ''}"
+           data-kind="adopted" data-key="${esc(d.class)}">
+        <span class="dot"></span>
+        <span class="nm">${esc(d.by_id || d.path)}</span>
+        <span class="cls">${esc(d.class)}</span>
+      </div>`).join('');
+}
+
+function renderAvailable() {
+    const el = $('available');
+    const free = state.probe.filter(p => !p.adopted);
+    if (!free.length) {
+        el.innerHTML = '<div class="empty">nothing unclaimed</div>';
+        return;
+    }
+    el.innerHTML = free.map(p => {
+        const known = classNames().includes(p.class);
+        return `
+      <div class="row ${known ? '' : 'dim'} ${sel && sel.kind === 'available' && sel.key === p.path ? 'sel' : ''}"
+           data-kind="available" data-key="${esc(p.path)}">
+        <span class="dot"></span>
+        <span class="nm">${esc(p.by_id || p.name || p.path)}</span>
+        <span class="cls">${esc(p.class)}</span>
+      </div>`;
+    }).join('');
+}
+
+function renderSaved() {
+    const el = $('saved');
+    if (!state.saved.length) {
+        el.innerHTML = '<div class="empty">none saved</div>';
+        return;
+    }
+    el.innerHTML = state.saved.map((s, i) => `
+      <div class="row ${sel && sel.kind === 'saved' && sel.key === i ? 'sel' : ''}"
+           data-kind="saved" data-key="${i}">
+        <span class="dot"></span>
+        <span class="nm">${esc(s.pattern)}</span>
+        <span class="cls">${esc(s.class)}</span>
+      </div>`).join('');
+}
+
+/* -------------------------------------------------------------- detail */
+
+function fieldsFor(cls, vals) {
+    vals = vals || {};
+    const num = (id, label, v, step) =>
+        `<div><label for="${id}">${label}</label>
+         <input id="${id}" type="number" ${step ? `step="${step}"` : ''}
+                value="${v === undefined || v === '' ? '' : esc(v)}"></div>`;
+    let f = '';
+    if (cls === 'mouse' || cls === 'touchscreen') {
+        f += num('f_screen_w', 'screen width (px)', vals.screen_w);
+        f += num('f_screen_h', 'screen height (px)', vals.screen_h);
+    }
+    if (cls === 'mouse') {
+        f += num('f_gain', 'gain (counts → px)', vals.gain !== undefined ? vals.gain : 1, '0.05');
+    }
+    if (cls === 'touchscreen') {
+        f += `<div><label for="f_rotation">rotation</label>
+              <select id="f_rotation">
+                ${[['', 'auto (HDMI)'], ['0', '0'], ['90', '90'], ['180', '180'], ['270', '270']]
+                  .map(([v, t]) => `<option value="${v}" ${String(vals.rotation ?? '') === v ? 'selected' : ''}>${t}</option>`).join('')}
+              </select></div>`;
+    }
+    if (cls === 'mouse') {
+        f += `<div class="checkline" style="align-self:end">
+                <input id="f_grab" type="checkbox" ${Number(vals.grab) ? 'checked' : ''}>
+                <label for="f_grab" style="margin:0">grab (hide from desktop)</label>
+              </div>`;
+    }
+    return f;
+}
+
+function readFields(cls) {
+    const g = id => { const e = $(id); return e ? e.value.trim() : ''; };
+    const opts = {};
+    if (cls === 'mouse' || cls === 'touchscreen') {
+        if (g('f_screen_w')) opts.screen_w = g('f_screen_w');
+        if (g('f_screen_h')) opts.screen_h = g('f_screen_h');
+    }
+    if (cls === 'mouse') {
+        if (g('f_gain')) opts.gain = g('f_gain');
+        opts.grab = $('f_grab') && $('f_grab').checked ? '1' : '0';
+    }
+    if (cls === 'touchscreen' && g('f_rotation')) opts.rotation = g('f_rotation');
+    return opts;
+}
+
+const optsToArgs = o => Object.entries(o).map(([k, v]) => `-${k} ${v}`).join(' ');
+
+function renderDetail() {
+    const el = $('detail');
+    if (!sel) { el.innerHTML = '<div class="empty">select a device on the left</div>'; return; }
+
+    if (sel.kind === 'adopted') {
+        const d = deviceByClass(sel.key);
+        if (!d) { sel = null; return renderDetail(); }
+        el.innerHTML = `
+          <h2>${esc(d.class)} — adopted</h2>
+          <dl class="kv">
+            <dt>datapoint</dt><dd>${esc(d.datapoint)}</dd>
+            <dt>by-id</dt><dd>${esc(d.by_id || '—')}</dd>
+            <dt>node</dt><dd>${esc(d.path)}</dd>
+            <dt>pinned to</dt><dd>${esc(d.pattern || 'class only')}</dd>
+            <dt>extent</dt><dd>${d.screen_w || '—'} × ${d.screen_h || '—'}</dd>
+            ${d.gain !== undefined ? `<dt>gain</dt><dd>${esc(d.gain)}</dd>` : ''}
+            <dt>flags</dt><dd>
+              <span class="chip ${Number(d.grab) ? 'on' : ''}">${Number(d.grab) ? 'grabbed' : 'not grabbed'}</span>
+              <span class="chip ${Number(d.kernel_ts) ? 'on' : 'warn'}">${Number(d.kernel_ts) ? 'kernel timestamps' : 'publish-time stamps'}</span>
+            </dd>
+            <dt>events</dt><dd id="evcount">${esc(d.events)}</dd>
+          </dl>
+          <canvas id="trace"></canvas>
+          <p id="tracehint">move the device — the dot should follow.</p>
+          <div class="btns">
+            <button id="bsave" class="primary" type="button">save for this rig</button>
+            <button id="brelease" class="danger" type="button">release</button>
+          </div>
+          <p class="hint">saving writes <code>local/input_devices.tcl</code>, which is
+             re-applied at every dserv start. Releasing drops the grab immediately.</p>
+          <div id="msg"></div>`;
+        $('brelease').onclick = () => act($('brelease'), async () => {
+            await inputCmd(`inputClose ${d.class}`);
+            sel = null;
+            setMsg('released', 'ok');
+        });
+        $('bsave').onclick = () => act($('bsave'), async () => {
+            const pattern = d.pattern || (d.by_id ? d.by_id : null);
+            if (!pattern) throw new Error(
+                'no stable pattern for this device (no by-id name) — adopt it from ' +
+                '"available" so a pattern is recorded, or add an entry by hand');
+            const o = {};
+            if (d.screen_w) o.screen_w = d.screen_w;
+            if (d.screen_h) o.screen_h = d.screen_h;
+            if (d.gain !== undefined) o.gain = d.gain;
+            if (d.class === 'mouse') o.grab = Number(d.grab) ? 1 : 0;
+            await inputCmd(`inputSaveDevice ${d.class} {${pattern}} ${optsToArgs(o)}`);
+            setMsg('saved — this device will be adopted at next start', 'ok');
+        });
+        renderLive();
+        return;
+    }
+
+    if (sel.kind === 'available') {
+        const p = state.probe.find(x => x.path === sel.key);
+        if (!p) { sel = null; return renderDetail(); }
+        const known = classNames().includes(p.class);
+        const occupied = known && !!deviceByClass(p.class);
+        const caps = Object.entries(p.caps || {}).filter(([, v]) => v).map(([k]) => k);
+        const axes = Object.entries(p.axes || {})
+              .map(([k, v]) => `${k} ${v[0]}..${v[1]}`).join('   ');
+        el.innerHTML = `
+          <h2>${esc(p.by_id || p.name || p.path)}</h2>
+          <dl class="kv">
+            <dt>node</dt><dd>${esc(p.path)}</dd>
+            <dt>name</dt><dd>${esc(p.name || '—')}</dd>
+            <dt>by-id</dt><dd>${esc(p.by_id || '—')}</dd>
+            <dt>classified</dt><dd>${esc(p.class)}</dd>
+            <dt>capabilities</dt><dd>${caps.length ? esc(caps.join(', ')) : '—'}</dd>
+            ${axes ? `<dt>axes</dt><dd>${esc(axes)}</dd>` : ''}
+          </dl>
+          ${!known ? `<p class="hint">This device does not match any registered
+             class, so there is nothing to adopt. The capability list above is
+             what classification is testing against.</p>`
+          : `
+          <form class="cfg" onsubmit="return false">${fieldsFor(p.class, {})}</form>
+          <div class="btns">
+            <button id="badopt" class="primary" type="button" ${occupied ? 'disabled' : ''}>adopt now</button>
+          </div>
+          <p class="hint">${occupied
+             ? `The <code>${esc(p.class)}</code> class already has a device. Release it first.`
+             : 'Adopts for this session only — nothing is written until you save.'}</p>`}
+          <div id="msg"></div>`;
+        if (known && !occupied) {
+            $('badopt').onclick = () => act($('badopt'), async () => {
+                const opts = readFields(p.class);
+                /* Pin to the by-id name where there is one: it survives
+                   reboots and replugs, which /dev/input/eventN does not. */
+                const pat = p.by_id || p.name;
+                const patArg = pat ? ` -pattern {*${pat}*}` : '';
+                await inputCmd(`inputOpen ${p.class} ${p.path} ${optsToArgs(opts)}${patArg}`);
+                sel = { kind: 'adopted', key: p.class };
+                setMsg('adopted — move it and watch the trace', 'ok');
+            });
+        }
+        return;
+    }
+
+    if (sel.kind === 'saved') {
+        const s = state.saved[sel.key];
+        if (!s) { sel = null; return renderDetail(); }
+        el.innerHTML = `
+          <h2>${esc(s.class)} — saved</h2>
+          <dl class="kv">
+            <dt>pattern</dt><dd>${esc(s.pattern)}</dd>
+            <dt>options</dt><dd>${esc(Object.entries(s.opts || {})
+                 .map(([k, v]) => `-${k} ${v}`).join(' ') || '—')}</dd>
+          </dl>
+          <p class="hint">Applied at every dserv start, from
+             <code>local/input_devices.tcl</code>. Forgetting does not release a
+             running device — it just stops it coming back.</p>
+          <div class="btns">
+            <button id="bforget" class="danger" type="button">forget</button>
+          </div>
+          <div id="msg"></div>`;
+        $('bforget').onclick = () => act($('bforget'), async () => {
+            await inputCmd(`inputForgetDevice ${s.class} {${s.pattern}}`);
+            sel = null;
+            setMsg('forgotten', 'ok');
+        });
+        return;
+    }
+}
+
+async function act(btn, fn) {
+    btn.disabled = true;
+    setMsg('');
+    try { await fn(); await refresh(); }
+    catch (e) { setMsg(e.message, 'err'); }
+    finally { btn.disabled = false; }
+}
+
+/* --------------------------------------------------------------- trace */
+
+function renderLive() {
+    renderAdopted();   /* liveness dots */
+    if (!sel || sel.kind !== 'adopted') return;
+    const d = deviceByClass(sel.key);
+    if (!d) return;
+    const l = live.get(d.datapoint);
+    const c = $('trace');
+    if (!c) return;
+
+    const ec = $('evcount');
+    if (ec) ec.textContent = String(Number(d.events) + (l ? l.count : 0));
+
+    /* Backing store at device pixels so the dot is not a blurry blob on a
+       HiDPI rig, which is most of them. */
+    const ratio = window.devicePixelRatio || 1;
+    const w = c.clientWidth, h = c.clientHeight;
+    if (c.width !== Math.round(w * ratio) || c.height !== Math.round(h * ratio)) {
+        c.width = Math.round(w * ratio); c.height = Math.round(h * ratio);
+    }
+    const g = c.getContext('2d');
+    g.setTransform(ratio, 0, 0, ratio, 0, 0);
+    g.clearRect(0, 0, w, h);
+
+    /* Prefer the published range; fall back to the configured extent. A
+       mouse always has one, a trackpad publishes its surface range. */
+    const r = (l && l.range) ? l.range
+            : [0, Math.max(1, d.screen_w - 1), 0, Math.max(1, d.screen_h - 1)];
+    const spanX = Math.max(1, r[1] - r[0]), spanY = Math.max(1, r[3] - r[2]);
+    const sx = v => ((v - r[0]) / spanX) * (w - 2) + 1;
+    const sy = v => ((v - r[2]) / spanY) * (h - 2) + 1;
+
+    g.strokeStyle = '#2e343d'; g.lineWidth = 1;
+    g.strokeRect(0.5, 0.5, w - 1, h - 1);
+
+    if (!l || !l.trail.length) {
+        g.fillStyle = '#6b7280'; g.font = '13px -apple-system, sans-serif';
+        g.textAlign = 'center';
+        g.fillText('no events yet', w / 2, h / 2);
+        return;
+    }
+
+    /* Trail fades oldest-first so direction of travel is readable. */
+    for (let i = 1; i < l.trail.length; i++) {
+        const a = l.trail[i - 1], b = l.trail[i];
+        g.strokeStyle = `rgba(96,165,250,${0.06 + 0.5 * (i / l.trail.length)})`;
+        g.lineWidth = 2;
+        g.beginPath(); g.moveTo(sx(a.x), sy(a.y)); g.lineTo(sx(b.x), sy(b.y)); g.stroke();
+    }
+    const last = l.trail[l.trail.length - 1];
+    g.beginPath(); g.arc(sx(last.x), sy(last.y), last.down ? 7 : 4, 0, Math.PI * 2);
+    g.fillStyle = last.down ? '#4ade80' : '#60a5fa';
+    g.fill();
+
+    const age = l.at ? Math.round((Date.now() - l.at) / 100) / 10 : null;
+    const hint = $('tracehint');
+    if (hint) {
+        const evName = ['press', 'drag', 'release', 'move'][l.ev] || '?';
+        hint.textContent = `${l.x}, ${l.y}  ·  ${evName}` +
+            (age !== null ? `  ·  ${age < 1 ? 'now' : age + 's ago'}` : '');
+    }
+}
+
+/* ----------------------------------------------------------------- init */
+
+function renderAll() { renderAdopted(); renderAvailable(); renderSaved(); renderDetail(); }
+
+document.addEventListener('click', e => {
+    const row = e.target.closest('.row');
+    if (!row) return;
+    const kind = row.dataset.kind;
+    sel = { kind, key: kind === 'saved' ? Number(row.dataset.key) : row.dataset.key };
+    renderAll();
+});
+
+function setConn(ok, msg) {
+    $('conn').className = ok === true ? 'ok' : ok === false ? 'bad' : '';
+    $('conn-msg').textContent = msg;
+}
+
+async function init() {
+    /* Paint the empty shell before touching the network. With dserv down,
+       a page showing "none / nothing unclaimed / none saved" reads as
+       working-but-empty; bare section headings read as broken. */
+    renderAll();
+
+    const qs = new URLSearchParams(location.search);
+    const qsHost = qs.get('host'), qsSsl = qs.get('ssl');
+    conn = new DservConnection({
+        subprocess: 'input',
+        dservHost: qsHost || null,
+        forceSecure: qsSsl !== null ? qsSsl === '1' : undefined,
+        onStatus: st => {
+            setConn(st === 'connected' ? true : st === 'connecting' ? null : false, st);
+            /* Re-read on every (re)connect, not just the first. dserv
+               restarts are routine on a rig — after one, every device is
+               freshly autodiscovered and the page must not be showing the
+               previous generation's list. */
+            if (st === 'connected') { subscribed.clear(); refresh(); }
+        },
+    });
+
+    dp = new DatapointManager(conn, { autoGetKeys: false });
+
+    try { await conn.connect(); }
+    catch (e) { setConn(false, 'not connected — retrying'); }
+
+    /* Started regardless of whether the first connect succeeded: refresh
+       fails quietly while down and starts working when dserv returns. */
+    setInterval(() => { if (conn && conn.connected) refresh(); }, 5000);
+    /* Repaint on a timer as well as on events, so the age readout and the
+       liveness dots decay when a device goes quiet. */
+    setInterval(scheduleRender, 1000);
+    window.addEventListener('resize', scheduleRender);
+}
+
+window.addEventListener('DOMContentLoaded', init);
+</script>
+</body>
+</html>

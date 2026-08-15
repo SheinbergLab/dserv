@@ -102,6 +102,18 @@ typedef struct input_device_s {
   char path[INPUT_PATH_MAX];
   char point_name[INPUT_DPOINT_MAX];
 
+  /* /dev/input/by-id basename, captured at open. Stable across reboots
+     where the event* number is not, so it is what inputList reports and
+     what a saved per-rig entry should be written against. */
+  char by_id[INPUT_PATH_MAX];
+
+  /* Events published since this device was opened. The page uses it to
+     answer "has this device EVER produced anything", which a live
+     subscription alone cannot tell you on a fresh page load. Written by
+     the reader thread, read by inputList without a lock: a torn read of
+     a counter shown in a UI is not worth serializing the hot path for. */
+  uint64_t event_count;
+
   /* 1 once the device's evdev clock has been switched to CLOCK_MONOTONIC,
      which is what makes ev.time comparable to dserv time. Until then (or
      if the switch failed) readers must fall back to tclserver_now().
@@ -192,6 +204,24 @@ static input_class_t *find_class(input_state_t *st, const char *name)
   }
   return NULL;
 }
+
+#ifdef __linux__
+/* Is this /dev/input node already adopted? Lets inputProbe mark which of
+   the enumerated devices are in use, so the page can offer only the rest.
+   Linux-only: the macOS probe path does not enumerate event nodes. */
+static int path_is_open(input_state_t *st, const char *path)
+{
+  pthread_mutex_lock(&st->devices_lock);
+  for (input_device_t *d = st->devices; d; d = d->next) {
+    if (strcmp(d->path, path) == 0) {
+      pthread_mutex_unlock(&st->devices_lock);
+      return 1;
+    }
+  }
+  pthread_mutex_unlock(&st->devices_lock);
+  return 0;
+}
+#endif
 
 static int class_has_open_device(input_state_t *st, input_class_t *cls)
 {
@@ -489,6 +519,7 @@ static void *touchscreen_reader(void *arg)
                                         sizeof(vals),
                                         (unsigned char *) vals);
         tclserver_set_point(d->state->tclserver, dp);
+        d->event_count++;
       } else if (!touch_active && touch_changed) {
         uint16_t vals[3];
         vals[0] = x;
@@ -500,6 +531,7 @@ static void *touchscreen_reader(void *arg)
                                         sizeof(vals),
                                         (unsigned char *) vals);
         tclserver_set_point(d->state->tclserver, dp);
+        d->event_count++;
       }
 
     sync_done:
@@ -687,6 +719,8 @@ static int device_reconnect(input_device_t *d)
         d->dev = dev;
         strncpy(d->path, path, sizeof(d->path) - 1);
         d->path[sizeof(d->path) - 1] = '\0';
+        d->by_id[0] = '\0';
+        find_by_id_name(path, d->by_id, sizeof(d->by_id));
 
         /* Clock id and grab are properties of the open fd, not of the
            device, so neither survives the replug — re-apply both. */
@@ -823,6 +857,7 @@ static void *trackpad_reader(void *arg)
                                         sizeof(vals),
                                         (unsigned char *) vals);
         tclserver_set_point(d->state->tclserver, dp);
+        d->event_count++;
       } else if (!contact_active && contact_changed) {
         uint16_t vals[3];
         vals[0] = (uint16_t) (x - d->minx);
@@ -834,6 +869,7 @@ static void *trackpad_reader(void *arg)
                                         sizeof(vals),
                                         (unsigned char *) vals);
         tclserver_set_point(d->state->tclserver, dp);
+        d->event_count++;
       }
 
     sync_done_tp:
@@ -1041,6 +1077,7 @@ static void *mouse_reader(void *arg)
                                       sizeof(vals),
                                       (unsigned char *) vals);
       tclserver_set_point(d->state->tclserver, dp);
+      d->event_count++;
 
       button_changed = 0;
       coords_changed = 0;
@@ -1103,6 +1140,7 @@ static input_device_t *open_device(input_state_t *st, input_class_t *cls,
   d->dev = dev;
   strncpy(d->path, path, INPUT_PATH_MAX - 1);
   strncpy(d->point_name, cls->datapoint, INPUT_DPOINT_MAX - 1);
+  find_by_id_name(path, d->by_id, sizeof(d->by_id));
 
   set_evdev_clock(d);
 
@@ -1793,13 +1831,32 @@ static int input_autodiscover_cmd(ClientData data, Tcl_Interp *interp,
   return TCL_OK;
 }
 
+/* Adopt one specific device, now, with an explicit config.
+ *
+ * This is deliberately separate from persistence. inputOpen changes only
+ * the running state, so a device can be tried and watched before anyone
+ * decides it is this rig's device — try, verify, then save, rather than
+ * editing a config file and restarting to find out. inputSaveDevice (Tcl,
+ * inputconf.tcl) is the other half.
+ *
+ * Deterministic on path, unlike declaring a known-device entry and
+ * re-running autodiscover: with two identical mice, a by-id glob matches
+ * both and discovery would adopt whichever udev enumerated first. Here
+ * the caller says which /dev/input/event* node it means.
+ *
+ * -pattern records the glob this device should be recognised by later,
+ * so device_reconnect can hold the adoption to the same physical device
+ * across a replug. Without it, reconnect matches on class alone. */
 static int input_open_cmd(ClientData data, Tcl_Interp *interp,
                           int objc, Tcl_Obj *const objv[])
 {
   input_state_t *st = (input_state_t *) data;
 
-  if (objc != 3) {
-    Tcl_WrongNumArgs(interp, 1, objv, "class path");
+  if (objc < 3 || (objc % 2) != 1) {
+    Tcl_WrongNumArgs(interp, 1, objv,
+                     "class path ?-screen_w W? ?-screen_h H? ?-rotation R? "
+                     "?-track_drag {0|1}? ?-gain G? ?-grab {0|1}? "
+                     "?-pattern glob?");
     return TCL_ERROR;
   }
 
@@ -1810,12 +1867,82 @@ static int input_open_cmd(ClientData data, Tcl_Interp *interp,
     return TCL_ERROR;
   }
 
-  input_device_t *d = open_device(st, cls, Tcl_GetString(objv[2]), interp);
-  if (!d) return TCL_ERROR;
-  if (start_device(d) < 0) {
-    Tcl_AppendResult(interp, "input: failed to start reader thread", NULL);
+  /* One device per class: they would otherwise both publish to the same
+     datapoint and interleave silently. Close the class first to swap. */
+  if (class_has_open_device(st, cls)) {
+    Tcl_AppendResult(interp, "input: class ", cls->name,
+                     " already has an open device; close it first", NULL);
     return TCL_ERROR;
   }
+
+  input_device_t *d = open_device(st, cls, Tcl_GetString(objv[2]), interp);
+  if (!d) return TCL_ERROR;
+
+  /* Options are applied after open_device set the class defaults, and
+     before start_device, which is where the grab is taken. */
+  for (int i = 3; i < objc; i += 2) {
+    const char *key = Tcl_GetString(objv[i]);
+    Tcl_Obj *val = objv[i + 1];
+    int ival;
+    double dval;
+    int bad = 0;
+
+    if (strcmp(key, "-screen_w") == 0) {
+      if (Tcl_GetIntFromObj(interp, val, &ival) != TCL_OK) bad = 1;
+      else d->screen_width = ival;
+    } else if (strcmp(key, "-screen_h") == 0) {
+      if (Tcl_GetIntFromObj(interp, val, &ival) != TCL_OK) bad = 1;
+      else d->screen_height = ival;
+    } else if (strcmp(key, "-rotation") == 0) {
+      if (Tcl_GetIntFromObj(interp, val, &ival) != TCL_OK) bad = 1;
+      else d->rotation = ival;
+    } else if (strcmp(key, "-track_drag") == 0) {
+      if (Tcl_GetIntFromObj(interp, val, &ival) != TCL_OK) bad = 1;
+      else d->track_drag = ival ? 1 : 0;
+    } else if (strcmp(key, "-gain") == 0) {
+      if (Tcl_GetDoubleFromObj(interp, val, &dval) != TCL_OK) bad = 1;
+      else if (dval <= 0.0) {
+        Tcl_AppendResult(interp, "input: -gain must be > 0", NULL);
+        bad = 1;
+      } else d->gain = dval;
+    } else if (strcmp(key, "-grab") == 0) {
+      if (Tcl_GetIntFromObj(interp, val, &ival) != TCL_OK) bad = 1;
+      else d->grab = ival ? 1 : 0;
+    } else if (strcmp(key, "-pattern") == 0) {
+      strncpy(d->match_pattern, Tcl_GetString(val),
+              sizeof(d->match_pattern) - 1);
+      d->match_pattern[sizeof(d->match_pattern) - 1] = '\0';
+    } else {
+      Tcl_AppendResult(interp, "input: unknown option ", key, NULL);
+      bad = 1;
+    }
+
+    if (bad) { unlink_and_free_device(st, d); return TCL_ERROR; }
+  }
+
+  /* A mouse without an extent would clamp its cursor to (0,0). Catch it
+     here rather than publishing a device that silently never moves. */
+  if (strcmp(cls->name, "mouse") == 0 &&
+      (d->screen_width <= 0 || d->screen_height <= 0)) {
+    Tcl_AppendResult(interp,
+                     "input: mouse needs -screen_w and -screen_h", NULL);
+    unlink_and_free_device(st, d);
+    return TCL_ERROR;
+  }
+
+  /* Re-centre now that the extent is final. */
+  if (strcmp(cls->name, "mouse") == 0) {
+    d->cur_x = d->screen_width  / 2;
+    d->cur_y = d->screen_height / 2;
+  }
+
+  if (start_device(d) < 0) {
+    Tcl_AppendResult(interp, "input: failed to start reader thread", NULL);
+    unlink_and_free_device(st, d);
+    return TCL_ERROR;
+  }
+
+  Tcl_SetObjResult(interp, Tcl_NewStringObj(d->point_name, -1));
   return TCL_OK;
 }
 
@@ -2012,6 +2139,28 @@ static int input_validate_expectations_cmd(ClientData data, Tcl_Interp *interp,
   return TCL_OK;
 }
 
+/* Registered classes and the datapoint each publishes. The page uses this
+   to know what it can adopt and what to subscribe to, rather than
+   hardcoding names that would drift the next time a class is added. */
+static int input_classes_cmd(ClientData data, Tcl_Interp *interp,
+                             int objc, Tcl_Obj *const objv[])
+{
+  input_state_t *st = (input_state_t *) data;
+  (void)objc; (void)objv;
+
+  Tcl_Obj *list = Tcl_NewListObj(0, NULL);
+  for (int i = 0; i < st->n_classes; i++) {
+    Tcl_Obj *entry = Tcl_NewDictObj();
+    Tcl_DictObjPut(interp, entry, Tcl_NewStringObj("name", -1),
+                   Tcl_NewStringObj(st->classes[i].name, -1));
+    Tcl_DictObjPut(interp, entry, Tcl_NewStringObj("datapoint", -1),
+                   Tcl_NewStringObj(st->classes[i].datapoint, -1));
+    Tcl_ListObjAppendElement(interp, list, entry);
+  }
+  Tcl_SetObjResult(interp, list);
+  return TCL_OK;
+}
+
 static int input_list_cmd(ClientData data, Tcl_Interp *interp,
                           int objc, Tcl_Obj *const objv[])
 {
@@ -2031,6 +2180,37 @@ static int input_list_cmd(ClientData data, Tcl_Interp *interp,
     Tcl_DictObjPut(interp, entry,
                    Tcl_NewStringObj("datapoint", -1),
                    Tcl_NewStringObj(d->point_name, -1));
+    Tcl_DictObjPut(interp, entry,
+                   Tcl_NewStringObj("by_id", -1),
+                   Tcl_NewStringObj(d->by_id, -1));
+    Tcl_DictObjPut(interp, entry,
+                   Tcl_NewStringObj("pattern", -1),
+                   Tcl_NewStringObj(d->match_pattern, -1));
+    /* events is the "is this thing alive at all" number: a live
+       subscription cannot tell a page that just loaded whether the device
+       has ever produced anything since boot. */
+    Tcl_DictObjPut(interp, entry,
+                   Tcl_NewStringObj("events", -1),
+                   Tcl_NewWideIntObj((Tcl_WideInt) d->event_count));
+    /* 0 here means the reader fell back to publish-time stamps — worth
+       surfacing, since it silently degrades every timestamp it emits. */
+    Tcl_DictObjPut(interp, entry,
+                   Tcl_NewStringObj("kernel_ts", -1),
+                   Tcl_NewIntObj(d->kernel_ts_ok));
+    Tcl_DictObjPut(interp, entry,
+                   Tcl_NewStringObj("grab", -1),
+                   Tcl_NewIntObj(d->grab));
+    Tcl_DictObjPut(interp, entry,
+                   Tcl_NewStringObj("screen_w", -1),
+                   Tcl_NewIntObj(d->screen_width));
+    Tcl_DictObjPut(interp, entry,
+                   Tcl_NewStringObj("screen_h", -1),
+                   Tcl_NewIntObj(d->screen_height));
+    if (strcmp(d->cls->name, "mouse") == 0) {
+      Tcl_DictObjPut(interp, entry,
+                     Tcl_NewStringObj("gain", -1),
+                     Tcl_NewDoubleObj(d->gain));
+    }
     Tcl_ListObjAppendElement(interp, list, entry);
   }
   pthread_mutex_unlock(&st->devices_lock);
@@ -2039,12 +2219,48 @@ static int input_list_cmd(ClientData data, Tcl_Interp *interp,
   return TCL_OK;
 }
 
+/* inputClose ?class?  — release one class's device, or every device when
+   called with no argument (the original behaviour, kept for teardown).
+   Releasing drops the EVIOCGRAB with the fd, so closing a grabbed mouse
+   hands it straight back to the desktop. Returns how many were closed. */
 static int input_close_cmd(ClientData data, Tcl_Interp *interp,
                            int objc, Tcl_Obj *const objv[])
 {
   input_state_t *st = (input_state_t *) data;
-  (void)interp; (void)objc; (void)objv;
-  destroy_all_devices(st);
+
+  if (objc > 2) {
+    Tcl_WrongNumArgs(interp, 1, objv, "?class?");
+    return TCL_ERROR;
+  }
+
+  if (objc == 1) {
+    destroy_all_devices(st);
+    return TCL_OK;
+  }
+
+  input_class_t *cls = find_class(st, Tcl_GetString(objv[1]));
+  if (!cls) {
+    Tcl_AppendResult(interp, "input: unknown class ",
+                     Tcl_GetString(objv[1]), NULL);
+    return TCL_ERROR;
+  }
+
+  /* Collect first, then close: unlink_and_free_device takes devices_lock
+     itself, so walking the list while closing would deadlock. */
+  int closed = 0;
+  for (;;) {
+    input_device_t *victim = NULL;
+    pthread_mutex_lock(&st->devices_lock);
+    for (input_device_t *d = st->devices; d; d = d->next) {
+      if (d->cls == cls) { victim = d; break; }
+    }
+    pthread_mutex_unlock(&st->devices_lock);
+    if (!victim) break;
+    unlink_and_free_device(st, victim);
+    closed++;
+  }
+
+  Tcl_SetObjResult(interp, Tcl_NewIntObj(closed));
   return TCL_OK;
 }
 
@@ -2098,6 +2314,8 @@ static int input_probe_cmd(ClientData data, Tcl_Interp *interp,
                    Tcl_NewStringObj(path, -1));
     Tcl_DictObjPut(interp, info, Tcl_NewStringObj("class", -1),
                    Tcl_NewStringObj(classified, -1));
+    Tcl_DictObjPut(interp, info, Tcl_NewStringObj("adopted", -1),
+                   Tcl_NewIntObj(path_is_open(st, path)));
     Tcl_DictObjPut(interp, info, Tcl_NewStringObj("name", -1),
                    Tcl_NewStringObj(lib_name ? lib_name : "", -1));
     if (*by_id) {
@@ -2265,6 +2483,8 @@ int Dserv_input_Init(Tcl_Interp *interp)
                        input_validate_expectations_cmd, st, NULL);
   Tcl_CreateObjCommand(interp, "inputList",
                        input_list_cmd, st, NULL);
+  Tcl_CreateObjCommand(interp, "inputClasses",
+                       input_classes_cmd, st, NULL);
   Tcl_CreateObjCommand(interp, "inputProbe",
                        input_probe_cmd, st, NULL);
   Tcl_CreateObjCommand(interp, "inputClose",

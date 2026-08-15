@@ -91,6 +91,15 @@ class PageNav {
             windowSize: { width: 1000, height: 700 }
         },
         {
+            id: 'input',
+            title: 'Input Devices',
+            desc: 'Adopt and verify mice, trackpads, touchscreens',
+            icon: '🖱️',
+            href: 'input.html',
+            category: 'viewers',
+            windowSize: { width: 1100, height: 780 }
+        },
+        {
             id: 'Terminal',
             title: 'Dserv Terminal',
             desc: 'Terminal and datapoint monitor',
