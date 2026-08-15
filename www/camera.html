@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>camera</title>
+<style>
+  :root {
+    --bg: #16181d; --card: #21252c; --card-edge: #2e343d; --ink: #e8eaed;
+    --muted: #9aa3af; --faint: #6b7280; --green: #4ade80; --blue: #60a5fa;
+    --amber: #fbbf24; --red: #f87171; --off: #3a4048;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  header { display: flex; align-items: baseline; gap: 14px; padding: 14px 22px;
+           border-bottom: 1px solid var(--card-edge); }
+  header h1 { font-size: 17px; font-weight: 600; margin: 0; }
+  #conn { margin-left: auto; font-size: 12px; color: var(--muted); }
+  #conn .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+               background: var(--off); margin-right: 6px; }
+  #conn.ok .dot { background: var(--green); }
+  #conn.bad .dot { background: var(--red); }
+
+  main { max-width: 760px; margin: 0 auto; padding: 20px; }
+  .card { background: var(--card); border: 1px solid var(--card-edge);
+          border-radius: 10px; padding: 14px 16px; }
+
+  #stage { display: flex; align-items: center; justify-content: center;
+           min-height: 240px; background: #000; border-radius: 6px; overflow: hidden; }
+  #shot { max-width: 100%; height: auto; display: none; cursor: pointer; }
+  #shot.stale { opacity: 0.35; }
+  #empty { color: var(--faint); text-align: center; padding: 40px 16px; }
+  #empty code { color: var(--muted); }
+
+  #caption { display: flex; gap: 10px; align-items: baseline; margin-top: 10px;
+             font-size: 12px; color: var(--muted); min-height: 18px; }
+  #age { color: var(--faint); margin-left: auto; white-space: nowrap; }
+
+  #controls { display: flex; gap: 8px; align-items: center; margin-top: 14px; }
+  button { background: var(--off); color: var(--ink); border: 1px solid var(--card-edge);
+           border-radius: 6px; padding: 6px 14px; font: inherit; font-size: 13px;
+           cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--faint); }
+  button:disabled { opacity: 0.45; cursor: default; }
+  #status { margin-left: auto; font-size: 12px; padding: 3px 10px; border-radius: 10px;
+            background: var(--off); color: var(--muted); }
+  #status.live { background: #14351f; color: var(--green); }
+  #status.err { background: #3f1d1d; color: var(--red); }
+  #err { color: var(--red); font-size: 12px; margin-top: 10px; min-height: 16px; }
+
+  /* full-frame lightbox */
+  #lightbox { position: fixed; inset: 0; background: rgba(0,0,0,0.85); display: none;
+              flex-direction: column; align-items: center; justify-content: center;
+              padding: 30px; z-index: 10; }
+  #lightbox.open { display: flex; }
+  #fullimg { max-width: 95vw; max-height: 85vh; }
+  #lightbox .bar { margin-top: 12px; display: flex; gap: 16px; font-size: 13px; }
+  #lightbox a { color: var(--blue); text-decoration: none; }
+  #lightbox span { color: var(--faint); cursor: pointer; }
+</style>
+</head>
+<body>
+<header>
+  <h1>camera</h1>
+  <div id="conn"><span class="dot"></span><span id="connmsg">connecting</span></div>
+</header>
+
+<main>
+  <div class="card">
+    <div id="stage">
+      <img id="shot" alt="camera snapshot" title="click for full resolution">
+      <div id="empty">no snapshot yet — <code>start</code> begins ~1 frame/sec
+        on <code>camera/preview</code></div>
+    </div>
+    <div id="caption"><span id="info"></span><span id="age"></span></div>
+    <div id="controls">
+      <button id="bstart">Start</button>
+      <button id="bstop">Stop</button>
+      <button id="bfull">Full frame</button>
+      <span id="status">unknown</span>
+    </div>
+    <div id="err"></div>
+  </div>
+</main>
+
+<div id="lightbox">
+  <img id="fullimg" alt="full resolution frame">
+  <div class="bar">
+    <a id="fulldl" download>download</a>
+    <span onclick="closeLightbox()">close</span>
+  </div>
+</div>
+
+<script src="js/ws_manager.js"></script>
+<script src="js/DatapointManager.js"></script>
+<script>
+const DSERV_JPEG = 14;
+
+let conn = null, dp = null;
+let lastFrameMs = 0;       // wall-clock ms of last preview arrival
+let fullPending = false;
+let fullUrl = null;        // blob URL of last full-res frame
+
+const $ = id => document.getElementById(id);
+
+function setConn(ok, msg) {
+    $('conn').className = ok === true ? 'ok' : ok === false ? 'bad' : '';
+    $('connmsg').textContent = msg;
+}
+
+function setError(msg) { $('err').textContent = msg || ''; }
+
+function b64ToBlobUrl(b64) {
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return URL.createObjectURL(new Blob([bytes], { type: 'image/jpeg' }));
+}
+
+function onPreview(d) {
+    if (!d.data) return;
+    if (d.dtype !== undefined && d.dtype !== DSERV_JPEG) {
+        setError(`camera/preview carries dtype ${d.dtype}, expected JPEG (${DSERV_JPEG})`);
+        return;
+    }
+    $('shot').src = 'data:image/jpeg;base64,' + d.data;
+    $('shot').style.display = 'block';
+    $('empty').style.display = 'none';
+    lastFrameMs = Date.now();
+    setError('');
+}
+
+function onFull(d) {
+    if (!d.data || !fullPending) return;
+    fullPending = false;
+    $('bfull').disabled = false;
+    if (fullUrl) URL.revokeObjectURL(fullUrl);
+    fullUrl = b64ToBlobUrl(d.data);
+    $('fullimg').src = fullUrl;
+    $('fulldl').href = fullUrl;
+    $('fulldl').download = 'camera_full_' + new Date().toISOString().replace(/[:.]/g, '-') + '.jpg';
+    $('lightbox').classList.add('open');
+}
+
+function closeLightbox() { $('lightbox').classList.remove('open'); }
+
+function onInfo(d)   { $('info').textContent = d.value || ''; }
+function onStatus(d) {
+    const s = d.value || 'unknown';
+    $('status').textContent = s;
+    $('status').className = s === 'continuous' ? 'live'
+                          : s.startsWith('error') ? 'err' : '';
+}
+
+async function camCmd(btn, cmd) {
+    setError('');
+    btn.disabled = true;
+    try {
+        await conn.evalAsync(`send camera {${cmd}}`);
+    } catch (e) {
+        setError(`${cmd}: ${e.message}`);
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+async function init() {
+    /* ?host=<host[:port]> -> watch a different rig's dserv (default: the one
+     * serving this page), ?ssl=1|0 when the page and dserv protocols differ */
+    const qs = new URLSearchParams(location.search);
+    const qsHost = qs.get('host'), qsSsl = qs.get('ssl');
+    conn = new DservConnection({
+        subprocess: 'camera',
+        dservHost: qsHost || null,
+        forceSecure: qsSsl !== null ? qsSsl === '1' : undefined,
+        onStatus: (st) => setConn(st === 'connected' ? true : st === 'connecting' ? null : false, st),
+    });
+    try {
+        await conn.connect();
+    } catch (e) {
+        setConn(false, 'connection failed');
+        return;
+    }
+    setConn(true, 'connected');
+
+    dp = new DatapointManager(conn, { autoGetKeys: false });
+    dp.subscribe('camera/preview', onPreview);
+    dp.subscribe('camera/full', onFull);
+    dp.subscribe('camera/frame_info', onInfo);
+    dp.subscribe('camera/status', onStatus);
+    /* subscriptions fire on CHANGE only — seed the retained values */
+    ['camera/preview', 'camera/frame_info', 'camera/status'].forEach(n => dp.sendGet(n));
+
+    $('bstart').onclick = () => camCmd($('bstart'), 'start');
+    $('bstop').onclick = () => camCmd($('bstop'), 'stop');
+    const grabFull = () => {
+        fullPending = true;
+        $('bfull').disabled = true;
+        camCmd($('bfull'), 'grab_full').then(() => {
+            /* button re-enabled by onFull, or by error/timeout below */
+            setTimeout(() => { fullPending = false; $('bfull').disabled = false; }, 10000);
+        });
+    };
+    $('bfull').onclick = grabFull;
+    $('shot').onclick = grabFull;
+    $('lightbox').onclick = (e) => { if (e.target === $('lightbox')) closeLightbox(); };
+
+    /* age ticker + staleness dim */
+    setInterval(() => {
+        if (!lastFrameMs) return;
+        const s = Math.round((Date.now() - lastFrameMs) / 1000);
+        $('age').textContent = s <= 1 ? 'just now' : `${s}s ago`;
+        $('shot').classList.toggle('stale',
+            s > 5 && $('status').textContent === 'continuous');
+    }, 1000);
+}
+
+window.addEventListener('DOMContentLoaded', init);
+</script>
+</body>
+</html>

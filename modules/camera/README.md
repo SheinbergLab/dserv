@@ -71,6 +71,12 @@ sudo ./dserv/scripts/setup-camera.sh
 # then from dserv Tcl: send camera start
 ```
 
+The installed `local/camera.tcl` (from `local/camera.tcl.EXAMPLE`) publishes a
+~1/sec JPEG snapshot stream to the `camera/preview` datapoint. View it at
+`http(s)://<host>:2565/camera.html` — a standalone page (not linked from the
+landing page) with start/stop and on-demand full-resolution capture
+(`camera/full`). Start failures surface on `camera/status`.
+
 Manual build from a source checkout (camera module only):
 
 ```bash
