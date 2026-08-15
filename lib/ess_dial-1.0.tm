@@ -164,9 +164,24 @@ namespace eval ess {
         }
 
         foreach s $dial_sources {
-            if { $s ni {swipe touch} } {
-                error "::ess::dial_init: unknown source '$s' (want swipe|touch)"
+            if { $s ni {swipe touch joystick} } {
+                error "::ess::dial_init: unknown source '$s'\
+                       (want swipe|touch|joystick)"
             }
+        }
+
+        # Observe slider position DIRECTLY rather than doing the cursor work
+        # on the state machine's tick. dpointAddScript (not SetScript) so this
+        # sits alongside ::ess::slider_process rather than displacing it --
+        # before multi-script existed, the cursor had nowhere to live but the
+        # SM's update, which is why the SM had to be woken per sample.
+        #
+        # Consequence worth having: the cursor now tracks whenever the dial is
+        # armed, regardless of which state the machine happens to be in, and
+        # at the device's rate rather than the SM's.
+        if { "swipe" in $dial_sources } {
+            dservAddExactMatch slider/position
+            dpointAddScript    slider/position ::ess::dial_slider_sample
         }
 
         dial_disarm
@@ -177,6 +192,8 @@ namespace eval ess {
     proc dial_deinit {} {
         variable dial_active
         if { !$dial_active } return
+        # Remove only OUR script; slider_process keeps its registration.
+        catch { dpointRemoveScript slider/position ::ess::dial_slider_sample }
         dial_disarm
         set dial_active 0
         dservSet ess/dial_active 0
@@ -233,6 +250,10 @@ namespace eval ess {
         # response after it.
         set dial_swipe_last [slider_swipe_time]
         set dial_touch_last [dial_touch_timestamp]
+        # Only if the joystick is OURS to arm -- a protocol may be using it
+        # for something else entirely, and joystick_reset clears its latch.
+        variable dial_sources
+        if { "joystick" in $dial_sources } { joystick_reset }
     }
 
     proc dial_disarm {} {
@@ -271,38 +292,54 @@ namespace eval ess {
         return [dservTimestamp ess/touch_press_deg]
     }
 
+    # Live-cursor observer, run on every slider sample (see dial_init).
+    # Does NOT wake the state machine: a cursor moving is not an event the
+    # experiment needs to make a decision about, and waking the SM at a 1 kHz
+    # device's rate is the pathology this whole arrangement avoids. The SM
+    # hears about the COMMIT, which is the event that matters.
+    proc dial_slider_sample { dpoint data } {
+        variable dial_active
+        variable dial_armed_time
+        variable dial_pi
+        variable dial_deadband_deg
+        variable dial_cursor_shown
+        variable dial_last_sent
+
+        if { !$dial_active || $dial_armed_time == 0 } return
+
+        if { ![slider_swipe_engaged] } {
+            if { $dial_cursor_shown } {
+                set dial_cursor_shown 0
+                dial_cursor_update 0 0
+            }
+            return
+        }
+
+        lassign $data x y
+        if { $x eq "" || $y eq "" } return
+        set angle [dial_clamp_arc [dial_norm2pi [expr {atan2($y, $x)}]]]
+        set deadband [expr {$dial_deadband_deg*$dial_pi/180.0}]
+
+        if { !$dial_cursor_shown } {
+            set dial_cursor_shown 1
+            dial_cursor_update $angle 1
+            set dial_last_sent $angle
+        } elseif { abs([dial_angdiff $angle $dial_last_sent]) > $deadband } {
+            dial_cursor_update $angle 1
+            set dial_last_sent $angle
+        }
+    }
+
     # Trackpad / joystick swipe. sliderconf owns engagement detection and
     # only publishes slider/swipe/angle on RELEASE once magnitude cleared the
     # threshold, so this reads engagement and commits rather than recomputing
     # either. Drives the live cursor as a side effect.
     proc dial_poll_swipe {} {
-        variable dial_pi
-        variable dial_deadband_deg
         variable dial_armed_time
-        variable dial_cursor_shown
-        variable dial_last_sent
         variable dial_swipe_last
 
-        if { [slider_swipe_engaged] } {
-            set angle [dial_norm2pi [expr {atan2([slider_y], [slider_x])}]]
-            # The live cursor never enters the excluded wedge: wedge angles
-            # snap to the nearer endpoint, so the subject sees exactly the
-            # choices they actually have.
-            set angle [dial_clamp_arc $angle]
-            set deadband [expr {$dial_deadband_deg*$dial_pi/180.0}]
-            if { !$dial_cursor_shown } {
-                set dial_cursor_shown 1
-                dial_cursor_update $angle 1
-                set dial_last_sent $angle
-            } elseif { abs([dial_angdiff $angle $dial_last_sent]) > $deadband } {
-                dial_cursor_update $angle 1
-                set dial_last_sent $angle
-            }
-        } elseif { $dial_cursor_shown } {
-            set dial_cursor_shown 0
-            dial_cursor_update 0 0
-        }
-
+        # Cursor tracking lives in dial_slider_sample now; this only reports
+        # the commit sliderconf publishes on release.
         set t [slider_swipe_time]
         if { $t > $dial_armed_time && $t > $dial_swipe_last } {
             set dial_swipe_last $t
@@ -340,6 +377,30 @@ namespace eval ess {
              $dist > [expr {$dial_radius + $dial_ring_tolerance}] } { return "" }
 
         set angle [dial_norm2pi [expr {atan2($ty, $tx)}]]
+        if { ![dial_in_arc $angle] } { return "" }
+        return $angle
+    }
+
+    # 8-way joystick: a settled deflection reports its sector's direction.
+    #
+    # Sectors are 0-7 clockwise from up, so sector k points at 90-45k degrees.
+    # This is a COARSE dial -- 45 degrees of resolution -- which is exactly
+    # right for a task reporting a direction and wrong for one reporting a
+    # precise bearing. Use it where the joystick is the rig's only pointing
+    # device, or as a fallback alongside swipe.
+    #
+    # Treated like touch, not like swipe: a deflection is a discrete commit
+    # rather than steering, so an out-of-arc sector is REJECTED rather than
+    # snapped. Snapping would commit a direction the subject did not choose.
+    #
+    # joystick_response is a latch armed by joystick_reset (done in dial_arm),
+    # so the window gate is the latch itself -- there is no stale value to
+    # consume.
+    proc dial_poll_joystick {} {
+        variable dial_pi
+        set sector [joystick_response]
+        if { $sector < 0 } { return "" }
+        set angle [dial_norm2pi [expr {(90.0 - 45.0*$sector)*$dial_pi/180.0}]]
         if { ![dial_in_arc $angle] } { return "" }
         return $angle
     }
