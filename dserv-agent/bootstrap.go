@@ -1064,14 +1064,45 @@ step_sync_scripts() {
     # files in that tree exist because a 3-way conflict-detecting sync owns it,
     # and this step knows nothing about them. --skip-scripts is what makes a
     # bootstrap re-run safe on a box with local work.
-    if $SKIP_SCRIPTS; then
-        info "Skipping ESS script sync (--skip-scripts)"
-        return
-    fi
-
     # ESS systems are run by dserv; a display box has nothing to run them with.
     if ! has_component dserv; then
         info "No dserv in profile ${PROFILE} — skipping ESS script sync"
+        return
+    fi
+
+    # Scripts live in <ess user>/systems/ess/, owned by that user. The user
+    # resolves --user flag > $SUDO_USER (whoever invoked sudo) > legacy 'lab',
+    # and the home dir comes from getent, never from a hardcoded /home path --
+    # the /home/lab hardcode silently skipped the sync on any box provisioned
+    # from a personal account.
+    local ess_user="${ESS_USER_ARG:-${SUDO_USER:-lab}}"
+    local user_home
+    user_home=$(getent passwd "$ess_user" | cut -d: -f6)
+
+    if [[ -z "$user_home" || ! -d "$user_home" ]]; then
+        warn "No home directory for user '${ess_user}' (--user to override), skipping script sync"
+        return
+    fi
+
+    # Point ESS at the tree this step populates. Without this file,
+    # essconf.tcl's fallback aims ESS_SYSTEM_PATH at the deb's own
+    # /usr/local/dserv/systems payload -- a stale packaged tree -- and the
+    # registry sync below lands in a directory ESS never reads, while the
+    # sync badge reports the deb tree's drift as pending changes. Written
+    # only when absent: an existing pre-systemdir.tcl is rig policy
+    # (including any ESS_DATA_DIR choice, which this file deliberately
+    # does not set) and is left alone.
+    local systemdir_conf="${DSERV_INSTALL_DIR}/local/pre-systemdir.tcl"
+    if [[ ! -f "$systemdir_conf" ]]; then
+        write_file "$systemdir_conf" <<SYSTEMDIR
+# folder for system script projects (written by dserv bootstrap)
+set env(ESS_SYSTEM_PATH) ${user_home}/systems
+SYSTEMDIR
+        ok "ESS_SYSTEM_PATH -> ${user_home}/systems (local/pre-systemdir.tcl)"
+    fi
+
+    if $SKIP_SCRIPTS; then
+        info "Skipping ESS script sync (--skip-scripts)"
         return
     fi
 
@@ -1097,20 +1128,6 @@ step_sync_scripts() {
         return
     fi
 
-    # Scripts live in <ess user>/systems/ess/, owned by that user. The user
-    # resolves --user flag > $SUDO_USER (whoever invoked sudo) > legacy 'lab',
-    # and the home dir comes from getent, never from a hardcoded /home path --
-    # the /home/lab hardcode silently skipped the sync on any box provisioned
-    # from a personal account.
-    local ess_user="${ESS_USER_ARG:-${SUDO_USER:-lab}}"
-    local user_home
-    user_home=$(getent passwd "$ess_user" | cut -d: -f6)
-
-    if [[ -z "$user_home" || ! -d "$user_home" ]]; then
-        warn "No home directory for user '${ess_user}' (--user to override), skipping script sync"
-        rm -f "$zip_file"
-        return
-    fi
     local dest="${user_home}/systems/ess"
 
     # Say what is about to be replaced. unzip -o is silent about collisions, so
@@ -1124,8 +1141,38 @@ step_sync_scripts() {
     fi
 
     run mkdir -p "$dest"
+    local zip_list
+    zip_list=$(unzip -Z1 "$zip_file")
     run unzip -o "$zip_file" -d "$dest"
     rm -f "$zip_file"
+
+    # Provisioning treats the registry as the whole truth for this tree:
+    # unzip -o makes the registry win every collision, and this block makes
+    # it win on existence too. A script file the export does not contain
+    # (leftover from a re-provisioned or cloned box, or deleted from the
+    # registry since the box last synced) would otherwise sit in the tree
+    # as a "local new" sync-badge entry forever. Quarantine, never delete:
+    # same .trash naming the Sync modal's stash uses, so it's recoverable.
+    # Scope mirrors the sync scan exactly -- *.tcl/*.js at system and
+    # protocol depth plus lib/*.tm; deeper paths (db/, data/, scripts/)
+    # are not sync-managed and are left alone.
+    local stamp trash rel n_quarantined=0
+    stamp=$(date +%Y%m%d_%H%M%S)
+    trash="${dest}/.trash"
+    while IFS= read -r rel; do
+        [[ -z "$rel" ]] && continue
+        if ! grep -qxF "$rel" <<< "$zip_list"; then
+            run mkdir -p "$trash"
+            run mv "${dest}/${rel}" "${trash}/${stamp}_${rel//\//_}"
+            warn "Quarantined ${rel} (not in registry) -> .trash/"
+            n_quarantined=$((n_quarantined+1))
+        fi
+    done < <(cd "$dest" && find . -mindepth 2 -maxdepth 3 -type f \
+        \( -name '*.tcl' -o -name '*.js' -o \( -path './lib/*' -name '*.tm' \) \) \
+        ! -path '*/.*' 2>/dev/null | sed 's|^\./||')
+    if [[ "$n_quarantined" -gt 0 ]]; then
+        info "Quarantined ${n_quarantined} unknown script(s) to ${trash}"
+    fi
 
     # dserv runs as root but the ess user keeps ownership of their tree
     run chown -R "${ess_user}:${ess_user}" "$dest" || true
