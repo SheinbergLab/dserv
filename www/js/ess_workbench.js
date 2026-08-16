@@ -242,12 +242,6 @@ class ESSWorkbench {
             lintBtn: document.getElementById('lint-btn'),
             formatBtn: document.getElementById('format-btn'),
             
-            // States diagram
-            statesDiagram: document.getElementById('states-diagram'),
-            statesList: document.getElementById('states-list'),
-            transitionsList: document.getElementById('transitions-list'),
-            stateDiagramSvg: document.getElementById('state-diagram-svg'),
-            
             // Footer
             snapshotTime: document.getElementById('snapshot-time'),
             clock: document.getElementById('clock')
@@ -290,9 +284,18 @@ class ESSWorkbench {
     
     connect() {
         this.updateConnectionStatus('connecting');
-        
+
+        // Zero-deploy dev loop: ?host=<host[:port]> (and ?ssl=1|0 when the
+        // page's protocol differs from the target dserv's) point a
+        // statically served copy of this page at a live dserv.
+        const qs = new URLSearchParams(location.search);
+        const qsHost = qs.get('host');
+        const qsSsl = qs.get('ssl');
+
         this.connection = new DservConnection({
             subprocess: 'ess',
+            dservHost: qsHost || null,
+            forceSecure: qsSsl !== null ? qsSsl === '1' : undefined,
             autoReconnect: true,
             onStatus: (status, message) => {
                 this.updateConnectionStatus(status);
@@ -469,9 +472,6 @@ class ESSWorkbench {
                     break;
                 case 'scripts':
                     this.updateScriptEditor();
-                    break;
-                case 'states':
-                    this.updateStatesDiagram();
                     break;
             }
             
@@ -940,8 +940,6 @@ class ESSWorkbench {
         if (tabName === 'scripts') {
             if (!this.editor) this.initEditor();
             if (this._snapshotDirty) this.updateScriptEditor();
-        } else if (tabName === 'states') {
-            this.updateStatesDiagram();
         } else if (tabName === 'variants') {
             this.initVariantsTab();
             if (this._snapshotDirty) this.updateVariantsEditor();
@@ -1318,173 +1316,6 @@ class ESSWorkbench {
     // ==========================================
     // States Diagram
     // ==========================================
-    
-    updateStatesDiagram() {
-        this.updateStatesList();
-        this.updateTransitionsList();
-        this.renderStateDiagram();
-    }
-    
-    updateStatesList() {
-        const container = this.elements.statesList;
-        if (!container) return;
-        
-        const states = this.parseStates(this.snapshot?.states || '');
-        const stateNames = Object.keys(states);
-        
-        if (stateNames.length === 0) {
-            container.innerHTML = '<div class="empty-state"><span>No states loaded</span></div>';
-            return;
-        }
-        
-        let html = '';
-        stateNames.forEach(name => {
-            html += `<div class="state-list-item">${this.escapeHtml(name)}</div>`;
-        });
-        
-        container.innerHTML = html;
-    }
-    
-    updateTransitionsList() {
-        const container = this.elements.transitionsList;
-        if (!container) return;
-        
-        const states = this.parseStates(this.snapshot?.states || '');
-        const transitions = [];
-        
-        Object.entries(states).forEach(([fromState, stateData]) => {
-            if (stateData.transitions && stateData.transitions.length > 0) {
-                stateData.transitions.forEach(toState => {
-                    transitions.push({ from: fromState, to: toState });
-                });
-            }
-        });
-        
-        if (transitions.length === 0) {
-            container.innerHTML = '<div class="empty-state"><span>No transitions loaded</span></div>';
-            return;
-        }
-        
-        let html = '';
-        transitions.forEach(t => {
-            html += `
-                <div class="transition-item">
-                    <div class="transition-from-to">
-                        ${this.escapeHtml(t.from)}
-                        <span class="transition-arrow">→</span>
-                        ${this.escapeHtml(t.to)}
-                    </div>
-                </div>
-            `;
-        });
-        
-        container.innerHTML = html;
-    }
-    
-    renderStateDiagram() {
-        const svg = this.elements.stateDiagramSvg;
-        if (!svg) return;
-        
-        const states = this.parseStates(this.snapshot?.states || '');
-        const stateNames = Object.keys(states);
-        
-        if (stateNames.length === 0) {
-            svg.innerHTML = '';
-            return;
-        }
-        
-        const nodeWidth = 120;
-        const nodeHeight = 40;
-        const hSpacing = 80;
-        const vSpacing = 60;
-        const padding = 40;
-        
-        const cols = Math.ceil(Math.sqrt(stateNames.length));
-        const rows = Math.ceil(stateNames.length / cols);
-        
-        const positions = {};
-        stateNames.forEach((name, i) => {
-            const col = i % cols;
-            const row = Math.floor(i / cols);
-            positions[name] = {
-                x: padding + col * (nodeWidth + hSpacing) + nodeWidth / 2,
-                y: padding + row * (nodeHeight + vSpacing) + nodeHeight / 2
-            };
-        });
-        
-        const width = padding * 2 + cols * (nodeWidth + hSpacing) - hSpacing;
-        const height = padding * 2 + rows * (nodeHeight + vSpacing) - vSpacing;
-        svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
-        
-        let svgContent = '';
-        
-        const startState = stateNames[0];
-        const endStates = new Set();
-        stateNames.forEach(name => {
-            const state = states[name];
-            if (!state.transitions || state.transitions.length === 0 || name.toLowerCase() === 'end') {
-                endStates.add(name);
-            }
-        });
-        
-        // Edges
-        Object.entries(states).forEach(([fromState, stateData]) => {
-            if (stateData.transitions) {
-                stateData.transitions.forEach(toState => {
-                    if (positions[fromState] && positions[toState]) {
-                        const from = positions[fromState];
-                        const to = positions[toState];
-                        
-                        const dx = to.x - from.x;
-                        const dy = to.y - from.y;
-                        const len = Math.sqrt(dx * dx + dy * dy);
-                        
-                        if (len > 0) {
-                            const ux = dx / len;
-                            const uy = dy / len;
-                            
-                            const startX = from.x + ux * (nodeWidth / 2);
-                            const startY = from.y + uy * (nodeHeight / 2);
-                            const endX = to.x - ux * (nodeWidth / 2 + 8);
-                            const endY = to.y - uy * (nodeHeight / 2 + 8);
-                            
-                            svgContent += `
-                                <line x1="${startX}" y1="${startY}" x2="${endX}" y2="${endY}" 
-                                      class="state-diagram-edge" marker-end="url(#arrowhead)"/>
-                            `;
-                        }
-                    }
-                });
-            }
-        });
-        
-        // Nodes
-        stateNames.forEach(name => {
-            const pos = positions[name];
-            
-            let nodeClass = 'state-diagram-node';
-            if (name === startState) nodeClass += ' start';
-            if (endStates.has(name)) nodeClass += ' end';
-            
-            svgContent += `
-                <rect x="${pos.x - nodeWidth / 2}" y="${pos.y - nodeHeight / 2}" 
-                      width="${nodeWidth}" height="${nodeHeight}" 
-                      rx="6" class="${nodeClass}"/>
-                <text x="${pos.x}" y="${pos.y}" class="state-diagram-text">
-                    ${this.escapeHtml(name)}
-                </text>
-            `;
-        });
-        
-        svg.innerHTML = `
-            <defs>
-                <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
-                    <polygon points="0 0, 10 3.5, 0 7" class="state-diagram-arrowhead"/>
-                </marker>
-            </defs>
-            ${svgContent}
-        `;
-    }
     
     // ==========================================
     // Utilities

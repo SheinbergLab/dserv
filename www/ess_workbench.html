@@ -11,6 +11,7 @@
     <link rel="stylesheet" href="css/ess_workbench.css">
     <link rel="stylesheet" href="css/DGTableViewer.css">
     <link rel="stylesheet" href="css/ess_workbench_registry.css">
+    <link rel="stylesheet" href="css/ess_statemap.css">
     <style>
      /* Libs sidebar divider */
      .scripts-sidebar-divider {
@@ -83,6 +84,16 @@
                         <rect x="3" y="16" width="7" height="5"></rect>
                     </svg>
                     Dashboard
+                </button>
+                <button class="tab-btn" data-tab="statemap">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="6" cy="5" r="2.5"></circle>
+                        <circle cx="18" cy="12" r="2.5"></circle>
+                        <circle cx="6" cy="19" r="2.5"></circle>
+                        <path d="M8.5 5h5a2 2 0 0 1 2 2v2.5"></path>
+                        <path d="M15.5 14.5V17a2 2 0 0 1-2 2h-5"></path>
+                    </svg>
+                    State Map
                 </button>
                 <button class="tab-btn" data-tab="variants">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -189,6 +200,24 @@
                             <div class="dash-protocols-list"></div>
                         </div>
                     </div>
+                </div>
+            </div>
+
+            <!-- State Map Tab -->
+            <div class="tab-content" id="tab-statemap">
+                <div class="statemap-layout">
+                    <div class="statemap-canvas" id="statemap-canvas">
+                        <svg id="statemap-svg" xmlns="http://www.w3.org/2000/svg"></svg>
+                        <div class="statemap-empty" id="statemap-empty">No system loaded</div>
+                    </div>
+                    <div class="statemap-divider" id="statemap-divider" title="Drag to resize"></div>
+                    <aside class="statemap-side" id="statemap-side">
+                        <div class="statemap-hero" id="statemap-hero">—</div>
+                        <div class="statemap-chips" id="statemap-chips"></div>
+                        <div id="statemap-live"></div>
+                        <div class="statemap-detail" id="statemap-detail"></div>
+                        <div class="statemap-trail" id="statemap-trail"></div>
+                    </aside>
                 </div>
             </div>
 
@@ -796,6 +825,7 @@
     <script src="js/ess_workbench.js"></script>
     <script src="js/ess_registry_plugin.js"></script>
     <script src="js/ess_overlay_plugin.js"></script>
+    <script src="js/ess_statemap_plugin.js"></script>
     <script src="js/ess_libs_plugin.js"></script>
     <script src="js/ess_dashboard_plugin.js"></script>
 </body>
