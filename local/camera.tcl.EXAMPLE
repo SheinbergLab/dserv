@@ -31,6 +31,31 @@ set last_frame_id -1
 set stream_fps 30.0
 set snapshot_interval 1.0
 
+package require settings
+
+# Rotation is the RIG's mounting declaration -- enclosures mount cameras
+# sideways -- so it lives with the other declared rig facts in local/rig.tcl
+# ("setting camera rotation 90"), not in this file. set_rotation (the
+# /camera.html selector calls it) persists the new value there and cycles a
+# running camera; on a fresh start the declared value applies directly.
+# 90/270 rotate in software during JPEG encode (Pi hardware does 0/180 only);
+# at snapshot rates the cost is negligible.
+proc apply_rotation {deg} {
+    if {[catch {cameraStatus} st]} { return }
+    if {[dict get $st state] eq "streaming"} {
+        stop
+        start
+    }
+}
+
+settings::declare camera rotation -default 0 -values {0 90 180 270} -type int \
+    -doc "Camera mounting rotation, degrees clockwise" \
+    -apply {::apply_rotation}
+
+proc set_rotation {deg} {
+    settings::put camera rotation $deg -persist
+}
+
 # Compute the skip rate for the current interval, apply it, and publish the
 # actual (quantized) interval to camera/interval. Before the camera is
 # initialized the module call errors — the chosen interval still publishes
@@ -78,9 +103,9 @@ proc start { { camera_id 0 } } {
         return
     }
 
-    # Pi CSI: call before cameraConfigure. 90/270 use software rotation;
-    # libcamera hardware orientation supports 0 and 180 only.
-    # cameraSetRotation 90
+    # Declared mounting rotation (local/rig.tcl); must be set before
+    # cameraConfigure
+    cameraSetRotation [settings::get camera rotation]
 
     # Native 1920x1080 @ stream_fps; preview 640x360 keeps the 16:9 aspect
     if {[catch {cameraConfigure 1920 1080 $::stream_fps 640 360} result]} {

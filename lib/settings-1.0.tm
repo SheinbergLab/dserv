@@ -243,7 +243,14 @@ proc ::settings::put {sub key value args} {
     if { $persist } {
         _persist_line $sub $key $v
         dict set filevals $sub $key $v
-        dict unset runtime $sub $key
+        # Guarded: nested `dict unset` THROWS when the intermediate key is
+        # absent, i.e. on every put for a sub that never had a runtime
+        # override -- which is the common case. Unguarded, the file was
+        # already written but the publish and -apply below never ran: a
+        # persisted value the running system silently did not adopt.
+        if { [dict exists $runtime $sub $key] } {
+            dict unset runtime $sub $key
+        }
         _dp settings/$sub/$key $v
         _dp settings/$sub/$key/source file
     } else {

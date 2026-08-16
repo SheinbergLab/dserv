@@ -43,10 +43,10 @@
            cursor: pointer; }
   button:hover:not(:disabled) { border-color: var(--faint); }
   button:disabled { opacity: 0.45; cursor: default; }
-  #rate { background: var(--off); color: var(--ink); border: 1px solid var(--card-edge);
+  #rate, #rot { background: var(--off); color: var(--ink); border: 1px solid var(--card-edge);
           border-radius: 6px; padding: 5px 8px; font: inherit; font-size: 13px; }
-  #rate:disabled { opacity: 0.45; }
-  label[for="rate"] { font-size: 12px; color: var(--faint); margin-left: 6px; }
+  #rate:disabled, #rot:disabled { opacity: 0.45; }
+  label[for="rate"], label[for="rot"] { font-size: 12px; color: var(--faint); margin-left: 6px; }
   #status { margin-left: auto; font-size: 12px; padding: 3px 10px; border-radius: 10px;
             background: var(--off); color: var(--muted); }
   #status.live { background: #14351f; color: var(--green); }
@@ -91,6 +91,13 @@
         <option value="10">10 s</option>
         <option value="30">30 s</option>
         <option value="60">60 s</option>
+      </select>
+      <label for="rot" title="Mounting rotation; persists to local/rig.tcl">rot</label>
+      <select id="rot">
+        <option value="0" selected>0°</option>
+        <option value="90">90°</option>
+        <option value="180">180°</option>
+        <option value="270">270°</option>
       </select>
       <span id="status">unknown</span>
     </div>
@@ -228,13 +235,19 @@ async function init() {
     dp.subscribe('camera/frame_info', onInfo);
     dp.subscribe('camera/status', onStatus);
     dp.subscribe('camera/interval', onInterval);
+    dp.subscribe('settings/camera/rotation',
+        d => { const v = String(parseInt(d.value)); if (!isNaN(+v)) $('rot').value = v; });
     /* subscriptions fire on CHANGE only — seed the retained values */
-    ['camera/preview', 'camera/frame_info', 'camera/status', 'camera/interval']
+    ['camera/preview', 'camera/frame_info', 'camera/status', 'camera/interval',
+     'settings/camera/rotation']
         .forEach(n => dp.sendGet(n));
 
     $('bstart').onclick = () => camCmd($('bstart'), 'start');
     $('bstop').onclick = () => camCmd($('bstop'), 'stop');
     $('rate').onchange = () => camCmd($('rate'), `set_interval ${$('rate').value}`);
+    /* rotation cycles a running camera (~2-3s pause) and persists the value
+       into local/rig.tcl on the box — the mounting declaration */
+    $('rot').onchange = () => camCmd($('rot'), `set_rotation ${$('rot').value}`);
     const grabFull = () => {
         fullPending = true;
         $('bfull').disabled = true;
