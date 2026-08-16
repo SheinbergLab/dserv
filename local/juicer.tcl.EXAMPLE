@@ -1,2 +1,9 @@
-# juicer line0 set to pin 27
+# GPIO solenoid on the host (skip if juice is an extio digital out)
 juicerSetPin 0 27
+
+# ms of output-high per ml. This is the extio pulse conversion
+# (::juicer_ms_per_ml). Survives dserv updates; config/juicerconf.tcl does not.
+# 1667 is the C GPIO default (juicerSetMsToMl); set both if this rig can
+# fall back to a Pi pin.
+set ::juicer_ms_per_ml 1667
+#juicerSetMsToMl 1667
