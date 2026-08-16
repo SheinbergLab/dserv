@@ -330,7 +330,12 @@ jobs:
       - name: Upload camera package
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ github.ref_name }}" dserv-camera-rpi_*.deb --clobber
+        # -R matters inside the container: without it gh shells out to git to
+        # infer the repo from the cwd, and the checkout there is owned by the
+        # runner uid while the job runs as root — git refuses ("dubious
+        # ownership", 0.53.4's failure). With -R, gh never touches git. The
+        # runner-native jobs above don't hit this; only this containerized one.
+        run: gh release upload -R "${{ github.repository }}" "${{ github.ref_name }}" dserv-camera-rpi_*.deb --clobber
 
   # Generic-linux camera debs for non-Pi machines; these still build a pinned
   # upstream libcamera from source and are unrelated to the rig fleet.
