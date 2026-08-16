@@ -60,22 +60,42 @@ This module provides a comprehensive interface to Raspberry Pi cameras through l
 - `HAS_LIBCAMERA` - Enable libcamera support
 - `HAS_JPEG` - Enable JPEG encoding
 
-## Building
+## Installing
 
-On Raspberry Pi, the easiest path is the setup script (builds against your
-system libcamera — important on Pi OS with libcamera 0.7+):
+On a Raspberry Pi rig, install the release deb — no build tools needed on the
+target. Easiest from the dserv-agent panel: the **dserv Camera** component
+downloads and installs `dserv-camera-rpi_<version>_arm64.deb` from the latest
+release. Or by hand:
+
+```bash
+wget https://github.com/SheinbergLab/dserv/releases/latest/download/dserv-camera-rpi_<version>_arm64.deb
+sudo apt install ./dserv-camera-rpi_<version>_arm64.deb
+# then from dserv Tcl: send camera start
+```
+
+The deb is built inside the OS the rigs run (Pi OS trixie, against the
+Raspberry Pi archive's libcamera) and depends on the exact libcamera runtime
+it linked (`libcamera0.7` today) — apt refuses cleanly on a system whose
+libcamera cannot work rather than the module failing to load. Its postinst
+seeds `local/camera.tcl` from the EXAMPLE on first install (never overwritten
+on upgrade — rotation/exposure tuning lives there) and restarts dserv so the
+camera subprocess appears.
+
+The installed `local/camera.tcl` publishes a ~1/sec JPEG snapshot stream to
+the `camera/preview` datapoint. View it at `http(s)://<host>:2565/camera.html`
+— a standalone page (not linked from the landing page) with start/stop, a
+live snapshot-interval selector, and on-demand full-resolution capture
+(`camera/full`). Start failures surface on `camera/status`.
+
+## Building from source
+
+For an OS the release deb does not match (apt will say so), the setup script
+builds against your system libcamera:
 
 ```bash
 git clone https://github.com/sheinberglab/dserv
 sudo ./dserv/scripts/setup-camera.sh
-# then from dserv Tcl: send camera start
 ```
-
-The installed `local/camera.tcl` (from `local/camera.tcl.EXAMPLE`) publishes a
-~1/sec JPEG snapshot stream to the `camera/preview` datapoint. View it at
-`http(s)://<host>:2565/camera.html` — a standalone page (not linked from the
-landing page) with start/stop and on-demand full-resolution capture
-(`camera/full`). Start failures surface on `camera/status`.
 
 Manual build from a source checkout (camera module only):
 
@@ -86,12 +106,6 @@ cmake -DBUILD_CAMERA=ON -DCMAKE_BUILD_TYPE=Release -B build
 cmake --build build --target camera_capture
 # output: build/dserv_camera.so
 ```
-
-Or use `scripts/setup-camera.sh`, which builds only the camera module without
-requiring other dserv module dependencies (ALSA, etc.).
-
-Prebuilt `dserv-camera-rpi` release debs target libcamera 0.5. On Pi OS with
-libcamera 0.7+, build from source instead of installing the release deb.
 
 ## Quick Start
 

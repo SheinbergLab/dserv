@@ -210,6 +210,96 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload "${{ github.ref_name }}" tools/extio-setup/extio-setup_linux_${{ matrix.goarch }} --clobber
 
+  # Raspberry Pi camera deb, built INSIDE the target OS: Debian trixie plus
+  # the raspberrypi.com archive, whose libcamera (pisp + vc4) is what the rigs
+  # actually run. libcamera breaks ABI every minor release (soname tracks the
+  # version), so a module built against an upstream source tree of some other
+  # version can never load on the rigs — that mismatch is why this deb used to
+  # be dead on arrival and camera installs fell back to on-target source
+  # builds. Linking the distro package and depending on the exact soname
+  # package (libcamera0.7 today, computed below) makes the deb installable
+  # with no build tools on the target, and apt refuses it cleanly on any
+  # system whose libcamera cannot work.
+  release-camera-rpi:
+
+    needs: create-release
+
+    runs-on: ubuntu-22.04-arm
+    container: debian:trixie
+
+    permissions:
+      contents: write
+
+    steps:
+
+      - name: Add the Raspberry Pi package archive
+        run: |
+          apt-get update
+          apt-get install -y wget gnupg ca-certificates git
+          wget -qO- https://archive.raspberrypi.com/debian/raspberrypi.gpg.key \
+            | gpg --dearmor > /usr/share/keyrings/raspberrypi.gpg
+          echo "deb [signed-by=/usr/share/keyrings/raspberrypi.gpg] https://archive.raspberrypi.com/debian trixie main" \
+            > /etc/apt/sources.list.d/raspberrypi.list
+          apt-get update
+
+      - name: Install build dependencies (same set scripts/setup-camera.sh uses)
+        run: apt-get install -y --no-install-recommends cmake g++ pkg-config tcl9.0-dev libcamera-dev libjpeg-dev gh
+
+      - name: Check out our dserv code for the current tag.
+        uses: actions/checkout@v4
+
+      - name: Build camera module only
+        run: |
+          cd modules
+          cmake -DBUILD_CAMERA=ON -DCMAKE_BUILD_TYPE=Release -B build
+          cmake --build build --target camera_capture
+          ldd build/dserv_camera.so | grep -q 'not found' && exit 1 || true
+
+      - name: Package camera module
+        run: |
+          mkdir -p camera-pkg/usr/local/dserv/modules
+          cp modules/build/dserv_camera.so camera-pkg/usr/local/dserv/modules/
+
+          # Depend on the exact libcamera runtime package we linked against.
+          LIBCAMERA_PKG=$(dpkg-query -S "$(readlink -f /usr/lib/aarch64-linux-gnu/libcamera.so)" | cut -d: -f1)
+          LIBCAMERA_VER=$(dpkg-query -W -f='${Version}' libcamera-dev | cut -d+ -f1)
+
+          mkdir -p camera-pkg/DEBIAN
+          cat > camera-pkg/DEBIAN/control << EOF
+          Package: dserv-camera-rpi
+          Version: ${{ github.ref_name }}
+          Architecture: $(dpkg --print-architecture)
+          Depends: dserv (>= ${{ github.ref_name }}), ${LIBCAMERA_PKG} (>= ${LIBCAMERA_VER}), libjpeg62-turbo
+          Description: Camera module for dserv (Raspberry Pi OS trixie, ${LIBCAMERA_PKG})
+          Maintainer: SheinbergLab
+          EOF
+
+          cat > camera-pkg/DEBIAN/postinst << 'EOF'
+          #!/bin/sh
+          set -e
+          # First install on a box: give the camera subprocess its local config.
+          # Never overwritten on upgrade — rigs tune rotation/exposure in it.
+          if [ ! -f /usr/local/dserv/local/camera.tcl ] \
+             && [ -f /usr/local/dserv/local/camera.tcl.EXAMPLE ]; then
+            cp /usr/local/dserv/local/camera.tcl.EXAMPLE /usr/local/dserv/local/camera.tcl
+          fi
+          # dsconf starts the camera subprocess when the module is present, so
+          # a running dserv picks it up on restart.
+          if command -v systemctl >/dev/null 2>&1; then
+            systemctl try-restart dserv 2>/dev/null || true
+          fi
+          EOF
+          chmod 755 camera-pkg/DEBIAN/postinst
+
+          dpkg-deb --root-owner-group --build camera-pkg dserv-camera-rpi_${{ github.ref_name }}_$(dpkg --print-architecture).deb
+
+      - name: Upload camera package
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.ref_name }}" dserv-camera-rpi_*.deb --clobber
+
+  # Generic-linux camera debs for non-Pi machines; these still build a pinned
+  # upstream libcamera from source and are unrelated to the rig fleet.
   release-camera:
 
     needs: create-release
@@ -223,9 +313,6 @@ jobs:
           - os: ubuntu-22.04-arm
             target: linux
             libcamera_version: "0.4.0"
-          - os: ubuntu-22.04-arm  
-            target: rpi
-            libcamera_version: "0.5.1"
 
     runs-on: ${{ matrix.os }}
 
@@ -258,32 +345,17 @@ jobs:
             echo "PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:$PKG_CONFIG_PATH" >> $GITHUB_ENV
           fi
 
-      - name: Install platform-specific libcamera
+      - name: Install pinned libcamera from source
         run: |
-          if [ "${{ matrix.target }}" = "rpi" ]; then
-            # Build from source for RPi compatibility
-            sudo apt install -y ninja-build python3-pip python3-yaml python3-ply python3-jinja2
-            sudo pip3 install meson
-            git clone https://gitlab.freedesktop.org/camera/libcamera.git
-            cd libcamera
-            git checkout v${{ matrix.libcamera_version }}
-            meson setup build --prefix=/usr/local -Dpipelines=rpi/vc4,vimc -Dipas=rpi/vc4 -Dtest=false -Ddocumentation=disabled
-            ninja -C build
-            sudo ninja -C build install
-            sudo ldconfig
-          else
-            # Use system packages for generic Linux (if available)
-            # For now, also build from source for consistency
-            sudo apt install -y ninja-build python3-pip python3-yaml python3-ply python3-jinja2
-            sudo pip3 install meson
-            git clone https://gitlab.freedesktop.org/camera/libcamera.git
-            cd libcamera
-            git checkout v${{ matrix.libcamera_version }}
-            meson setup build --prefix=/usr/local -Dpipelines=rpi/vc4,vimc -Dipas=rpi/vc4 -Dtest=false -Ddocumentation=disabled
-            ninja -C build
-            sudo ninja -C build install
-            sudo ldconfig
-          fi
+          sudo apt install -y ninja-build python3-pip python3-yaml python3-ply python3-jinja2
+          sudo pip3 install meson
+          git clone https://gitlab.freedesktop.org/camera/libcamera.git
+          cd libcamera
+          git checkout v${{ matrix.libcamera_version }}
+          meson setup build --prefix=/usr/local -Dpipelines=rpi/vc4,vimc -Dipas=rpi/vc4 -Dtest=false -Ddocumentation=disabled
+          ninja -C build
+          sudo ninja -C build install
+          sudo ldconfig
 
       - name: Build JPEG library with PIC for static linking
         run: |
@@ -321,11 +393,8 @@ jobs:
           
           # Create package metadata
           mkdir -p camera-pkg/DEBIAN
-          LIBCAMERA_DEP="libcamera0.5 (>= 0.5.0)"
-          if [ "${{ matrix.target }}" = "linux" ]; then
-            LIBCAMERA_DEP="libcamera0.4 (>= 0.4.0)"
-          fi
-          
+          LIBCAMERA_DEP="libcamera0.4 (>= 0.4.0)"
+
           cat > camera-pkg/DEBIAN/control << EOF
           Package: dserv-camera-${{ matrix.target }}
           Version: ${{ github.ref_name }}

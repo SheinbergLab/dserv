@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
-# Setup dserv camera module and local config. Does NOT run "send camera start".
+# Build-from-source fallback for the dserv camera module. On a Pi OS rig the
+# normal install is the dserv-camera-rpi release deb (dserv-agent panel, or
+# apt install ./dserv-camera-rpi_<version>_arm64.deb) — use this script when
+# no release deb matches the target's libcamera (apt will refuse the deb).
+# Does NOT run "send camera start".
 #
 # Installs build deps (if missing), builds dserv_camera.so from repo sources,
 # installs the module + local/camera.tcl, restarts dserv, and verifies the
