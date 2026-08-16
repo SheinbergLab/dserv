@@ -133,6 +133,11 @@ namespace eval ess {
     variable dial_stick_invert   0
     variable dial_stick_commit_dp "extio/*/state/group/stick_select"
     variable dial_stick_scale    0.0     ;# full-scale deflection, learned
+    # Floor below which a deflection is not evidence of full travel. Guards
+    # the learner against defining full scale from an uncalibrated stick's
+    # resting offset. Set -stick_min_scale above the resting magnitude your
+    # rig actually shows.
+    variable dial_stick_min_scale 1.0
     variable dial_stick_last_ts  0
     variable dial_stick_angle    0.0
     variable dial_stick_moved    0
@@ -245,6 +250,7 @@ namespace eval ess {
         variable dial_stick_rate
         variable dial_stick_deadzone
         variable dial_stick_expo
+        variable dial_stick_min_scale
         variable dial_stick_invert
         variable dial_stick_commit_dp
 
@@ -264,6 +270,7 @@ namespace eval ess {
         set dial_stick_rate     180.0
         set dial_stick_deadzone 0.08
         set dial_stick_expo     2.0
+        set dial_stick_min_scale 1.0
         set dial_stick_invert   0
         set dial_stick_commit_dp "extio/*/state/group/stick_select"
         set dial_cursor_dpoint  ess/cursor
@@ -280,6 +287,7 @@ namespace eval ess {
                 -stick_rate     { set dial_stick_rate $v }
                 -stick_deadzone { set dial_stick_deadzone $v }
                 -stick_expo     { set dial_stick_expo $v }
+                -stick_min_scale { set dial_stick_min_scale $v }
                 -stick_invert   { set dial_stick_invert [expr {$v ? 1 : 0}] }
                 -stick_commit   { set dial_stick_commit_dp $v }
                 -cursor_dpoint  { set dial_cursor_dpoint $v }
@@ -738,6 +746,7 @@ namespace eval ess {
         variable dial_stick_last_ts
         variable dial_stick_angle
         variable dial_stick_moved
+        variable dial_stick_min_scale
         variable dial_arc_center
 
         if { !$dial_active || $dial_armed_time == 0 } return
@@ -754,11 +763,21 @@ namespace eval ess {
         if { $dt <= 0 || $dt > 0.25 } return
 
         # Full scale is LEARNED from the largest deflection seen, so the
-        # rate is expressed relative to this stick's actual travel rather
-        # than to a calibration constant that would have to be maintained
-        # per rig.
+        # rate is relative to this stick's actual travel rather than a
+        # constant maintained per rig -- but it is learned only from
+        # deflections that are plausibly deliberate.
+        #
+        # Bootstrapping off ANY sample was wrong and produced a first-trial
+        # meander: a stick whose centre is not calibrated does not rest at
+        # zero (measured -0.39 on rpi500, whose sliderconf centre is the
+        # generic 2048), so the very first sample made the RESTING OFFSET
+        # the definition of full deflection -- f = 1.0, full-rate rotation,
+        # from an untouched stick. It settled once a real push raised the
+        # scale, which is why it only ever showed up on trial one.
         set ax [expr {abs($x)}]
-        if { $ax > $dial_stick_scale } { set dial_stick_scale $ax }
+        if { $ax > $dial_stick_min_scale && $ax > $dial_stick_scale } {
+            set dial_stick_scale $ax
+        }
         if { $dial_stick_scale <= 0 } return
 
         set f [expr {$x/$dial_stick_scale}]
