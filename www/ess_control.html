@@ -174,12 +174,13 @@
                                     </div>
                                 </div>
                                 <div class="ess-input-row">
-                                    <span class="ess-input-label">Source</span>
+                                    <span class="ess-input-label" title="This session only — reverts at restart to local/slider.tcl">Source*</span>
                                     <div class="ess-input-group">
                                         <select id="slider-source" class="ess-input-select">
                                             <option value="auto">auto</option>
                                             <option value="ain">ain</option>
                                             <option value="trackpad">trackpad</option>
+                                            <option value="extio">extio (stick)</option>
                                             <option value="virtual">virtual</option>
                                         </select>
                                     </div>
@@ -187,6 +188,16 @@
                                 <div class="ess-input-row">
                                     <span class="ess-input-label">Mode</span>
                                     <span id="slider-mode-value" class="ess-slider-mode-value">—</span>
+                                </div>
+                                <div class="ess-input-row">
+                                    <!-- The selector calls set_source at RUNTIME and nothing
+                                         persists it, so it reverts at restart to whatever
+                                         local/slider.tcl declares. Saying so is the smallest
+                                         honest fix: without it, testing a source appears to
+                                         work and then silently reverts. -->
+                                    <span class="ess-input-label" style="font-size:11px">
+                                        * session only; local/slider.tcl wins at restart
+                                    </span>
                                 </div>
                             </div>
                             <!-- Eye Tracker Settings -->
