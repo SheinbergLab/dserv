@@ -232,21 +232,34 @@ jobs:
 
     steps:
 
-      - name: Add the Raspberry Pi package archive
+      - name: Bootstrap container basics
         run: |
           apt-get update
-          apt-get install -y wget gnupg ca-certificates git
-          wget -qO- https://archive.raspberrypi.com/debian/raspberrypi.gpg.key \
-            | gpg --dearmor > /usr/share/keyrings/raspberrypi.gpg
-          echo "deb [signed-by=/usr/share/keyrings/raspberrypi.gpg] https://archive.raspberrypi.com/debian trixie main" \
+          apt-get install -y --no-install-recommends ca-certificates git
+
+      - name: Check out our dserv code for the current tag.
+        uses: actions/checkout@v4
+
+      - name: Add the Raspberry Pi package archive
+        # The keyring comes from the REPO, not the legacy
+        # archive.raspberrypi.com/debian/raspberrypi.gpg.key download: that
+        # export still carries the key's original 2012 SHA1 self-signature,
+        # which trixie's sequoia (sqv) apt verifier rejects outright ("SHA1
+        # is not considered secure"). Pi OS ships the SAME key with its
+        # binding signature re-issued 2025-06-05 using SHA512 — the committed
+        # scripts/raspberrypi-archive-keyring.asc is that refreshed keyring
+        # (from raspberrypi-archive-keyring 2025.1+rpt1, fingerprint
+        # CF8A1AF502A2AA2D763BAE7E82B129927FA3303E), verified against the
+        # archive's Release.gpg with sqv 1.3.0.
+        run: |
+          install -m 0644 scripts/raspberrypi-archive-keyring.asc \
+            /usr/share/keyrings/raspberrypi-archive-keyring.asc
+          echo "deb [signed-by=/usr/share/keyrings/raspberrypi-archive-keyring.asc] https://archive.raspberrypi.com/debian trixie main" \
             > /etc/apt/sources.list.d/raspberrypi.list
           apt-get update
 
       - name: Install build dependencies (same set scripts/setup-camera.sh uses)
         run: apt-get install -y --no-install-recommends cmake g++ pkg-config tcl9.0-dev libcamera-dev libjpeg-dev gh
-
-      - name: Check out our dserv code for the current tag.
-        uses: actions/checkout@v4
 
       - name: Build camera module only
         run: |
