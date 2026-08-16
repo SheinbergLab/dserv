@@ -118,18 +118,24 @@
     background: #f85149;
 }
 
-/* Quick pull button (shown when stale) */
+/* Quick pull button (shown when stale). Constrained to sit inside the
+   chip's text line: an unconstrained <button> renders taller than the
+   12px row and made the whole header jump when staleness appeared. */
 .project-quick-pull-btn {
     background: #e3b341;
     color: #1c2128;
     border: none;
     border-radius: 3px;
-    font-size: 11px;
+    font-size: 10px;
     font-weight: bold;
-    padding: 1px 4px;
+    height: 14px;
+    display: inline-flex;
+    align-items: center;
+    padding: 0 4px;
     margin-left: 4px;
     cursor: pointer;
     line-height: 1;
+    flex-shrink: 0;
 }
 
 .project-quick-pull-btn:hover {

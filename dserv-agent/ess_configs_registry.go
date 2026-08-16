@@ -11,7 +11,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -835,11 +837,127 @@ func (r *ESSRegistry) ExportProjectBundle(workgroup, projectName, exportedBy, so
 	return bundle, nil
 }
 
+// canonicalValue renders a decoded-JSON value deterministically: map keys
+// sort, float64 formats via shortest round-trip. Both sides of a bundle
+// comparison arrive through encoding/json's default decode (push body and
+// stored-column unmarshal alike), so float64-vs-float64 is symmetric.
+func canonicalValue(sb *strings.Builder, v interface{}) {
+	switch val := v.(type) {
+	case map[string]interface{}:
+		keys := make([]string, 0, len(val))
+		for k := range val {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		sb.WriteByte('{')
+		for i, k := range keys {
+			if i > 0 {
+				sb.WriteByte(' ')
+			}
+			sb.WriteString(k)
+			sb.WriteByte(':')
+			canonicalValue(sb, val[k])
+		}
+		sb.WriteByte('}')
+	case []interface{}:
+		sb.WriteByte('[')
+		for i, e := range val {
+			if i > 0 {
+				sb.WriteByte(' ')
+			}
+			canonicalValue(sb, e)
+		}
+		sb.WriteByte(']')
+	case float64:
+		sb.WriteString(strconv.FormatFloat(val, 'g', -1, 64))
+	default:
+		b, _ := json.Marshal(val)
+		sb.Write(b)
+	}
+}
+
+// bundleContentSignature renders a bundle's meaningful content in a
+// canonical, volatile-free form. Fields are WHITELISTED: row ids, use
+// counters, created/updated timestamps, and per-push metadata
+// (exportedAt/By, sourceRig, createdBy) never participate, so a rig
+// re-pushing an unchanged project produces an identical signature.
+// Config lists sort by name; queue items resolve to config NAMES
+// (raw ids differ per box) and order by position.
+func bundleContentSignature(b *ESSProjectBundle) string {
+	var sb strings.Builder
+
+	systems := append([]string(nil), b.Project.Systems...)
+	sort.Strings(systems)
+	fmt.Fprintf(&sb, "project|%s|%s|%v\n", b.Project.Name, b.Project.Description, systems)
+
+	idName := make(map[int64]string, len(b.Configs))
+	for _, c := range b.Configs {
+		idName[c.ID] = c.Name
+	}
+	cfgs := append([]ESSConfig(nil), b.Configs...)
+	sort.Slice(cfgs, func(i, j int) bool { return cfgs[i].Name < cfgs[j].Name })
+	for _, c := range cfgs {
+		fmt.Fprintf(&sb, "config|%s|%s|%s|%s|%s|%s|%s|%s\n",
+			c.Name, c.Description, c.ScriptSource, c.System, c.Protocol,
+			c.Variant, c.Subject, c.FileTemplate)
+		sb.WriteString("  variantArgs ")
+		canonicalValue(&sb, mapAsInterface(c.VariantArgs))
+		sb.WriteString("\n  params ")
+		canonicalValue(&sb, mapAsInterface(c.Params))
+		tags := append([]string(nil), c.Tags...)
+		sort.Strings(tags)
+		fmt.Fprintf(&sb, "\n  tags %v\n", tags)
+	}
+
+	qs := append([]ESSQueue(nil), b.Queues...)
+	sort.Slice(qs, func(i, j int) bool { return qs[i].Name < qs[j].Name })
+	for _, q := range qs {
+		fmt.Fprintf(&sb, "queue|%s|%s|%t|%t|%t\n",
+			q.Name, q.Description, q.AutoStart, q.AutoAdvance, q.AutoDatafile)
+		items := append([]ESSQueueItem(nil), q.Items...)
+		sort.Slice(items, func(i, j int) bool { return items[i].Position < items[j].Position })
+		for _, it := range items {
+			name := it.ConfigName
+			if name == "" {
+				name = idName[it.ConfigID]
+			}
+			fmt.Fprintf(&sb, "  item|%s|%d|%d|%s\n", name, it.RepeatCount, it.PauseAfter, it.Notes)
+		}
+	}
+	return sb.String()
+}
+
+func mapAsInterface(m map[string]interface{}) interface{} {
+	if m == nil {
+		return map[string]interface{}{}
+	}
+	return m
+}
+
 // ImportProjectBundle imports a bundle into a workgroup, creating/updating as needed
 func (r *ESSRegistry) ImportProjectBundle(workgroup string, bundle *ESSProjectBundle, replace bool) (*SyncResult, error) {
 	result := &SyncResult{
 		Success:     true,
 		ProjectName: bundle.Project.Name,
+	}
+
+	// A push whose content matches what the registry already holds is
+	// acknowledged but changes nothing: no table writes, no history row,
+	// and — the point — no lastPushedAt advance. Every box auto-pushes
+	// its active project after any settle, so most pushes are no-ops;
+	// before this check each one stamped a new lastPushedAt that made
+	// every OTHER box's staleness poll go yellow over content that had
+	// not changed (the Aug 2026 history was hundreds of identical
+	// bundles differing only in ids and timestamps).
+	if existing, _ := r.GetProjectDef(workgroup, bundle.Project.Name); existing != nil {
+		if current, err := r.ExportProjectBundle(workgroup, bundle.Project.Name, "", ""); err == nil {
+			if bundleContentSignature(current) == bundleContentSignature(bundle) {
+				result.Unchanged = true
+				result.ConfigsCount = len(bundle.Configs)
+				result.QueuesCount = len(bundle.Queues)
+				return result, nil
+			}
+		}
 	}
 	
 	// Start transaction

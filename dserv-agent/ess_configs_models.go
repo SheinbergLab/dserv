@@ -215,4 +215,8 @@ type SyncResult struct {
 	Deleted      []string `json:"deleted,omitempty"`
 	Skipped      []string `json:"skipped,omitempty"`
 	Errors       []string `json:"errors,omitempty"`
+	// Unchanged: the pushed bundle's content matched what the registry
+	// already held, so nothing was written and lastPushedAt did not
+	// advance (see ImportProjectBundle's dedup check).
+	Unchanged bool `json:"unchanged,omitempty"`
 }

@@ -166,6 +166,17 @@ proc registry_poll_callback {dpoint data} {
                 pushed_by [dict get $result pushed_by] \
                 source_rig [dict get $result source_rig] \
                 pushed_at [dict get $result pushed_at]]
+        } elseif {$status eq "current"} {
+            # Self-heal: a poll that finds us current clears an earlier
+            # stale flag. Only stale is upgraded — "modified" means local
+            # edits and is not the poll's to clear. Without this the
+            # yellow light was one-way: a single transient stale verdict
+            # stuck until the next push or pull.
+            catch {
+                if {[dservGet ess/registry/sync_status] eq "stale"} {
+                    dservSet ess/registry/sync_status "synced"
+                }
+            }
         }
     } err]} {
         # Silent failure - registry may be unreachable
