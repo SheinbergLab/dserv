@@ -4983,6 +4983,29 @@ select.ess-param-select {
     margin-bottom: 4px;
 }
 
+/* Displaced-file rescue rows (shown only when a pull displaced local work) */
+.ess-sync-displaced-row {
+    display: flex;
+    gap: 10px;
+    align-items: baseline;
+    font-size: 12px;
+    padding: 3px 2px;
+}
+
+.ess-sync-displaced-path {
+    font-family: var(--ess-font-mono, monospace);
+    color: var(--ess-text-primary);
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ess-sync-displaced-time {
+    color: var(--ess-text-muted);
+    font-size: 11px;
+}
+
 .ess-sync-row {
     cursor: pointer;
 }

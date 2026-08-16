@@ -2387,6 +2387,11 @@ body {
     min-height: 0;
 }
 
+/* Loader lab (post-strip): no editor column, args + table full width */
+.loaders-split.loaders-split-lab {
+    grid-template-columns: 1fr;
+}
+
 @media (min-width: 1600px) {
     .loaders-split {
         grid-template-columns: 1fr 1fr;

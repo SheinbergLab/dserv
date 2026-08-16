@@ -1,14 +1,18 @@
 /**
  * ESS Workbench - Main Application Script
- * 
+ *
+ * The workbench is an INSPECTOR: it reads and explains the loaded
+ * system (dashboard, state map, loader dry-runs, script browsing with
+ * history/diffs) and edits nothing. Editing happens in files — usually
+ * with an LLM in the loop — and syncs through ess_control's Sync modal.
+ * (The in-page editors, per-user overlay, and old registry sync UI were
+ * retired 2026-08.)
+ *
  * Handles:
  * - Plugin registration and lifecycle hooks
  * - WebSocket connection and snapshot subscription
- * - Tab navigation
- * - Dashboard component rendering
- * - Script editor integration
- * - State diagram visualization
- * - Variants editor
+ * - Tab navigation and dashboard rendering
+ * - The loader dry-run lab (ess::test_loader)
  *
  * Plugin Lifecycle Hooks (called in registration order):
  *   onInit(wb)                — after core init, before connect()
@@ -16,11 +20,6 @@
  *   onDisconnected(wb)        — WebSocket disconnected
  *   onSnapshot(wb, snapshot)  — after snapshot is parsed and core UI updated
  *   onTabSwitch(wb, tabName)  — after tab switch completes
- *   onScriptSelect(wb, name)  — after script selected in Scripts tab
- *   onSaveScript(wb, type, content) — before a script save; return false to handle it
- *   onPullScript(wb, type)    — before a pull; return false to handle it
- *   onCommitScript(wb, type, comment) — before a commit; return false to handle it
- *   onShowCommitDialog(wb, type) — before commit dialog; return false to handle it
  */
 
 
@@ -119,7 +118,6 @@ class ESSWorkbench {
         this.connection = null;
         this.snapshot = null;
         this.autoReload = true;
-        this.registry = null;
         
         // UI state
         this.currentTab = 'dashboard';
@@ -189,7 +187,6 @@ class ESSWorkbench {
         this.cacheElements();
         this.bindEvents();
         this.startClock();
-        this.initVariantsEditor();
         this.initLoadersEditor();
 
         // Let plugins initialize (before connect, so they can bind events)
@@ -217,31 +214,7 @@ class ESSWorkbench {
             statParams: document.getElementById('stat-params'),
             statLoaders: document.getElementById('stat-loaders'),
             statVariants: document.getElementById('stat-variants'),
-            
-            // Variant args
-            variantArgsContainer: document.getElementById('variant-args-container'),
-            autoReloadCheck: document.getElementById('auto-reload-check'),
-            reloadVariantBtn: document.getElementById('reload-variant-btn'),
-            
-            // Parameters (legacy)
-            paramsContainer: document.getElementById('params-container'),
-            paramCount: document.getElementById('param-count'),
-            
-            // Loaders (legacy)
-            loadersList: document.getElementById('loaders-list'),
-            loaderCount: document.getElementById('loader-count'),
-            
-            // States preview
-            statesPreview: document.getElementById('states-preview'),
-            
-            // Scripts
-            scriptsList: document.getElementById('scripts-list'),
-            editorFilename: document.getElementById('editor-filename'),
-            editorStatus: document.getElementById('editor-status'),
-            editorContainer: document.getElementById('editor-container'),
-            lintBtn: document.getElementById('lint-btn'),
-            formatBtn: document.getElementById('format-btn'),
-            
+
             // Footer
             snapshotTime: document.getElementById('snapshot-time'),
             clock: document.getElementById('clock')
@@ -256,26 +229,6 @@ class ESSWorkbench {
             });
         });
         
-        // Auto-reload toggle
-        this.elements.autoReloadCheck?.addEventListener('change', (e) => {
-            this.autoReload = e.target.checked;
-        });
-        
-        // Reload variant button
-        this.elements.reloadVariantBtn?.addEventListener('click', () => {
-            this.reloadVariant();
-        });
-        
-        // Script file selection
-        this.elements.scriptsList?.querySelectorAll('.script-item').forEach(item => {
-            item.addEventListener('click', () => {
-                this.selectScript(item.dataset.script);
-            });
-        });
-        
-        // Editor actions
-        this.elements.lintBtn?.addEventListener('click', () => this.lintCurrentScript());
-        this.elements.formatBtn?.addEventListener('click', () => this.formatCurrentScript());
     }
     
     // ==========================================
@@ -315,7 +268,6 @@ class ESSWorkbench {
         this.connection.on('connected', () => {
             this.updateConnectionStatus('connected');
             this.subscribeToSnapshot();
-            this.initRegistry();
             this._pluginHook('onConnected');
         });
         
@@ -373,56 +325,6 @@ class ESSWorkbench {
         }
     }
     
-    async initRegistry() {
-        try {
-            console.log('Initializing ESS Registry...');
-            
-            const registryUrlDp = await this.dpManager.get('ess/registry/url');
-            const workgroupDp = await this.dpManager.get('ess/registry/workgroup');
-            
-            const registryUrl = registryUrlDp?.data || registryUrlDp?.value || '';
-            const workgroup = workgroupDp?.data || workgroupDp?.value || 'brown-sheinberg';
-            
-            console.log('Registry config from dserv:', { registryUrl, workgroup });
-            
-            this.registry = new RegistryClient({
-                baseUrl: registryUrl,
-                workgroup: workgroup
-            });
-            
-            if (this.registry.workgroup) {
-                try {
-                    const systems = await this.registry.getSystems();
-                    console.log(`Registry connected: ${systems.length} systems available`);
-                } catch (err) {
-                    console.warn('Registry connection test failed:', err);
-                }
-            }
-            
-            // Let plugins know registry is ready
-            await this._pluginHookAsync('onRegistryReady');
-            
-        } catch (err) {
-            console.error('Failed to initialize registry from dserv config:', err);
-            
-            // Fallback: try URL parameters
-            try {
-                const urlParams = new URLSearchParams(window.location.search);
-                const agentUrl = urlParams.get('agent') || '';
-                const workgroup = urlParams.get('workgroup') || 'brown-sheinberg';
-                
-                this.registry = new RegistryClient({
-                    baseUrl: agentUrl,
-                    workgroup: workgroup
-                });
-                
-                await this._pluginHookAsync('onRegistryReady');
-            } catch (fallbackErr) {
-                console.error('Registry initialization completely failed:', fallbackErr);
-            }
-        }
-    }
-    
     // ==========================================
     // Snapshot Handling
     // ==========================================
@@ -455,23 +357,14 @@ class ESSWorkbench {
                 sys_analyze: snapshot.script_sys_analyze || ''
             };
             
-            // Hide sidebar entries for scripts that don't exist
-            this.updateScriptSidebarVisibility();
-
             // Update config display (always visible/cheap)
             this.updateConfigDisplay();
 
             // Only update the active tab's content
             this._snapshotDirty = true;
             switch (this.currentTab) {
-                case 'variants':
-                    this.updateVariantsEditor();
-                    break;
                 case 'loaders':
                     this.updateLoadersEditor();
-                    break;
-                case 'scripts':
-                    this.updateScriptEditor();
                     break;
             }
             
@@ -607,10 +500,6 @@ class ESSWorkbench {
         ['statStates', 'statParams', 'statLoaders', 'statVariants'].forEach(key => {
             if (this.elements[key]) this.elements[key].textContent = '0';
         });
-        
-        if (this.elements.variantArgsContainer) {
-            this.elements.variantArgsContainer.innerHTML = this.getEmptyState('No variant loaded');
-        }
     }
     
     getEmptyState(message) {
@@ -626,6 +515,55 @@ class ESSWorkbench {
         `;
     }
     
+        parseVariantsDict(str) {
+        if (!str || typeof str !== 'string') return {};
+        
+        const variants = {};
+        // Strip comment lines at each dict level, mirroring ess::normalize_variants
+        // in lib/ess-2.0.tm — variant files now allow comments the server sanitizes.
+        const list = TclParser.parseList(TclParser.stripComments(str.trim()));
+
+        for (let i = 0; i < list.length - 1; i += 2) {
+            const name = list[i];
+            const defStr = list[i + 1];
+            const def = TclParser.parseDict(TclParser.stripComments(defStr));
+
+            variants[name] = {
+                description: def.description || '',
+                loader_proc: def.loader_proc || '',
+                loader_options: def.loader_options ? TclParser.parseDict(TclParser.stripComments(def.loader_options)) : {},
+                init: def.init || '',
+                deinit: def.deinit || '',
+                params: def.params ? TclParser.parseDict(TclParser.stripComments(def.params)) : {}
+            };
+        }
+        
+        return variants;
+    }
+
+        parseLoaderOptionValues(optionStr) {
+        const values = [];
+        const items = TclParser.parseList(optionStr);
+        
+        for (const item of items) {
+            const parts = TclParser.parseList(item);
+            
+            if (parts.length === 2) {
+                values.push({
+                    label: parts[0],
+                    value: parts[1]
+                });
+            } else {
+                values.push({
+                    label: item,
+                    value: item
+                });
+            }
+        }
+        
+        return values;
+    }
+
     // ==========================================
     // Configuration Display
     // ==========================================
@@ -688,240 +626,6 @@ class ESSWorkbench {
     }
     
     // ==========================================
-    // Variant Args
-    // ==========================================
-    
-    updateVariantArgs() {
-        const container = this.elements.variantArgsContainer;
-        if (!container) return;
-        
-        const loaderInfo = this.parseCurrentLoader(this.snapshot?.current_loader);
-        const variantArgs = this.parseVariantArgs(this.snapshot?.variant_args || '');
-        
-        if (!loaderInfo || !loaderInfo.loader_arg_options) {
-            container.innerHTML = this.getEmptyState('No variant options available');
-            return;
-        }
-        
-        const argNames = loaderInfo.loader_arg_names || [];
-        const argOptions = loaderInfo.loader_arg_options || {};
-        
-        if (argNames.length === 0) {
-            container.innerHTML = this.getEmptyState('No configurable options');
-            return;
-        }
-        
-        let html = '';
-        
-        argNames.forEach(argName => {
-            const options = argOptions[argName] || [];
-            const currentValue = variantArgs[argName] || '';
-            
-            if (Array.isArray(options) && options.length > 0) {
-                html += `
-                    <div class="variant-arg-row">
-                        <span class="variant-arg-label">${this.escapeHtml(argName)}</span>
-                        <select class="variant-arg-select" data-arg="${this.escapeHtml(argName)}">
-                            ${options.map((opt, idx) => {
-                                const label = typeof opt === 'object' ? opt.label : opt;
-                                const value = typeof opt === 'object' ? opt.value : opt;
-                                const normCurrent = this.normalizeWhitespace(currentValue);
-                                const normValue = this.normalizeWhitespace(value);
-                                const selected = normValue === normCurrent ? 'selected' : '';
-                                return `<option value="${idx}" ${selected}>${this.escapeHtml(label)}</option>`;
-                            }).join('')}
-                        </select>
-                    </div>
-                `;
-            } else {
-                html += `
-                    <div class="variant-arg-row">
-                        <span class="variant-arg-label">${this.escapeHtml(argName)}</span>
-                        <input type="text" class="variant-arg-select" data-arg="${this.escapeHtml(argName)}" 
-                               value="${this.escapeHtml(currentValue)}" placeholder="Enter value">
-                    </div>
-                `;
-            }
-        });
-        
-        container.innerHTML = html;
-        
-        this._currentArgOptions = argOptions;
-        
-        container.querySelectorAll('.variant-arg-select').forEach(el => {
-            el.addEventListener('change', (e) => {
-                const argName = e.target.dataset.arg;
-                let value = e.target.value;
-                
-                if (e.target.tagName === 'SELECT' && this._currentArgOptions[argName]) {
-                    const idx = parseInt(value, 10);
-                    const opt = this._currentArgOptions[argName][idx];
-                    value = opt ? opt.value : value;
-                }
-                
-                this.onVariantArgChange(argName, value);
-            });
-        });
-    }
-    
-    normalizeWhitespace(str) {
-        if (typeof str !== 'string') return String(str);
-        return str.replace(/\s+/g, ' ').trim();
-    }
-    
-    onVariantArgChange(argName, value) {
-        if (!this.connection || !this.connection.connected) return;
-        
-        const cmd = `ess::set_variant_args ${argName} {${value}}`;
-        this.connection.send(cmd).catch(err => {
-            console.error('Failed to set variant arg:', err);
-        });
-        
-        if (this.autoReload) {
-            setTimeout(() => this.reloadVariant(), 100);
-        }
-    }
-    
-    reloadVariant() {
-        if (!this.connection || !this.connection.connected) return;
-        
-        this.connection.send('ess::reload_variant').catch(err => {
-            console.error('Failed to reload variant:', err);
-        });
-    }
-    
-    // ==========================================
-    // Parameters
-    // ==========================================
-    
-    updateParameters() {
-        const container = this.elements.paramsContainer;
-        if (!container) return;
-        
-        const params = this.parseParams(this.snapshot?.params || '');
-        const paramNames = Object.keys(params);
-        
-        this.elements.paramCount.textContent = paramNames.length.toString();
-        
-        if (paramNames.length === 0) {
-            container.innerHTML = this.getEmptyState('No parameters defined');
-            return;
-        }
-        
-        let html = '';
-        
-        paramNames.forEach(name => {
-            const param = params[name];
-            const value = param.value !== undefined ? param.value : param.default;
-            const type = param.type || 'string';
-            const isTime = param.flag === '1' || name.toLowerCase().includes('time');
-            
-            html += `
-                <div class="param-row">
-                    <span class="param-name ${isTime ? 'time' : ''}">${this.escapeHtml(name)}</span>
-                    <input type="text" class="param-input" data-param="${this.escapeHtml(name)}" 
-                           value="${this.escapeHtml(String(value))}">
-                    <span class="param-type">${this.escapeHtml(type)}</span>
-                </div>
-            `;
-        });
-        
-        container.innerHTML = html;
-        
-        container.querySelectorAll('.param-input').forEach(el => {
-            el.addEventListener('change', (e) => {
-                this.onParamChange(e.target.dataset.param, e.target.value);
-            });
-        });
-    }
-    
-    onParamChange(paramName, value) {
-        if (!this.connection || !this.connection.connected) return;
-        
-        const cmd = `ess::set_param ${paramName} {${value}}`;
-        this.connection.send(cmd).catch(err => {
-            console.error('Failed to set parameter:', err);
-        });
-    }
-    
-    // ==========================================
-    // Loaders
-    // ==========================================
-    
-    updateLoaders() {
-        const container = this.elements.loadersList;
-        if (!container) return;
-        
-        const loaders = this.parseLoaders(this.snapshot?.loaders || '');
-        
-        this.elements.loaderCount.textContent = loaders.length.toString();
-        
-        if (loaders.length === 0) {
-            container.innerHTML = this.getEmptyState('No loaders registered');
-            return;
-        }
-        
-        let html = '';
-        
-        loaders.forEach(loader => {
-            const name = loader.name || 'unnamed';
-            const args = loader.args || [];
-            const argsStr = args.length > 0 ? args.join(', ') : 'no arguments';
-            
-            html += `
-                <div class="loader-item">
-                    <div class="loader-name">${this.escapeHtml(name)}</div>
-                    <div class="loader-args">(${this.escapeHtml(argsStr)})</div>
-                </div>
-            `;
-        });
-        
-        container.innerHTML = html;
-    }
-    
-    // ==========================================
-    // States Preview
-    // ==========================================
-    
-    updateStatesPreview() {
-        const container = this.elements.statesPreview;
-        if (!container) return;
-        
-        const states = this.parseStates(this.snapshot?.states || '');
-        const stateNames = Object.keys(states);
-        
-        if (stateNames.length === 0) {
-            container.innerHTML = this.getEmptyState('No states defined');
-            return;
-        }
-        
-        const startState = stateNames[0];
-        const endStates = new Set();
-        
-        stateNames.forEach(name => {
-            const state = states[name];
-            if (!state.transitions || state.transitions.length === 0) {
-                endStates.add(name);
-            }
-            if (name.toLowerCase() === 'end') {
-                endStates.add(name);
-            }
-        });
-        
-        let html = '';
-        
-        stateNames.forEach(name => {
-            let classes = 'state-node';
-            if (name === startState) classes += ' start';
-            if (endStates.has(name)) classes += ' end';
-            
-            html += `<div class="${classes}">${this.escapeHtml(name)}</div>`;
-        });
-        
-        container.innerHTML = html;
-    }
-    
-    // ==========================================
     // Tab Navigation
     // ==========================================
     
@@ -937,382 +641,14 @@ class ESSWorkbench {
         });
         
         // Initialize tab-specific content and refresh if snapshot arrived while away
-        if (tabName === 'variants') {
-            this.initVariantsTab();
-            if (this._snapshotDirty) this.updateVariantsEditor();
-        } else if (tabName === 'loaders') {
+        if (tabName === 'loaders') {
             this.initLoadersTab();
-            if (this._snapshotDirty) this.updateLoadersEditor();
         }
         this._snapshotDirty = false;
         
         // Notify plugins
         this._pluginHook('onTabSwitch', tabName);
     }
-    
-    async initVariantsTab() {
-        if (this.variantEditorPending || !this.variantScriptEditor?.view) {
-            const ready = await this.ensureVariantScriptEditor();
-            if (ready) {
-                this.loadVariantScriptContent();
-            }
-        }
-    }
-    
-    loadVariantScriptContent() {
-        if (!this.variantScriptEditor?.view) return;
-        
-        if (this.scripts.variants) {
-            this.variantScriptEditor.setValue(this.scripts.variants);
-        } else if (this.snapshot?.variants) {
-            this.variantScriptEditor.setValue(this.snapshot.variants);
-        }
-    }
-
-    // ==========================================
-    // Script Editor
-    // ==========================================
-    
-    async initEditor() {
-        if (this.editor) return;
-        
-        try {
-            this.editor = new TclEditor(this.elements.editorContainer, {
-                theme: 'dark',
-                fontSize: '13px',
-                tabSize: 4,
-                lineNumbers: true,
-                keybindings: 'emacs'
-            });
-            
-            await new Promise(resolve => {
-                this.elements.editorContainer.addEventListener('editor-ready', resolve, { once: true });
-            });
-            
-            await this.loadScript(this.currentScript);
-            
-            let checkTimeout = null;
-            const checkModified = async () => {
-                if (this.scriptOriginalHash) {
-                    const currentContent = this.editor.getValue();
-                    const currentHash = await sha256(currentContent);
-                    const isModified = currentHash !== this.scriptOriginalHash;
-                    
-                    if (isModified !== this.scriptModified) {
-                        this.scriptModified = isModified;
-                        const saveBtn = document.getElementById('script-save-btn');
-                        if (saveBtn) saveBtn.disabled = !isModified;
-                    }
-                }
-            };
-            
-            const onEditorChange = () => {
-                if (!this.scriptOriginalHash) return;
-                
-                if (checkTimeout) clearTimeout(checkTimeout);
-                checkTimeout = setTimeout(checkModified, 300);
-                
-                if (this.elements.editorStatus.textContent) {
-                    this.elements.editorStatus.textContent = '';
-                    this.elements.editorStatus.style.color = '';
-                    this.elements.editorStatus.onclick = null;
-                }
-            };
-            
-            this.editor.view.dom.addEventListener('input', onEditorChange);
-            this.editor.view.dom.addEventListener('keyup', onEditorChange);
-            
-        } catch (e) {
-            console.error('Failed to initialize editor:', e);
-        }
-
-        // Editors start read-only until a user is selected
-        this.updateEditorsReadOnly();
-    }
-
-    updateEditorsReadOnly() {
-        const hasUser = !!this.currentUser || !!document.getElementById('user-select')?.value;
-        const readOnly = !hasUser;
-
-        this.editor?.setReadOnly(readOnly);
-        this.variantScriptEditor?.setReadOnly(readOnly);
-        this.loaderScriptEditor?.setReadOnly(readOnly);
-    }
-
-    async selectScript(scriptName) {
-        this.currentScript = scriptName;
-        
-        this.elements.scriptsList?.querySelectorAll('.script-item').forEach(item => {
-            item.classList.toggle('active', item.dataset.script === scriptName);
-        });
-        
-        await this.loadScript(scriptName);
-        
-        // Notify plugins
-        this._pluginHook('onScriptSelect', scriptName);
-    }
-    
-    async loadScript(scriptName) {
-        if (!this.editor) return;
-        
-        const content = this.scripts[scriptName] || '';
-        this.editor.setValue(content);
-        
-        this.scriptOriginalHash = await sha256(content);
-        this.scriptModified = false;
-        
-        const saveBtn = document.getElementById('script-save-btn');
-        if (saveBtn) saveBtn.disabled = true;
-        
-        const sys = this.snapshot?.system || '';
-        const proto = this.snapshot?.protocol || '';
-        const filenames = {
-            system: sys ? `${sys}.tcl` : 'system.tcl',
-            protocol: proto ? `${sys}/${proto}.tcl` : 'protocol.tcl',
-            loaders: proto ? `${sys}/${proto}_loaders.tcl` : 'loaders.tcl',
-            variants: proto ? `${sys}/${proto}_variants.tcl` : 'variants.tcl',
-            stim: proto ? `${sys}/${proto}_stim.tcl` : 'stim.tcl',
-            sys_extract: sys ? `${sys}_extract.tcl` : 'sys_extract.tcl',
-            proto_extract: proto ? `${sys}/${proto}_extract.tcl` : 'proto_extract.tcl',
-            sys_analyze: sys ? `${sys}_analyze.tcl` : 'sys_analyze.tcl'
-        };
-        
-        this.elements.editorFilename.textContent = filenames[scriptName] || `${scriptName}.tcl`;
-        this.elements.editorStatus.textContent = '';
-    }
-    
-    updateScriptSidebarVisibility() {
-        const optionalTypes = ['sys_extract', 'proto_extract', 'sys_analyze'];
-        
-        const labels = {
-            system: 'system',
-            protocol: 'protocol',
-            loaders: 'loaders',
-            variants: 'variants',
-            stim: 'stim',
-            sys_extract: 'sys_extract',
-            proto_extract: 'proto_extract',
-            sys_analyze: 'sys_analyze'
-        };
-        
-        const sys = this.snapshot?.system || '';
-        const proto = this.snapshot?.protocol || '';
-        const filenames = {
-            system: sys ? `${sys}.tcl` : '',
-            protocol: proto ? `${proto}.tcl` : '',
-            loaders: proto ? `${proto}_loaders.tcl` : '',
-            variants: proto ? `${proto}_variants.tcl` : '',
-            stim: proto ? `${proto}_stim.tcl` : '',
-            sys_extract: sys ? `${sys}_extract.tcl` : '',
-            proto_extract: proto ? `${proto}_extract.tcl` : '',
-            sys_analyze: sys ? `${sys}_analyze.tcl` : ''
-        };
-        
-        this.elements.scriptsList?.querySelectorAll('.script-item').forEach(item => {
-            const scriptType = item.dataset.script;
-            
-            const label = item.querySelector('span:not(.script-status-dot)');
-            if (label && labels[scriptType]) {
-                label.textContent = labels[scriptType];
-            }
-            
-            if (filenames[scriptType]) {
-                item.title = filenames[scriptType];
-            }
-            
-            if (optionalTypes.includes(scriptType)) {
-                const hasContent = this.scripts[scriptType] && this.scripts[scriptType].trim() !== '';
-                item.style.display = hasContent ? '' : 'none';
-                
-                if (!hasContent && this.currentScript === scriptType) {
-                    this.selectScript('system');
-                }
-            }
-        });
-    }
-
-    updateScriptEditor() {
-        if (this.editor && this.currentTab === 'scripts') {
-            this.loadScript(this.currentScript);
-        }
-    }
-    
-    lintCurrentScript() {
-        if (!this.editor) return;
-        
-        const result = this.editor.lint();
-        
-        if (result.isValid) {
-            this.elements.editorStatus.textContent = '✓ No issues';
-            this.elements.editorStatus.style.color = 'var(--wb-success)';
-            
-            setTimeout(() => {
-                this.elements.editorStatus.textContent = '';
-                this.elements.editorStatus.style.color = '';
-            }, 3000);
-        } else {
-            const firstError = result.errors[0];
-            const firstWarning = result.warnings[0];
-            const issue = firstError || firstWarning;
-            
-            if (issue) {
-                this.elements.editorStatus.innerHTML = 
-                    `<span style="cursor:pointer" title="Click to see all issues">` +
-                    `Line ${issue.line}: ${issue.message}` +
-                    (result.errors.length + result.warnings.length > 1 
-                     ? ` <small>(+${result.errors.length + result.warnings.length - 1} more)</small>` 
-                     : '') +
-                    `</span>`;
-                this.elements.editorStatus.style.color = firstError ? 'var(--wb-error)' : 'var(--wb-warning)';
-                
-                this.elements.editorStatus.onclick = () => {
-                    this.jumpToLine(issue.line);
-                    console.log('Lint results:', result);
-                };
-            } else {
-                this.elements.editorStatus.textContent = result.summary;
-                this.elements.editorStatus.style.color = 'var(--wb-error)';
-            }
-        }
-    }
-    
-    jumpToLine(lineNum) {
-        if (!this.editor?.view) return;
-        
-        const doc = this.editor.view.state.doc;
-        const line = doc.line(Math.min(lineNum, doc.lines));
-        
-        this.editor.view.dispatch({
-            selection: { anchor: line.from },
-            scrollIntoView: true
-        });
-        
-        this.editor.view.focus();
-    }
-    
-    formatCurrentScript() {
-        if (!this.editor) return;
-        
-        this.editor.format();
-        this.elements.editorStatus.textContent = 'Formatted';
-        this.elements.editorStatus.style.color = 'var(--wb-success)';
-        
-        setTimeout(() => {
-            this.elements.editorStatus.textContent = '';
-            this.elements.editorStatus.style.color = '';
-        }, 2000);
-    }
-    
-    // ==========================================
-    // Script Save / Pull / Commit (delegatable to plugins)
-    // ==========================================
-    
-    /**
-     * Save current script. Plugins can intercept via onSaveScript.
-     */
-    async saveCurrentScript() {
-        const scriptType = this.currentScript;
-        const content = this.editor?.getValue();
-        
-        // Let plugins handle it if they want
-        const handled = await this._pluginHookAsync('onSaveScript', scriptType, content);
-        if (handled === false) return;
-        
-        // Default: save via dserv eval
-        if (!this.editor?.view) {
-            alert('No editor available');
-            return;
-        }
-        
-        if (!content) {
-            alert('No content to save');
-            return;
-        }
-        
-        const btn = document.getElementById('script-save-btn');
-        const originalText = btn?.textContent;
-        
-        try {
-            if (btn) {
-                btn.disabled = true;
-                btn.textContent = 'Saving...';
-            }
-            
-            if (this.connection?.ws?.readyState === WebSocket.OPEN) {
-                const saveCmd = `ess::save_script ${scriptType} {${content}}`;
-                this.connection.ws.send(JSON.stringify({
-                    cmd: 'eval',
-                    script: saveCmd
-                }));
-                
-                console.log(`Saved ${scriptType} script to local filesystem`);
-                this.scripts[scriptType] = content;
-                
-                if (btn) {
-                    btn.textContent = 'Saved!';
-                    setTimeout(() => {
-                        btn.textContent = originalText;
-                        btn.disabled = false;
-                    }, 1500);
-                }
-            } else {
-                throw new Error('WebSocket not connected');
-            }
-        } catch (err) {
-            alert(`Save failed: ${err.message}`);
-            if (btn) {
-                btn.textContent = originalText;
-                btn.disabled = false;
-            }
-        }
-    }
-    
-    /**
-     * Pull script from registry. Plugins can intercept via onPullScript.
-     */
-    async pullScriptFromRegistry() {
-        const handled = await this._pluginHookAsync('onPullScript', this.currentScript);
-        if (handled === false) return;
-        
-        // Default: no-op (needs registry plugin)
-        console.warn('pullScriptFromRegistry: no handler');
-    }
-    
-    /**
-     * Show commit dialog. Plugins can intercept via onShowCommitDialog.
-     */
-    showCommitDialog(scriptType) {
-        const handled = this._pluginHook('onShowCommitDialog', scriptType);
-        if (handled === false) return;
-        
-        // Default: show the modal
-        const modal = document.getElementById('commit-modal');
-        if (!modal) return;
-        
-        const fileEl = document.getElementById('commit-file');
-        if (fileEl) {
-            fileEl.textContent = `File: ${scriptType}.tcl`;
-        }
-        
-        modal.dataset.scriptType = scriptType;
-        document.getElementById('commit-comment').value = '';
-        modal.style.display = 'flex';
-    }
-    
-    /**
-     * Commit to registry. Plugins can intercept via onCommitScript.
-     */
-    async commitToRegistry(scriptType, comment) {
-        const handled = await this._pluginHookAsync('onCommitScript', scriptType, comment);
-        if (handled === false) return;
-        
-        // Default: no-op (needs registry plugin)
-        console.warn('commitToRegistry: no handler');
-    }
-    
-    // ==========================================
-    // States Diagram
-    // ==========================================
     
     // ==========================================
     // Utilities
@@ -1484,1060 +820,14 @@ class ESSWorkbench {
     }
     
     // ==========================================
-    // Variants Editor (large section, all core)
-    // ==========================================
-    
-    initVariantsEditor() {
-        this.variantElements = {
-            scriptEditor: document.getElementById('variant-script-editor'),
-            parsedVariantSelect: document.getElementById('parsed-variant-select'),
-            parsedStatus: document.getElementById('parsed-status'),
-            parsedContent: document.getElementById('parsed-content'),
-            fileValidationStatus: document.getElementById('file-validation-status'),
-            formatBtn: document.getElementById('variant-format-btn'),
-            newBtn: document.getElementById('variant-new-btn'),
-            duplicateBtn: document.getElementById('variant-duplicate-btn'),
-            saveBtn: document.getElementById('variant-save-btn'),
-            saveReloadBtn: document.getElementById('variant-save-reload-btn')
-        };
-        
-        this.variantsOriginalHash = null;
-        this.variantsModified = false;
-        
-        this.variantElements.formatBtn?.addEventListener('click', () => {
-            this.formatVariantsScript();
-        });
-        
-        this.variantElements.newBtn?.addEventListener('click', () => {
-            this.addNewVariant();
-        });
-        
-        this.variantElements.duplicateBtn?.addEventListener('click', () => {
-            this.duplicateCurrentVariant();
-        });
-        
-        this.variantElements.saveBtn?.addEventListener('click', () => {
-            this.saveVariantsScript(false);
-        });
-        
-        this.variantElements.saveReloadBtn?.addEventListener('click', () => {
-            this.saveVariantsScript(true);
-        });
-        
-        this.variantElements.parsedVariantSelect?.addEventListener('change', (e) => {
-            this.jumpToVariant(e.target.value);
-        });
-        
-        this.variantEditorPending = true;
-    }
-    
-    async formatVariantsScript() {
-        if (!this.variantScriptEditor?.view) return;
-        
-        if (typeof TclFormatter === 'undefined') {
-            console.warn('TclFormatter not available');
-            return;
-        }
-        
-        const content = this.variantScriptEditor.getValue();
-        
-        try {
-            const formatted = TclFormatter.formatTclCode(content, 4);
-            const cursorPos = this.getCursorPosition();
-            
-            this.variantScriptEditor.setValue(formatted);
-            
-            const newLength = formatted.length;
-            const newPos = Math.min(cursorPos, newLength);
-            
-            this.variantScriptEditor.view.dispatch({
-                selection: { anchor: newPos }
-            });
-
-            if (this.variantsOriginalHash) {
-                const currentHash = await sha256(formatted);
-                this.variantsModified = currentHash !== this.variantsOriginalHash;
-                this.updateSaveButton();
-            }
-            
-            this.validateEntireFile();
-            this.populateVariantDropdown();
-            this.updateParsedView();
-            
-        } catch (e) {
-            console.error('Format error:', e);
-        }
-    }
-    
-    initVariantScriptEditor() {
-        console.log('initVariantScriptEditor called - deferring until tab visible');
-        this.variantEditorPending = true;
-    }
-    
-    async ensureVariantScriptEditor() {
-        const container = this.variantElements.scriptEditor;
-        
-        if (!container) {
-            console.warn('Variant script editor container not found');
-            return false;
-        }
-        
-        if (typeof TclEditor === 'undefined') {
-            console.warn('TclEditor not defined');
-            return false;
-        }
-        
-        if (this.variantScriptEditor && this.variantScriptEditor.view) {
-            return true;
-        }
-        
-        this.variantScriptEditor = new TclEditor(container, {
-            theme: 'dark',
-            fontSize: '13px',
-            tabSize: 4,
-            lineNumbers: true,
-            keybindings: 'emacs'
-        });
-        
-        await new Promise(resolve => {
-            container.addEventListener('editor-ready', resolve, { once: true });
-        });
-        
-        this.variantEditorPending = false;
-
-        this.setupCursorTracking();
-        this.updateEditorsReadOnly();
-
-        return this.variantScriptEditor.view !== null;
-    }
-    
-    setupCursorTracking() {
-        if (!this.variantScriptEditor?.view) return;
-        
-        let updateTimeout = null;
-        const debouncedUpdate = () => {
-            if (updateTimeout) clearTimeout(updateTimeout);
-            updateTimeout = setTimeout(() => {
-                this.updateParsedView();
-            }, 150);
-        };
-        
-        let validateTimeout = null;
-        const debouncedValidate = () => {
-            if (validateTimeout) clearTimeout(validateTimeout);
-            validateTimeout = setTimeout(() => {
-                this.validateEntireFile();
-            }, 500);
-        };
-        
-        const checkModified = async () => {
-            if (this.variantsOriginalHash) {
-                const currentContent = this.variantScriptEditor.getValue();
-                const currentHash = await sha256(currentContent);
-                const isModified = currentHash !== this.variantsOriginalHash;
-                if (isModified !== this.variantsModified) {
-                    this.variantsModified = isModified;
-                    this.updateSaveButton();
-                }
-            }
-        };
-        
-        const view = this.variantScriptEditor.view;
-        if (view) {
-            view.dom.addEventListener('keyup', () => {
-                debouncedUpdate();
-                debouncedValidate();
-                checkModified();
-            });
-            view.dom.addEventListener('click', debouncedUpdate);
-            view.dom.addEventListener('input', () => {
-                debouncedUpdate();
-                debouncedValidate();
-                checkModified();
-            });
-            
-            view.scrollDOM.addEventListener('scroll', () => {
-                this.applyVariantHighlight();
-            });
-        }
-    }
-    
-    updateSaveButton() {
-        const btn = this.variantElements.saveBtn;
-        const reloadBtn = this.variantElements.saveReloadBtn;
-        
-        if (btn) {
-            if (this.variantsModified) {
-                btn.disabled = false;
-                btn.classList.add('modified');
-            } else {
-                btn.disabled = true;
-                btn.classList.remove('modified');
-            }
-        }
-        
-        if (reloadBtn) {
-            if (this.variantsModified) {
-                reloadBtn.disabled = false;
-                reloadBtn.classList.add('modified');
-            } else {
-                reloadBtn.disabled = true;
-                reloadBtn.classList.remove('modified');
-            }
-        }
-    }
-    
-    async saveVariantsScript(andReload = false) {
-        if (!this.variantScriptEditor?.view || !this.variantsModified) return;
-        
-        const content = this.variantScriptEditor.getValue();
-        const btn = andReload ? this.variantElements.saveReloadBtn : this.variantElements.saveBtn;
-        
-        const statusEl = this.variantElements.fileValidationStatus;
-        if (statusEl?.classList.contains('error')) {
-            const proceed = confirm('This file has validation errors. Save anyway?');
-            if (!proceed) return;
-        }
-        
-        const originalHtml = btn?.innerHTML;
-        if (btn) {
-            btn.disabled = true;
-            btn.innerHTML = `
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="spin">
-                    <circle cx="12" cy="12" r="10"></circle>
-                </svg>
-                Saving...
-            `;
-        }
-        
-        try {
-            const saveCmd = `ess::save_script variants {${content}}`;
-            
-            if (this.connection?.ws?.readyState === WebSocket.OPEN) {
-                this.connection.ws.send(JSON.stringify({
-                    cmd: 'eval',
-                    script: saveCmd
-                }));
-                
-                this.variantsOriginalHash = await sha256(content);
-                this.variantsModified = false;
-                
-                console.log('Variants script saved successfully');
-                
-                if (andReload) {
-                    if (btn) {
-                        btn.innerHTML = `
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="spin">
-                                <circle cx="12" cy="12" r="10"></circle>
-                            </svg>
-                            Reloading...
-                        `;
-                    }
-                    
-                    await new Promise(resolve => setTimeout(resolve, 200));
-                    
-                    this.connection.ws.send(JSON.stringify({
-                        cmd: 'eval',
-                        script: 'ess::reload_system'
-                    }));
-                }
-                
-                // Notify plugins (e.g., registry tracks sync status)
-                this._pluginHook('onVariantsSaved', content);
-                
-                if (btn) {
-                    btn.innerHTML = `
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <polyline points="20 6 9 17 4 12"></polyline>
-                        </svg>
-                        ${andReload ? 'Reloaded!' : 'Saved!'}
-                    `;
-                    setTimeout(() => {
-                        this.resetSaveButton();
-                    }, 2000);
-                }
-            } else {
-                throw new Error('WebSocket not connected');
-            }
-            
-        } catch (error) {
-            console.error('Failed to save variants script:', error);
-            alert(`Failed to save: ${error.message}`);
-            this.resetSaveButton();
-        }
-    }
-    
-    resetSaveButton() {
-        const btn = this.variantElements.saveBtn;
-        const reloadBtn = this.variantElements.saveReloadBtn;
-        
-        if (btn) {
-            btn.innerHTML = `
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
-                    <polyline points="17 21 17 13 7 13 7 21"></polyline>
-                    <polyline points="7 3 7 8 15 8"></polyline>
-                </svg>
-                Save
-            `;
-        }
-        
-        if (reloadBtn) {
-            reloadBtn.innerHTML = `
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <polyline points="23 4 23 10 17 10"></polyline>
-                    <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
-                </svg>
-                Save & Reload
-            `;
-        }
-        
-        this.updateSaveButton();
-    }
-    
-    validateEntireFile() {
-        if (!this.variantScriptEditor?.view) return;
-        
-        const content = this.variantScriptEditor.getValue();
-        const statusEl = this.variantElements.fileValidationStatus;
-        if (!statusEl) return;
-        
-        const errors = [];
-        const warnings = [];
-        
-        if (typeof TclLinter !== 'undefined') {
-            try {
-                const linter = new TclLinter();
-                const result = linter.lint(content);
-                if (result.errors?.length > 0) {
-                    result.errors.forEach(e => {
-                        errors.push(`Line ${e.line || '?'}: ${e.message}`);
-                    });
-                }
-            } catch (e) {
-                errors.push(`Linter error: ${e.message}`);
-            }
-        }
-        
-        const variantsMatch = content.match(/variable\s+variants\s*\{/);
-        if (!variantsMatch) {
-            errors.push('Missing "variable variants { ... }" block');
-        }
-        
-        const variants = this.findAllVariants(content);
-        if (variants.length === 0 && variantsMatch) {
-            warnings.push('No variants defined');
-        }
-        
-        for (const v of variants) {
-            const variantInfo = this.findVariantAtPosition(content, v.start + 1);
-            if (variantInfo) {
-                try {
-                    const parsed = this.parseVariantBlock(variantInfo.body);
-                    if (!parsed.loader_proc) {
-                        errors.push(`Variant "${v.name}": missing loader_proc`);
-                    }
-                } catch (e) {
-                    errors.push(`Variant "${v.name}": parse error`);
-                }
-            }
-        }
-        
-        if (errors.length > 0) {
-            statusEl.className = 'file-validation-status error';
-            statusEl.textContent = `✗ ${errors.length} error${errors.length > 1 ? 's' : ''}`;
-            statusEl.title = errors.join('\n');
-        } else if (warnings.length > 0) {
-            statusEl.className = 'file-validation-status warning';
-            statusEl.textContent = `⚠ ${warnings.length} warning${warnings.length > 1 ? 's' : ''}`;
-            statusEl.title = warnings.join('\n');
-        } else {
-            statusEl.className = 'file-validation-status valid';
-            statusEl.textContent = `✓ ${variants.length} variant${variants.length !== 1 ? 's' : ''}`;
-            statusEl.title = 'File is valid';
-        }
-    }
-    
-    updateVariantsEditor() {
-        if (!this.snapshot) return;
-        
-        const variantsStr = this.snapshot.variants || '';
-        this.parsedVariants = this.parseVariantsDict(variantsStr);
-        
-        if (this.variantScriptEditor?.view) {
-            this.loadVariantScriptContent();
-        }
-    }
-    
-    parseVariantsDict(str) {
-        if (!str || typeof str !== 'string') return {};
-        
-        const variants = {};
-        // Strip comment lines at each dict level, mirroring ess::normalize_variants
-        // in lib/ess-2.0.tm — variant files now allow comments the server sanitizes.
-        const list = TclParser.parseList(TclParser.stripComments(str.trim()));
-
-        for (let i = 0; i < list.length - 1; i += 2) {
-            const name = list[i];
-            const defStr = list[i + 1];
-            const def = TclParser.parseDict(TclParser.stripComments(defStr));
-
-            variants[name] = {
-                description: def.description || '',
-                loader_proc: def.loader_proc || '',
-                loader_options: def.loader_options ? TclParser.parseDict(TclParser.stripComments(def.loader_options)) : {},
-                init: def.init || '',
-                deinit: def.deinit || '',
-                params: def.params ? TclParser.parseDict(TclParser.stripComments(def.params)) : {}
-            };
-        }
-        
-        return variants;
-    }
-    
-    async loadVariantScriptContent() {
-        if (!this.variantScriptEditor?.view) return;
-        
-        let content = '';
-        if (this.scripts.variants) {
-            content = this.scripts.variants;
-        } else if (this.snapshot?.variants) {
-            content = this.snapshot.variants;
-        }
-
-        if (content) {
-            this.variantScriptEditor.setValue(content);
-            
-            this.variantsOriginalHash = await sha256(content);
-            this.variantsModified = false;
-            this.updateSaveButton();
-            
-            setTimeout(() => {
-                this.populateVariantDropdown();
-                this.updateParsedView();
-                this.validateEntireFile();
-            }, 100);
-        }
-    }
-    
-    populateVariantDropdown() {
-        const select = this.variantElements.parsedVariantSelect;
-        if (!select || !this.variantScriptEditor?.view) return;
-        
-        const content = this.variantScriptEditor.getValue();
-        const variants = this.findAllVariants(content);
-        
-        select.innerHTML = '<option value="">— Select variant —</option>';
-        
-        variants.forEach(v => {
-            const option = document.createElement('option');
-            option.value = v.name;
-            option.textContent = v.name;
-            select.appendChild(option);
-        });
-        
-        this.allVariantPositions = variants;
-    }
-    
-    findAllVariants(content) {
-        const variants = [];
-        
-        const variantsMatch = content.match(/variable\s+variants\s*\{/);
-        if (!variantsMatch) return variants;
-        
-        const variantsStart = variantsMatch.index + variantsMatch[0].length;
-        
-        let braceDepth = 1;
-        let variantsEnd = variantsStart;
-        for (let i = variantsStart; i < content.length && braceDepth > 0; i++) {
-            if (content[i] === '{') braceDepth++;
-            else if (content[i] === '}') braceDepth--;
-            if (braceDepth === 0) variantsEnd = i;
-        }
-        
-        const variantsBody = content.substring(variantsStart, variantsEnd);
-        let searchPos = 0;
-        
-        while (searchPos < variantsBody.length) {
-            while (searchPos < variantsBody.length && /\s/.test(variantsBody[searchPos])) {
-                searchPos++;
-            }
-            
-            if (searchPos >= variantsBody.length) break;
-            
-            let nameStart = searchPos;
-            while (searchPos < variantsBody.length && /\w/.test(variantsBody[searchPos])) {
-                searchPos++;
-            }
-            const variantName = variantsBody.substring(nameStart, searchPos);
-            
-            if (!variantName) break;
-            
-            while (searchPos < variantsBody.length && /\s/.test(variantsBody[searchPos])) {
-                searchPos++;
-            }
-            
-            if (variantsBody[searchPos] !== '{') break;
-            
-            let depth = 1;
-            searchPos++;
-            while (searchPos < variantsBody.length && depth > 0) {
-                if (variantsBody[searchPos] === '{') depth++;
-                else if (variantsBody[searchPos] === '}') depth--;
-                searchPos++;
-            }
-            
-            variants.push({
-                name: variantName,
-                start: variantsStart + nameStart
-            });
-        }
-        
-        return variants;
-    }
-    
-    jumpToVariant(variantName) {
-        if (!variantName || !this.variantScriptEditor?.view) return;
-        
-        const variant = this.allVariantPositions?.find(v => v.name === variantName);
-        if (!variant) return;
-        
-        const view = this.variantScriptEditor.view;
-        
-        view.dispatch({
-            selection: { anchor: variant.start }
-        });
-        
-        const lineBlock = view.lineBlockAt(variant.start);
-        const editorHeight = view.dom.clientHeight;
-        const targetScroll = lineBlock.top - (editorHeight * 0.25);
-        
-        view.scrollDOM.scrollTop = Math.max(0, targetScroll);
-        view.focus();
-        
-        setTimeout(() => this.updateParsedView(), 50);
-    }
-    
-    updateParsedView() {
-        if (!this.variantScriptEditor?.view) return;
-        
-        const content = this.variantScriptEditor.getValue();
-        const cursorPos = this.getCursorPosition();
-        
-        const variantInfo = this.findVariantAtPosition(content, cursorPos);
-        
-        if (!variantInfo) {
-            this.showNoParsedVariant();
-            this.clearVariantHighlight();
-            return;
-        }
-        
-        this.highlightVariant(variantInfo.start, variantInfo.end);
-        
-        try {
-            const parsed = this.parseVariantBlock(variantInfo.body);
-            const validationErrors = this.validateVariant(parsed);
-            this.showParsedVariant(variantInfo.name, parsed, validationErrors);
-        } catch (e) {
-            this.showParseError(variantInfo.name, e.message);
-        }
-    }
-    
-    highlightVariant(start, end) {
-        if (!this.variantScriptEditor?.view) return;
-        
-        const view = this.variantScriptEditor.view;
-        const doc = view.state.doc;
-        
-        const startLine = doc.lineAt(start);
-        const endLine = doc.lineAt(end);
-        
-        this.currentHighlight = { start: startLine.number, end: endLine.number };
-        this.applyVariantHighlight();
-    }
-    
-    clearVariantHighlight() {
-        this.currentHighlight = null;
-        this.applyVariantHighlight();
-    }
-    
-    applyVariantHighlight() {
-        if (!this.variantScriptEditor?.view) return;
-        
-        const view = this.variantScriptEditor.view;
-        const gutterEl = view.dom.querySelector('.cm-gutters');
-        
-        if (!gutterEl) return;
-        
-        view.dom.querySelectorAll('.variant-highlight-gutter').forEach(el => {
-            el.classList.remove('variant-highlight-gutter');
-        });
-        
-        if (!this.currentHighlight) return;
-        
-        const gutterElements = gutterEl.querySelectorAll('.cm-gutterElement');
-        
-        gutterElements.forEach(gutterEl => {
-            const lineNum = parseInt(gutterEl.textContent);
-            if (!isNaN(lineNum) && lineNum >= this.currentHighlight.start && lineNum <= this.currentHighlight.end) {
-                gutterEl.classList.add('variant-highlight-gutter');
-            }
-        });
-    }
-    
-    validateVariant(parsed) {
-        const errors = [];
-        const warnings = [];
-        
-        const availableLoaders = this.getAvailableLoaders();
-        const availableParams = this.getAvailableParams();
-        
-        if (!parsed.loader_proc) {
-            errors.push('Missing required field: loader_proc');
-        } else if (availableLoaders.length > 0 && !availableLoaders.find(l => l.name === parsed.loader_proc)) {
-            errors.push(`Unknown loader: "${parsed.loader_proc}". Available: ${availableLoaders.map(l => l.name).join(', ')}`);
-        }
-        
-        if (parsed.loader_proc && parsed.loader_options) {
-            const loader = availableLoaders.find(l => l.name === parsed.loader_proc);
-            if (loader && loader.args) {
-                const optionKeys = Object.keys(parsed.loader_options);
-                optionKeys.forEach(key => {
-                    if (!loader.args.includes(key)) {
-                        warnings.push(`Loader option "${key}" not in ${parsed.loader_proc}'s args: ${loader.args.join(', ')}`);
-                    }
-                });
-            }
-        }
-        
-        if (parsed.params && availableParams.length > 0) {
-            const paramKeys = Object.keys(parsed.params);
-            paramKeys.forEach(key => {
-                if (!availableParams.includes(key)) {
-                    warnings.push(`Unknown param: "${key}"`);
-                }
-            });
-        }
-        
-        if (parsed.init && typeof TclLinter !== 'undefined') {
-            try {
-                const linter = new TclLinter();
-                const initLint = linter.lint(parsed.init);
-                if (initLint.errors?.length > 0) {
-                    errors.push(`Init script: ${initLint.errors[0].message}`);
-                }
-            } catch (e) { /* skip */ }
-        }
-        
-        if (parsed.deinit && typeof TclLinter !== 'undefined') {
-            try {
-                const linter = new TclLinter();
-                const deinitLint = linter.lint(parsed.deinit);
-                if (deinitLint.errors?.length > 0) {
-                    errors.push(`Deinit script: ${deinitLint.errors[0].message}`);
-                }
-            } catch (e) { /* skip */ }
-        }
-        
-        return { errors, warnings };
-    }
-    
-    getAvailableLoaders() {
-        if (!this.snapshot?.loaders) return [];
-        return this.parseLoaders(this.snapshot.loaders);
-    }
-    
-    getAvailableParams() {
-        if (!this.snapshot?.params) return [];
-        const params = this.parseParams(this.snapshot.params);
-        return Object.keys(params);
-    }
-    
-    getCursorPosition() {
-        if (!this.variantScriptEditor?.view) return 0;
-        const state = this.variantScriptEditor.view.state;
-        return state.selection.main.head;
-    }
-    
-    findVariantAtPosition(content, pos) {
-        const variantsMatch = content.match(/variable\s+variants\s*\{/);
-        if (!variantsMatch) return null;
-        
-        const variantsStart = variantsMatch.index + variantsMatch[0].length;
-        
-        let braceDepth = 1;
-        let variantsEnd = variantsStart;
-        for (let i = variantsStart; i < content.length && braceDepth > 0; i++) {
-            if (content[i] === '{') braceDepth++;
-            else if (content[i] === '}') braceDepth--;
-            if (braceDepth === 0) variantsEnd = i;
-        }
-        
-        const variantsBody = content.substring(variantsStart, variantsEnd);
-        let searchPos = 0;
-        
-        while (searchPos < variantsBody.length) {
-            while (searchPos < variantsBody.length && /\s/.test(variantsBody[searchPos])) {
-                searchPos++;
-            }
-            
-            if (searchPos >= variantsBody.length) break;
-            
-            let nameStart = searchPos;
-            while (searchPos < variantsBody.length && /\w/.test(variantsBody[searchPos])) {
-                searchPos++;
-            }
-            const variantName = variantsBody.substring(nameStart, searchPos);
-            
-            if (!variantName) break;
-            
-            while (searchPos < variantsBody.length && /\s/.test(variantsBody[searchPos])) {
-                searchPos++;
-            }
-            
-            if (variantsBody[searchPos] !== '{') break;
-            
-            const bodyStart = searchPos + 1;
-            let depth = 1;
-            searchPos++;
-            
-            while (searchPos < variantsBody.length && depth > 0) {
-                if (variantsBody[searchPos] === '{') depth++;
-                else if (variantsBody[searchPos] === '}') depth--;
-                searchPos++;
-            }
-            
-            const bodyEnd = searchPos - 1;
-            const body = variantsBody.substring(bodyStart, bodyEnd);
-            
-            const absStart = variantsStart + nameStart;
-            const absEnd = variantsStart + searchPos;
-            
-            if (pos >= absStart && pos <= absEnd) {
-                return {
-                    name: variantName,
-                    body: body,
-                    start: absStart,
-                    end: absEnd
-                };
-            }
-        }
-        
-        return null;
-    }
-    
-    parseVariantBlock(body) {
-        // Strip comment lines at each dict level, mirroring ess::normalize_variants
-        // in lib/ess-2.0.tm, so embedded '#' lines don't corrupt key/value pairing.
-        const dict = TclParser.parseDict(TclParser.stripComments(body.trim()));
-
-        return {
-            description: dict.description || '',
-            loader_proc: dict.loader_proc || '',
-            loader_options: dict.loader_options ? TclParser.parseDict(TclParser.stripComments(dict.loader_options)) : {},
-            init: dict.init || '',
-            deinit: dict.deinit || '',
-            params: dict.params ? TclParser.parseDict(TclParser.stripComments(dict.params)) : {}
-        };
-    }
-    
-    showNoParsedVariant() {
-        if (this.variantElements.parsedVariantSelect) {
-            this.variantElements.parsedVariantSelect.value = '';
-        }
-        if (this.variantElements.parsedStatus) {
-            this.variantElements.parsedStatus.textContent = '';
-            this.variantElements.parsedStatus.className = 'parsed-status';
-        }
-        if (this.variantElements.parsedContent) {
-            this.variantElements.parsedContent.innerHTML = `
-                <div class="parsed-empty">
-                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                        <circle cx="12" cy="12" r="10"></circle>
-                        <path d="M12 16v-4"></path>
-                        <path d="M12 8h.01"></path>
-                    </svg>
-                    <span>Place cursor inside a variant or select from dropdown</span>
-                </div>
-            `;
-        }
-        this.currentVariantName = null;
-    }
-    
-    showParsedVariant(name, parsed, validation = { errors: [], warnings: [] }) {
-        this.currentVariantName = name;
-        
-        const hasErrors = validation.errors.length > 0;
-        const hasWarnings = validation.warnings.length > 0;
-        
-        if (this.variantElements.parsedVariantSelect) {
-            this.variantElements.parsedVariantSelect.value = name;
-        }
-        if (this.variantElements.parsedStatus) {
-            if (hasErrors) {
-                this.variantElements.parsedStatus.textContent = `✗ ${validation.errors.length} error${validation.errors.length > 1 ? 's' : ''}`;
-                this.variantElements.parsedStatus.className = 'parsed-status error';
-            } else if (hasWarnings) {
-                this.variantElements.parsedStatus.textContent = `⚠ ${validation.warnings.length} warning${validation.warnings.length > 1 ? 's' : ''}`;
-                this.variantElements.parsedStatus.className = 'parsed-status warning';
-            } else {
-                this.variantElements.parsedStatus.textContent = '✓ Valid';
-                this.variantElements.parsedStatus.className = 'parsed-status valid';
-            }
-        }
-        if (this.variantElements.parsedContent) {
-            let html = '';
-            
-            if (hasErrors) {
-                html += `
-                    <div class="parsed-validation errors">
-                        <div class="validation-header">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <circle cx="12" cy="12" r="10"></circle>
-                                <line x1="15" y1="9" x2="9" y2="15"></line>
-                                <line x1="9" y1="9" x2="15" y2="15"></line>
-                            </svg>
-                            Errors
-                        </div>
-                        ${validation.errors.map(e => `<div class="validation-item">${this.escapeHtml(e)}</div>`).join('')}
-                    </div>
-                `;
-            }
-            
-            if (hasWarnings) {
-                html += `
-                    <div class="parsed-validation warnings">
-                        <div class="validation-header">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
-                                <line x1="12" y1="9" x2="12" y2="13"></line>
-                                <line x1="12" y1="17" x2="12.01" y2="17"></line>
-                            </svg>
-                            Warnings
-                        </div>
-                        ${validation.warnings.map(w => `<div class="validation-item">${this.escapeHtml(w)}</div>`).join('')}
-                    </div>
-                `;
-            }
-            
-            // Description
-            html += `
-                <div class="parsed-section">
-                    <div class="parsed-section-label">Description</div>
-                    <div class="parsed-section-value ${parsed.description ? '' : 'empty'}">
-                        ${parsed.description ? this.escapeHtml(parsed.description) : 'No description'}
-                    </div>
-                </div>
-            `;
-            
-            // Loader
-            const loaderValid = !validation.errors.some(e => e.includes('loader'));
-            html += `
-                <div class="parsed-section">
-                    <div class="parsed-section-label">Loader</div>
-                    <div class="parsed-section-value inline-mono ${parsed.loader_proc ? '' : 'empty'} ${!loaderValid ? 'invalid' : ''}">
-                        ${parsed.loader_proc ? this.escapeHtml(parsed.loader_proc) : 'No loader specified'}
-                    </div>
-                </div>
-            `;
-            
-            // Loader Options
-            const optionKeys = Object.keys(parsed.loader_options);
-            if (optionKeys.length > 0) {
-                html += `
-                    <div class="parsed-section">
-                        <div class="parsed-section-label">Loader Options</div>
-                        <div class="parsed-options">
-                            ${optionKeys.map(key => {
-                                const hasWarning = validation.warnings.some(w => w.includes(`"${key}"`));
-                                const optionValues = this.parseLoaderOptionValues(parsed.loader_options[key]);
-                                const firstValue = optionValues[0]?.value || '';
-                                const displayValue = this.truncateValue(firstValue, 20);
-                                const needsTooltip = firstValue.length > 20;
-                                return `
-                                <div class="parsed-option ${hasWarning ? 'has-warning' : ''}">
-                                    <span class="parsed-option-name">${this.escapeHtml(key)}</span>
-                                    <div class="parsed-option-control">
-                                        <select class="parsed-option-preview" title="Preview: ${optionValues.length} option(s)" onchange="this.nextElementSibling.textContent = '→ ' + this.options[this.selectedIndex].dataset.display; this.nextElementSibling.title = this.value;">
-                                            ${optionValues.map(opt => {
-                                                const dispVal = this.truncateValue(opt.value, 20);
-                                                return `<option value="${this.escapeHtml(opt.value)}" data-display="${this.escapeHtml(dispVal)}">${this.escapeHtml(opt.label)}</option>`;
-                                            }).join('')}
-                                        </select>
-                                        <span class="parsed-option-value ${needsTooltip ? 'has-tooltip' : ''}" title="${needsTooltip ? this.escapeHtml(firstValue) : ''}">→ ${this.escapeHtml(displayValue)}</span>
-                                    </div>
-                                </div>
-                            `}).join('')}
-                        </div>
-                    </div>
-                `;
-            }
-            
-            // Params
-            const paramKeys = Object.keys(parsed.params);
-            if (paramKeys.length > 0) {
-                html += `
-                    <div class="parsed-section">
-                        <div class="parsed-section-label">Params Override</div>
-                        <div class="parsed-params">
-                            ${paramKeys.map(key => {
-                                const hasWarning = validation.warnings.some(w => w.includes(`"${key}"`));
-                                return `
-                                <div class="parsed-param ${hasWarning ? 'has-warning' : ''}">
-                                    <span class="parsed-param-name">${this.escapeHtml(key)}</span>
-                                    <span class="parsed-param-value">${this.escapeHtml(parsed.params[key])}</span>
-                                </div>
-                            `}).join('')}
-                        </div>
-                    </div>
-                `;
-            }
-            
-            // Init
-            if (parsed.init) {
-                const hasInitError = validation.errors.some(e => e.includes('Init script'));
-                html += `
-                    <div class="parsed-section">
-                        <div class="parsed-section-label">Init ${hasInitError ? '<span class="label-error">⚠</span>' : ''}</div>
-                        <div class="parsed-section-value mono ${hasInitError ? 'has-error' : ''}">${this.escapeHtml(parsed.init)}</div>
-                    </div>
-                `;
-            }
-            
-            // Deinit
-            if (parsed.deinit) {
-                const hasDeinitError = validation.errors.some(e => e.includes('Deinit script'));
-                html += `
-                    <div class="parsed-section">
-                        <div class="parsed-section-label">Deinit ${hasDeinitError ? '<span class="label-error">⚠</span>' : ''}</div>
-                        <div class="parsed-section-value mono ${hasDeinitError ? 'has-error' : ''}">${this.escapeHtml(parsed.deinit)}</div>
-                    </div>
-                `;
-            }
-            
-            this.variantElements.parsedContent.innerHTML = html;
-        }
-    }
-    
-    formatOptionValue(value) {
-        if (value.length > 50) {
-            return value.substring(0, 47) + '...';
-        }
-        return value;
-    }
-    
-    truncateValue(value, maxLen = 20) {
-        if (value.length > maxLen) {
-            return value.substring(0, maxLen - 3) + '...';
-        }
-        return value;
-    }
-    
-    parseLoaderOptionValues(optionStr) {
-        const values = [];
-        const items = TclParser.parseList(optionStr);
-        
-        for (const item of items) {
-            const parts = TclParser.parseList(item);
-            
-            if (parts.length === 2) {
-                values.push({
-                    label: parts[0],
-                    value: parts[1]
-                });
-            } else {
-                values.push({
-                    label: item,
-                    value: item
-                });
-            }
-        }
-        
-        return values;
-    }
-    
-    showParseError(name, message) {
-        this.currentVariantName = name;
-        
-        if (this.variantElements.parsedVariantName) {
-            this.variantElements.parsedVariantName.textContent = name;
-        }
-        if (this.variantElements.parsedStatus) {
-            this.variantElements.parsedStatus.textContent = '✗ Error';
-            this.variantElements.parsedStatus.className = 'parsed-status error';
-        }
-        if (this.variantElements.parsedContent) {
-            this.variantElements.parsedContent.innerHTML = `
-                <div class="parsed-error">
-                    <div class="parsed-error-title">Parse Error</div>
-                    <div class="parsed-error-message">${this.escapeHtml(message)}</div>
-                </div>
-            `;
-        }
-    }
-    
-    addNewVariant() {
-        if (!this.variantScriptEditor?.view) return;
-        
-        const template = `
-    new_variant {
-        description "New variant description"
-        loader_proc your_loader
-        loader_options {
-        }
-        params {
-        }
-    }
-`;
-        
-        const content = this.variantScriptEditor.getValue();
-        const lastBrace = content.lastIndexOf('}');
-        
-        if (lastBrace > 0) {
-            const newContent = content.substring(0, lastBrace) + template + '\n}';
-            this.variantScriptEditor.setValue(newContent);
-        } else {
-            this.variantScriptEditor.setValue(content + template);
-        }
-    }
-    
-    duplicateCurrentVariant() {
-        if (!this.variantScriptEditor?.view || !this.currentVariantName) {
-            alert('Place cursor inside a variant first');
-            return;
-        }
-        
-        const content = this.variantScriptEditor.getValue();
-        const cursorPos = this.getCursorPosition();
-        const variantInfo = this.findVariantAtPosition(content, cursorPos);
-        
-        if (!variantInfo) {
-            alert('Could not find variant at cursor');
-            return;
-        }
-        
-        const newName = prompt('Enter name for duplicated variant:', variantInfo.name + '_copy');
-        if (!newName || newName === variantInfo.name) return;
-        
-        const duplicate = `\n    ${newName} {${variantInfo.body}}\n`;
-        
-        const newContent = content.substring(0, variantInfo.end) + duplicate + content.substring(variantInfo.end);
-        this.variantScriptEditor.setValue(newContent);
-    }
-
-    // ==========================================
     // Loaders Editor
     // ==========================================
 
     initLoadersEditor() {
         this.loaderElements = {
-            scriptEditor: document.getElementById('loader-script-editor'),
             loaderSelect: document.getElementById('loader-select'),
             runBtn: document.getElementById('loader-run-btn'),
             runStatus: document.getElementById('loader-run-status'),
-            formatBtn: document.getElementById('loader-format-btn'),
-            saveReloadBtn: document.getElementById('loader-save-reload-btn'),
-            validationStatus: document.getElementById('loader-validation-status'),
             argsBody: document.getElementById('loader-args-body'),
             argsResetBtn: document.getElementById('loader-args-reset-btn'),
             tableContainer: document.getElementById('loader-table-container'),
@@ -2547,17 +837,12 @@ class ESSWorkbench {
             consoleClearBtn: document.getElementById('loader-console-clear-btn')
         };
 
-        this.loadersOriginalHash = null;
-        this.loadersModified = false;
-        this.loaderEditorPending = true;
         this.loaderSandbox = null;         // DservConnection for isolated subprocess
         this.loaderErrorCount = 0;
         this.currentLoaderName = null;
         this.parsedLoaderDefs = [];        // [{name, args, bodyStart, bodyEnd}, ...]
 
         // Bind events
-        this.loaderElements.formatBtn?.addEventListener('click', () => this.formatLoadersScript());
-        this.loaderElements.saveReloadBtn?.addEventListener('click', () => this.saveLoadersScript());
         this.loaderElements.runBtn?.addEventListener('click', () => this.runLoader());
         this.loaderElements.consoleClearBtn?.addEventListener('click', () => this.clearLoaderConsole());
         this.loaderElements.argsResetBtn?.addEventListener('click', () => this.resetLoaderArgs());
@@ -2570,89 +855,14 @@ class ESSWorkbench {
     }
 
     async initLoadersTab() {
-        if (this.loaderEditorPending || !this.loaderScriptEditor?.view) {
-            const ready = await this.ensureLoaderScriptEditor();
-            if (ready) {
-                await this.loadLoaderScriptContent();
-            }
-        }
+        // Full refresh every time the tab shows: defs from the snapshot's
+        // loaders script AND the variants cross-reference that supplies
+        // arg choices. Unconditional on purpose — gating this on
+        // _snapshotDirty left the arg dropdowns empty whenever another
+        // tab visit had already consumed the flag.
+        this.updateLoadersEditor();
         if (!this.loaderSandbox) {
             await this.initLoaderSandbox();
-        }
-    }
-
-    async ensureLoaderScriptEditor() {
-        const container = this.loaderElements.scriptEditor;
-        if (!container) return false;
-
-        if (typeof TclEditor === 'undefined') return false;
-
-        if (this.loaderScriptEditor && this.loaderScriptEditor.view) {
-            return true;
-        }
-
-        this.loaderScriptEditor = new TclEditor(container, {
-            theme: 'dark',
-            fontSize: '13px',
-            tabSize: 4,
-            lineNumbers: true,
-            keybindings: 'emacs'
-        });
-
-        await new Promise(resolve => {
-            container.addEventListener('editor-ready', resolve, { once: true });
-        });
-
-        this.loaderEditorPending = false;
-
-        // Setup modification tracking
-        this.setupLoaderCursorTracking();
-        this.updateEditorsReadOnly();
-
-        return this.loaderScriptEditor.view !== null;
-    }
-
-    setupLoaderCursorTracking() {
-        if (!this.loaderScriptEditor?.view) return;
-
-        let validateTimeout = null;
-        const debouncedValidate = () => {
-            if (validateTimeout) clearTimeout(validateTimeout);
-            validateTimeout = setTimeout(() => this.validateLoadersFile(), 500);
-        };
-
-        const checkModified = async () => {
-            if (this.loadersOriginalHash) {
-                const currentContent = this.loaderScriptEditor.getValue();
-                const currentHash = await sha256(currentContent);
-                const isModified = currentHash !== this.loadersOriginalHash;
-                if (isModified !== this.loadersModified) {
-                    this.loadersModified = isModified;
-                    this.updateLoaderSaveButton();
-                }
-            }
-        };
-
-        let parseTimeout = null;
-        const debouncedParse = () => {
-            if (parseTimeout) clearTimeout(parseTimeout);
-            parseTimeout = setTimeout(() => {
-                this.parseAndUpdateLoaderDropdown();
-            }, 300);
-        };
-
-        const view = this.loaderScriptEditor.view;
-        if (view) {
-            view.dom.addEventListener('keyup', () => {
-                debouncedValidate();
-                checkModified();
-                debouncedParse();
-            });
-            view.dom.addEventListener('input', () => {
-                debouncedValidate();
-                checkModified();
-                debouncedParse();
-            });
         }
     }
 
@@ -2717,41 +927,20 @@ class ESSWorkbench {
     }
 
     // ==========================================
-    // Loader Script Content
+    // Loader Defs (parsed from the snapshot's loaders script)
     // ==========================================
 
-    async loadLoaderScriptContent() {
-        if (!this.loaderScriptEditor?.view) return;
-
-        let content = '';
-        if (this.scripts.loaders) {
-            content = this.scripts.loaders;
-        }
-
-        if (content) {
-            this.loaderScriptEditor.setValue(content);
-            this.loadersOriginalHash = await sha256(content);
-            this.loadersModified = false;
-            this.updateLoaderSaveButton();
-
-            setTimeout(() => {
-                this.parseAndUpdateLoaderDropdown();
-                this.validateLoadersFile();
-            }, 100);
-        }
+    refreshLoaderDefs() {
+        this.parseAndUpdateLoaderDropdown();
     }
 
     updateLoadersEditor() {
         if (!this.snapshot) return;
-
-        if (this.loaderScriptEditor?.view && !this.loadersModified) {
-            this.loadLoaderScriptContent();
-        }
-
-        // Also update parsed variants for cross-referencing loader_options
+        // Parsed variants cross-reference loader_options for arg choices
         if (this.snapshot.variants) {
             this.parsedVariantsForLoaders = this.parseVariantsDict(this.snapshot.variants);
         }
+        this.refreshLoaderDefs();
     }
 
     // ==========================================
@@ -2829,9 +1018,7 @@ class ESSWorkbench {
     }
 
     parseAndUpdateLoaderDropdown() {
-        if (!this.loaderScriptEditor?.view) return;
-
-        const content = this.loaderScriptEditor.getValue();
+        const content = this.scripts?.loaders || '';
         this.parsedLoaderDefs = this.parseLoadersFromScript(content);
 
         const select = this.loaderElements.loaderSelect;
@@ -3048,200 +1235,6 @@ class ESSWorkbench {
                     el.className = 'loaders-run-status';
                 }, 5000);
             }
-        }
-    }
-
-    // ==========================================
-    // Save Loaders Script
-    // ==========================================
-
-    async saveLoadersScript() {
-        if (!this.loaderScriptEditor?.view || !this.loadersModified) return;
-
-        const content = this.loaderScriptEditor.getValue();
-        const btn = this.loaderElements.saveReloadBtn;
-
-        if (btn) {
-            btn.disabled = true;
-            btn.innerHTML = `
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="spin">
-                    <circle cx="12" cy="12" r="10"></circle>
-                </svg>
-                Saving...
-            `;
-        }
-
-        try {
-            const saveCmd = `ess::save_script loaders {${content}}`;
-
-            if (this.connection?.ws?.readyState === WebSocket.OPEN) {
-                this.connection.ws.send(JSON.stringify({
-                    cmd: 'eval',
-                    script: saveCmd
-                }));
-
-                this.loadersOriginalHash = await sha256(content);
-                this.loadersModified = false;
-
-                if (btn) {
-                    btn.innerHTML = `
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="spin">
-                            <circle cx="12" cy="12" r="10"></circle>
-                        </svg>
-                        Reloading...
-                    `;
-                }
-
-                await new Promise(resolve => setTimeout(resolve, 200));
-
-                this.connection.ws.send(JSON.stringify({
-                    cmd: 'eval',
-                    script: 'ess::reload_system'
-                }));
-
-                this._pluginHook('onLoadersSaved', content);
-
-                if (btn) {
-                    btn.innerHTML = `
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <polyline points="20 6 9 17 4 12"></polyline>
-                        </svg>
-                        Saved!
-                    `;
-                    setTimeout(() => this.resetLoaderSaveButton(), 2000);
-                }
-            } else {
-                throw new Error('WebSocket not connected');
-            }
-        } catch (error) {
-            console.error('Failed to save loaders script:', error);
-            alert(`Failed to save: ${error.message}`);
-            this.resetLoaderSaveButton();
-        }
-    }
-
-    updateLoaderSaveButton() {
-        const btn = this.loaderElements.saveReloadBtn;
-        if (btn) {
-            btn.disabled = !this.loadersModified;
-            btn.classList.toggle('modified', this.loadersModified);
-        }
-    }
-
-    resetLoaderSaveButton() {
-        const btn = this.loaderElements.saveReloadBtn;
-        if (btn) {
-            btn.innerHTML = `
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
-                    <polyline points="17 21 17 13 7 13 7 21"></polyline>
-                    <polyline points="7 3 7 8 15 8"></polyline>
-                </svg>
-                Save &amp; Reload
-            `;
-        }
-        this.updateLoaderSaveButton();
-    }
-
-    // ==========================================
-    // Loader Validation & Formatting
-    // ==========================================
-
-    validateLoadersFile() {
-        if (!this.loaderScriptEditor?.view) return;
-
-        const content = this.loaderScriptEditor.getValue();
-        const statusEl = this.loaderElements.validationStatus;
-        if (!statusEl) return;
-
-        if (typeof TclLinter !== 'undefined') {
-            try {
-                const linter = new TclLinter();
-                const result = linter.lint(content);
-                if (result.errors?.length > 0) {
-                    const firstError = result.errors[0];
-                    const extra = result.errors.length > 1
-                        ? ` <small>(+${result.errors.length - 1} more)</small>`
-                        : '';
-                    statusEl.innerHTML =
-                        `<span style="cursor:pointer" title="Click to jump to error">` +
-                        `Line ${firstError.line}: ${firstError.message}${extra}</span>`;
-                    statusEl.className = 'loaders-validation-status error';
-                    statusEl.onclick = () => this.jumpToLoaderLine(firstError.line);
-                } else if (result.warnings?.length > 0) {
-                    const firstWarning = result.warnings[0];
-                    const extra = result.warnings.length > 1
-                        ? ` <small>(+${result.warnings.length - 1} more)</small>`
-                        : '';
-                    statusEl.innerHTML =
-                        `<span style="cursor:pointer" title="Click to jump to warning">` +
-                        `Line ${firstWarning.line}: ${firstWarning.message}${extra}</span>`;
-                    statusEl.className = 'loaders-validation-status warning';
-                    statusEl.onclick = () => this.jumpToLoaderLine(firstWarning.line);
-                } else {
-                    statusEl.textContent = 'valid';
-                    statusEl.className = 'loaders-validation-status valid';
-                    statusEl.onclick = null;
-                }
-            } catch (e) {
-                statusEl.textContent = 'lint error';
-                statusEl.className = 'loaders-validation-status error';
-                statusEl.onclick = null;
-            }
-        }
-    }
-
-    jumpToLoaderLine(lineNum) {
-        if (!this.loaderScriptEditor?.view) return;
-
-        const view = this.loaderScriptEditor.view;
-        const doc = view.state.doc;
-
-        // Save current position before jumping
-        const currentLine = doc.lineAt(view.state.selection.main.anchor).number;
-
-        // If we're already at the target line, jump back to previous position
-        const targetLine = (currentLine === lineNum && this._loaderJumpBackLine)
-            ? this._loaderJumpBackLine
-            : lineNum;
-
-        // Store where we came from (only when jumping to the error)
-        if (targetLine === lineNum) {
-            this._loaderJumpBackLine = currentLine;
-        } else {
-            this._loaderJumpBackLine = null;
-        }
-
-        const line = doc.line(Math.min(targetLine, doc.lines));
-        view.dispatch({
-            selection: { anchor: line.from },
-            scrollIntoView: true
-        });
-
-        view.focus();
-    }
-
-    async formatLoadersScript() {
-        if (!this.loaderScriptEditor?.view) return;
-
-        if (typeof TclFormatter === 'undefined') return;
-
-        const content = this.loaderScriptEditor.getValue();
-
-        try {
-            const formatted = TclFormatter.formatTclCode(content, 4);
-            this.loaderScriptEditor.setValue(formatted);
-
-            if (this.loadersOriginalHash) {
-                const currentHash = await sha256(formatted);
-                this.loadersModified = currentHash !== this.loadersOriginalHash;
-                this.updateLoaderSaveButton();
-            }
-
-            this.validateLoadersFile();
-            this.parseAndUpdateLoaderDropdown();
-        } catch (e) {
-            console.error('Format error:', e);
         }
     }
 

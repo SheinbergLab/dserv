@@ -85,9 +85,6 @@ namespace eval ess {
     proc publish_snapshot args { _protected_call publish_snapshot 0 $args }
 
     # Registry sync operations
-    proc sync_status args { _protected_call sync_status 1 $args }
-    proc commit_script args { _protected_call commit_script 1 $args }
-    proc commit_system args { _protected_call commit_system 1 $args }
     proc sync_system args { _protected_call sync_system 1 $args }
     proc sync_base args { _protected_call sync_base 0 $args }
     proc sync_libs args { _protected_call sync_libs 0 $args }
@@ -97,7 +94,6 @@ namespace eval ess {
     proc save_lib args { _protected_call save_lib 0 $args }
     proc commit_lib args { _protected_call commit_lib 1 $args }
     proc seed_libs args { _protected_call seed_libs 1 $args }	
-    proc lib_sync_status args { _protected_call lib_sync_status 0 $args }
 
     # Scaffold operations
     proc scaffold_protocol args { _protected_call scaffold_protocol 1 $args }

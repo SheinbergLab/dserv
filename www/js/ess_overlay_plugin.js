@@ -30,7 +30,6 @@ const EditorUserPlugin = {
         const userSelect = document.getElementById('user-select');
         userSelect?.addEventListener('change', (e) => {
             this._setEditorUser(wb, e.target.value);
-            wb.updateEditorsReadOnly();
         });
 
         // Restore last user from localStorage (legacy key carried the
@@ -45,21 +44,28 @@ const EditorUserPlugin = {
     onConnected(wb) {
         // Activate pending user after a short delay
         setTimeout(() => this._activatePendingEditorUser(wb), 500);
+        this._loadUsers(wb);
+
+        // Footer workgroup indicator (was fed by the retired registry plugin)
+        wb.dpManager?.subscribe('ess/registry/workgroup', (dp) => {
+            const v = (dp && typeof dp === 'object') ? (dp.data ?? dp.value ?? '') : dp;
+            const el = document.querySelector('#registry-status span:last-child');
+            if (el) el.textContent = v ? `Registry: ${v}` : 'Registry: —';
+        });
+        try {
+            wb.connection.ws.send(JSON.stringify({ cmd: 'touch', name: 'ess/registry/workgroup' }));
+        } catch (e) { /* fine */ }
     },
 
-    async onRegistryReady(wb) {
-        // Load users for the selector
-        if (wb.registry?.workgroup) {
-            try {
-                const result = await wb.registry.getUsers();
-                const users = Array.isArray(result) ? result : (result.users || result || []);
-                this._populateUsers(wb, users);
-            } catch (err) {
-                console.warn('Could not load users for editor selector:', err);
-                this._loadUsersFromDserv(wb);
-            }
-        } else {
-            this._loadUsersFromDserv(wb);
+    // Workgroup roster from the scripts subprocess (same source the
+    // Sync modal uses).
+    async _loadUsers(wb) {
+        try {
+            const r = await wb.connection.evalAsync('send scripts {scripts::users}');
+            const users = JSON.parse(r)?.users || [];
+            this._populateUsers(wb, users);
+        } catch (err) {
+            console.warn('Could not load users for editor selector:', err);
         }
     },
 
@@ -86,7 +92,6 @@ const EditorUserPlugin = {
             }
         }
 
-        wb.updateEditorsReadOnly();
     },
 
     // ==========================================
@@ -149,7 +154,7 @@ const EditorUserPlugin = {
 
         const currentVal = select.value || wb._pendingEditorUser || '';
 
-        select.innerHTML = '<option value="">No user (read-only)</option>';
+        select.innerHTML = '<option value="">No user set</option>';
         wb._userMap = {};
 
         if (Array.isArray(users)) {
@@ -179,21 +184,6 @@ const EditorUserPlugin = {
 
         wb._pendingEditorUser = null;
     },
-
-    async _loadUsersFromDserv(wb) {
-        if (!wb.dpManager) return;
-
-        try {
-            const usersDp = await wb.dpManager.get('ess/registry/users');
-            const usersVal = usersDp?.data || usersDp?.value;
-            if (usersVal) {
-                const users = typeof usersVal === 'string' ? JSON.parse(usersVal) : usersVal;
-                this._populateUsers(wb, users);
-            }
-        } catch (err) {
-            console.warn('Could not load users from dserv:', err);
-        }
-    }
 };
 
 ESSWorkbench.registerPlugin(EditorUserPlugin);

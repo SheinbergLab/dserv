@@ -30,20 +30,23 @@ ess::sync_system match_to_sample    ;# just one system
 ess::sync_status                    ;# what's different?
 ```
 
-## Committing
+## Pushing
+
+Script pushes go through the scripts subprocess (the engine behind
+ess_control's Sync modal) — per-file commits from the ess interp were
+retired 2026-08 with the workbench editing UI:
+
+```tcl
+send scripts {scripts::push hapticvis -user david -comment "fix timing bug"}
+send scripts {scripts::push_preview hapticvis}   ;# see what a push would carry
+```
+
+Lib helpers remain in the ess interp (scripts::push -include_libs uses them):
 
 | Command | Description |
 |---------|-------------|
-| `ess::commit_script <type> ?comment?` | Push one base script to registry. Types: `system`, `protocol`, `stim`, `loaders`, `variants`, `extract`, `sys_extract`, `sys_analyze`, etc. |
-| `ess::commit_system ?comment?` | Push all base scripts for current system+protocol. |
-| `ess::commit_lib <filename> ?comment?` | Push a lib `.tm` from base to registry. |
+| `ess::commit_lib <filename> ?comment?` | Push a lib `.tm` to the registry. |
 | `ess::seed_libs` | Push all local libs to registry (skips unchanged). |
-
-```tcl
-ess::commit_script protocol "fix timing bug"
-ess::commit_system "release v2"
-ess::commit_lib "utils-1.0.tm"
-```
 
 ## Editor identity
 

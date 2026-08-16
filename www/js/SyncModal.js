@@ -162,6 +162,7 @@ class SyncModal {
                         <div class="ess-sync-preview" id="sync-pull-preview">
                             <div class="ess-modal-loading">Loading preview...</div>
                         </div>
+                        <div id="sync-displaced-section" hidden></div>
                     </div>
                 </div>
                 <div class="ess-modal-footer">
@@ -426,6 +427,72 @@ class SyncModal {
         } finally {
             this.loading = false;
             this._updateActionButton();
+        }
+        this._loadDisplaced();
+    }
+
+    // ── Displaced files ─────────────────────────────────────────────
+    //
+    // When a pull overwrites a locally-changed file (conflict / cold),
+    // the local version is saved to .sync_displaced/. This section is
+    // the recovery surface: restore puts the saved copy back, dismiss
+    // acknowledges it. (Moved here from the retired workbench registry
+    // tab — the modal is where the displacement happens, so the rescue
+    // belongs next to it.)
+
+    async _loadDisplaced() {
+        const el = this._overlay?.querySelector('#sync-displaced-section');
+        if (!el) return;
+        try {
+            const raw = await this.connection.evalAsync(
+                'send ess {ess::sync_displaced_list; dservGet ess/sync/displaced}');
+            const files = JSON.parse(raw)?.files || [];
+            if (!files.length) { el.hidden = true; el.innerHTML = ''; return; }
+            this._displaced = files;
+            const rows = files.map((f, i) => `
+                <div class="ess-sync-displaced-row">
+                    <span class="ess-sync-displaced-path">${this._escapeHtml(f.relpath)}</span>
+                    <span class="ess-sync-displaced-time">${this._escapeHtml(f.time || '')}</span>
+                    <a href="#" class="ess-sync-action" data-displaced-action="restore" data-idx="${i}"
+                       title="Copy the saved local version back over the pulled file">restore</a>
+                    <a href="#" class="ess-sync-action" data-displaced-action="dismiss" data-idx="${i}"
+                       title="Acknowledge — keep the pulled version (the saved copy stays in .sync_displaced/)">dismiss</a>
+                </div>`).join('');
+            el.innerHTML = `
+                <div class="ess-sync-warning">
+                    ${this._plural(files.length, 'displaced file')} — a pull overwrote local changes;
+                    the local versions were saved to <code>.sync_displaced/</code>.
+                </div>${rows}`;
+            el.hidden = false;
+            el.querySelectorAll('[data-displaced-action]').forEach(a => {
+                a.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    this._displacedAction(a.dataset.displacedAction, parseInt(a.dataset.idx, 10));
+                });
+            });
+        } catch (err) {
+            el.hidden = true;
+        }
+    }
+
+    async _displacedAction(action, idx) {
+        const f = (this._displaced || [])[idx];
+        if (!f) return;
+        if (action === 'restore' && !confirm(
+            `Restore your saved version of ${f.relpath}?\n\nThis overwrites the pulled copy with the local version saved at ${f.time}.`)) {
+            return;
+        }
+        try {
+            const cmd = action === 'restore' ? 'ess::restore_displaced' : 'ess::dismiss_displaced';
+            await this.connection.evalAsync(`send ess {${cmd} {${this._tclSafe(f.file)}}}`);
+            this.log(`${action === 'restore' ? 'Restored' : 'Dismissed'} ${f.relpath}`, 'info');
+            if (action === 'restore') {
+                await this._loadPullPreview(true);   // tree changed; also reloads this section
+            } else {
+                await this._loadDisplaced();
+            }
+        } catch (err) {
+            this.log(`${action} failed: ${err.message}`, 'error');
         }
     }
 
