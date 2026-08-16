@@ -1,28 +1,23 @@
 # local/extio.tcl -- rig-local extio configuration
 #
 # Sourced at the END of config/extioconf.tcl, after discovery and wiring are
-# set up, so anything declared here wins over db-persisted values at boot.
-# Absent file = all defaults. An error in this file aborts only the extio
-# subprocess's config (see local/README for what that costs and how to spot it).
+# set up. Absent file = all defaults. An error in this file aborts only the
+# extio subprocess's config (see local/README for what that costs and how to
+# spot it).
 
 # ---- obs-leader auto-bind consent ------------------------------------------
-# Opt this rig into auto-binding the ESS obs scheduler to a box that announces
-# itself as obs leader (box side: config/obs/mode leader + config/obs/pin <n>
-# + cmd/save on the box console).
+# MOVED: this declaration now lives in local/rig.tcl with the other declared
+# rig facts, as
 #
-# The value is a NAME FILTER, *not* a boolean:
-#   off          never auto-bind (the default)
-#   auto         bind whatever single box announces obs_leader
-#   <boxname>    bind only that box (e.g. box01)
+#     setting extio obs_autobind auto
 #
-# The line below is this rig's DECLARED setting: it re-asserts at every dserv
-# boot. A runtime `send extio {extio_obs_autobind auto}` still works (and
-# persists to settings.db), but the next boot re-asserts this file's value --
-# edit here for anything meant to outlive a restart. To turn auto-bind off,
-# declare `off` explicitly rather than deleting the line: a deleted line falls
-# back to whatever settings.db last persisted, which may surprise you.
-#
-# extio_obs_autobind auto
+# The value is a NAME FILTER, *not* a boolean: off (default) / auto (bind
+# whatever single box announces obs_leader) / <boxname> (only that box).
+# Boolean spellings (1/on/true) normalize to auto. A runtime
+# `send extio {extio_obs_autobind auto}` persists straight into rig.tcl —
+# a set IS the declaration now. A legacy extio_obs_autobind line in THIS
+# file still works (it persists any changed value into rig.tcl at boot),
+# but rig.tcl is the one place to look.
 
 # ---- other rig-local extio overrides ---------------------------------------
 # Port pinning, extra forwards, etc. This file runs inside the extio

@@ -266,8 +266,11 @@ if { [catch { load ${dspath}/modules/dserv_extiodisc[info sharedlibextension] } 
     dservSet extio/discover/error ""
 }
 
-# persisted rig settings (obs_autobind); same store essconf/dfconf use
+# settings: declared rig facts live in local/rig.tcl (settings module);
+# settingsdb's sqlite stays for the one-time obs_autobind carryover below
+# and any future LEARNED state.
 tcl::tm::add $dspath/lib
+package require settings
 package require settingsdb
 settingsdb::init [file join $dspath db settings.db]
 
@@ -2550,9 +2553,11 @@ proc extio_ota_on_trial {dp data} {
 # session state: every dserv restart silently reverted a leader rig to "dark
 # obs pin, loud per-obs fallback" until someone re-bound by hand (officepi,
 # 2026-08-04). Consent lives on the HOST. Its DECLARED home is
-# local/extio.tcl (see the .EXAMPLE) -- that file sources last, so its value
-# re-asserts at every boot; settings.db (subsystem obs_autobind) is the
-# runtime persistence, and the fallback for rigs with no file line.
+# local/rig.tcl via the settings module ("setting extio obs_autobind auto"):
+# one file, one precedence (runtime > file > default), no boot re-assertion
+# dance. A pre-migration value in settings.db is carried into the file once,
+# below; a legacy extio_obs_autobind line in local/extio.tcl still works and
+# self-migrates by persisting into rig.tcl when it changes the value.
 # Values: "" = off (default), "auto" = bind whatever single
 # leader announces, "<boxname>" = only that box. The TRIGGER is the announce
 # (state/obs_leader -> 1), never boot -- announces always come (registration
@@ -2575,36 +2580,19 @@ proc extio_obs_autobind_norm {v} {
     return $v
 }
 
+settings::declare extio obs_autobind -default "" \
+    -validate {extio_obs_autobind_norm} \
+    -doc "obs-leader auto-bind consent: off, auto, or a box name" \
+    -apply {::extio_obs_autobind_apply}
+
 proc extio_obs_autobind_get {} {
-    set v ""
-    catch { set v [::settingsdb::load obs_autobind] }
-    return [extio_obs_autobind_norm $v]
+    return [settings::get extio obs_autobind]
 }
 
-# What does local/extio.tcl DECLARE for autobind, if anything?
-# Returns {1 <normalized>} when an active (uncommented) line exists, {0 {}}
-# otherwise. Last line wins, matching what sourcing the file would do.
-proc extio_local_declared_autobind {} {
-    set f [file join $::dspath local extio.tcl]
-    if { ![file exists $f] || [catch { open $f } fd] } { return {0 {}} }
-    set txt [read $fd]; close $fd
-    set found 0; set val ""
-    foreach line [split $txt \n] {
-        set line [string trim $line]
-        if { [string index $line 0] eq "#" } continue
-        if { [regexp {^extio_obs_autobind\s+(\S+)} $line -> v] } {
-            set found 1
-            set val [extio_obs_autobind_norm [string trim $v "\"{}"]]
-        }
-    }
-    return [list $found $val]
-}
-
-proc extio_obs_autobind {value} {
-    set value [extio_obs_autobind_norm $value]
-    ::settingsdb::save obs_autobind $value
+# -apply hook: surface the value where UIs already look, and bind now if a
+# matching leader is already announced (the normal trigger is the announce).
+proc extio_obs_autobind_apply {value} {
     dservSet extio/obs_autobind $value
-    # apply immediately if a matching leader is already announced
     if { $value ne "" } {
         set boxes {}
         catch { set boxes [dservGet extio/boxes] }
@@ -2614,19 +2602,18 @@ proc extio_obs_autobind {value} {
             if { $lead == 1 } { extio_obs_autobind_try $b }
         }
     }
-    set out [expr {$value eq "" ? "off" : $value}]
-    # A runtime change is outlived by the file's declaration (re-asserted at
-    # every boot) -- say so now, instead of silently reverting at the next
-    # restart (the officepi lesson, generalized).
-    if { ![info exists ::extio_local_sourcing] || !$::extio_local_sourcing } {
-        lassign [extio_local_declared_autobind] dfound dval
-        if { $dfound && $dval ne $value } {
-            append out " -- NOTE: local/extio.tcl declares\
- '[expr {$dval eq "" ? "off" : $dval}]', which re-asserts at the next dserv\
- restart; edit the file to make this change permanent"
-        }
+}
+
+proc extio_obs_autobind {value} {
+    # No-change sets are skipped so a legacy extio_obs_autobind line in
+    # local/extio.tcl (sourced every boot) does not rewrite rig.tcl each
+    # boot; the ephemerality NOTE the old two-home design needed is gone --
+    # a set IS the persisted declaration now.
+    set v [extio_obs_autobind_norm $value]
+    if { $v ne [settings::get extio obs_autobind] } {
+        set v [settings::put extio obs_autobind $value -persist]
     }
-    return $out
+    return [expr {$v eq "" ? "off" : $v}]
 }
 
 proc extio_obs_autobind_try {box} {
@@ -2719,19 +2706,28 @@ proc init {} {
 
 init
 
-# surface the persisted auto-bind flag (UIs + humans); "" reads as off
+# One-time carryover: a rig whose auto-bind consent lived only in
+# settings.db (the pre-rig.tcl home) gets its file line written now;
+# thereafter local/rig.tcl is the single home and the db row is inert.
+if { [settings::source_of extio obs_autobind] eq "default" } {
+    set _dbv ""
+    catch { set _dbv [extio_obs_autobind_norm [::settingsdb::load obs_autobind]] }
+    if { $_dbv ne "" } {
+        settings::put extio obs_autobind $_dbv -persist
+        puts "extio: obs_autobind '$_dbv' migrated from settings.db to local/rig.tcl"
+    }
+    unset _dbv
+}
+
+# surface the declared auto-bind flag (UIs + humans); "" reads as off
 dservSet extio/obs_autobind [extio_obs_autobind_get]
 
-# rig-local DECLARED config + overrides (autobind consent, port pinning,
-# extra forwards) -- see local/extio.tcl.EXAMPLE. Sourced LAST deliberately:
-# file declarations re-assert over db-persisted values at every boot. The
-# flag lets procs called from inside the file (e.g. extio_obs_autobind)
-# know the file itself is speaking, so they skip the ephemerality note.
-set ::extio_local_sourcing 0
+# rig-local config + overrides (port pinning, extra forwards) -- see
+# local/extio.tcl.EXAMPLE. A legacy extio_obs_autobind line here still works:
+# the setter persists a CHANGED value into local/rig.tcl (the declared home)
+# and skips no-change sets, so the line is harmless duplication until removed.
 if { [file exists $dspath/local/extio.tcl] } {
-    set ::extio_local_sourcing 1
     source $dspath/local/extio.tcl
-    set ::extio_local_sourcing 0
 }
 
 puts "extio initialized"

@@ -42,6 +42,8 @@
 #
 #   settings::get <sub> <key>            effective value (runtime > file >
 #                                        default); publishes value + source
+#   settings::source_of <sub> <key>      default | file | runtime -- for
+#                                        one-time migrations from older stores
 #   settings::put <sub> <key> <v> ?-persist?
 #       Validated runtime override. -persist writes the file line (surgical:
 #       comments and unrelated lines byte-preserved) and reclassifies the
@@ -227,6 +229,15 @@ proc ::settings::get {sub key} {
     _dp settings/$sub/$key $v
     _dp settings/$sub/$key/source $src
     return $v
+}
+
+# Where does the effective value come from: default | file | runtime.
+# Exists for migrations: "has a human declared this yet, or are we still on
+# the default?" is the question a one-time carryover from an older store
+# must ask before writing the file line.
+proc ::settings::source_of {sub key} {
+    lassign [_effective $sub $key] v src
+    return $src
 }
 
 proc ::settings::put {sub key value args} {
