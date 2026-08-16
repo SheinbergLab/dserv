@@ -937,10 +937,7 @@ class ESSWorkbench {
         });
         
         // Initialize tab-specific content and refresh if snapshot arrived while away
-        if (tabName === 'scripts') {
-            if (!this.editor) this.initEditor();
-            if (this._snapshotDirty) this.updateScriptEditor();
-        } else if (tabName === 'variants') {
+        if (tabName === 'variants') {
             this.initVariantsTab();
             if (this._snapshotDirty) this.updateVariantsEditor();
         } else if (tabName === 'loaders') {

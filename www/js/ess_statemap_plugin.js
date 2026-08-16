@@ -507,7 +507,9 @@ const StateMapPlugin = {
                     `    }\n` +
                     `}\n` +
                     `set __o`;
-                const resp = await wb.connection.send(script, 'ess');
+                // evalAsync: requestId-correlated, safe alongside any
+                // concurrent scripts-subprocess fetches on this socket.
+                const resp = await wb.connection.evalAsync(`send ess {${script}}`);
                 this._sourceCache.set(key, resp || '(no action or transition method)');
             } catch (err) {
                 el.innerHTML = `<div class="sm-side-title">${name}</div>
