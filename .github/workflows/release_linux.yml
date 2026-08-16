@@ -284,9 +284,13 @@ jobs:
             cp /usr/local/dserv/local/camera.tcl.EXAMPLE /usr/local/dserv/local/camera.tcl
           fi
           # dsconf starts the camera subprocess when the module is present, so
-          # a running dserv picks it up on restart.
+          # a running dserv picks it up on restart. --no-block matters: when
+          # the install itself runs under dserv's interp (essctrl exec dpkg),
+          # a blocking restart deadlocks — dserv's stop joins the worker that
+          # is waiting on dpkg, which is waiting on this very systemctl —
+          # until systemd's stop timeout SIGKILLs it (seen 2026-08-15).
           if command -v systemctl >/dev/null 2>&1; then
-            systemctl try-restart dserv 2>/dev/null || true
+            systemctl try-restart --no-block dserv 2>/dev/null || true
           fi
           EOF
           chmod 755 camera-pkg/DEBIAN/postinst

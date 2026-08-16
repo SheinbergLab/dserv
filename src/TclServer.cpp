@@ -5,6 +5,7 @@
 #include "dserv.h"
 #include "dservConfig.h"
 #include "socket_keepalive.h"
+#include "ListenerSocket.h"
 #include <vector>
 #include <algorithm>
 #include <filesystem>
@@ -223,41 +224,13 @@ bool TclServer::isDone()
 
 void TclServer::start_tcp_server(void)
 {
-  struct sockaddr_in address;
   struct sockaddr client_address;
   socklen_t client_address_len = sizeof(client_address);
   int socket_fd;
   int new_socket_fd;        // client socket
-  int on = 1;
-  
-  /* Initialise IPv4 address. */
-  memset(&address, 0, sizeof(struct sockaddr_in));
-  address.sin_family = AF_INET;
-  address.sin_port = htons(newline_port());
-  address.sin_addr.s_addr = INADDR_ANY;
-  
-  
-  /* Create TCP socket. */
-  if ((socket_fd = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
-    perror("socket");
-    return;
-  }
+  int on = 1;               // TCP_NODELAY on accepted sockets
 
-  /* Allow this server to reuse the port immediately */
-  setsockopt(socket_fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
-  
-  /* Bind address to socket. */
-  if (bind(socket_fd, (const struct sockaddr *) &address,
-       sizeof (struct sockaddr)) == -1) {
-    perror("bind");
-    return;
-  }
-  
-  /* Listen on socket. */
-  if (listen(socket_fd, 20) == -1) {
-    perror("listen");
-    return;
-  }
+  socket_fd = listener_socket_or_die(newline_port(), "newline listener");
 
   while (!m_bDone) {
     /* Accept connection to client. */
@@ -266,10 +239,11 @@ void TclServer::start_tcp_server(void)
       perror("accept");
       continue;
     }
+    accepted_socket_cloexec(new_socket_fd);
 
     // Get client IP address
     std::string client_ip = get_client_ip(client_address);
-    
+
     if (!accept_new_connection(client_ip)) {
        std::lock_guard<std::mutex> lock(connection_mutex);
        auto ip_count_it = ip_connection_count.find(client_ip);
@@ -302,35 +276,13 @@ void TclServer::start_tcp_server(void)
 
 void TclServer::start_message_server(void)
 {
-  struct sockaddr_in address;
   struct sockaddr client_address;
   socklen_t client_address_len = sizeof(client_address);
   int socket_fd;
   int new_socket_fd;
-  int on = 1;
-  
-  memset(&address, 0, sizeof(struct sockaddr_in));
-  address.sin_family = AF_INET;
-  address.sin_port = htons(message_port());
-  address.sin_addr.s_addr = INADDR_ANY;
+  int on = 1;               // TCP_NODELAY on accepted sockets
 
-  if ((socket_fd = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
-    perror("socket");
-    return;
-  }
-
-  setsockopt(socket_fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
-  
-  if (bind(socket_fd, (const struct sockaddr *) &address,
-       sizeof (struct sockaddr)) == -1) {
-    perror("bind");
-    return;
-  }
-  
-  if (listen(socket_fd, 20) == -1) {
-    perror("listen");
-    return;
-  }
+  socket_fd = listener_socket_or_die(message_port(), "message listener");
 
   while (!m_bDone) {
     /* Accept connection to client. */
@@ -339,6 +291,7 @@ void TclServer::start_message_server(void)
       perror("accept");
       continue;
     }
+    accepted_socket_cloexec(new_socket_fd);
 
     // Get client IP address
     std::string client_ip = get_client_ip(client_address);
@@ -1586,7 +1539,12 @@ set www_path /usr/local/dserv/www</code>
         std::cout << "WebSocket server listening on port " << websocket_port() << std::endl;
         std::cout << "Web terminal available at http://localhost:" << websocket_port() << "/" << std::endl;
       } else {
-        std::cerr << "Failed to start WebSocket server on port " << websocket_port() << std::endl;
+        // Same policy as the text listeners (ListenerSocket.h): a server
+        // that cannot bind one of its ports must not keep running half-alive.
+        std::cerr << "Failed to start WebSocket server on port "
+                  << websocket_port()
+                  << " -- exiting so systemd can relaunch clean" << std::endl;
+        _exit(1);
       }
     }).run();
   }; // End of setup_routes lambda

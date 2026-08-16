@@ -3,6 +3,7 @@
 #include "TclInterpInit.h"
 #include "dpoint_process.h"
 #include "socket_keepalive.h"
+#include "ListenerSocket.h"
 
 static int process_requests(Dataserver *dserv);
 
@@ -1447,42 +1448,12 @@ static int process_requests(Dataserver *dserv) {
   
 void Dataserver::start_tcp_server(void)
 {
-  struct sockaddr_in address;
   struct sockaddr client_address;
   socklen_t client_address_len = sizeof(client_address);
   int new_socket_fd;		// client socket
-  int on = 1;
-    
-  //std::cout << "server on port " << std::to_string(tcpport) << std::endl;
+  int on = 1;               // TCP_NODELAY on accepted sockets
 
-  /* Initialise IPv4 address. */
-  memset(&address, 0, sizeof(struct sockaddr_in));
-  address.sin_family = AF_INET;
-  address.sin_port = htons(tcpport);
-  address.sin_addr.s_addr = INADDR_ANY;
-
-        
-  /* Create TCP socket. */
-  if ((socket_fd = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
-    perror("socket");
-    return;
-  }
-
-  /* Allow this server to reuse the port immediately */
-  setsockopt(socket_fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
-  
-  /* Bind address to socket. */
-  if (bind(socket_fd, (const struct sockaddr *) &address,
-	   sizeof (struct sockaddr)) == -1) {
-    perror("bind");
-    return;
-  }
-
-  /* Listen on socket. */
-  if (listen(socket_fd, 20) == -1) {
-    perror("listen");
-    return;
-  }
+  socket_fd = listener_socket_or_die(tcpport, "dataserver listener");
 
   while (1) {
     /* Accept connection to client. */
@@ -1491,7 +1462,8 @@ void Dataserver::start_tcp_server(void)
       perror("accept");
       continue;
     }
-      
+    accepted_socket_cloexec(new_socket_fd);
+
     setsockopt(new_socket_fd, IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on));
 
     /* The thread below blocks in read() with no timeout, so a peer that
