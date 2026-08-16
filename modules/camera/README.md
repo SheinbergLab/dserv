@@ -87,6 +87,27 @@ the `camera/preview` datapoint. View it at `http(s)://<host>:2565/camera.html`
 live snapshot-interval selector, and on-demand full-resolution capture
 (`camera/full`). Start failures surface on `camera/status`.
 
+## Arducam and other clone modules
+
+Arducam's "Pi Camera V3" boards use the same imx708 as the official Camera
+Module 3 and drive identically through this module. If
+`rpicam-hello --list-cameras` shows nothing with the camera attached,
+auto-detect did not bind the sensor — add its overlay to
+`/boot/firmware/config.txt` and reboot:
+
+```
+dtoverlay=imx708
+```
+
+(Substitute the sensor your board carries — imx519, ov64a40, … . Overlay
+selection is boot configuration and stays a human decision: the deb's
+postinst deliberately does not edit config.txt, since the edit needs a
+reboot to act and a wrong overlay can shadow auto-detect.) Arducam
+*Pivariety*-series cameras are the exception to "drives identically": they
+need Arducam's own libcamera fork, which the release deb's dependency on the
+distro libcamera cannot satisfy — use `scripts/setup-camera.sh` against
+Arducam's stack for those.
+
 ## Building from source
 
 For an OS the release deb does not match (apt will say so), the setup script

@@ -292,6 +292,17 @@ jobs:
           if command -v systemctl >/dev/null 2>&1; then
             systemctl try-restart --no-block dserv 2>/dev/null || true
           fi
+          # Advice only, never a config.txt edit: overlay selection is boot
+          # configuration and needs a reboot to act — a human decision. But an
+          # attached clone/Arducam camera whose overlay is missing binds no
+          # sensor, and saying so here beats a silent gap.
+          if ! cat /sys/bus/i2c/devices/*/name 2>/dev/null | grep -qiE '^(imx|ov|arducam)'; then
+            echo "dserv-camera: no camera sensor bound on this box."
+            echo "dserv-camera: if a camera IS attached (Arducam/clone modules especially),"
+            echo "dserv-camera: it may need 'dtoverlay=<sensor>' (e.g. imx708) in"
+            echo "dserv-camera: /boot/firmware/config.txt and a reboot."
+            echo "dserv-camera: check with: rpicam-hello --list-cameras"
+          fi
           EOF
           chmod 755 camera-pkg/DEBIAN/postinst
 

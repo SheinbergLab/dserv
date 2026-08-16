@@ -1391,7 +1391,7 @@ body.solo .agent-panel {
 		 if (comp.hardwareDetected === true && !inst) {
 		     depBadges += `<span class="dep-badge" style="background:#14351f;color:#34d399" title="This box's hardware matches this add-on">hardware detected</span>`;
 		 } else if (comp.hardwareDetected === false && !inst) {
-		     depBadges += `<span class="dep-badge" title="No matching hardware found on this box">no hardware detected</span>`;
+		     depBadges += `<span class="dep-badge" title="No matching sensor bound on this box. A physically attached camera can still show this when its overlay is missing — clone/Arducam modules may need dtoverlay=<sensor> (e.g. imx708) in /boot/firmware/config.txt and a reboot. Triage: rpicam-hello --list-cameras">no hardware detected</span>`;
 		 } else {
 		     depBadges += `<span class="dep-badge" title="Opt-in add-on; not part of any profile">optional</span>`;
 		 }
