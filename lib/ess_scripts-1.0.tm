@@ -114,12 +114,11 @@ namespace eval scripts {
             }
         }
         set ::ess::current(project) $project
-        if {![info exists ::ess::overlay_path]} { set ::ess::overlay_path "" }
 
         _registry_from_dserv
 
         ess::paths::configure -system_path $::ess::system_path \
-            -project $project -overlay_path ""
+            -project $project
 
         # Follow project switches made in the ess subprocess.
         dservAddExactMatch ess/project

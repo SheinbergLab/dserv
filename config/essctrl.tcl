@@ -80,14 +80,9 @@ namespace eval ess {
     proc get_lib_files args { _protected_call get_lib_files 1 $args }
     proc get_lib_file_content args { _protected_call get_lib_file_content 1 $args }
     proc validate_script_minimal s { _protected_call validate_script_minimal 0 $s }
-    # Overlay management
-    proc set_overlay_user {args} { _protected_call set_overlay_user 0 $args }
-    proc promote_overlay args { _protected_call promote_overlay 1 $args }
-    proc promote_all_overlays args { _protected_call promote_all_overlays 1 $args }
-    proc discard_overlay args { _protected_call discard_overlay 1 $args }
-    proc discard_all_overlays args { _protected_call discard_all_overlays 1 $args }
-    proc overlay_summary args { _protected_call overlay_summary 0 $args }
-    proc publish_snapshot args { _protected_call publish_snapshot 0 $args }    
+    # Editor identity (attribution for GUI/CLI edits)
+    proc set_editor_user {args} { _protected_call set_editor_user 0 $args }
+    proc publish_snapshot args { _protected_call publish_snapshot 0 $args }
 
     # Registry sync operations
     proc sync_status args { _protected_call sync_status 1 $args }

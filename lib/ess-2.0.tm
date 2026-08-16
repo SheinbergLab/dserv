@@ -3625,18 +3625,15 @@ namespace eval ess {
     
     proc save_script {type script_content {validation_level "fast"}} {
         variable current
-	variable overlay_path
-	
+        variable editor_user
+
         if {$current(system) == ""} {
             ess_error "No system loaded" "script"
             return
         }
 
-	if {$overlay_path eq ""} {
-	    error "No user selected. Select a user before editing."
-	}
-	
-        ess_info "Saving $type script with $validation_level validation" "script"
+        set who [expr {$editor_user ne "" ? " (user: $editor_user)" : ""}]
+        ess_info "Saving $type script with $validation_level validation$who" "script"
         
         # Validate script
         set validation [validate_script $script_content $type $validation_level]
@@ -3656,8 +3653,8 @@ namespace eval ess {
         # Create backup
         set backup_file [backup_script $type]
         
-        # Save the script (overlay if active, else base)
-        set saveto [get_save_file_path $type]
+        # Save the script into the base tree
+        set saveto [get_base_file_path $type]
         
         if {[catch {
             set file_handle [open $saveto w]
@@ -3778,14 +3775,6 @@ namespace eval ess {
     proc get_base_file_path {type} {
         return [ess::paths::base_path [get_script_relpath $type]]
     }
-
-    proc get_overlay_file_path {type} {
-        return [ess::paths::overlay_path_for [get_script_relpath $type]]
-    }
-
-    proc get_save_file_path {type} {
-        return [ess::paths::save_path [get_script_relpath $type]]
-    }
     
     # Enhanced cleanup with centralized directory
     proc cleanup_old_backups {type {max_backups 10}} {
@@ -3857,203 +3846,6 @@ namespace eval ess {
     }
 }
 
-
-# ──────────────────────────────────────────────────────────────────
-# Overlay Management: promote and discard
-# ──────────────────────────────────────────────────────────────────
-namespace eval ess {
-
-    # Promote a single overlay script back to the base (main) location.
-    # Copies overlay → base, then removes the overlay file.
-    # Optionally reloads the system afterward.
-    proc promote_overlay {type {reload 0}} {
-        variable current
-        variable overlay_path
-        variable system_path
-
-        if {$overlay_path eq ""} {
-            error "No overlay active"
-        }
-        if {$current(system) eq ""} {
-            error "No system loaded"
-        }
-
-        set relpath [get_script_relpath $type]
-        if {$relpath eq ""} {
-            error "Unknown script type: $type"
-        }
-
-        set overlay_file [file join $overlay_path $relpath]
-        set base_file    [file join $system_path $relpath]
-
-        if {![file exists $overlay_file]} {
-            error "No overlay file for $type"
-        }
-
-        # Backup the current base file before overwriting
-        backup_script $type
-
-        # Copy overlay → base
-        file copy -force $overlay_file $base_file
-        fix_file_ownership $base_file
-        ess_info "Promoted $type: overlay → base" "overlay"
-
-        # Remove the overlay file
-        file delete $overlay_file
-        ess_info "Removed overlay file for $type" "overlay"
-
-        # Clean up empty overlay directories (best-effort, don't abort promote)
-        catch {cleanup_empty_overlay_dirs}
-
-        # Republish snapshot so workbench sees updated status
-        publish_snapshot
-
-        # Optionally reload
-        if {$reload} {
-            reload_system
-        }
-
-        return "promoted"
-    }
-
-    # Promote ALL overlay scripts back to base at once.
-    proc promote_all_overlays {{reload 1}} {
-        variable overlay_path
-
-        if {$overlay_path eq ""} {
-            error "No overlay active"
-        }
-
-        set promoted [list]
-        foreach type {system protocol loaders variants stim sys_extract sys_analyze proto_extract} {
-            set relpath [get_script_relpath $type]
-            if {$relpath eq ""} continue
-            set overlay_file [file join $overlay_path $relpath]
-            if {[file exists $overlay_file]} {
-                promote_overlay $type 0
-                lappend promoted $type
-            }
-        }
-
-        if {[llength $promoted] == 0} {
-            ess_info "No overlay files to promote" "overlay"
-            return "nothing_to_promote"
-        }
-
-        ess_info "Promoted [llength $promoted] script(s): [join $promoted {, }]" "overlay"
-
-        # Clean up empty overlay directories now that all files are promoted
-        catch {cleanup_empty_overlay_dirs}
-
-        if {$reload} {
-            reload_system
-        }
-
-        return "promoted: [join $promoted {, }]"
-    }
-
-    # Discard a single overlay file, reverting to the base version.
-    proc discard_overlay {type {reload 0}} {
-        variable current
-        variable overlay_path
-
-        if {$overlay_path eq ""} {
-            error "No overlay active"
-        }
-        if {$current(system) eq ""} {
-            error "No system loaded"
-        }
-
-        set relpath [get_script_relpath $type]
-        if {$relpath eq ""} {
-            error "Unknown script type: $type"
-        }
-
-        set overlay_file [file join $overlay_path $relpath]
-
-        if {![file exists $overlay_file]} {
-            ess_info "No overlay file for $type to discard" "overlay"
-            return "no_overlay"
-        }
-
-        file delete $overlay_file
-        ess_info "Discarded overlay for $type (reverted to base)" "overlay"
-
-        # Clean up empty directories
-        cleanup_empty_overlay_dirs
-
-        # Republish
-        publish_snapshot
-
-        if {$reload} {
-            reload_system
-        }
-
-        return "discarded"
-    }
-
-    # Discard ALL overlay files for the current system.
-    proc discard_all_overlays {{reload 1}} {
-        variable overlay_path
-
-        if {$overlay_path eq ""} {
-            error "No overlay active"
-        }
-
-        set discarded [list]
-        foreach type {system protocol loaders variants stim sys_extract sys_analyze proto_extract} {
-            set relpath [get_script_relpath $type]
-            if {$relpath eq ""} continue
-            set overlay_file [file join $overlay_path $relpath]
-            if {[file exists $overlay_file]} {
-                file delete $overlay_file
-                lappend discarded $type
-            }
-        }
-
-        if {[llength $discarded] == 0} {
-            ess_info "No overlay files to discard" "overlay"
-            return "nothing_to_discard"
-        }
-
-        cleanup_empty_overlay_dirs
-
-        ess_info "Discarded [llength $discarded] overlay(s): [join $discarded {, }]" "overlay"
-        publish_snapshot
-
-        if {$reload} {
-            reload_system
-        }
-
-        return "discarded: [join $discarded {, }]"
-    }
-
-    # Remove empty directories left behind after overlay operations
-    proc cleanup_empty_overlay_dirs {} {
-        ess::paths::cleanup_empty_overlay_dirs
-    }
-    
-    # Get overlay info for the current system: list of {type source} pairs
-    # plus summary counts, useful for UI display
-    proc overlay_summary {} {
-        variable overlay_path
-        set status [get_overlay_status]
-        set overlay_count 0
-        set total 0
-        dict for {type source} $status {
-            incr total
-            if {$source eq "overlay"} {
-                incr overlay_count
-            }
-        }
-        return [dict create \
-            status       $status \
-            overlay_user [expr {$overlay_path ne "" ? [file tail $overlay_path] : ""}] \
-            overlay_active [expr {$overlay_path ne ""}] \
-            overlay_count $overlay_count \
-            total_scripts $total]
-    }
-}
 
 ###############################################################################
 ################################### joystick ##################################
@@ -5694,8 +5486,8 @@ namespace eval ess {
 
     # Load a sound file as stimulus `name`; returns duration in ms.
     # `filename` defaults to name.wav. A bare filename is resolved through
-    # the standard data/ search order (protocol -> system -> project,
-    # overlay-aware) like any other data file; absolute paths or paths
+    # the standard data/ search order (protocol -> system -> project)
+    # like any other data file; absolute paths or paths
     # with directory components are used as-is. wav/flac/mp3 accepted.
     proc wav_load { name {filename {}} } {
         if { $filename eq {} } { set filename ${name}.wav }
@@ -6048,14 +5840,11 @@ namespace eval ess {
         variable system_path /usr/local/dserv/systems
     }
 
-    # Overlay path for per-user development layers
-    # When set, resolve_file checks here first, falling back to system_path
-    # When empty (default), everything resolves from system_path only
-    variable overlay_path {}
-
-    if {[info exists ::env(ESS_OVERLAY_PATH)]} {
-        variable overlay_path $::env(ESS_OVERLAY_PATH)
-    }
+    # Editor identity for attribution (who is editing via a GUI/CLI
+    # client).  Purely informational: it tags save_script logging and
+    # the ess/editor_user datapoint; it never affects path resolution.
+    # (The per-user overlay layer this replaced was retired 2026-08.)
+    variable editor_user {}
 
     if {[info exists ::env(ESS_RMT_HOST)]} {
         variable rmt_host $::env(ESS_RMT_HOST)
@@ -6121,21 +5910,19 @@ namespace eval ess {
     foreach v "system_path rmt_host data_dir project stim_required" {
         dservSet ess/$v [set $v]
     }
-    dservSet ess/overlay_path $overlay_path
+    dservSet ess/editor_user $editor_user
     dservSet ess/block_id 0
 
     # Configure the paths module with our resolved values
     ess::paths::configure \
         -system_path $system_path \
-        -overlay_path $overlay_path \
         -project $project
 
     #
-    # Overlay resolution — delegates to ess::paths module
+    # Path resolution — delegates to ess::paths module
     #
     proc resolve_file {relpath} { return [ess::paths::resolve $relpath] }
     proc resolve_glob {relpattern} { return [ess::paths::resolve_glob $relpattern] }
-    proc resolve_source {relpath} { return [ess::paths::source $relpath] }
 
     # ──────────────────────────────────────────────────────────────
     # Data files
@@ -6149,8 +5936,7 @@ namespace eval ess {
     # ──────────────────────────────────────────────────────────────
 
     # Standard search order for a protocol's data file, most specific
-    # first. Both the protocol- and system-level data dirs go through
-    # resolve_file, so a user's overlay copy wins over the base tree.
+    # first: protocol-level data dir, then system-level, then project.
     proc data_search_paths {name {system {}} {protocol {}}} {
         variable current
         if {$system eq {}}   { set system   $current(system) }
@@ -6213,25 +5999,21 @@ namespace eval ess {
         return {}
     }
 
-    # Set the active overlay user; empty string disables overlay
-    proc set_overlay_user {username} {
-        variable overlay_path
+    # Set the editor identity (attribution only); empty string clears it
+    proc set_editor_user {username} {
+        variable editor_user
 
-        set overlay_path [ess::paths::set_overlay_user $username]
-        ess::paths::configure -overlay_path $overlay_path
+        set editor_user $username
+        dservSet ess/editor_user $username
 
-        dservSet ess/overlay_path $overlay_path
-        dservSet ess/overlay_user $username
+        publish_snapshot
 
-	publish_snapshot
-	
-        ess_info "Overlay user set to '$username', path: $overlay_path" "overlay"
+        ess_info "Editor user set to '$username'" "script"
     }
 
-    # Report which scripts are overlaid for the current system
-    proc get_overlay_status {} {
-        variable current
-        return [ess::paths::overlay_status $current(system) $current(protocol)]
+    proc get_editor_user {} {
+        variable editor_user
+        return $editor_user
     }
 
     proc system_init {system} {
@@ -7020,9 +6802,6 @@ namespace eval ess {
             set sysname [file tail $f]
             if {![file isdirectory $f]} continue
 
-            # Use resolve_file so that an overlay of the system .tcl
-            # is sourced when present, but discovery still works even
-            # if the overlay directory doesn't contain the main .tcl.
             set relpath [file join $current(project) $sysname ${sysname}.tcl]
             set fname [resolve_file $relpath]
 
@@ -7047,7 +6826,6 @@ namespace eval ess {
             set protoname [file tail $f]
             if {![file isdirectory $f]} continue
 
-            # Use resolve_file so overlay of the protocol .tcl is honoured
             set relpath [file join $current(project) $s $protoname ${protoname}.tcl]
             set fname [resolve_file $relpath]
 
@@ -7467,9 +7245,8 @@ proc ess::system_snapshot_json {} {
     dict set snapshot script_sys_analyze  [sys_analyze_script]
     dict set snapshot script_proto_extract [proto_extract_script]	
     
-    # Report which layer each script comes from
-    dict set snapshot overlay_status [get_overlay_status]
-    dict set snapshot overlay_user [expr {$::ess::overlay_path ne "" ? [file tail $::ess::overlay_path] : ""}]
+    # Editor identity (attribution for GUI/CLI edits)
+    dict set snapshot editor_user $::ess::editor_user
 
     if {[info exists _loading_from_config] && $_loading_from_config} {
 	dict set snapshot source "config"

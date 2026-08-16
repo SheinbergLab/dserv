@@ -35,8 +35,8 @@ namespace eval ess {
     #
     # When sync_system overwrites a local base file that differs from
     # the registry, the local version is saved to a "sync_displaced"
-    # directory.  This protects promoted overlay work that hasn't been
-    # pushed to registry yet.
+    # directory.  This protects local work that hasn't been pushed to
+    # the registry yet.
     #
     # The displaced list is published as a datapoint so the workbench
     # can warn the user.
@@ -832,150 +832,15 @@ namespace eval ess {
             errors $all_errors]
     }
 
-    # ── Push overlay file to server sandbox ───────────────────────────
-    #
-    # After saving locally, push the overlay file to the registry so
-    # it persists for cross-machine roaming.
-    #
-    proc push_overlay {type} {
-        variable overlay_path
-        variable registry_url
-        variable registry_workgroup
-        variable current
-
-        if {$overlay_path eq ""} {
-            error "No overlay user set"
-        }
-        if {$registry_url eq ""} {
-            error "Registry URL not configured"
-        }
-
-        set relpath [get_script_relpath $type]
-        set overlay_file [file join $overlay_path $relpath]
-
-        if {![file exists $overlay_file]} {
-            error "No overlay file for $type"
-        }
-
-        # Read content
-        set f [open $overlay_file r]
-        set content [read $f]
-        close $f
-
-        # Map to registry API type and protocol
-        lassign [_registry_type_mapping $type $current(protocol)] api_type api_protocol
-
-        set overlay_user [file tail $overlay_path]
-        set system $current(system)
-
-        set url "${registry_url}/api/v1/ess/script/${registry_workgroup}/${system}/${api_protocol}/${api_type}"
-
-        set body [dict_to_json [dict create \
-            content $content \
-            updatedBy $overlay_user \
-            comment "pushed from overlay"]]
-
-        if {[catch {
-            set response [https_put $url $body]
-        } err]} {
-            ess_error "Failed to push $type to registry: $err" "sync"
-            error "Push failed: $err"
-        }
-
-        ess_info "Pushed $type to registry ($registry_workgroup/$system)" "sync"
-        return "success"
-    }
-
-    # ── Pull overlay from server sandbox ──────────────────────────────
-    #
-    # Pull a user's sandbox files from the server into the local overlay.
-    # Used when switching machines or after fresh boot with overlay user set.
-    #
-    proc pull_overlay {{version ""}} {
-        variable overlay_path
-        variable system_path
-        variable registry_url
-        variable registry_workgroup
-        variable current
-
-        if {$overlay_path eq ""} {
-            error "No overlay user set"
-        }
-        if {$registry_url eq ""} {
-            error "Registry URL not configured"
-        }
-
-        set overlay_user [file tail $overlay_path]
-        if {$version eq ""} {
-            set version $overlay_user
-        }
-
-        set system $current(system)
-        set project $current(project)
-        set pulled 0
-
-        ess_info "Pulling overlay for $overlay_user ($system@$version)" "sync"
-
-        # Get the sandbox version's scripts
-        set url "${registry_url}/api/v1/ess/scripts/${registry_workgroup}/${system}?version=${version}"
-
-        if {[catch {
-            set response [https_get $url]
-            set data [json_to_dict $response]
-        } err]} {
-            # No sandbox exists — that's fine, nothing to pull
-            ess_info "No sandbox found for $overlay_user/$system (may not exist yet)" "sync"
-            return [dict create pulled 0]
-        }
-
-        # Write each script to the overlay directory
-        set scripts [dict get $data scripts]
-        dict for {group script_list} $scripts {
-            foreach script $script_list {
-                set protocol [dict get $script protocol]
-                set filename [dict get $script filename]
-                set content  [dict get $script content]
-
-                if {$protocol eq ""} {
-                    set relpath [file join $project $system $filename]
-                } else {
-                    set relpath [file join $project $system $protocol $filename]
-                }
-
-                set overlay_file [file join $overlay_path $relpath]
-
-                if {[catch {
-                    set dir [file dirname $overlay_file]
-                    if {![file exists $dir]} {
-                        mkdir_matching_owner $dir
-                    }
-                    set f [open $overlay_file w]
-                    puts -nonewline $f $content
-                    close $f
-                    fix_file_ownership $overlay_file
-                    incr pulled
-                    ess_info "  Pulled overlay: $relpath" "sync"
-                } write_err]} {
-                    ess_error "  Failed to write overlay $relpath: $write_err" "sync"
-                }
-            }
-        }
-
-        ess_info "Pulled $pulled overlay files for $overlay_user" "sync"
-        return [dict create pulled $pulled]
-    }
-
     # ── Commit a single base script to registry ────────────────────
     #
-    # Pushes a promoted (base) script to the registry as the main version.
-    # This is the "publish" step after promote_overlay → base.
+    # Pushes a local script to the registry as the main version.
     #
     # type: system, protocol, loaders, variants, stim, etc.
     # comment: optional commit message
     #
     proc commit_script {type {comment ""}} {
         variable system_path
-        variable overlay_path
         variable registry_url
         variable registry_workgroup
         variable registry_checksums
@@ -991,7 +856,6 @@ namespace eval ess {
             error "No system loaded"
         }
 
-        # Read from base, not overlay
         set relpath [get_script_relpath $type]
         if {$relpath eq ""} {
             error "Unknown or unavailable script type: $type"
@@ -1011,8 +875,8 @@ namespace eval ess {
 
         # Identify who is committing
         set user ""
-        if {$overlay_path ne ""} {
-            set user [file tail $overlay_path]
+        if {[info exists ::ess::editor_user] && $::ess::editor_user ne ""} {
+            set user $::ess::editor_user
         } elseif {[info exists ::env(USER)]} {
             set user $::env(USER)
         }
@@ -1208,73 +1072,28 @@ namespace eval ess {
 
     # ── Read a lib file ──────────────────────────────────────────────
     #
-    # Returns content of a lib .tm file.
-    # Checks overlay path first if active, falls back to base via
-    # get_lib_file_content (defined in ess-2.0.tm).
+    # Returns content of a lib .tm file via get_lib_file_content
+    # (defined in ess-2.0.tm).
     #
     proc read_lib {filename} {
-        variable overlay_path
-        variable current
-
-        # Check overlay first
-        if {$overlay_path ne ""} {
-            set project $current(project)
-            set overlay_file [file join $overlay_path $project lib $filename]
-            if {[file exists $overlay_file]} {
-                set f [open $overlay_file r]
-                set content [read $f]
-                close $f
-                return $content
-            }
-        }
-
-        # Fall back to base (with validation)
         return [get_lib_file_content $filename]
     }
 
     # ── Save a lib file ──────────────────────────────────────────────
     #
-    # If overlay is active, writes to overlay lib path directly.
-    # If no overlay, delegates to save_lib_file (ess-2.0.tm) which
-    # handles validation, backup creation, and ownership.
+    # Delegates to save_lib_file (ess-2.0.tm) which handles
+    # validation, backup creation, and ownership.
     #
     proc save_lib {filename content} {
-        variable system_path
-        variable overlay_path
-        variable current
-
-        set project $current(project)
-
-        if {$overlay_path ne ""} {
-            # Save to overlay
-            set dir [file join $overlay_path $project lib]
-            set target [file join $dir $filename]
-
-            if {![file exists $dir]} {
-                mkdir_matching_owner $dir
-            }
-
-            set f [open $target w]
-            puts -nonewline $f $content
-            close $f
-            fix_file_ownership $target
-
-            ess_info "Saved lib $filename to overlay" "sync"
-            return "ok"
-        }
-
-        # No overlay — save to base via save_lib_file (gets backup + validation)
         return [save_lib_file $filename $content]
     }
 
     # ── Commit a lib from base to registry ───────────────────────────
     #
     # Reads the base lib file and PUTs it to the registry.
-    # Requires the lib to be promoted (in base) first if overlay was active.
     #
     proc commit_lib {filename {comment ""} {user_override ""}} {
         variable system_path
-        variable overlay_path
         variable registry_url
         variable registry_workgroup
         variable current
@@ -1288,7 +1107,6 @@ namespace eval ess {
 
         set project $current(project)
 
-        # Read from base (not overlay)
         set base_file [file join $system_path $project lib $filename]
         if {![file exists $base_file]} {
             error "No base lib file: $filename"
@@ -1309,8 +1127,8 @@ namespace eval ess {
         # Identify user
         set user $user_override
         if {$user eq ""} {
-            if {$overlay_path ne ""} {
-                set user [file tail $overlay_path]
+            if {[info exists ::ess::editor_user] && $::ess::editor_user ne ""} {
+                set user $::ess::editor_user
             } elseif {[info exists ::env(USER)]} {
                 set user $::env(USER)
             }

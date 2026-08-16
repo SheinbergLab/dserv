@@ -45,25 +45,20 @@ ess::commit_system "release v2"
 ess::commit_lib "utils-1.0.tm"
 ```
 
-## Overlay / Sandbox
+## Editor identity
 
-The overlay system lets individual users edit scripts without touching the
-shared base layer. The user identity comes from `ess::set_overlay_user`
-(defined in `ess-2.0.tm`, wrapped in `essctrl.tcl`), which sets the
-`overlay_path` used by all overlay and commit operations.
+Edits go directly to the local script tree (the per-user overlay layer
+was retired 2026-08; the manifest-based sync made a second local layer
+redundant). `ess::set_editor_user` (defined in `ess-2.0.tm`, wrapped in
+`essctrl.tcl`) records who is editing — it tags saves and is the default
+identity for commits.
 
 | Command | Description |
 |---------|-------------|
-| `ess::set_overlay_user <name>` | Set the active overlay user. Creates the overlay directory structure. All script edits go to overlay until promoted. |
-| `ess::promote_overlay <type>` | Copy overlay script to base (local). |
-| `ess::promote_all_overlays` | Promote all overlay scripts to base. |
-| `ess::discard_overlay <type>` | Discard overlay edits for one script. |
-| `ess::discard_all_overlays` | Discard all overlay edits. |
-| `ess::overlay_summary` | Show what's in the overlay vs base. |
-| `ess::push_overlay <type>` | Push overlay file to server sandbox for cross-machine roaming. |
-| `ess::pull_overlay ?version?` | Pull sandbox files into local overlay. |
+| `ess::set_editor_user <name>` | Set the editor identity (attribution only; empty string clears it). |
+| `ess::get_editor_user` | Return the current editor identity. |
 
-The typical workflow is: **set user → edit in overlay → promote to base → commit to registry**.
+The typical workflow is: **set user → edit locally → commit to registry**.
 
 The user identity also controls registry permissions — `commit_script`,
 `commit_system`, and `commit_lib` check the user's role via the registry
@@ -71,10 +66,9 @@ and block commits if the role is `viewer`. Roles are `admin`, `editor`,
 or `viewer`.
 
 ```tcl
-ess::set_overlay_user alice       ;# now editing as alice
+ess::set_editor_user alice        ;# now editing as alice
 # ... edit scripts ...
-ess::promote_overlay protocol     ;# move overlay → base
-ess::commit_script protocol       ;# push base → registry
+ess::commit_script protocol       ;# push local → registry
 ```
 
 ## Scaffolding

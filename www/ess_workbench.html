@@ -11,7 +11,6 @@
     <link rel="stylesheet" href="css/ess_workbench.css">
     <link rel="stylesheet" href="css/DGTableViewer.css">
     <link rel="stylesheet" href="css/ess_workbench_registry.css">
-    <link rel="stylesheet" href="css/ess_workbench_overlay.css">
     <style>
      /* Libs sidebar divider */
      .scripts-sidebar-divider {
@@ -354,7 +353,6 @@
                             <span class="loaders-run-status" id="loader-run-status"></span>
                         </div>
                         <div class="loaders-toolbar-right">
-                            <div id="loader-overlay-controls"></div>
                             <span class="loaders-validation-status" id="loader-validation-status"></span>
                             <button class="btn btn-sm" id="loader-format-btn">
                                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -460,7 +458,6 @@
                                     <polyline points="14 2 14 8 20 8"></polyline>
                                 </svg>
                                 <span>system.tcl</span>
-                                <span class="script-status-dot" data-script="system"></span>
                             </button>
                             <button class="script-item" data-script="protocol">
                                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -468,7 +465,6 @@
                                     <polyline points="14 2 14 8 20 8"></polyline>
                                 </svg>
                                 <span>protocol.tcl</span>
-                                <span class="script-status-dot" data-script="protocol"></span>
                             </button>
                             <button class="script-item" data-script="loaders">
                                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -476,7 +472,6 @@
                                     <polyline points="14 2 14 8 20 8"></polyline>
                                 </svg>
                                 <span>loaders.tcl</span>
-                                <span class="script-status-dot" data-script="loaders"></span>
                             </button>
                             <button class="script-item" data-script="variants">
                                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -484,7 +479,6 @@
                                     <polyline points="14 2 14 8 20 8"></polyline>
                                 </svg>
                                 <span>variants.tcl</span>
-                                <span class="script-status-dot" data-script="variants"></span>
                             </button>
                             <button class="script-item" data-script="stim">
                                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -492,7 +486,6 @@
                                     <polyline points="14 2 14 8 20 8"></polyline>
                                 </svg>
                                 <span>stim.tcl</span>
-                                <span class="script-status-dot" data-script="stim"></span>
                             </button>
                             <button class="script-item" data-script="sys_extract">
                                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -500,7 +493,6 @@
                                     <polyline points="14 2 14 8 20 8"></polyline>
                                 </svg>
                                 <span>sys_extract.tcl</span>
-                                <span class="script-status-dot" data-script="sys_extract"></span>
                             </button>
                             <button class="script-item" data-script="proto_extract">
                                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -508,7 +500,6 @@
                                     <polyline points="14 2 14 8 20 8"></polyline>
                                 </svg>
                                 <span>proto_extract.tcl</span>
-                                <span class="script-status-dot" data-script="proto_extract"></span>
                             </button>
 <button class="script-item" data-script="sys_analyze">
                                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -516,7 +507,6 @@
                                     <polyline points="14 2 14 8 20 8"></polyline>
                                 </svg>
                                 <span>sys_analyze.tcl</span>
-                                <span class="script-status-dot" data-script="sys_analyze"></span>
 </button>
                             <!-- Libs section -->
                             <div class="scripts-sidebar-divider" id="libs-divider" style="display:none;">
