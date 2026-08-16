@@ -4960,6 +4960,29 @@ select.ess-param-select {
     font-weight: 600;
 }
 
+/* Untracked strays: informational only, kept visually quiet */
+.ess-sync-col-new,
+.ess-sync-col-num.ess-sync-col-new,
+.ess-sync-table th.ess-sync-col-new {
+    color: var(--ess-text-muted);
+    font-weight: 400;
+}
+
+.ess-sync-untracked {
+    margin: 6px 0 2px;
+}
+
+.ess-sync-untracked > summary {
+    cursor: pointer;
+    color: var(--ess-text-muted);
+    font-size: 12px;
+    user-select: none;
+}
+
+.ess-sync-untracked[open] > summary {
+    margin-bottom: 4px;
+}
+
 .ess-sync-row {
     cursor: pointer;
 }

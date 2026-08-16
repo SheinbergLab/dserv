@@ -437,6 +437,11 @@ class SyncModal {
     // list of changed files plus counts. The 3-way decision says which
     // side moved: pull/conflict/cold arrive in to_pull, keep_local in
     // skipped, and extra[] are local files the cloud has never seen.
+    //
+    // The counts keep push and pull separable on purpose: pushCount
+    // (edited + conflicts) is what actually needs pushing, newCount is
+    // untracked strays. Lumping them into one "local" number buried the
+    // real edits under a dev machine's stray files.
     _rowStats(data, opts = {}) {
         const isLibs = !!opts.isLibs;
         const system = opts.system || '';
@@ -474,7 +479,7 @@ class SyncModal {
         }
 
         for (const item of skipped) {
-            files.push(fileEntry(item, 'local', 'local',
+            files.push(fileEntry(item, 'local', 'edited',
                 'Changed locally. Push to send it to the cloud.'));
         }
 
@@ -486,6 +491,7 @@ class SyncModal {
                 title: 'New local file, not on the cloud yet.',
                 kind: isLibs ? 'lib' : 'script',
                 system,
+                untracked: true,
                 diffable: false,
                 // local-only files can be stashed to <project>/.trash
                 stashable: true,
@@ -493,21 +499,26 @@ class SyncModal {
             });
         }
 
-        files.sort((a, b) => a.label.localeCompare(b.label));
+        // Push-needed edits lead, then conflicts, then cloud pulls;
+        // untracked strays render last (collapsed by the file list).
+        const rank = f => f.untracked ? 3
+            : (f.where === 'conflict' ? 1 : (f.where === 'cloud' ? 2 : 0));
+        files.sort((a, b) => (rank(a) - rank(b)) || a.label.localeCompare(b.label));
 
         return {
             total: unchanged + toPull.length + skipped.length + extra.length,
             unchanged,
             cloudCount: toPull.length,
             // A conflict counts on both sides, because it genuinely is both.
-            localCount: skipped.length + extra.length + conflicts,
+            pushCount: skipped.length + conflicts,
+            newCount: extra.length,
             conflicts,
             files
         };
     }
 
     _renderChangedFileList(files, rowKey) {
-        const items = files.map((f, idx) => {
+        const item = (f, idx) => {
             const arrow = f.where === 'cloud' ? '↓' : (f.where === 'conflict' ? '⚠' : '↑');
             const links = [];
             if (f.diffable) {
@@ -526,8 +537,24 @@ class SyncModal {
                 + `<span class="ess-sync-badge ess-sync-badge-${f.where}">${this._escapeHtml(f.badge)}</span>`
                 + `${actions}</li>`
                 + `<li class="ess-sync-file-detail" data-row="${this._escapeHtml(rowKey)}" data-idx="${idx}" hidden></li>`;
-        }).join('');
-        return `<ul class="ess-sync-file-list">${items}</ul>`;
+        };
+
+        // Untracked strays fold away so real push/pull work stays legible;
+        // indexes stay global across both lists (diff/stash handlers key
+        // into one files array).
+        const main = [];
+        const untracked = [];
+        files.forEach((f, idx) => (f.untracked ? untracked : main).push(item(f, idx)));
+
+        let html = main.length ? `<ul class="ess-sync-file-list">${main.join('')}</ul>` : '';
+        if (untracked.length) {
+            html += `<details class="ess-sync-untracked">`
+                + `<summary>${this._plural(untracked.length, 'untracked local file')}`
+                + ` — not on the cloud (stash to clean up)</summary>`
+                + `<ul class="ess-sync-file-list">${untracked.join('')}</ul>`
+                + `</details>`;
+        }
+        return html;
     }
 
     _renderRowDetail(row) {
@@ -540,9 +567,12 @@ class SyncModal {
         }
 
         const s = row.stats;
-        const counts = `${this._plural(s.total, 'file')}, `
-            + `${this._plural(s.localCount, 'local change')}, `
-            + `${this._plural(s.cloudCount, 'cloud change')}`;
+        const parts_ = [`${this._plural(s.total, 'file')}`];
+        if (s.pushCount) parts_.push(`<b>${s.pushCount} to push</b>`);
+        if (s.cloudCount) parts_.push(`${s.cloudCount} to pull`);
+        if (s.newCount) parts_.push(`${s.newCount} untracked`);
+        if (parts_.length === 1) parts_.push('in sync');
+        const counts = parts_.join(', ');
 
         if (!s.files.length) {
             return `<div class="ess-sync-summary">${counts} — nothing to do.</div>`;
@@ -620,27 +650,45 @@ class SyncModal {
             });
         }
 
+        // Systems that need pushing first — that is what the operator came
+        // to find — then pull-pending, then untracked-only/new, then clean.
+        // Shared libs stay pinned on top. Alphabetical within a group.
+        const rowRank = r => {
+            if (r.isLibs) return -1;
+            if (!r.inRegistry) return 2;
+            const s = r.stats;
+            if (s.pushCount > 0) return 0;
+            if (s.cloudCount > 0) return 1;
+            if (s.newCount > 0) return 2;
+            return 3;
+        };
+        rows.sort((a, b) => (rowRank(a) - rowRank(b)) || a.label.localeCompare(b.label));
+
         const tableRows = rows.map(row => {
             const keyAttr = this._escapeHtml(row.key);
             const s = row.stats;
-            const hasChanges = !!s && (s.localCount > 0 || s.cloudCount > 0);
+            // Untracked-only rows render dimmed like clean ones: strays
+            // should not light a row up as if it had real work pending.
+            const hasChanges = !!s && (s.pushCount > 0 || s.cloudCount > 0);
             const badge = row.inRegistry
                 ? ''
                 : ' <span class="ess-sync-new-badge">new</span>';
             const totalCell = s ? s.total : '—';
-            const localCell = s ? s.localCount : '—';
+            const pushCell = s ? s.pushCount : '—';
             const cloudCell = s ? s.cloudCount : '—';
+            const newCell = s ? (s.newCount || '') : '—';
 
             return `
                 <tr class="ess-sync-row${hasChanges ? '' : ' ess-sync-row-uptodate'}" data-key="${keyAttr}">
                     <td class="ess-sync-col-name">${this._escapeHtml(row.label)}${badge}</td>
                     <td class="ess-sync-col-num">${totalCell}</td>
-                    <td class="ess-sync-col-num${s && s.localCount ? ' ess-sync-col-local' : ''}">${localCell}</td>
+                    <td class="ess-sync-col-num${s && s.pushCount ? ' ess-sync-col-local' : ''}">${pushCell}</td>
                     <td class="ess-sync-col-num${s && s.cloudCount ? ' ess-sync-col-registry' : ''}">${cloudCell}</td>
+                    <td class="ess-sync-col-num ess-sync-col-new">${newCell}</td>
                     <td class="ess-sync-col-caret"><span class="ess-sync-caret" aria-hidden="true">&#9662;</span></td>
                 </tr>
                 <tr class="ess-sync-detail-row" data-key="${keyAttr}" hidden>
-                    <td colspan="5">${this._renderRowDetail(row)}</td>
+                    <td colspan="6">${this._renderRowDetail(row)}</td>
                 </tr>`;
         }).join('');
 
@@ -650,27 +698,33 @@ class SyncModal {
                     <tr>
                         <th>System</th>
                         <th>Total</th>
-                        <th>Changed (local)</th>
-                        <th>Changed (cloud)</th>
+                        <th>To push</th>
+                        <th>To pull</th>
+                        <th class="ess-sync-col-new">Untracked</th>
                         <th class="ess-sync-col-caret"></th>
                     </tr>
                 </thead>
                 <tbody>${tableRows}</tbody>
             </table>`;
 
+        // Lead with what needs pushing — the question the operator opens
+        // this modal to answer — then pull state, then stray noise.
+        const pushRows = rows.filter(r => r.stats && r.stats.pushCount > 0)
+            .map(r => r.label);
+        const totalNew = rows.reduce((n, r) => n + (r.stats?.newCount || 0), 0);
         const pullCount = this._countPullItems();
-        // Only advertise pushing for rows that actually offer it: gated
-        // rows (cloud changes pending) hide their push block.
-        const hasPushable = rows.some(r => !r.isLibs && (
-            !r.inRegistry || (r.stats.cloudCount === 0 && r.stats.localCount > 0)
-        ));
-        let summaryText = pullCount === 0
-            ? 'Already up to date with the cloud.'
-            : `${pullCount} file(s) would be pulled.`;
-        if (hasPushable) {
-            summaryText += ' Select a system to push.';
+
+        const bits = [];
+        bits.push(pushRows.length
+            ? `<b>Unpushed changes in: ${pushRows.map(l => this._escapeHtml(l)).join(', ')}.</b>`
+            : 'Nothing waiting to push.');
+        bits.push(pullCount === 0
+            ? 'Up to date with the cloud.'
+            : `${pullCount} file(s) would be pulled.`);
+        if (totalNew > 0) {
+            bits.push(`${this._plural(totalNew, 'untracked local file')}.`);
         }
-        const summary = `<div class="ess-sync-summary">${summaryText}</div>`;
+        const summary = `<div class="ess-sync-summary">${bits.join(' ')}</div>`;
 
         return summary + table;
     }
