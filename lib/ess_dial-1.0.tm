@@ -125,6 +125,11 @@ namespace eval ess {
     # David did it with the mouse before this existed.
     variable dial_stick_rate     180.0   ;# deg/s at full deflection
     variable dial_stick_deadzone 0.08    ;# fraction of full scale
+    # Response curve: rate = full * f^expo, f being deflection past the
+    # deadzone rescaled to 0..1. 1.0 is linear; 2-3 gives a slow, fine
+    # region near centre and full speed still available at the edge, which
+    # is what a single knob for "slow gain" and "fast gain" really wants.
+    variable dial_stick_expo     2.0
     variable dial_stick_invert   0
     variable dial_stick_commit_dp "extio/*/state/group/stick_select"
     variable dial_stick_scale    0.0     ;# full-scale deflection, learned
@@ -230,6 +235,18 @@ namespace eval ess {
         variable dial_radius
         variable dial_ring_tolerance
         variable dial_cursor_dpoint
+        # Every namespace variable this proc assigns MUST be declared here.
+        # Without the declaration `set` makes a LOCAL, the namespace value
+        # keeps its default, and the option is silently ignored -- which is
+        # exactly what happened to -start_radius and every -stick_* option:
+        # they appeared to work only because the defaults were the values
+        # being tested with.
+        variable dial_start_radius
+        variable dial_stick_rate
+        variable dial_stick_deadzone
+        variable dial_stick_expo
+        variable dial_stick_invert
+        variable dial_stick_commit_dp
 
         # defaults on every init, so a protocol that omits an option gets
         # the documented value rather than whatever the previous protocol
@@ -246,6 +263,7 @@ namespace eval ess {
         set dial_start_radius   40
         set dial_stick_rate     180.0
         set dial_stick_deadzone 0.08
+        set dial_stick_expo     2.0
         set dial_stick_invert   0
         set dial_stick_commit_dp "extio/*/state/group/stick_select"
         set dial_cursor_dpoint  ess/cursor
@@ -261,6 +279,7 @@ namespace eval ess {
                 -start_radius   { set dial_start_radius $v }
                 -stick_rate     { set dial_stick_rate $v }
                 -stick_deadzone { set dial_stick_deadzone $v }
+                -stick_expo     { set dial_stick_expo $v }
                 -stick_invert   { set dial_stick_invert [expr {$v ? 1 : 0}] }
                 -stick_commit   { set dial_stick_commit_dp $v }
                 -cursor_dpoint  { set dial_cursor_dpoint $v }
@@ -743,7 +762,25 @@ namespace eval ess {
         if { $dial_stick_scale <= 0 } return
 
         set f [expr {$x/$dial_stick_scale}]
-        if { abs($f) < $dial_stick_deadzone } return   ;# at rest: no drift
+        set af [expr {abs($f)}]
+        if { $af < $dial_stick_deadzone } return   ;# at rest: no drift
+
+        # RESCALE past the deadzone so the slowest achievable rotation is a
+        # creep rather than a step. Without this, clearing an 8% deadzone
+        # jumped straight to 8% of full rate -- so the fine-control region
+        # was not merely small, it did not exist. Matters more, not less,
+        # with a Hall-effect stick whose deadzone can be tiny.
+        set af [expr {($af - $dial_stick_deadzone) /
+                      (1.0 - $dial_stick_deadzone)}]
+        if { $af <= 0.0 } return
+        if { $af > 1.0 } { set af 1.0 }
+
+        # Expo curve: slow and fine near centre, full speed at the edge.
+        variable dial_stick_expo
+        if { $dial_stick_expo != 1.0 } {
+            set af [expr {pow($af, $dial_stick_expo)}]
+        }
+        set f [expr {$f < 0 ? -$af : $af}]
         if { $dial_stick_invert } { set f [expr {-$f}] }
 
         # First deflection of the trial starts the cursor at the arc centre
