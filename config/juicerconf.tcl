@@ -112,12 +112,16 @@ oo::class create Juicer {
     variable _fd
     variable _path /dev/ttyACM0
     variable _use_gpio
+    variable _backend
+    variable _extio_target
     variable _timeout_ms
 
     constructor { { path {} } } {
 	set _fd -1
 	set _path $path
 	set _use_gpio 0
+	set _backend ""
+	set _extio_target {}
 	set _timeout_ms 10000   ;# bound the pump-reply wait (covers a large dispense/purge)
     }
 
@@ -135,12 +139,23 @@ oo::class create Juicer {
 	fconfigure $_fd -buffering line -translation lf
     }
 
-    method use_gpio {} { set _use_gpio 1 }
-    method using_gpio {} { return $_use_gpio }
-    
+    method use_gpio {} { my set_backend gpio }
+    method using_gpio {} { return [expr {$_backend eq "gpio"}] }
+    method backend {} { return $_backend }
+    method extio_target {} { return $_extio_target }
+    method set_backend {kind {target {}}} {
+	set _backend $kind
+	set _extio_target $target
+	set _use_gpio [expr {$kind eq "gpio"}]
+	dservSet juicer/backend $kind
+	if {$kind eq "extio"} {
+	    dservSet juicer/extio [join $target]
+	}
+    }
+
     method find {} {
 	set model_name juicer
-	set devices [glob /dev/ttyACM* /dev/ttyUSB*]
+	set devices [glob -nocomplain /dev/ttyACM* /dev/ttyUSB*]
 	foreach dev $devices {
 	    if {[file exists $dev]} {
 		set info [exec udevadm info --query=all --name=$dev 2>/dev/null]
@@ -247,6 +262,113 @@ oo::class create Juicer {
     }
 }
 
+#
+# extio juice-pin discovery (bind path, not the reward path)
+#
+# A box announces live presence via state/watchdog (1 Hz) and pin roles via
+# state/label/<n>. Labels linger in dserv after unplug, so key existence is not
+# proof of life (same rule as extio_discover / ptpconf). Prefer extio/boxes,
+# the live set extio already publishes.
+#
+#   juicer_extio_boxes          -> {hmio-1 ...}
+#   juicer_extio_pins ?pat?     -> {{box pin label role} ...}  role=out|other
+#   juicer_find_extio ?pat?     -> {box pin} of the first digital-out hit, or {}
+#
+# Glob *juice* matches juice, juicer, ...
+#
+proc juicer_extio_denul {s} { return [lindex [split $s \x00] 0] }
+
+proc juicer_extio_boxes {} {
+    if {[dservExists extio/boxes]} {
+	set boxes [dservGet extio/boxes]
+	if {$boxes ne ""} { return $boxes }
+    }
+    set out {}
+    set now [now]
+    foreach k [dservKeys extio/*/state/watchdog] {
+	if {![regexp {^extio/([^/]+)/state/watchdog$} $k -> b]} continue
+	set age -1
+	catch { set age [expr {$now - [dservTimestamp $k]}] }
+	# watchdog is 1 Hz; 10 s is generous and still drops a vanished box
+	if {$age >= 0 && $age < 10000000} {
+	    lappend out $b
+	}
+    }
+    return [lsort -unique $out]
+}
+
+proc juicer_extio_out_pins {box} {
+    set dp extio/$box/state/pins/out
+    if {![dservExists $dp]} { return {} }
+    set csv [string trim [juicer_extio_denul [dservGet $dp]]]
+    if {$csv eq ""} { return {} }
+    set pins {}
+    foreach p [split $csv ,] {
+	set p [string trim $p]
+	if {$p ne ""} { lappend pins $p }
+    }
+    return $pins
+}
+
+proc juicer_extio_pins {{pat *juice*}} {
+    set hits {}
+    foreach box [juicer_extio_boxes] {
+	set outs [juicer_extio_out_pins $box]
+	foreach k [dservKeys extio/$box/state/label/*] {
+	    if {![regexp {^extio/([^/]+)/state/label/([0-9]+)$} $k -> b pin]} continue
+	    set lab [string trim [juicer_extio_denul [dservGet $k]]]
+	    if {$lab eq ""} continue
+	    if {![string match -nocase $pat $lab]} continue
+	    set role other
+	    if {[lsearch -exact $outs $pin] >= 0} { set role out }
+	    lappend hits [list $b $pin $lab $role]
+	}
+    }
+    return $hits
+}
+
+# First *juice* pin that is currently a digital out. Empty if none.
+proc juicer_find_extio {{pat *juice*}} {
+    foreach h [juicer_extio_pins $pat] {
+	lassign $h box pin lab role
+	if {$role eq "out"} { return [list $box $pin] }
+    }
+    return {}
+}
+
+# Bind USB / extio / gpio once. Called from init (USB) and on extio/boxes.
+proc juicer_choose_backend {args} {
+    if {![info exists ::juicer]} { return }
+    set cur [$::juicer backend]
+    if {$cur eq "usb"} { return }
+    set hit [juicer_find_extio]
+    if {$hit ne ""} {
+	if {$cur ne "extio"} {
+	    $::juicer set_backend extio $hit
+	    puts "juicer: backend extio {$hit}"
+	}
+	return
+    }
+    if {$cur eq "extio"} { return }
+    set boxes {}
+    if {[dservExists extio/boxes]} { set boxes [dservGet extio/boxes] }
+    if {$boxes eq ""} { return }
+    if {$cur ne "gpio"} {
+	$::juicer set_backend gpio
+	puts "juicer: backend gpio (no *juice* digital out on {$boxes})"
+    }
+}
+
+proc juicer_watch_extio {} {
+    dservAddExactMatch extio/boxes
+    dpointSetScript extio/boxes juicer_choose_backend
+    # labels can land after extio/boxes is first published; without this
+    # choose_backend binds gpio on an empty hunt and never retries.
+    dservAddMatch extio/*/state/label/*
+    dpointSetScript extio/*/state/label/* juicer_choose_backend
+    juicer_choose_backend
+}
+
 proc gpio_init {} {
     # make an educated guess about which gpiochip to use
     if { $::tcl_platform(os) == "Linux" } {
@@ -269,13 +391,16 @@ proc gpio_init {} {
 }
 
 proc init {} {
+    set ::juicer_ms_per_ml 1667
     set ::juicer [Juicer new]
     if {[set jpath [$::juicer find]] != {}} {
 	$::juicer set_path $jpath
 	$::juicer open
+	$::juicer set_backend usb
+	puts "juicer: backend usb $jpath"
     } else {
 	gpio_init
-	$::juicer use_gpio
+	juicer_watch_extio
     }
     set ::juicer_last_trial_ml 0
 }
@@ -284,11 +409,25 @@ proc init {} {
 # our "API" commands
 #
 proc reward { ml } {
-    if {[$::juicer using_gpio]} {
-	# currently assume only a single juicer is configured
-	juicerJuiceAmount 0 $ml
-    } else {
-	catch { publish_juicer_response [$::juicer reward $ml] }
+    switch -- [$::juicer backend] {
+	usb {
+	    catch { publish_juicer_response [$::juicer reward $ml] }
+	}
+	extio {
+	    lassign [$::juicer extio_target] box pin
+	    set us [expr {int($ml * $::juicer_ms_per_ml * 1000)}]
+	    if {$us > 0 && $box ne "" && $pin ne ""} {
+		set dp extio/$box/cmd/do/$pin/pulse_us
+		# retained cmd leaves do not re-push an unchanged value
+		if {[dservExists $dp] && [dservGet $dp] == $us} {
+		    dservSet $dp 0
+		}
+		dservSet $dp $us
+	    }
+	}
+	gpio {
+	    juicerJuiceAmount 0 $ml
+	}
     }
     # Notify db subprocesses to accumulate juice in session table
     catch { send db "session_add_juice $ml" }
