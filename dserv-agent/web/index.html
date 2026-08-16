@@ -1384,6 +1384,18 @@ body.solo .agent-panel {
              if (deps.length) {
 		 depBadges += `<span class="dep-badge" title="Requires: ${deps.join(', ')}">→${deps.join(',')}</span>`;
              }
+             // Optional add-ons: the box's own hardware probe turns the generic
+             // badge into a nudge ("hardware detected") or a caution ("no
+             // hardware detected") — the Install button works either way.
+             if (c.optional) {
+		 if (comp.hardwareDetected === true && !inst) {
+		     depBadges += `<span class="dep-badge" style="background:#14351f;color:#34d399" title="This box's hardware matches this add-on">hardware detected</span>`;
+		 } else if (comp.hardwareDetected === false && !inst) {
+		     depBadges += `<span class="dep-badge" title="No matching hardware found on this box">no hardware detected</span>`;
+		 } else {
+		     depBadges += `<span class="dep-badge" title="Opt-in add-on; not part of any profile">optional</span>`;
+		 }
+             }
              
              // Service control row (only for components with services)
              let serviceHtml = '';

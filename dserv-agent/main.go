@@ -154,6 +154,20 @@ type Component struct {
 	// where the button is the remedy -- and when the leader is not installed
 	// at all (a display box's agent updates on its own).
 	FollowsComponent string `json:"followsComponent,omitempty"`
+
+	// Optional components are add-ons a box opts into (camera), as opposed to
+	// what a box IS (profiles). Profile installs -- including the "*" set --
+	// skip them; they install only when named in ?components= or from the
+	// panel's Install button. This is the difference between "every incage
+	// box gets a camera stack" and "any box may add one".
+	Optional bool `json:"optional,omitempty"`
+
+	// DetectCmd, when set, probes whether the hardware this component drives
+	// is attached (exit 0 = present). Run once at component load -- CSI
+	// cameras and the like do not hotplug -- and surfaced on ComponentStatus
+	// so the panel can turn a generic optional row into "hardware detected,
+	// not installed": the box itself suggesting the add-on.
+	DetectCmd []string `json:"detectCmd,omitempty"`
 }
 
 type ComponentStatus struct {
@@ -171,6 +185,11 @@ type ComponentStatus struct {
 	// dserv" here instead of re-offering an Update button whose click would
 	// collide with the migration's apt transaction on the dpkg lock.
 	Migrating bool `json:"migrating,omitempty"`
+
+	// HardwareDetected reports the cached DetectCmd probe; nil when the
+	// component declares no probe, so the panel can distinguish "no opinion"
+	// from "looked and found nothing".
+	HardwareDetected *bool `json:"hardwareDetected,omitempty"`
 }
 
 type StatusInfo struct {
@@ -301,6 +320,7 @@ type Agent struct {
 	mu           sync.RWMutex
 	http         *http.Client
 	components   []Component
+	hwDetect     map[string]bool // DetectCmd results, probed once at load
 	localID      string
 	selfService  string // systemd unit name running this process (for self-restart)
 	releaseCache *ReleaseCache
@@ -1946,6 +1966,34 @@ func (a *Agent) loadComponents() {
 			},
 		}
 	}
+
+	// Hardware probes run once here, not per status poll: the hardware these
+	// detect (a CSI camera on an i2c bus) does not hotplug, and status is
+	// polled by every open panel.
+	a.hwDetect = make(map[string]bool)
+	for _, comp := range a.components {
+		if len(comp.DetectCmd) == 0 {
+			continue
+		}
+		err := exec.Command(comp.DetectCmd[0], comp.DetectCmd[1:]...).Run()
+		a.hwDetect[comp.ID] = err == nil
+		if err == nil {
+			log.Printf("Component %s: hardware detected", comp.ID)
+		}
+	}
+}
+
+// nonOptional filters the roster down to what profiles install: components
+// that describe what a box IS. Optional add-ons (camera) install only when
+// named explicitly or from the panel.
+func nonOptional(comps []Component) []Component {
+	var out []Component
+	for _, c := range comps {
+		if !c.Optional {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 func (a *Agent) handleComponents(w http.ResponseWriter, r *http.Request) {
@@ -2017,6 +2065,10 @@ func (a *Agent) getComponentStatus(comp Component) ComponentStatus {
 	status := ComponentStatus{Component: comp}
 	status.CurrentVersion = a.getInstalledVersion(comp)
 	status.Installed = status.CurrentVersion != ""
+	if len(comp.DetectCmd) > 0 {
+		detected := a.hwDetect[comp.ID]
+		status.HardwareDetected = &detected
+	}
 
 	if comp.Repo != "" {
 		release := a.getLatestRelease(comp.Repo)

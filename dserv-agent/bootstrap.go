@@ -168,17 +168,19 @@ func (a *Agent) filterComponents(profileName string, explicitComponents string) 
 		return a.resolveWithDeps(wanted)
 	}
 
-	// Profile lookup
+	// Profile lookup. Every all-components path filters to nonOptional:
+	// profiles declare what a box IS, and optional add-ons (camera) are what
+	// a box HAS -- they join only by explicit ?components= or panel install.
 	if profileName == "" || profileName == "all" {
-		return a.components
+		return nonOptional(a.components)
 	}
 
 	for _, p := range a.getProfiles() {
 		if strings.EqualFold(p.Name, profileName) {
-			// "*" means all
+			// "*" means all (non-optional)
 			for _, c := range p.Components {
 				if c == "*" {
-					return a.components
+					return nonOptional(a.components)
 				}
 			}
 			wanted := make(map[string]bool)
@@ -189,8 +191,8 @@ func (a *Agent) filterComponents(profileName string, explicitComponents string) 
 		}
 	}
 
-	// Unknown profile - return all with a log
-	return a.components
+	// Unknown profile - return all (non-optional) with a log
+	return nonOptional(a.components)
 }
 
 // resolveWithDeps takes a set of wanted component IDs and adds any
@@ -783,6 +785,12 @@ step_install_components() {
                     # Already handled by step_install_agent. Counted as installed
                     # so the tally is honest and anything depending on it resolves.
                     installed+=("$comp_id")
+                elif [[ $(echo "$comp_json" | jq -r '.optional // false') == "true" ]] \
+                     && [[ -z $(installed_version "$comp_json") ]]; then
+                    # Optional add-ons ride in the roster for the panel to offer,
+                    # but a profile install never opts a box in. A box that DID
+                    # opt in earlier has a version, and updates like anything else.
+                    info "${comp_id}: optional add-on -- skipping (opt in from the agent panel)"
                 else
                     install_component "$comp_json" && installed+=("$comp_id") || warn "Failed: ${comp_id}"
                 fi
@@ -801,6 +809,11 @@ step_install_components() {
                 local comp_json=$(echo "$COMPONENTS_JSON" | jq ".components[$i]")
                 local comp_id=$(echo "$comp_json" | jq -r '.id')
                 [[ "$comp_id" == "$AGENT_COMPONENT_ID" ]] && { installed+=("$comp_id"); continue; }
+                if [[ $(echo "$comp_json" | jq -r '.optional // false') == "true" ]] \
+                   && [[ -z $(installed_version "$comp_json") ]]; then
+                    info "${comp_id}: optional add-on -- skipping (opt in from the agent panel)"
+                    continue
+                fi
                 install_component "$comp_json" && installed+=("$comp_id") || warn "Failed: ${comp_id}"
             done
             break
@@ -1472,6 +1485,35 @@ func (a *Agent) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 
 	// Filter components based on profile or explicit list
 	components := a.filterComponents(profileName, explicitComponents)
+
+	// Profile mode also CARRIES eligible optional add-ons (camera): they ride
+	// into the box's /etc/dserv-agent/components.json so the panel can offer
+	// them, but the install loop skips them unless already installed. Eligible
+	// means every dependency is in the profile's set -- a display box without
+	// dserv gets no camera row, matching the deb's own Depends. Explicit
+	// ?components= lists stay exactly as named: naming an optional is the
+	// opt-in.
+	if explicitComponents == "" {
+		included := make(map[string]bool, len(components))
+		for _, c := range components {
+			included[c.ID] = true
+		}
+		for _, c := range a.components {
+			if !c.Optional || included[c.ID] {
+				continue
+			}
+			eligible := true
+			for _, dep := range c.Depends {
+				if !included[dep] {
+					eligible = false
+					break
+				}
+			}
+			if eligible {
+				components = append(components, c)
+			}
+		}
+	}
 
 	// An explicit ?components= list is not a profile. Without this the banner,
 	// the recorded identity, and the sudo re-fetch all claim "incage" for a
