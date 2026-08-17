@@ -1029,11 +1029,16 @@ set www_path /usr/local/dserv/www</code>
 
     // WebSocket endpoint - NOTE the "template" keyword and "auto *ws" for type flexibility
     app.template ws<WSPerSocketData>("/ws", {
-        /* Settings */
+        /* Settings. Payload and backpressure track DSERV_MAX_DATA_LEN:
+           any datapoint dserv can hold (a large stimdg's stiminfo JSON
+           runs to tens of MB) must fit through this transport in both
+           directions. Backpressure is the per-connection outbound
+           buffer cap for a slow client — sends beyond it drop (see
+           .dropped), and idleTimeout reaps dead peers. */
         .compression = uWS::SHARED_COMPRESSOR,
-        .maxPayloadLength = 24 * 1024 * 1024,
+        .maxPayloadLength = DSERV_MAX_DATA_LEN,
         .idleTimeout = 120,
-        .maxBackpressure = 24 * 1024 * 1024,
+        .maxBackpressure = DSERV_MAX_DATA_LEN,
         
         .upgrade = [](auto *res, auto *req, auto *context) {
           res->template upgrade<WSPerSocketData>({

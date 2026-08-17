@@ -2362,8 +2362,8 @@ int Dataserver::tcp_process_request(Dataserver *ds,
    lengths include a trailing \r\n (so >= 2), and the caps keep a
    malformed/hostile length from driving huge allocations or the
    out-of-bounds [len - 2] writes in the handlers below */
-#define DSERV_MAX_VARNAME_LEN (512)
-#define DSERV_MAX_DATA_LEN (128 * 1024 * 1024)
+/* DSERV_MAX_VARNAME_LEN / DSERV_MAX_DATA_LEN come from Datapoint.h —
+   shared with the websocket transport limits in TclServer.cpp. */
 
 void
 Dataserver::tcp_client_process(Dataserver *ds, int sockfd)

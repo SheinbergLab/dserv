@@ -1,6 +1,16 @@
 #ifndef DATAPOINT_H
 #define DATAPOINT_H
 
+/*
+ * Hard limits on a single datapoint. DSERV_MAX_DATA_LEN is the one
+ * ceiling for "how big can a point be" — the TCP receive paths
+ * (Dataserver.cpp) and the websocket transport (TclServer.cpp, as
+ * maxPayloadLength/maxBackpressure) all derive from it, so a point
+ * dserv accepts is a point every transport can carry.
+ */
+#define DSERV_MAX_VARNAME_LEN (512)
+#define DSERV_MAX_DATA_LEN (128 * 1024 * 1024)
+
 #include <inttypes.h>
 #include "Base64.h"
 
