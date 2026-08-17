@@ -1377,7 +1377,12 @@ set www_path /usr/local/dserv/www</code>
               if (name_obj && json_is_string(name_obj)) {
                 const char *name = json_string_value(name_obj);
                 ds_datapoint_t *dp = ds->get_datapoint((char *)name);
-                  
+
+		if (dp && DPOINT_IS_PRIVATE(dp)) {
+		  dpoint_free(dp);
+		  dp = nullptr;	/* report as not found */
+		}
+
 		if (dp) {
 		  char *json_str = dpoint_to_json(dp);
 		  if (json_str) {
@@ -3155,6 +3160,8 @@ static void add_tcl_commands(Tcl_Interp *interp, TclServer *tserv)
 		       dserv_copy_command, tserv->ds, NULL);
   Tcl_CreateObjCommand(interp, "dservSet",
 		       dserv_set_command, tserv->ds, NULL);
+  Tcl_CreateObjCommand(interp, "dservSetPrivate",
+		       dserv_setprivate_command, tserv->ds, NULL);
   Tcl_CreateObjCommand(interp, "dservTouch",
 		       dserv_touch_command, tserv->ds, NULL);
   Tcl_CreateObjCommand(interp, "dservTimestamp",
@@ -3700,6 +3707,7 @@ static int dserv_when_command(ClientData data, Tcl_Interp *interp,
     if (done) return;
     ds_datapoint_t *dp = tserv->ds->get_datapoint((char *) k);
     if (!dp) return;
+    if (DPOINT_IS_PRIVATE(dp)) { dpoint_free(dp); return; }
     if (when_eval_predicate(interp, predicate, dp) == 1) {
       dpoint_tcl_script(interp, callback.c_str(), dp);
       if (once) { when_remove(tserv, interp, id); done = true; }

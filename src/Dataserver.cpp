@@ -148,6 +148,9 @@ ds_datapoint_t *Dataserver::process(ds_datapoint_t *dpoint)
 
 void Dataserver::trigger(ds_datapoint_t *dpoint)
 {
+  /* trigger scripts run in the eval-reachable main interp, so private
+     payloads must never reach them */
+  if (DPOINT_IS_PRIVATE(dpoint)) return;
   if (trigger_matches.is_match(dpoint->varname)) {
     std::string script;
     /* Triggers stay single-script: nothing appends to this registry (there
@@ -282,10 +285,21 @@ int Dataserver::exists(char *varname)
   return find_datapoint(varname);
 }
 
-/* get a copy of dpoint from the table */
+/*
+ * get a copy of dpoint from the table
+ *
+ *  This is the public read API (%get, dservGet, websocket get all land
+ * here): PRIVATE points are reported as not found.  Internal paths that
+ * must see the real point (touch, copy, metadata commands) use
+ * get_datapoint() directly.
+ */
 int Dataserver::get(char *varname, ds_datapoint_t **dpoint)
 {
   ds_datapoint_t *dp = get_datapoint(varname);
+  if (dp && DPOINT_IS_PRIVATE(dp)) {
+    dpoint_free(dp);
+    dp = nullptr;
+  }
   if (dp) {
     if (dpoint) *dpoint = dp;
     else dpoint_free(dp);
@@ -711,14 +725,22 @@ int dserv_get_command(ClientData data, Tcl_Interp * interp, int objc,
   
   ds_datapoint_t *dpoint;
   dpoint = ds->get_datapoint(Tcl_GetString(objv[1]));
-  
+
+  if (dpoint && DPOINT_IS_PRIVATE(dpoint)) {
+    dpoint_free(dpoint);
+    Tcl_AppendResult(interp, "dpoint \"",
+		     Tcl_GetString(objv[1]),
+		     "\" is private", NULL);
+    return TCL_ERROR;
+  }
+
   if (!dpoint) {
     Tcl_AppendResult(interp, "dpoint \"",
 		     Tcl_GetString(objv[1]),
 		     "\" not found", NULL);
     return TCL_ERROR;
   }
-  
+
   obj = dpoint_to_tclobj(interp, dpoint);
   if (obj)
     Tcl_SetObjResult(interp, obj);
@@ -1045,6 +1067,35 @@ int dserv_set_command(ClientData data, Tcl_Interp * interp, int objc,
   return TCL_OK;
 }
 
+/*
+ * dservSetPrivate varname value
+ *
+ *  Like dservSet, but the point carries DSERV_DPOINT_PRIVATE_FLAG:
+ * loggable, name/metadata visible, payload unreadable everywhere.
+ * Safe to expose to any interp -- setting privacy only ever restricts
+ * access, and overwriting an existing name replaces the data rather
+ * than revealing it.
+ */
+int dserv_setprivate_command(ClientData data, Tcl_Interp * interp, int objc,
+			     Tcl_Obj * const objv[])
+{
+  Dataserver *ds = (Dataserver *) data;
+  if (objc < 3) {
+    Tcl_WrongNumArgs(interp, 1, objv, "varname value");
+    return TCL_ERROR;
+  }
+
+  char *value = Tcl_GetString(objv[2]);
+  ds_datapoint_t *dp = dpoint_new(Tcl_GetString(objv[1]),
+				  Dataserver::now(), DSERV_STRING,
+				  strlen(value),
+				  (unsigned char *) value);
+  dp->flags |= DSERV_DPOINT_PRIVATE_FLAG;
+  ds->set(dp);			/* takes ownership */
+
+  return TCL_OK;
+}
+
 int dserv_eval_command(ClientData data, Tcl_Interp * interp, int objc,
 		       Tcl_Obj * const objv[])
 {
@@ -1223,6 +1274,8 @@ static void add_tcl_commands(Tcl_Interp *interp, Dataserver *dserv)
 		       dserv_timestamp_command, dserv, NULL);
   Tcl_CreateObjCommand(interp, "dservSet",
 		       dserv_set_command, dserv, NULL);
+  Tcl_CreateObjCommand(interp, "dservSetPrivate",
+		       dserv_setprivate_command, dserv, NULL);
   Tcl_CreateObjCommand(interp, "dservSetData",
 		       dserv_setdata_command, dserv, NULL);
   Tcl_CreateObjCommand(interp, "dservSetData64",

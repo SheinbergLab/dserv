@@ -23,6 +23,37 @@ Done processing datapoints."
 )
 
 add_test(
+    NAME private_dpoints
+    COMMAND dserv --tscript "${CMAKE_SOURCE_DIR}/tests/test_private.tcl"
+)
+set_property(TEST private_dpoints PROPERTY PASS_REGULAR_EXPRESSION "\
+Start private test.
+public get: hello
+keys has secret: 1
+get denied: 1
+deny message: dpoint \"test/secret\" is private
+timestamp visible: 1
+copy denied: 1 private
+End private test.
+TRIGGER test/pub = world
+Private test done."
+)
+
+add_test(
+    NAME private_logger
+    COMMAND dserv --cscript "${CMAKE_SOURCE_DIR}/tests/test_private_logger.tcl"
+)
+set_property(TEST private_logger PROPERTY PASS_REGULAR_EXPRESSION "\
+Start private logger test.
+End private logger test.
+DPOINT test/pub = logged_public
+Checking private log.
+log secret: private val=logged_secret
+log public: public val=logged_public
+Private logger test done."
+)
+
+add_test(
     NAME logger_script
     COMMAND dserv --cscript "${CMAKE_SOURCE_DIR}/scripts/tcl/test_logger.tcl"
 )

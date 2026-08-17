@@ -135,9 +135,16 @@ int LogClient::log_point(ds_datapoint_t *dpoint, ds_logger_buf_t *logbuf)
   //    std::cout << "varname: " << dpoint->varname << " buf: " << logbuf << std::endl;
   
   // write every point to log individually
+  //
+  // "nonzero flags" historically meant "statically owned control point:
+  // push as-is, don't copy".  Attribute bits (e.g. PRIVATE) ride along
+  // on ordinary heap-owned data points, so they must be masked out of
+  // that ownership decision or the writer thread and the logger thread
+  // would both free the same point.
   if (!logbuf) {
     ds_datapoint_t *forwarded_dpoint = dpoint;
-    if (!dpoint->flags) forwarded_dpoint = dpoint_copy(dpoint);
+    if (!(dpoint->flags & ~DSERV_DPOINT_ATTR_MASK))
+      forwarded_dpoint = dpoint_copy(dpoint);
     dpoint_queue.push_back(forwarded_dpoint);
     return 1;
   }
@@ -159,9 +166,11 @@ int LogClient::log_point(ds_datapoint_t *dpoint, ds_logger_buf_t *logbuf)
   }
   
   // if the log buffer can't hold the current point just write out point
+  // (same ownership rule as above: attribute bits don't mean "static")
   if (logbuf->bufsize <= dpoint->data.len) {
     ds_datapoint_t *forwarded_dpoint = dpoint;
-    if (!dpoint->flags) forwarded_dpoint = dpoint_copy(dpoint);
+    if (!(dpoint->flags & ~DSERV_DPOINT_ATTR_MASK))
+      forwarded_dpoint = dpoint_copy(dpoint);
     dpoint_queue.push_back(forwarded_dpoint);
     return 1;
   }

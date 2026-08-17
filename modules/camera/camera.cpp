@@ -27,7 +27,21 @@
 extern "C" {
 #include <tcl.h>
 #include "Datapoint.h"
-#include "tclserver_api.h" 
+#include "tclserver_api.h"
+
+/*
+ * Image payloads (PPM/JPEG frames) are published PRIVATE: they reach
+ * log files but are never delivered to subscribers and never returned
+ * by dservGet/%get/websocket reads (see Datapoint.h).  Status and
+ * metadata points (frame_notify, .../meta) stay public so a rig can
+ * confirm the camera is alive without exposing imagery.
+ */
+static void tclserver_set_point_private(tclserver_t *tclserver,
+					ds_datapoint_t *dp)
+{
+  dp->flags |= DSERV_DPOINT_PRIVATE_FLAG;
+  tclserver_set_point(tclserver, dp);
+}
 }
 
 // Forward declaration
@@ -1578,8 +1592,8 @@ public:
 					ppm_data.size(),
 					ppm_data.data()
 					);
-	
-	tclserver_set_point(tclserver, dp);
+
+	tclserver_set_point_private(tclserver, dp);
 	return true;
       }
     }
@@ -1612,8 +1626,8 @@ public:
 					frame_ring_buffer_[i].jpeg_data.size(),
 					(unsigned char *)frame_ring_buffer_[i].jpeg_data.data()
 					);
-	
-	tclserver_set_point(tclserver, dp);
+
+	tclserver_set_point_private(tclserver, dp);
 	return true;
       }
     }
@@ -1645,8 +1659,8 @@ public:
                                         jpeg_data.size(),
                                         (unsigned char *)jpeg_data.data()
                                         );
-        
-        tclserver_set_point(tclserver, dp);
+
+        tclserver_set_point_private(tclserver, dp);
         return true;
       }
     }
@@ -1712,8 +1726,8 @@ public:
 				    ppm_data.size(),
 				    ppm_data.data()
 				    );
-    tclserver_set_point(tclserver, dp);
-    
+    tclserver_set_point_private(tclserver, dp);
+
     // Publish metadata
     publish_frame_metadata(point_name);
   }
@@ -2503,8 +2517,8 @@ extern "C" {
 		   (ds_datatype_t)DSERV_JPEG,
 		   info->capture->get_jpeg_size(),
 		   (unsigned char *)info->capture->get_jpeg_data());
-      
-      tclserver_set_point(info->tclserver, dp);
+
+      tclserver_set_point_private(info->tclserver, dp);
       
       char meta_name[256];
       snprintf(meta_name, sizeof(meta_name), "%s/meta", point_name);

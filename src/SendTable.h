@@ -99,6 +99,11 @@ class SendTable
   {
     std::vector<std::shared_ptr<SendClient>> close_vec;
 
+    /* PRIVATE points are never delivered to any send client: network
+       subscribers and the TclServers' own queues (dpoint scripts) alike.
+       They still reach the logger, which has its own queue and table. */
+    if (DPOINT_IS_PRIVATE(dpoint)) return;
+
     std::lock_guard<std::mutex> mlock(mutex_);
     for (auto const& it : map_) {
       std::shared_ptr<SendClient> send_client = it.second;

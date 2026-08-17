@@ -47,7 +47,30 @@ typedef enum {
   DSERV_DPOINT_LOGCLOSE_FLAG = 0x40,	/* close one log client (varname = filename);
 					   distinct from SHUTDOWN, which ends the
 					   logger thread itself */
+
+  /*
+   * Attribute bits (DSERV_DPOINT_ATTR_MASK) describe a point and travel
+   * with it through every copy; unlike the control bits above they are
+   * never routed as logger/lifecycle commands.  Any code that treats
+   * "flags != 0" as meaning "control point" must mask these off first
+   * (see LogClient::log_point).
+   *
+   * PRIVATE: the payload never leaves the process except to log files.
+   * Denied to every read surface -- subscription fan-out (all send
+   * clients, so both network subscribers and Tcl dpoint scripts),
+   * dservGet / %get / websocket get, dservWhen level-seeding, and
+   * trigger scripts.  The name and metadata stay visible (dservKeys,
+   * dservInfo, dservTimestamp) so a rig can confirm a private producer
+   * is alive without seeing its data.  Producers set this bit at
+   * creation (C modules) or publish via dservSetPrivate; it cannot be
+   * injected from the wire (all wire parsers zero flags) and there is
+   * deliberately no way to unset it on an existing point.
+   */
+  DSERV_DPOINT_PRIVATE_FLAG = 0x100,
 } ds_datapoint_flag_t;
+
+#define DSERV_DPOINT_ATTR_MASK (0xFF00)
+#define DPOINT_IS_PRIVATE(dp) (((dp)->flags & DSERV_DPOINT_PRIVATE_FLAG) != 0)
   
 enum { DSERV_CREATE, DSERV_CLEAR, DSERV_SET, DSERV_GET, DSERV_GET_EVENT };
 enum { DSERV_GET_FIRST_KEY, DSERV_GET_NEXT_KEY };

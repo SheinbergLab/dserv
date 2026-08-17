@@ -54,6 +54,8 @@ class DatapointTable
       if (old->data.type == d->data.type &&
 	  old->data.len == d->data.len) {
 	old->timestamp = d->timestamp;
+	old->flags = d->flags;	/* attribute bits track the latest write,
+				   same as the timestamp */
 	memcpy(old->data.buf, d->data.buf, old->data.len);
 
 	/* done so can return without updating map_*/

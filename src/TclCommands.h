@@ -25,6 +25,8 @@ int dserv_touch_command(ClientData data, Tcl_Interp * interp, int objc,
 			Tcl_Obj * const objv[]);
 int dserv_set_command(ClientData data, Tcl_Interp * interp, int objc,
 		      Tcl_Obj * const objv[]);
+int dserv_setprivate_command(ClientData data, Tcl_Interp * interp, int objc,
+			     Tcl_Obj * const objv[]);
 int dserv_clear_command(ClientData data, Tcl_Interp * interp, int objc,
 			Tcl_Obj * const objv[]);
 int dserv_eval_command(ClientData data, Tcl_Interp * interp, int objc,
