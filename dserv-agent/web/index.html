@@ -867,6 +867,7 @@ body.solo .agent-panel {
              // A closed panel cannot show the outcome; stop the watcher rather
              // than let it time out into an error toast on a box that is fine.
              this.retypeTarget = null;
+             this.retypeFailed = null;
 	 }
 	 
 	 connectAgent(node) {
@@ -1126,6 +1127,12 @@ body.solo .agent-panel {
                      <button class="component-btn" style="margin-left:8px" onclick="app.loadLogs('dserv-retype')">Log</button>`;
              }
              const retypeBtn = `<button class="component-btn" style="margin-left:8px" onclick="app.retypeOpen()">Retype…</button>`;
+             // A failed retype outlives its toast: the box still reports the
+             // OLD profile, which on its own reads as "nothing happened".
+             if (this.retypeFailed) {
+		 return `<span style="color:#f87171">retype to ${this.esc(this.retypeFailed)} failed</span>
+                     <button class="component-btn" style="margin-left:8px" onclick="app.loadLogs('dserv-retype')">Log</button>${retypeBtn}`;
+             }
              if (!box || !box.profile) {
 		 return `<span style="color:#71767b" title="No /etc/dserv-agent/box.conf — this box was provisioned before identities were recorded. Retype (or re-run the bootstrap) to record one and converge services to it.">unrecorded</span>${retypeBtn}`;
              }
@@ -1175,6 +1182,7 @@ body.solo .agent-panel {
 		 return;
              }
              this.retypeTarget = msg.data.profile;
+             this.retypeFailed = null; // a new attempt clears the last one's verdict
              this.showToast(`Retype to ${msg.data.profile} started`, 'success');
              this.renderPanel();
              this.retypeWatch(0);
@@ -1186,8 +1194,9 @@ body.solo .agent-panel {
 	 // (onclose is deliberately inert), so reattach it here.
 	 retypeWatch(n) {
              if (!this.retypeTarget) return;
-             if (n > 80) { // ~4 min — the bootstrap is stuck or failed; keep the log pointer up
+             if (n > 80) { // ~4 min — the unit never failed outright, so it is stuck
 		 this.showToast('Retype not recorded yet — check its log (dserv-retype)', 'error');
+		 this.retypeFailed = this.retypeTarget;
 		 this.retypeTarget = null;
 		 this.renderPanel();
 		 return;
@@ -1199,6 +1208,19 @@ body.solo .agent-panel {
                      this.retypeTarget = null;
                      this.renderPanel();
                      this.panelWs?.send(JSON.stringify({type:'components'}));
+                     return;
+		 }
+		 // A run that died in its first second used to be
+		 // indistinguishable from a slow one until the give-up timer ran
+		 // out. The agent now reports the unit, so say so at once and
+		 // leave the Log button pointing at the reason.
+		 const rt = this.panelStatus?.retype;
+		 if (rt?.failed) {
+                     const why = [rt.result, rt.code && `exit ${rt.code}`].filter(Boolean).join(', ');
+                     this.showToast(`Retype to ${this.retypeTarget} failed${why ? ` (${why})` : ''} — see its log`, 'error');
+                     this.retypeFailed = this.retypeTarget;
+                     this.retypeTarget = null;
+                     this.renderPanel();
                      return;
 		 }
 		 if (this.panelUsingMainWs) {

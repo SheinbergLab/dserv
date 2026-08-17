@@ -42,6 +42,10 @@ type BootstrapConfig struct {
 	ServerURL        string
 	DefaultWG        string
 	Version          string
+	// Both carry the JSON ALREADY shell-quoted (shellQuote), so the template
+	// interpolates them bare. A component's detectCmd or description can hold
+	// a single quote -- one did, and it truncated the assignment mid-JSON and
+	// made every served script a syntax error at line 36.
 	ComponentsJSON   string // filtered component list as JSON, with resolved release assets
 	AgentReleaseJSON string // dserv-agent release {tag, assets:[{name,url}]} as JSON
 	ProfileName      string
@@ -271,11 +275,13 @@ DSERV_INSTALL_DIR="/usr/local/dserv"
 LOG_FILE="/tmp/dserv-bootstrap-$(date +%Y%m%d-%H%M%S).log"
 
 # Component definitions (filtered by profile, with release assets pre-resolved
-# by the registry so installs hit GitHub's CDN, not the rate-limited API)
-COMPONENTS_JSON='{{.ComponentsJSON}}'
+# by the registry so installs hit GitHub's CDN, not the rate-limited API).
+# Already shell-quoted by the registry -- component fields are free text and a
+# detectCmd may legitimately contain a single quote.
+COMPONENTS_JSON={{.ComponentsJSON}}
 
 # dserv-agent release, pre-resolved by the registry: {tag, assets:[{name,url}]}
-AGENT_RELEASE_JSON='{{.AgentReleaseJSON}}'
+AGENT_RELEASE_JSON={{.AgentReleaseJSON}}
 
 # ============ Parse Arguments ============
 
@@ -1607,8 +1613,8 @@ func (a *Agent) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 		ServerURL:        serverURL,
 		DefaultWG:        workgroup,
 		Version:          version,
-		ComponentsJSON:   string(compJSON),
-		AgentReleaseJSON: string(agentJSON),
+		ComponentsJSON:   shellQuote(string(compJSON)),
+		AgentReleaseJSON: shellQuote(string(agentJSON)),
 		ProfileName:      profileName,
 		StimMode:         a.profileStimMode(profileName),
 

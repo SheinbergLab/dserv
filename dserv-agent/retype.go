@@ -105,6 +105,16 @@ func (a *Agent) startRetype(profile string) error {
 		return fmt.Errorf("a retype is already running (journalctl -u %s)", retypeUnit)
 	}
 
+	// Clear a previous run's failure before claiming the name. Deliberately
+	// NOT --collect below: a transient unit vanishes the moment it goes
+	// inactive, which erased the evidence exactly when it mattered -- a
+	// bootstrap that died in its first second looked identical, to the panel,
+	// to one still grinding away, for the four minutes retypeWatch waits.
+	// Without --collect a success still self-collects and a failure lingers in
+	// `failed`, which is the state retypeStatus reports. The cost is that the
+	// name stays taken until this reset.
+	exec.Command("sudo", "systemctl", "reset-failed", retypeUnit).Run()
+
 	// --skip-scripts always: a box being retyped is a box in service, and the
 	// script sync unzips the registry's copy OVER ~/systems/ess. Deliberately
 	// NOT --skip-agent -- converging the agent package is part of converging
@@ -126,7 +136,6 @@ echo "retype: complete"`,
 		setupURL, shellQuote(setupURL), profile)
 
 	cmd := exec.Command("sudo", "systemd-run",
-		"--collect",
 		"--unit", retypeUnit,
 		"--description", "dserv box retype to profile "+profile,
 		"--setenv=DEBIAN_FRONTEND=noninteractive",
@@ -141,6 +150,55 @@ echo "retype: complete"`,
 
 	log.Printf("retype to %q handed off to %s.service (registry %s)", profile, retypeUnit, registry)
 	return nil
+}
+
+// RetypeState is how a retype run looks from outside: rides along on every
+// status payload so the panel's existing poll sees a failure on its next tick
+// rather than waiting out its give-up timer.
+type RetypeState struct {
+	Active bool   `json:"active"`
+	Failed bool   `json:"failed"`
+	Result string `json:"result,omitempty"` // systemd's Result, e.g. "exit-code"
+	Code   string `json:"code,omitempty"`   // the script's exit status, when nonzero
+}
+
+// retypeStatus reports the transient unit, or nil when there is nothing to
+// say -- no run in flight and no failure held. nil is the common case by far:
+// a unit that succeeded collected itself, and most boxes never retype at all.
+func retypeStatus() *RetypeState {
+	out, err := exec.Command("systemctl", "show", retypeUnit,
+		"--property=LoadState,ActiveState,Result,ExecMainStatus").Output()
+	if err != nil {
+		return nil
+	}
+	f := make(map[string]string, 4)
+	for _, line := range strings.Split(string(out), "\n") {
+		if k, v, ok := strings.Cut(strings.TrimSpace(line), "="); ok {
+			f[k] = v
+		}
+	}
+	// An unloaded unit is the steady state, not an error: systemd garbage
+	// collects a transient unit as soon as it succeeds.
+	if ls := f["LoadState"]; ls == "" || ls == "not-found" {
+		return nil
+	}
+	st := &RetypeState{}
+	switch f["ActiveState"] {
+	case "activating", "active", "deactivating", "reloading":
+		st.Active = true
+	case "failed":
+		st.Failed = true
+	default:
+		// inactive-but-loaded: on its way out, and it did not fail.
+		return nil
+	}
+	if st.Failed {
+		st.Result = f["Result"]
+		if c := f["ExecMainStatus"]; c != "" && c != "0" {
+			st.Code = c
+		}
+	}
+	return st
 }
 
 // GET /api/retype/profiles - what the registry offers, plus where this box

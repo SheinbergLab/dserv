@@ -198,6 +198,7 @@ type StatusInfo struct {
 	System   SystemInfo        `json:"system"`
 	Services map[string]string `json:"services,omitempty"`
 	Box      *BoxIdentity      `json:"box,omitempty"`
+	Retype   *RetypeState      `json:"retype,omitempty"`
 }
 
 // BoxIdentity is the declared identity the bootstrap records in
@@ -1445,6 +1446,7 @@ func (a *Agent) getStatus() StatusInfo {
 		System:   a.getSystemInfo(),
 		Services: a.getAllServiceStatuses(),
 		Box:      readBoxIdentity(boxConfPath),
+		Retype:   retypeStatus(),
 	}
 }
 
