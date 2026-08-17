@@ -1455,11 +1455,16 @@ set www_path /usr/local/dserv/www</code>
         .dropped = [](auto *ws, std::string_view message, uWS::OpCode opCode) {
           std::cerr << "WebSocket message dropped due to backpressure" << std::endl;
         },
-          
+
         .drain = [](auto *ws) {
-          if (ws->getBufferedAmount() > 1024 * 1024) {
-            ws->close();
-          }
+          /* Drain fires while a buffered send is still flushing. Do NOT
+             close here on ordinary backpressure: any reply larger than
+             one TCP write (a multi-MB stimdg JSON to a browser on a real
+             network) transiently buffers well past any small threshold,
+             and closing mid-send silently killed every large-datapoint
+             viewer. The 1MB guard that used to live here did exactly
+             that. Slow/runaway clients are already bounded by
+             maxBackpressure (24MB, drops new sends) and idleTimeout. */
         },
           
         .ping = [](auto *ws, std::string_view) {
