@@ -481,6 +481,51 @@ wait_for_chrony() {
 # so a rig on a different network may legitimately have edited it to servers that
 # are actually near it. Silently restoring our copy over that would replace a
 # measurement with a guess.
+# A grandmaster's NTP daemon IS the site's time source -- phc2sys pushes
+# CLOCK_REALTIME into the PHC and out to every box -- so whatever steers this
+# clock steers the rig. systemd-timesyncd is an SNTP client with no filtering,
+# and it ships ACTIVE on a stock Debian/Raspberry Pi OS, which made it the
+# default outcome of provisioning a fresh grandmaster. Measured here (numbers
+# in the grandmaster branch below): timesyncd fed this servo ~690x more noise
+# than no time source at all.
+#
+# Displace it, and ONLY it. An ABSENT daemon measured as the most stable state
+# of the three (sd 77 ns vs chrony's 92 ns) and can be a deliberate choice, so
+# a grandmaster running without NTP keeps its existing NOTE and is left alone.
+# chrony is what we install because it wins absolute accuracy at no cost in
+# stability; installing it displaces timesyncd through the package conflict.
+#
+# Never fatal: a grandmaster with a bad time source is worse than one with a
+# stale package list, but neither is a reason to refuse the role.
+ensure_chrony_over_timesyncd() {
+    if have chronyc; then
+        return 0
+    fi
+    if [ "$(systemctl is-active systemd-timesyncd.service 2>/dev/null)" != active ]; then
+        return 0
+    fi
+    if ! have apt-get; then
+        echo "NOTE: systemd-timesyncd is steering this grandmaster and chrony is not"
+        echo "      installed, but apt-get is unavailable. Install chrony by hand and"
+        echo "      re-run, or this host will inject SNTP jitter into every box."
+        return 0
+    fi
+    echo "systemd-timesyncd is steering this grandmaster; installing chrony to replace it."
+    echo "  (measured here: timesyncd sd 53 us vs chrony sd 92 ns into phc2sys)"
+    # Lock::Timeout for the reason the ntp-client tier uses it: a
+    # bootstrap-driven apply lands ~20 s before the deferred dserv-agent
+    # migration's own apt run, so wait for the dpkg lock instead of failing.
+    if ! DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            -o DPkg::Lock::Timeout=300 chrony >/dev/null 2>&1; then
+        echo "WARNING: could not install chrony (try by hand: apt-get install -y chrony)."
+        echo "         The grandmaster role still applies, but timesyncd keeps steering"
+        echo "         this clock and its jitter reaches every box on the segment."
+        return 0
+    fi
+    echo "chrony installed; systemd-timesyncd displaced by the package conflict."
+    return 0
+}
+
 install_gm_chrony_conf() {
     _src=/usr/local/dserv/systemd/chrony-grandmaster.conf
     _dst=/etc/chrony/conf.d/10-dserv-grandmaster.conf
@@ -706,6 +751,10 @@ case "${1:-status}" in
       # right there, enabled. Retire the old role and restore its time source
       # first, then ask what the time source is.
       disable_role "$CL_PTP" "$CL_PHC"
+      # Before install_gm_chrony_conf, which needs /etc/chrony/conf.d to exist
+      # before it can drop the grandmaster tuning in it -- and before the
+      # survey below, so the survey reports what this host will actually run.
+      ensure_chrony_over_timesyncd
       install_gm_chrony_conf "$2"
       revive_ntp wait "$2"
       # The grandmaster's phc2sys pushes the SYSTEM clock into the PHC, so NTP
