@@ -182,9 +182,6 @@ main() {
   echo "Start ~1 snapshot/sec from the dserv Web Console or Tcl:"
   echo "  send camera start"
   echo
-  echo "Watch the feed (not linked from the landing page):"
-  echo "  https://$(hostname -s).local:2565/camera.html"
-  echo
   echo "Check camera state (rotation, exposure, fps) with:"
   echo "  send camera check_status"
 }

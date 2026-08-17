@@ -41,7 +41,7 @@
     {
       "id": "dserv-camera",
       "name": "dserv Camera",
-      "description": "CSI camera snapshots (~1/sec to camera/preview, feed at /camera.html)",
+      "description": "CSI camera capture subsystem",
       "repo": "SheinbergLab/dserv",
       "package": "dserv-camera-rpi",
       "assetPattern": "dserv-camera-rpi_.*\\.deb$",
