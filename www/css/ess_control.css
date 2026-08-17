@@ -515,6 +515,9 @@ body.ess-app {
     flex-direction: column;
     gap: 8px;
     min-height: 0;
+    /* fixed-size panels + min-height floors can exceed a console-squeezed
+       grid; scroll the column rather than bleed under the bottom panel */
+    overflow-y: auto;
 }
 
 /* Left column - Experiment Control fills height */
@@ -564,6 +567,17 @@ body.ess-app {
     border-radius: 6px;
     overflow: hidden;
     min-height: 0;
+}
+
+/* Cascade: min-height: 0 above ties with the equal-specificity floor the
+   layout section declared EARLIER in the file, and the later rule wins —
+   without this re-assert a console-squeezed middle column crushes Input
+   Controls to a bare header. (Deliberately NOT applied to .ess-panel-perf:
+   its floor has always lost the same tie, and the right column's shrink-
+   freely behavior is relied on — re-flooring it makes the column scroll at
+   heights that previously fit.) */
+.ess-panel-inputs {
+    min-height: 150px;
 }
 
 .ess-panel-header {

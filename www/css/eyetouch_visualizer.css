@@ -82,8 +82,11 @@
     /* Don't use flex properties - size is set by JS */
 }
 
-/* Ensure panel body fills available space and doesn't scroll */
-.ess-column-middle .ess-panel .ess-panel-body {
+/* Eyetouch panel body fills available space and doesn't scroll (the canvas
+   sizes itself). Scoped to THIS panel: the previous .ess-panel version also
+   caught Input/Live Controls in the middle column, killing their base
+   overflow-y: auto — with the console open they clipped instead of scrolling. */
+.ess-column-middle .ess-panel-eyetouch .ess-panel-body {
     flex: 1 1 auto;
     min-height: 0;
     overflow: hidden;
