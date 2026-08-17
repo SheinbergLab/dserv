@@ -1160,7 +1160,15 @@ body.solo .agent-panel {
              const cur = this.panelStatus?.box?.profile || '';
              const opts = (data.profiles || []).map(p =>
 		 `<option value="${this.esc(p.name)}" ${p.name === cur ? 'selected' : ''} title="${this.esc(p.description || '')}">${this.esc(p.name)}</option>`).join('');
+             // The time role rides along because for some boxes it is the ONLY
+             // channel: the panel reaches a box over a direct socket, so one
+             // behind NAT at another site can be provisioned by URL and never
+             // driven from here. Blank keeps whatever box.conf declares --
+             // that is what a retype has always meant.
              cell.innerHTML = `<select id="retype-select" class="component-select">${opts}</select>
+		 <input id="retype-timerole" class="component-select" style="width:170px"
+			placeholder="time role (optional)"
+			title="Blank keeps the current declaration. Otherwise: grandmaster IFACE · client IFACE · ntp-client SERVER · none to clear.">
 		 <button class="component-btn update" onclick="app.retypeApply()">Apply</button>
 		 <button class="component-btn" onclick="app.renderPanel()">Cancel</button>`;
 	 }
@@ -1168,11 +1176,19 @@ body.solo .agent-panel {
 	 retypeApply() {
              const p = document.getElementById('retype-select')?.value;
              if (!p) return;
-             if (!confirm(`Retype this box to profile "${p}"?\n\nThis re-runs the provisioner from ${this.retypeRegistry}:\n• services the profile excludes are disabled\n• missing components are installed, outdated ones updated\n• the agent restarts (this panel reconnects on its own)\n\nLocal ESS scripts are kept (--skip-scripts).`)) {
+             const tr = (document.getElementById('retype-timerole')?.value || '').trim();
+             if (tr && !/^(none|(grandmaster|client|ntp-client) [A-Za-z0-9._:-]+)$/.test(tr)) {
+		 this.showToast('Time role must be "grandmaster IFACE", "client IFACE", "ntp-client SERVER", or "none"', 'error');
+		 return;
+             }
+             const trLine = tr
+		   ? `\n• time role re-declared as "${tr}" and applied`
+		   : '\n• the declared time role is kept as-is';
+             if (!confirm(`Retype this box to profile "${p}"?\n\nThis re-runs the provisioner from ${this.retypeRegistry}:\n• services the profile excludes are disabled\n• missing components are installed, outdated ones updated${trLine}\n• the agent restarts (this panel reconnects on its own)\n\nLocal ESS scripts are kept (--skip-scripts).`)) {
 		 this.renderPanel();
 		 return;
              }
-             this.panelWs?.send(JSON.stringify({type:'retype', profile: p}));
+             this.panelWs?.send(JSON.stringify({type:'retype', profile: p, timeRole: tr}));
 	 }
 
 	 retypeStarted(msg) {

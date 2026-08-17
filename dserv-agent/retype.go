@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os/exec"
 	"regexp"
 	"strings"
@@ -73,13 +74,19 @@ func (a *Agent) fetchRegistryProfiles(registry string) ([]BootstrapProfile, erro
 // startRetype validates the request and hands the provisioning run to the
 // transient unit. Returns once systemd has accepted the unit -- nothing waits
 // for the bootstrap itself, whose endgame restarts this process.
-func (a *Agent) startRetype(profile string) error {
+// timeRole is optional: empty means "no change", which is what a retype has
+// always meant -- step_record_identity preserves the existing declaration.
+// A value re-declares it, "none" clears it.
+func (a *Agent) startRetype(profile, timeRole string) error {
 	registry := a.registryBase()
 	if registry == "" {
 		return fmt.Errorf("no registry configured (-registry flag or %s) — retype from a shell instead: curl -sSL <registry>/setup?profile=%s | bash -s -- --skip-scripts", boxConfPath, profile)
 	}
 	if !profileNameRe.MatchString(profile) {
 		return fmt.Errorf("invalid profile name %q", profile)
+	}
+	if timeRole != "" && !timeRoleDeclRe.MatchString(timeRole) {
+		return fmt.Errorf("invalid time role %q (want \"grandmaster IFACE\", \"client IFACE\", \"ntp-client SERVER\", or \"none\")", timeRole)
 	}
 
 	// The registry must actually know this profile. filterComponents falls
@@ -121,6 +128,9 @@ func (a *Agent) startRetype(profile string) error {
 	// the box. A box running a hand-built agent should retype from a shell
 	// with --skip-agent instead.
 	setupURL := registry + "/setup?profile=" + profile
+	if timeRole != "" {
+		setupURL += "&time_role=" + url.QueryEscape(timeRole)
+	}
 	script := fmt.Sprintf(`set -e
 d=$(mktemp -d)
 trap 'rm -rf "$d"' EXIT
@@ -233,18 +243,23 @@ func (a *Agent) handleRetype(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	profile := r.URL.Query().Get("profile")
+	timeRole := strings.TrimSpace(r.URL.Query().Get("time_role"))
 	if profile == "" {
 		var body struct {
-			Profile string `json:"profile"`
+			Profile  string `json:"profile"`
+			TimeRole string `json:"timeRole"`
 		}
 		json.NewDecoder(r.Body).Decode(&body)
 		profile = body.Profile
+		if timeRole == "" {
+			timeRole = strings.TrimSpace(body.TimeRole)
+		}
 	}
 	if profile == "" {
 		writeJSON(w, 400, map[string]string{"error": "profile required"})
 		return
 	}
-	if err := a.startRetype(profile); err != nil {
+	if err := a.startRetype(profile, timeRole); err != nil {
 		writeJSON(w, 400, map[string]string{"error": err.Error()})
 		return
 	}

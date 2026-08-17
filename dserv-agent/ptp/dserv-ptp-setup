@@ -37,8 +37,47 @@ CL_PHC=dserv-phc2sys-client@
 # serves this segment's time. Owned by the ntp-client role, removed by disable.
 NTP_CONF=/etc/chrony/conf.d/10-dserv-ntp-client.conf
 
+# The box's declared identity, written by the dserv bootstrap. We only ever
+# UPDATE the time_role line in it -- see record_declaration.
+BOX_CONF=${DSERV_BOX_CONF:-/etc/dserv-agent/box.conf}
+
 die() { echo "dserv-ptp-setup: $*" >&2; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
+
+# Record what we just applied as this box's DECLARED time role.
+#
+# The declaration is what makes a role survive: the bootstrap re-applies it on
+# every re-run, and the panel compares declared against observed and offers to
+# converge the difference. Until now only the panel's agent path wrote it, so a
+# role set from this CLI left the record blank -- which is how the fleet ended
+# up with four running grandmasters and not one declaration between them, and
+# nothing for "Apply declared" to act on.
+#
+# Only ever UPDATES an existing file. Creating one is the bootstrap's job: it
+# owns profile/workgroup/registry too, and a box.conf holding nothing but a
+# time role would misreport an unprovisioned box as declared.
+#
+# Never fatal. By the time we are called the role IS applied and verified;
+# failing the command over a bookkeeping write would tell the caller their
+# working change did not happen, and invite them to retry it.
+record_declaration() {
+    [ -f "$BOX_CONF" ] || return 0
+    _decl=$1
+    _tmp="${BOX_CONF}.tmp.$$"
+    # Rewrite the one line, preserve every other byte (comments included),
+    # append if the key is absent, then atomic rename -- the same contract the
+    # agent's updateBoxConfTimeRole keeps, so either hand leaves the same file.
+    if awk -v v="$_decl" '
+        /^time_role=/ { print "time_role=" v; seen = 1; next }
+        { print }
+        END { if (!seen) print "time_role=" v }
+    ' "$BOX_CONF" > "$_tmp" 2>/dev/null && chmod 644 "$_tmp" && mv "$_tmp" "$BOX_CONF"; then
+        echo "declared in $BOX_CONF: time_role=${_decl}"
+    else
+        rm -f "$_tmp"
+        echo "WARNING: could not record time_role in $BOX_CONF (the role IS applied)" >&2
+    fi
+}
 
 # ethtool and pmc live in /usr/sbin, which is NOT in a non-login shell's PATH --
 # so `command -v ethtool` answers "no" over `ssh host 'dserv-ptp-setup candidates'`
@@ -732,6 +771,7 @@ case "${1:-status}" in
 
       echo "Making this host the PTP GRANDMASTER on $2."
       enable_pair "$GM_PTP" "$GM_PHC" "$2"
+      record_declaration "grandmaster $2"
       ;;
   client)
       need_root "$@"; deps_present; units_present; preflight client "$2"
@@ -746,6 +786,7 @@ case "${1:-status}" in
       done
       echo "Making this host a PTP CLIENT on $2 (grandmaster found by BMCA; no address needed)."
       enable_pair "$CL_PTP" "$CL_PHC" "$2"
+      record_declaration "client $2"
       ;;
   ntp-client)
       need_root "$@"
@@ -823,6 +864,10 @@ EOF
           echo "  This host keeps its distro NTP sources meanwhile. Re-check here with:"
           echo "    chronyc sources          (or remove the role:  $0 disable)"
       fi
+      # Declared even when reach stayed 0: the CONFIGURATION is in place and
+      # is what a re-run should restore. An unreachable server is a fact about
+      # the network right now, not a reason to forget the intent.
+      record_declaration "ntp-client $2"
       chronyc sources 2>/dev/null || true
       ;;
   disable)
@@ -847,6 +892,7 @@ EOF
       # are already unsure what this machine's clock is doing, so a NOTE here was
       # advice arriving at the worst possible moment to act on it.
       revive_ntp
+      record_declaration ""
       echo "disabled."
       status
       ;;

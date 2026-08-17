@@ -50,6 +50,7 @@ type BootstrapConfig struct {
 	AgentReleaseJSON string // dserv-agent release {tag, assets:[{name,url}]} as JSON
 	ProfileName      string
 	StimMode         string // "" = cage default (fullscreen service); "windowed" = dev
+	TimeRole         string // ?time_role= seed for TIME_ROLE; whitelist-validated
 
 	// ExplicitComponents is the raw ?components= list, empty when provisioning
 	// by profile. The script forwards it on the sudo re-fetch, which used to
@@ -290,7 +291,12 @@ ROLE=""
 # "client eth0", "ntp-client 192.168.88.29". Recorded in box.conf and
 # applied by step_time_role through the registry's /ptp/setup, so it works
 # identically on a display box with no dserv package.
-TIME_ROLE=""
+#
+# Seeded from ?time_role= when the URL carried one -- the only channel that
+# reaches a box the panel cannot open a socket to. The registry validates it
+# against a strict whitelist before it lands here; --time-role below still
+# overrides, and "none" clears a declaration.
+TIME_ROLE="{{.TimeRole}}"
 WORKGROUP="${DEFAULT_WORKGROUP}"
 DRY_RUN=false
 SKIP_AGENT=false
@@ -1536,6 +1542,18 @@ func (a *Agent) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 	}
 	explicitComponents := r.URL.Query().Get("components")
 
+	// ?time_role=grandmaster+eth0 pre-declares the box's time role, so a box
+	// reachable ONLY by running this script -- one behind NAT at another site,
+	// where the panel's browser-to-box socket can never land -- can still be
+	// given a role. --time-role still overrides it: the flag is parsed after
+	// this assignment, and check_root forwards the flag across the sudo
+	// re-exec, so an operator's explicit choice always wins over the URL's.
+	timeRole := strings.TrimSpace(r.URL.Query().Get("time_role"))
+	if timeRole != "" && !timeRoleDeclRe.MatchString(timeRole) {
+		http.Error(w, "invalid time_role (want \"grandmaster IFACE\", \"client IFACE\", \"ntp-client SERVER\", or \"none\")", 400)
+		return
+	}
+
 	// Filter components based on profile or explicit list
 	components := a.filterComponents(profileName, explicitComponents)
 
@@ -1617,6 +1635,7 @@ func (a *Agent) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 		AgentReleaseJSON: shellQuote(string(agentJSON)),
 		ProfileName:      profileName,
 		StimMode:         a.profileStimMode(profileName),
+		TimeRole:         timeRole,
 
 		ExplicitComponents: explicitComponents,
 		RetireServices:     strings.Join(retire, " "),

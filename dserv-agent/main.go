@@ -352,6 +352,7 @@ type WSMessage struct {
 	Service      string          `json:"service,omitempty"`
 	StopServices []string        `json:"stopServices,omitempty"`
 	Profile      string          `json:"profile,omitempty"`
+	TimeRole     string          `json:"timeRole,omitempty"` // retype: re-declare the time role
 	Role         string          `json:"role,omitempty"` // time_role: grandmaster|client|ntp-client
 	Arg          string          `json:"arg,omitempty"`  // time_role: IFACE or SERVER
 	Payload      json.RawMessage `json:"payload,omitempty"`
@@ -2656,7 +2657,7 @@ func (a *Agent) handleWSMessage(msg WSMessage) WSResponse {
 		resp.Data = map[string]interface{}{"registry": registry, "profiles": profiles}
 
 	case "retype":
-		if err := a.startRetype(msg.Profile); err != nil {
+		if err := a.startRetype(msg.Profile, msg.TimeRole); err != nil {
 			resp.Error = err.Error()
 			return resp
 		}

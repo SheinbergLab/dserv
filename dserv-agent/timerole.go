@@ -265,6 +265,16 @@ var timeRoleBusy int32
 
 var timeArgRe = regexp.MustCompile(`^[A-Za-z0-9._:-]+$`)
 
+// timeRoleDeclRe validates a DECLARED time role -- "ROLE ARG", the one-string
+// shape box.conf stores and step_time_role splits back apart. Used by the
+// provisioning surfaces (?time_role= on /setup, and the retype that forwards
+// it), where the value reaches both a URL and a shell assignment in the served
+// script. A whitelist, deliberately, rather than quoting around whatever
+// arrives: today's bootstrap outage was a quote that escaped its assignment,
+// and the alphabet an interface or server name actually needs is this small.
+// "none" is the explicit clear, matching --time-role's own convention.
+var timeRoleDeclRe = regexp.MustCompile(`^(none|(grandmaster|client|ntp-client) [A-Za-z0-9._:-]+)$`)
+
 // startTimeRole validates and launches an apply/disable in the background;
 // the outcome is broadcast as time_role_result. Backgrounded because apply
 // can legitimately take a minute (apt install + the tool's 30 s reach wait),
