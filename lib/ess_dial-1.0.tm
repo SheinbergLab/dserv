@@ -84,28 +84,63 @@ namespace eval ess {
     # angle unreachable (dial_response returns -1 once disarmed).
     variable dial_pending        ""
 
-    # Mouse source. The mouse is an ABSOLUTE pointer in a declared extent,
-    # so the dial reads mouse/event straight rather than going through the
-    # slider's swipe machinery: direction is atan2 about the extent's
-    # centre, and radius is ignored (a dial only has an angle).
+    # Mouse source. The mouse is a POINTING device, so it reports the way
+    # the touchscreen does -- a free cursor the subject places anywhere,
+    # and a click that lands on the reportable arc commits the angle it
+    # points at. It is deliberately NOT the swipe's steering idiom.
     #
-    # That makes the interaction move-to-choose, click-to-select, with no
-    # button held while adjusting -- which is what a mouse is good at, and
-    # a nicer fit for "choose, adjust, select" than press-drag-release.
+    # That is the touch side of this file's central asymmetry (see
+    # dial_poll_touch): steering CLAMPS an out-of-arc angle because the
+    # subject is watching a cursor and sees where they are; a discrete
+    # press REJECTS one, because snapping a click at 12:00 round to 2:00
+    # commits an answer nobody chose. A placed dot is a press, so it
+    # rejects.
+    #
+    # The interaction is move-to-point, click-to-select, with no button
+    # held while adjusting -- what a mouse is good at, and the same
+    # instruction the operator's simulated dial already obeys, which is
+    # the cheapest thing to explain to a human subject: "click where you
+    # think it is".
+    #
+    # It is also the version with the LEAST machinery. Reading only an
+    # angle put a singularity at the centre, and every mouse-specific
+    # workaround in the history of this file -- the start-radius acquire
+    # gate, the acquired latch, holding the last angle through the dead
+    # zone -- existed to paper over it. A dot that is simply where the
+    # mouse is has no dead zone, so none of it is representable.
     # Rig-level source binding, set in local/ and NOT cleared by
     # input_reset -- bindings describe the rig and persist across systems,
     # exactly as button_bind / joystick_bind do. Empty = unbound.
     variable dial_bound_sources  {}
 
-    # How far the virtual cursor must leave the centre before the dial
-    # takes a direction seriously. Below it the cursor stays HIDDEN, so a
-    # stray count does not silently pick an angle and the subject's first
-    # deliberate movement chooses the start -- which is what the trackpad's
-    # press-then-drag gave for free.
-    variable dial_start_radius   40
-
-    # Has the subject chosen a direction yet this trial? The start radius
-    # gates ACQUIRING one; it must not keep gating once one is chosen.
+    # Reaching the ring band (dial_radius +/- dial_ring_tolerance, inside the
+    # arc) LOCKS ON, once per response window. After that the radius stops
+    # mattering and only the angle does.
+    #
+    # The lock is not a convenience, it is what makes the gesture possible.
+    # Sweeping along an arc, a hand travels the CHORD, not the curve: sliding
+    # left to right across the bottom of the arc cuts inside the band and the
+    # report kept dropping out and reverting to a bare cursor mid-gesture.
+    # Requiring the subject to trace a circle accurately is a motor task the
+    # experiment is not trying to measure.
+    #
+    # So: get to the ring once to engage, then sweep freely and commit.
+    #
+    # Two things are deliberately NOT relaxed by the lock:
+    #
+    #   the ARC still applies -- leaving the reportable wedge is a real
+    #   "no answer here", not a shortcut, so it drops the lock's benefit and
+    #   shows the plain cursor again
+    #
+    #   the same in_band drives BOTH the drawing and the acceptance, so a
+    #   catcher on screen always means a click will be taken. Latching only
+    #   the display would promise an answer the dial then refuses.
+    #
+    # Note what this costs: a locked-on click is accepted at a radius a TOUCH
+    # would reject, so mouse and touch are no longer the same rule. That is
+    # the price of the gesture, and it is one-way -- everything a touch
+    # accepts, the mouse accepts too.
+    #
     # --- stick source (velocity steering) --------------------------------
     #
     # Direct pointing with a thumbstick was tried first and was HARDER than
@@ -142,11 +177,123 @@ namespace eval ess {
     variable dial_stick_angle    0.0
     variable dial_stick_moved    0
 
-    variable dial_mouse_acquired 0
-
     variable dial_mouse_range_known 0
     variable dial_mouse_cx 0.0
     variable dial_mouse_cy 0.0
+
+    # Pixels-to-degrees for the mouse's declared extent. An angle is
+    # scale-free, so the old angle-only reading needed only the centre; a
+    # PLACED dot needs a scale, because now the dot's distance from the
+    # centre is a real quantity that has to agree with the arc the stim
+    # draws. Derived in dial_mouse_range from the extent and ::ess's screen
+    # degrees, so a rig that declares its mouse extent correctly in
+    # inputconf.tcl gets the mapping for free.
+    variable dial_mouse_dpp_x    0.0
+    variable dial_mouse_dpp_y    0.0
+
+    # Fraction of the screen the full mouse extent covers. 1.0 means a
+    # sweep across the whole extent crosses the whole screen. Below 1.0
+    # trades reach for precision -- the dot moves less per count -- which
+    # is the knob to turn if subjects overshoot the arc.
+    variable dial_mouse_scale    1.0
+
+    # Where the dot is, in degrees: "x,y,show,in_band".
+    #
+    # The mouse's ONLY publication. It does not drive ess/cursor: a free dot
+    # already shows where the report is being aimed, and a ring ghost
+    # tracking alongside it meant two things moving at once, the second of
+    # which is the swipe mode's own cursor object and reads as that older
+    # idiom. One moving thing, one instruction.
+    #
+    # Publishing once per sample also keeps the mouse off a hazard in the
+    # dserv->stim path: two datapoints published back-to-back with no work
+    # between them can lose the first, which a dual publish did on every
+    # sample at mouse rate.
+    #
+    # A SEPARATE datapoint rather than a wider ess/cursor, because the two
+    # are different objects: the cursor is a report indicator on the ring,
+    # the pointer is where a pointing device is. Widening "angle_rad,show"
+    # would also break a format three ported protocols and the ess_control
+    # panel already parse.
+    #
+    # in_band is the affordance, and it is not optional. A press that misses
+    # is silently ignored (it must be -- see above), so without a visible
+    # "this will accept" state the subject clicks and nothing happens, with
+    # nothing on screen to say why. The stim brightens the ring on it.
+    variable dial_pointer_dpoint ess/dial/pointer
+    variable dial_pointer_shown  0
+    variable dial_pointer_band   -1
+    variable dial_pointer_x      0.0
+    variable dial_pointer_y      0.0
+
+    # Positional deadband for republishing the dot, in degrees. The reader
+    # already decimates motion, so this is only insurance against a fast
+    # mouse; it never gates a CHANGE OF BAND, which must be crisp.
+    variable dial_pointer_deadband 0.05
+
+    # Has the subject reached the ring band yet this response window? Set by
+    # the first on-ring sample, cleared by dial_arm. Per-trial state, not
+    # configuration.
+    variable dial_mouse_locked   0
+
+    # --- dpad source (travelling cursor from a 4-switch d-pad) -----------
+    #
+    # The SAME four switches as the joystick source, read differently, so
+    # dial_init refuses both at once -- the swipe/stick precedent above.
+    #
+    #   joystick   a settled deflection REPORTS its sector. Discrete, no
+    #              cursor, nothing in between.
+    #   dpad       holding a direction walks a cursor OUT along that spoke
+    #              from the centre; reaching the ring is the response.
+    #
+    # Built for teaching an animal to use a joystick, where the discrete
+    # version gives nothing to learn from: push, and either it counted or
+    # it did not. A cursor travelling while the switch is held makes the
+    # contingency visible the whole way, which is what shaping needs.
+    #
+    # It is the only source whose INPUT is constant while its OUTPUT must
+    # keep changing. The mouse's events are its own clock and the analog
+    # stick streams samples even at a fixed deflection, but four switches
+    # held down produce exactly one event and then silence -- so this is
+    # the one source that carries a timer (see dial_dpad_tick).
+    #
+    # Position, not just an angle, so it rides ess/dial/pointer like the
+    # mouse and inherits the whole display: the dot, the switch to the
+    # catcher at the band, the in_band affordance. A stim that already
+    # draws a mouse dial draws this one with no changes at all.
+    variable dial_dpad_rate      8.0    ;# deg of travel per second held
+    variable dial_dpad_tick_ms   16     ;# ~60 Hz
+    # ring: reaching the band IS the response. Held apart from the travel
+    # so the criterion can be sharpened later -- a dwell rule ("stop on the
+    # target and stay there") changes only this switch and dial_dpad_tick's
+    # last branch, not the movement.
+    variable dial_dpad_commit    ring   ;# ring | none
+
+    # Acceleration on a sustained hold, the digital-clock idiom: the longer
+    # the direction is held, the faster the cursor travels.
+    #
+    #   rate(t) = min(rate + accel*t, rate_max)      t = seconds held
+    #
+    # 0 accel is a constant rate and is the default, because acceleration
+    # is not free here: with commit "ring" the time from first deflection
+    # to the report IS the reaction time, and a rate that changes under the
+    # animal makes that a nonlinear function of hold duration rather than a
+    # measurement. Worth having for a long travel or an impatient subject;
+    # worth knowing what it costs the dependent measure.
+    variable dial_dpad_accel     0.0    ;# extra deg/s for every second held
+    variable dial_dpad_rate_max  0.0    ;# cap; 0 = uncapped
+
+    # per-response state
+    variable dial_dpad_r         0.0    ;# how far out, in degrees
+    variable dial_dpad_angle     -1.0   ;# current spoke, radians; -1 = none
+    variable dial_dpad_timer     ""     ;# dservAfter id, "" = not running
+    variable dial_dpad_last_us   0      ;# previous tick, for dt
+    variable dial_dpad_hold_us   0      ;# start of this hold, for accel
+    variable dial_dpad_deflected 0      ;# is a direction held right now?
+    # Walking back to the centre after a rejected reach. See dial_rearm:
+    # the cursor is never teleported, so the animal's own release is what
+    # resets it.
+    variable dial_dpad_homing    0
 
     # ---------------------------------------------------------------------
     # angle helpers
@@ -246,7 +393,13 @@ namespace eval ess {
         # exactly what happened to -start_radius and every -stick_* option:
         # they appeared to work only because the defaults were the values
         # being tested with.
-        variable dial_start_radius
+        variable dial_mouse_scale
+        variable dial_dpad_rate
+        variable dial_dpad_accel
+        variable dial_dpad_rate_max
+        variable dial_dpad_tick_ms
+        variable dial_dpad_commit
+        variable dial_pointer_dpoint
         variable dial_stick_rate
         variable dial_stick_deadzone
         variable dial_stick_expo
@@ -266,7 +419,12 @@ namespace eval ess {
         set dial_arc_halfwidth  180.0
         set dial_radius         0.0
         set dial_ring_tolerance 0.0
-        set dial_start_radius   40
+        set dial_mouse_scale      1.0
+        set dial_dpad_rate        8.0
+        set dial_dpad_accel       0.0
+        set dial_dpad_rate_max    0.0
+        set dial_dpad_tick_ms     16
+        set dial_dpad_commit      ring
         set dial_stick_rate     180.0
         set dial_stick_deadzone 0.08
         set dial_stick_expo     2.0
@@ -274,6 +432,7 @@ namespace eval ess {
         set dial_stick_invert   0
         set dial_stick_commit_dp "extio/*/state/group/stick_select"
         set dial_cursor_dpoint  ess/cursor
+        set dial_pointer_dpoint ess/dial/pointer
 
         foreach { k v } $args {
             switch -- $k {
@@ -283,7 +442,21 @@ namespace eval ess {
                 -arc_halfwidth  { set dial_arc_halfwidth $v }
                 -radius         { set dial_radius $v }
                 -ring_tolerance { set dial_ring_tolerance $v }
-                -start_radius   { set dial_start_radius $v }
+                -mouse_scale    { set dial_mouse_scale $v }
+                -dpad_rate      { set dial_dpad_rate $v }
+                -dpad_accel     { set dial_dpad_accel $v }
+                -dpad_rate_max  { set dial_dpad_rate_max $v }
+                -dpad_tick_ms   { set dial_dpad_tick_ms $v }
+                -dpad_commit    { set dial_dpad_commit $v }
+                -pointer_dpoint { set dial_pointer_dpoint $v }
+                # Errors rather than being accepted and ignored. It named a
+                # radius in MOUSE PIXELS, gating a start the free dot no
+                # longer has. Silently reinterpreting it as ring geometry
+                # would leave a call site reading fine and behaving wrongly,
+                # which is the failure this file has already had once.
+                -start_radius   { error "::ess::dial_init: -start_radius is\
+                                         gone with the angle-only mouse; use\
+                                         -ring_tolerance" }
                 -stick_rate     { set dial_stick_rate $v }
                 -stick_deadzone { set dial_stick_deadzone $v }
                 -stick_expo     { set dial_stick_expo $v }
@@ -300,11 +473,17 @@ namespace eval ess {
             error "::ess::dial_init: swipe and stick are alternative readings\
                    of the same device -- choose one"
         }
+        # Both read the same four switches: one reports a settled sector,
+        # the other walks a cursor out along it.
+        if { "joystick" in $dial_sources && "dpad" in $dial_sources } {
+            error "::ess::dial_init: joystick and dpad are alternative\
+                   readings of the same switches -- choose one"
+        }
 
         foreach s $dial_sources {
-            if { $s ni {swipe touch joystick mouse stick} } {
+            if { $s ni {swipe touch joystick mouse stick dpad} } {
                 error "::ess::dial_init: unknown source '$s'\
-                       (want swipe|touch|joystick|mouse|stick)"
+                       (want swipe|touch|joystick|mouse|stick|dpad)"
             }
         }
 
@@ -328,6 +507,14 @@ namespace eval ess {
             dpointAddScript    slider/position ::ess::dial_stick_sample
             dservAddMatch      $dial_stick_commit_dp
             dpointAddScript    $dial_stick_commit_dp ::ess::dial_stick_commit
+        }
+
+        if { "dpad" in $dial_sources } {
+            variable dial_dpad_r;     set dial_dpad_r     0.0
+            variable dial_dpad_angle; set dial_dpad_angle -1.0
+            dial_dpad_stop
+            dservAddExactMatch ess/joystick/dir
+            dpointAddScript    ess/joystick/dir ::ess::dial_dpad_dir
         }
 
         if { "mouse" in $dial_sources } {
@@ -354,6 +541,12 @@ namespace eval ess {
                 }
             }
         }
+
+        # Assert the pointer as hidden, for the same reason dial_deinit
+        # asserts the gate: a subscriber that already holds a stale dot
+        # cannot tell "absent" from "not shown", and a leftover dot from a
+        # previous system is worse than no dot at all.
+        dial_pointer_hide
 
         dial_disarm
         set dial_active 1
@@ -384,6 +577,8 @@ namespace eval ess {
         catch { dpointRemoveScript slider/position ::ess::dial_stick_sample }
         variable dial_stick_commit_dp
         catch { dpointRemoveScript $dial_stick_commit_dp ::ess::dial_stick_commit }
+        catch { dpointRemoveScript ess/joystick/dir ::ess::dial_dpad_dir }
+        catch { dial_dpad_stop }
         catch { dpointRemoveScript mouse/event ::ess::dial_mouse_sample }
         catch { dpointRemoveScript mouse/event/range ::ess::dial_mouse_range }
         dial_disarm
@@ -392,6 +587,7 @@ namespace eval ess {
         # Clear the companions too, so the panel cannot show a previous
         # system's sources or arc if it is ever displayed again.
         dservSet ess/dial/sources {}
+        dial_pointer_hide
     }
 
     # Publish the dial's geometry so anything outside ess can DRAW it.
@@ -404,6 +600,13 @@ namespace eval ess {
     #
     # ess/dial/geometry : "arc_center_deg,arc_halfwidth_deg,radius"
     # ess/cursor        : "angle_rad,show"   (published live; see above)
+    # ess/dial/pointer  : "x_deg,y_deg,show,in_band"  (free pointer only)
+    #
+    # A stim that draws the dot draws it from ess/dial/pointer and needs to
+    # know nothing about which transport is feeding it -- sources with no
+    # 2D position (stick, joystick, swipe) simply never show one. That is
+    # what keeps "who feeds the dial" a rig decision (dial_bind) rather
+    # than something a protocol has to encode.
     # Which sources this dial is listening to.
     #
     # Published because the dial's input is otherwise invisible: with
@@ -423,6 +626,27 @@ namespace eval ess {
         variable dial_radius
         dservSet ess/dial/geometry \
             "$dial_arc_center,$dial_arc_halfwidth,$dial_radius"
+    }
+
+    # ---------------------------------------------------------------------
+    # the free pointer (mouse)
+    # ---------------------------------------------------------------------
+
+    # Publish "x,y,show,in_band" -- degrees, y up, origin at the centre of
+    # the dial's circle, matching ess/dial/geometry and ess/touch_press_deg
+    # so a stim can draw the dot in the same frame it drew the ring.
+    proc dial_pointer_update { x y show in_band } {
+        variable dial_pointer_dpoint
+        dservSet $dial_pointer_dpoint \
+            "[format %.4f $x],[format %.4f $y],$show,$in_band"
+    }
+
+    proc dial_pointer_hide {} {
+        variable dial_pointer_shown
+        variable dial_pointer_band
+        set dial_pointer_shown 0
+        set dial_pointer_band  -1
+        dial_pointer_update 0 0 0 0
     }
 
     # Per-trial geometry. Separate from dial_init because the arc and the
@@ -473,8 +697,6 @@ namespace eval ess {
         set dial_report_time   0
         set dial_report_source ""
         set dial_pending       ""
-        variable dial_mouse_acquired
-        set dial_mouse_acquired 0
         variable dial_stick_last_ts; set dial_stick_last_ts 0
         variable dial_stick_moved;   set dial_stick_moved 0
         variable dial_stick_angle;   set dial_stick_angle 0.0
@@ -489,23 +711,160 @@ namespace eval ess {
         variable dial_sources
         if { "joystick" in $dial_sources } { joystick_reset }
 
-        # Put the mouse's virtual cursor back in the middle. Without this
-        # each trial resumes at the PREVIOUS trial's answer, which anchors
-        # the next report, and the cursor eventually random-walks into a
-        # corner where it clamps and whole directions stop being
-        # reportable. Recentred, the trial starts from nothing and the
-        # subject's first movement picks the direction.
-        if { "mouse" in $dial_sources } {
-            catch { send input "inputRecenter mouse" }
+        # Put the mouse's virtual cursor back at the ORIGIN -- the centre of
+        # the circle, which names no direction, not the ring point at
+        # arc_center, which names one and would anchor every report toward
+        # it.
+        #
+        # The mouse is the one source that can do this. It is a RELATIVE
+        # device whose absolute position is a fiction the reader maintains
+        # (input.c integrates counts into a virtual cursor and clamps it to
+        # a declared extent), so recentring desynchronises nothing -- there
+        # is no physical position for the dot to disagree with, the way a
+        # finger disagrees with a touchscreen.
+        #
+        # Two things come of it, and the second is the stronger one:
+        #
+        #   the report is unanchored -- each trial starts from nothing
+        #   rather than from the previous trial's answer, which also ends
+        #   the random walk into a corner where the extent clamps and whole
+        #   directions stop being reportable
+        #
+        #   every reportable direction is EQUIDISTANT -- from the centre of
+        #   a circle each arc angle is one radius away, so motor cost is
+        #   flat across directions and cannot confound the thing being
+        #   measured. Starting from the last answer varies both.
+        #
+        # Validate here rather than in dial_init: the band comes from the
+        # ring radius, and a protocol taking its radius from stimdg has not
+        # set one when dial_init runs. By arm time all per-trial geometry is
+        # in.
+        #
+        # Both halves matter. A radius of 0 accepts a click at the centre; a
+        # tolerance of 0 (the default) accepts nothing at all, which is the
+        # worse failure because it looks like a subject who will not respond.
+        # POINTER sources -- the ones that place a dot rather than report an
+        # angle outright. They share the ring-band requirement and start the
+        # window with the dot at the origin. Only the mouse also has a
+        # device cursor to recentre; the dpad's cursor is ours and simply
+        # starts at zero.
+        if { ("mouse" in $dial_sources) || ("dpad" in $dial_sources) } {
+            variable dial_radius
+            variable dial_ring_tolerance
+            if { $dial_radius <= 0 || $dial_ring_tolerance <= 0 } {
+                error "::ess::dial_arm: a pointer source needs a ring band --\
+                       call dial_set_radius with a tolerance, or pass\
+                       -ring_tolerance to dial_init"
+            }
+            if { "mouse" in $dial_sources } {
+                catch { send input "inputRecenter mouse" }
+            }
+            variable dial_dpad_r;       set dial_dpad_r       0.0
+            variable dial_dpad_angle;   set dial_dpad_angle   -1.0
+            variable dial_dpad_last_us; set dial_dpad_last_us 0
+            variable dial_dpad_hold_us;  set dial_dpad_hold_us  0
+            variable dial_dpad_homing;   set dial_dpad_homing   0
+            variable dial_dpad_deflected; set dial_dpad_deflected 0
+            dial_dpad_stop
+            # Recentred means the dot IS at the origin, so publish it there
+            # rather than leaving the previous trial's position on screen
+            # until the first movement.
+            variable dial_pointer_shown; set dial_pointer_shown 1
+            variable dial_pointer_band;  set dial_pointer_band  0
+            # Each response window starts unengaged, so the subject has to
+            # reach the ring again rather than inheriting the last trial's
+            # lock and being able to commit from anywhere immediately.
+            variable dial_mouse_locked;  set dial_mouse_locked  0
+            variable dial_pointer_x;     set dial_pointer_x     0.0
+            variable dial_pointer_y;     set dial_pointer_y     0.0
+            # The ONLY publish in this block, deliberately.
+            #
+            # This is what puts the dot on screen the moment the response
+            # window opens, rather than leaving the subject looking at
+            # nothing until they happen to move. It is also the cue that
+            # invites the movement in the first place.
+            #
+            # It used to be followed immediately by a dial_cursor_update to
+            # clear the ghost, and that pairing INTERMITTENTLY lost this
+            # publish somewhere between dserv and the stim -- measured
+            # roughly one arm in three -- so the dot kept the previous
+            # trial's position until the first mouse delta moved it. Two
+            # datapoints written back-to-back with no work between them is
+            # the trigger; the cause is not understood and is worth finding,
+            # because anything else that publishes in pairs is exposed to it.
+            #
+            # The ghost clear is not merely deferred, it is UNNECESSARY: the
+            # mouse no longer drives ess/cursor at all, and a stim showing a
+            # pointer takes its catcher from the pointer, ignoring ess/cursor
+            # entirely. There is no stale ghost left for it to take down.
+            dial_pointer_update 0 0 1 0
         }
+    }
+
+    # Re-open the response window WITHOUT resetting where the cursor is.
+    #
+    # For the forgiving path: a reach that landed somewhere the protocol
+    # will not accept should not be answered by teleporting the cursor back
+    # to the centre. That is a jump the subject did not cause, and with a
+    # dpad it is worse than cosmetic -- the cursor would still be out in the
+    # band, so the very next deflection would re-commit instantly from
+    # wherever it sat.
+    #
+    # Instead the dpad enters HOMING: holding achieves nothing, and letting
+    # the stick centre walks the cursor back in at the travel rate. The
+    # reset becomes something the animal performs rather than something
+    # done to it -- and returning to centre is a real joystick skill worth
+    # training rather than papering over.
+    #
+    # dial_arm remains the right call at the START of a trial, where the
+    # cursor genuinely should begin at the origin.
+    proc dial_rearm {} {
+        variable dial_active
+        variable dial_armed_time
+        variable dial_sources
+        variable dial_report_angle
+        variable dial_report_time
+        variable dial_report_source
+        variable dial_pending
+
+        if { !$dial_active } return
+        set dial_armed_time    [now]
+        set dial_report_angle  -1.0
+        set dial_report_time   0
+        set dial_report_source ""
+        set dial_pending       ""
+
+        if { "dpad" in $dial_sources } {
+            variable dial_dpad_r
+            variable dial_dpad_homing
+            # Already home? Then there is nothing to walk back and the next
+            # deflection may start immediately.
+            set dial_dpad_homing [expr {$dial_dpad_r > 0.0 ? 1 : 0}]
+            variable dial_dpad_deflected
+            if { $dial_dpad_homing && !$dial_dpad_deflected } {
+                variable dial_dpad_last_us; set dial_dpad_last_us [now]
+                variable dial_dpad_timer
+                if { $dial_dpad_timer eq "" } { dial_dpad_tick }
+            }
+        }
+        return
     }
 
     proc dial_disarm {} {
         variable dial_armed_time
         variable dial_cursor_shown
+        variable dial_pointer_shown
         set dial_armed_time 0
+        # A cursor still walking after the window closed would invite a
+        # commit the dial has stopped listening for.
+        catch { dial_dpad_stop }
         if { $dial_cursor_shown } { dial_cursor_update 0 0 }
         set dial_cursor_shown 0
+        # The dot tracks a live device, so unlike the ring cursor there is
+        # no reading under which it should survive the response window --
+        # a dot still moving after the dial stopped listening invites
+        # clicks that do nothing.
+        if { $dial_pointer_shown } { dial_pointer_hide }
     }
 
     proc dial_armed {} {
@@ -616,42 +975,102 @@ namespace eval ess {
         lassign [dservGet ess/touch_press_deg] tx ty
         if { $tx eq "" || $ty eq "" } { return "" }
 
-        set dist [expr {sqrt($tx*$tx + $ty*$ty)}]
-        if { $dist < [expr {$dial_radius - $dial_ring_tolerance}] ||
-             $dist > [expr {$dial_radius + $dial_ring_tolerance}] } { return "" }
+        if { ![dial_in_ring [expr {sqrt($tx*$tx + $ty*$ty)}]] } { return "" }
 
         set angle [dial_norm2pi [expr {atan2($ty, $tx)}]]
         if { ![dial_in_arc $angle] } { return "" }
         return $angle
     }
 
-    # The extent's centre, from mouse/event/range ([0 max_x 0 max_y]).
-    # Needed before any angle can be computed, so a sample arriving first
-    # is simply dropped rather than measured from (0,0).
+    # Is this distance from the centre inside the ring band?
+    #
+    # Shared by touch and mouse so the two cannot drift apart: a mouse is a
+    # touch with a visible cursor, and "landed on the ring" has to mean the
+    # same thing for both or the same click reports differently depending on
+    # which hardware made it. This file already carries two bugs that were
+    # exactly that kind of drift (see the header).
+    proc dial_in_ring { dist } {
+        variable dial_radius
+        variable dial_ring_tolerance
+        return [expr {$dist >= $dial_radius - $dial_ring_tolerance &&
+                      $dist <= $dial_radius + $dial_ring_tolerance}]
+    }
+
+    # The extent's centre and scale, from mouse/event/range
+    # ([0 max_x 0 max_y]). Needed before any position can be computed, so a
+    # sample arriving first is simply dropped rather than measured from
+    # (0,0) at an unknown scale.
+    #
+    # The extent maps onto the SCREEN: crossing the whole extent crosses
+    # the whole display (times -mouse_scale). That is the mapping a subject
+    # can form a model of, and it makes the declared extent in inputconf.tcl
+    # the single place a rig states how far a hand movement goes.
     proc dial_mouse_range { dpoint data } {
         variable dial_mouse_range_known
         variable dial_mouse_cx
         variable dial_mouse_cy
+        variable dial_mouse_dpp_x
+        variable dial_mouse_dpp_y
+        variable dial_mouse_scale
         lassign $data minx maxx miny maxy
         if { $maxx eq "" || $maxy eq "" } return
+        set spanx [expr {$maxx - $minx}]
+        set spany [expr {$maxy - $miny}]
+        if { $spanx <= 0 || $spany <= 0 } return
+
         set dial_mouse_cx [expr {($minx + $maxx)/2.0}]
         set dial_mouse_cy [expr {($miny + $maxy)/2.0}]
+
+        # The screen's half-extent in degrees, from the DATAPOINTS ::ess
+        # publishes at init. Not $::ess::screen_halfx -- there is no such
+        # variable (the values live in the loaded system's own namespace),
+        # and reading it under a bare catch silently produced a scale from
+        # the fallback instead: a dot running at 68% of true size on a
+        # 23.4x13.3 degree screen, self-consistent enough that nothing
+        # looked wrong.
+        #
+        # So the fallback now SAYS SO. A wrong scale is invisible by
+        # construction -- every angle still works, the ring is still
+        # reachable, only the gain is off -- which is exactly the kind of
+        # failure that has to announce itself or never be found.
+        set hx ""
+        set hy ""
+        catch { set hx [dservGet ess/screen_halfx] }
+        catch { set hy [dservGet ess/screen_halfy] }
+        if { ![string is double -strict $hx] || $hx <= 0 ||
+             ![string is double -strict $hy] || $hy <= 0 } {
+            set hx 16.0
+            set hy 9.0
+            puts stderr "::ess::dial: ess/screen_halfx|halfy unavailable;\
+                         mouse scale falling back to ${hx}x${hy} deg --\
+                         the dot's gain will be wrong if that is not the\
+                         real screen"
+        }
+
+        set dial_mouse_dpp_x [expr {2.0*$hx*$dial_mouse_scale/$spanx}]
+        set dial_mouse_dpp_y [expr {2.0*$hy*$dial_mouse_scale/$spany}]
         set dial_mouse_range_known 1
     }
 
-    # Mouse as an absolute pointer: move to choose and adjust, click to
-    # select.
+    # Mouse as a free pointer: place the dot, click on the arc to report.
     #
-    # MOVE (3) and DRAG (1) both steer -- whether a button happens to be
-    # held while adjusting should not change what the cursor does. PRESS
-    # (0) commits, because button-down is the moment of decision and gives
-    # the cleaner reaction time; RELEASE (2) is ignored so a click is one
-    # response, not two.
+    # MOVE (3) and DRAG (1) both move the dot -- whether a button happens
+    # to be held should not change where a pointer is. PRESS (0) reports,
+    # because button-down is the moment of decision and gives the cleaner
+    # reaction time; RELEASE (2) is ignored, so a click is one response
+    # rather than two.
     #
-    # Radius is ignored -- a dial has only an angle. A non-square extent
-    # therefore costs nothing: it means some directions are reachable at
-    # larger radius than others, while the angle itself stays true because
-    # pixels are square.
+    # A press only reports if the dot is on the ring band and inside the
+    # arc. Anywhere else it does NOTHING -- deliberately, and this is the
+    # one place the design has a cost: an ignored click is invisible. That
+    # is what in_band pays for. The dot carries "you are on target"
+    # continuously, so the subject knows before clicking, and a click that
+    # does nothing is one they could see coming.
+    #
+    # ONE publication per sample: ess/dial/pointer. The ring ghost is not
+    # driven from here (see the dial_pointer_dpoint comment) -- the dot is
+    # the only moving thing, and it stopped stuttering when it became the
+    # only publish.
     proc dial_mouse_sample { dpoint data } {
         variable dial_active
         variable dial_armed_time
@@ -663,64 +1082,256 @@ namespace eval ess {
         variable dial_mouse_range_known
         variable dial_mouse_cx
         variable dial_mouse_cy
+        variable dial_mouse_dpp_x
+        variable dial_mouse_dpp_y
+        variable dial_pointer_shown
+        variable dial_pointer_band
+        variable dial_pointer_x
+        variable dial_pointer_y
+        variable dial_pointer_deadband
 
         if { !$dial_active || $dial_armed_time == 0 } return
         if { !$dial_mouse_range_known } return
 
         lassign $data x y ev
         if { $x eq "" || $y eq "" } return
+        if { $ev == 2 } return   ;# button-up is not a second response
 
         # Published y grows DOWNWARD (mouse_reader keeps REL_Y's sense, the
         # same as a touchscreen's ABS_Y), so flip it into the dial's world.
-        set dx [expr {$x - $dial_mouse_cx}]
-        set dy [expr {$dial_mouse_cy - $y}]
+        set px [expr {($x - $dial_mouse_cx)*$dial_mouse_dpp_x}]
+        set py [expr {($dial_mouse_cy - $y)*$dial_mouse_dpp_y}]
 
-        # The start radius gates ACQUIRING a direction, once per trial --
-        # not maintaining one.
-        #
-        # Gating it continuously made the cursor blink: sweeping the mouse
-        # horizontally to move round the circle carries the cursor straight
-        # through the centre, and every crossing dropped inside the radius
-        # and hid it. Once a direction has been chosen the cursor stays put
-        # and simply HOLDS its last angle through the dead zone, where
-        # there is no meaningful direction to update to.
-        variable dial_start_radius
-        variable dial_mouse_acquired
-        set inside [expr {($dx*$dx + $dy*$dy) <
-                          ($dial_start_radius*$dial_start_radius)}]
+        set r      [expr {sqrt($px*$px + $py*$py)}]
+        set angle  [dial_norm2pi [expr {atan2($py, $px)}]]
+        set in_arc [dial_in_arc $angle]
 
-        if { $inside && !$dial_mouse_acquired } {
-            # Nothing chosen yet: show nothing, and a PRESS here is not a
-            # response -- the subject has not picked anything.
-            return
-        }
-        if { $inside } { return }   ;# acquired: hold the last angle
-        set dial_mouse_acquired 1
-
-        set angle [dial_clamp_arc [dial_norm2pi [expr {atan2($dy, $dx)}]]]
+        # Reaching the band engages the report; from then on the radius is
+        # free and only the arc still gates. See the lock's rationale above.
+        variable dial_mouse_locked
+        if { $in_arc && [dial_in_ring $r] } { set dial_mouse_locked 1 }
+        set band [expr {($dial_mouse_locked && $in_arc) ? 1 : 0}]
 
         if { $ev == 0 } {
-            # SELECT. Latched as pending and consumed by dial_response, so
-            # a mouse commit takes the same path into the protocol as
-            # every other source.
+            # REPORT. Rejected out of band, exactly as a touch off the ring
+            # is rejected -- the same dial_in_ring and dial_in_arc pair, and
+            # for the same reason: a press is a discrete choice, so there is
+            # nothing to snap it to that the subject actually chose.
+            if { !$band } return
+            # Latched as pending and consumed by dial_response, so a mouse
+            # report takes the same path into the protocol as every other
+            # source.
             set dial_pending [list $angle mouse]
             do_update
             return
         }
-        if { $ev == 2 } return   ;# button-up is not a second response
 
-        # CHOOSE / ADJUST -- steer the cursor, do NOT wake the state
-        # machine (a 1 kHz mouse would otherwise drive the SM at 1 kHz).
-        set deadband [expr {$dial_deadband_deg*$dial_pi/180.0}]
-        if { !$dial_cursor_shown } {
-            set dial_cursor_shown 1
-            dial_cursor_update $angle 1
-            set dial_last_sent $angle
-        } elseif { abs([dial_angdiff $angle $dial_last_sent]) > $deadband } {
-            dial_cursor_update $angle 1
-            set dial_last_sent $angle
+        # MOVE -- do NOT wake the state machine (a 1 kHz mouse would
+        # otherwise drive the SM at 1 kHz). Publish the dot on real
+        # movement, and ALWAYS on a band change: the deadband exists to
+        # thin a fast mouse, never to delay the affordance.
+        set moved [expr {abs($px - $dial_pointer_x) > $dial_pointer_deadband ||
+                         abs($py - $dial_pointer_y) > $dial_pointer_deadband}]
+        if { $moved || $band != $dial_pointer_band || !$dial_pointer_shown } {
+            set dial_pointer_x     $px
+            set dial_pointer_y     $py
+            set dial_pointer_band  $band
+            set dial_pointer_shown 1
+            dial_pointer_update $px $py 1 $band
         }
     }
+
+    # ---------------------------------------------------------------------
+    # dpad: a cursor that walks out along the held spoke
+    # ---------------------------------------------------------------------
+
+    # Travel rate right now, in degrees per second.
+    #
+    # THE place acceleration lives. Everything else -- the tick, the
+    # commit, the display -- is written against "what is the rate at this
+    # instant", so a different curve is a change here and nowhere else.
+    # Linear is the digital-clock behaviour; a staged or exponential ramp
+    # would substitute cleanly.
+    proc dial_dpad_rate_now { held_s } {
+        variable dial_dpad_rate
+        variable dial_dpad_accel
+        variable dial_dpad_rate_max
+        set r [expr {$dial_dpad_rate + $dial_dpad_accel*$held_s}]
+        if { $dial_dpad_rate_max > 0 && $r > $dial_dpad_rate_max } {
+            set r $dial_dpad_rate_max
+        }
+        return $r
+    }
+
+    proc dial_dpad_stop {} {
+        variable dial_dpad_timer
+        if { $dial_dpad_timer ne "" } {
+            catch { dservAfterCancel $dial_dpad_timer }
+            set dial_dpad_timer ""
+        }
+    }
+
+    # ess/joystick/dir carries the SECTOR (0..7 clockwise from up) or -1 for
+    # centred, republished by joystick_ingest on every state change.
+    #
+    # Deflection starts the timer; centring stops it and the cursor HOLDS
+    # where it got to. Holding rather than decaying is deliberate for
+    # shaping: progress made in a short push is kept, so an animal can
+    # reach the ring in several bursts instead of needing one sustained
+    # hold it cannot yet produce. Requiring the hold is a LATER criterion,
+    # and it is a decay rule here, not a redesign.
+    proc dial_dpad_dir { dpoint data } {
+        variable dial_active
+        variable dial_armed_time
+        variable dial_pi
+        variable dial_dpad_angle
+        variable dial_dpad_timer
+        variable dial_dpad_last_us
+        variable dial_dpad_hold_us
+
+        if { !$dial_active || $dial_armed_time == 0 } return
+        if { ![string is entier -strict $data] } return
+
+        variable dial_dpad_deflected
+        variable dial_dpad_homing
+
+        if { $data < 0 } {
+            set dial_dpad_deflected 0
+            # Centred. Normally that HOLDS the cursor where it got to; while
+            # homing it is the opposite -- releasing is the thing that walks
+            # it back, so the timer keeps running.
+            if { $dial_dpad_homing } {
+                if { $dial_dpad_timer eq "" } {
+                    set dial_dpad_last_us [now]
+                    dial_dpad_tick
+                }
+            } else {
+                dial_dpad_stop
+            }
+            return
+        }
+
+        set dial_dpad_deflected 1
+        # While homing, holding a direction achieves nothing: the only way
+        # out is to let the stick centre and let the cursor come home. That
+        # is the "return" being required rather than performed for them.
+        if { $dial_dpad_homing } { dial_dpad_stop; return }
+
+        # RE-AIM the spoke at the current radius rather than steering
+        # freely in 2D. The report then always names one of the eight
+        # directions the device can actually express, and the display
+        # reads as travel along a spoke. A free 2D velocity would let the
+        # path curve and land the report between sectors, which is a
+        # precision the four switches do not have.
+        set dial_dpad_angle \
+            [dial_norm2pi [expr {(90.0 - 45.0*$data)*$dial_pi/180.0}]]
+
+        if { $dial_dpad_timer eq "" } {
+            set dial_dpad_last_us [now]
+            set dial_dpad_hold_us [now]
+            dial_dpad_tick
+        }
+    }
+
+    # One step of travel. Publishes the pointer; does NOT wake the state
+    # machine -- the SM hears about the commit, not about the cursor, the
+    # same rule every other source here follows.
+    proc dial_dpad_tick {} {
+        variable dial_active
+        variable dial_armed_time
+        variable dial_dpad_r
+        variable dial_dpad_angle
+        variable dial_dpad_timer
+        variable dial_dpad_last_us
+        variable dial_dpad_hold_us
+        variable dial_dpad_tick_ms
+        variable dial_dpad_commit
+        variable dial_radius
+        variable dial_ring_tolerance
+        variable dial_pending
+        variable dial_pointer_shown
+        variable dial_pointer_band
+        variable dial_pointer_x
+        variable dial_pointer_y
+
+        set dial_dpad_timer ""
+        if { !$dial_active || $dial_armed_time == 0 } return
+        if { $dial_dpad_angle < 0 } return
+
+        set t  [now]
+        set dt [expr {($t - $dial_dpad_last_us)/1.0e6}]
+        set dial_dpad_last_us $t
+        # A gap this large means the interp was busy elsewhere; integrating
+        # across it would teleport the cursor.
+        if { $dt <= 0 || $dt > 0.25 } { set dt 0.0 }
+
+        variable dial_dpad_homing
+        variable dial_dpad_deflected
+
+        if { $dial_dpad_homing } {
+            # Walking back in at the base rate. No acceleration: coming home
+            # is not a response and should not be a race.
+            variable dial_dpad_rate
+            set dial_dpad_r [expr {$dial_dpad_r - $dial_dpad_rate*$dt}]
+            if { $dial_dpad_r <= 0.0 } {
+                set dial_dpad_r     0.0
+                set dial_dpad_homing 0
+            }
+            set px [expr {$dial_dpad_r*cos($dial_dpad_angle)}]
+            set py [expr {$dial_dpad_r*sin($dial_dpad_angle)}]
+            set dial_pointer_x     $px
+            set dial_pointer_y     $py
+            set dial_pointer_band  0
+            set dial_pointer_shown 1
+            dial_pointer_update $px $py 1 0
+            if { $dial_dpad_homing } {
+                set dial_dpad_timer \
+                    [dservAfter $dial_dpad_tick_ms ::ess::dial_dpad_tick]
+            }
+            return
+        }
+
+        set held [expr {($t - $dial_dpad_hold_us)/1.0e6}]
+        set dial_dpad_r \
+            [expr {$dial_dpad_r + [dial_dpad_rate_now $held]*$dt}]
+
+        # Park at the band's outer edge. With commit "ring" this is barely
+        # reachable, but with commit "none" it keeps a held switch from
+        # walking the cursor off the screen.
+        set rmax [expr {$dial_radius + $dial_ring_tolerance}]
+        if { $dial_dpad_r > $rmax } { set dial_dpad_r $rmax }
+
+        set px [expr {$dial_dpad_r*cos($dial_dpad_angle)}]
+        set py [expr {$dial_dpad_r*sin($dial_dpad_angle)}]
+        set band [expr {([dial_in_ring $dial_dpad_r] &&
+                         [dial_in_arc $dial_dpad_angle]) ? 1 : 0}]
+
+        set dial_pointer_x     $px
+        set dial_pointer_y     $py
+        set dial_pointer_band  $band
+        set dial_pointer_shown 1
+        dial_pointer_update $px $py 1 $band
+
+        # Commit on reaching the RING RADIUS -- the target's centre -- not
+        # the band's near edge. The band still drives in_band, so the
+        # affordance lights as the cursor enters it and the cursor then
+        # travels the last of the way and lands ON the target. Selecting
+        # from the near edge left it visibly short of the thing it chose.
+        if { $dial_dpad_r >= $dial_radius && [dial_in_arc $dial_dpad_angle] &&
+             $dial_dpad_commit eq "ring" } {
+            # Arriving IS the response: no second action to learn, and the
+            # animal has watched the cursor earn it the whole way.
+            set dial_pending [list $dial_dpad_angle dpad]
+            do_update
+            return
+        }
+
+        set dial_dpad_timer [dservAfter $dial_dpad_tick_ms ::ess::dial_dpad_tick]
+    }
+
+    # Commits arrive asynchronously via dial_dpad_tick latching dial_pending,
+    # which dial_response consumes before it polls. Nothing to poll here.
+    proc dial_poll_dpad {} { return "" }
 
     # Velocity steering from a self-centring stick.
     #
