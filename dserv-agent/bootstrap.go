@@ -1059,12 +1059,15 @@ registry ${REGISTRY_URL}
 workgroup ${WORKGROUP}
 EOF
 
-    if [[ -n "$ROLE" ]]; then
-        write_file "${DSERV_INSTALL_DIR}/etc/role.conf" <<EOF
-role ${ROLE}
-EOF
-        info "  Role: ${ROLE}"
-    fi
+    # No role.conf here. It was written whenever --role was given and read by
+    # nothing -- not dserv, not the agent, not a Tcl script. The declaration
+    # that matters is role= in box.conf, which the agent reads on every status
+    # call and reports to the fleet page. A second copy could only ever drift
+    # from it, and being written by the provisioner made it look authoritative.
+    #
+    # Deliberately NOT removing an existing one: deleting files a profile does
+    # not own is not this step's business, and the orphans are inert. Clean
+    # them by hand:  rm -f ${DSERV_INSTALL_DIR}/etc/role.conf
 
     ok "dserv configured"
 }
