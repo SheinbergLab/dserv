@@ -286,6 +286,11 @@ namespace eval ess {
     variable dial_dpad_last_us   0      ;# previous tick, for dt
     variable dial_dpad_hold_us   0      ;# start of this hold, for accel
     variable dial_dpad_deflected 0      ;# is a direction held right now?
+    # The spoke the cursor is ON, and the spoke the stick is ASKING for, as
+    # sectors (0..7, -1 none). Kept as integers so "same spoke?" is an exact
+    # comparison rather than a float epsilon.
+    variable dial_dpad_sector    -1
+    variable dial_dpad_want      -1
     # Walking back to the centre after a rejected reach. See dial_rearm:
     # the cursor is never teleported, so the animal's own release is what
     # resets it.
@@ -509,8 +514,10 @@ namespace eval ess {
         }
 
         if { "dpad" in $dial_sources } {
-            variable dial_dpad_r;     set dial_dpad_r     0.0
-            variable dial_dpad_angle; set dial_dpad_angle -1.0
+            variable dial_dpad_r;      set dial_dpad_r      0.0
+            variable dial_dpad_angle;  set dial_dpad_angle  -1.0
+            variable dial_dpad_sector; set dial_dpad_sector -1
+            variable dial_dpad_want;   set dial_dpad_want   -1
             dial_dpad_stop
             dservAddExactMatch ess/joystick/dir
             dpointAddScript    ess/joystick/dir ::ess::dial_dpad_dir
@@ -772,6 +779,8 @@ namespace eval ess {
             }
             variable dial_dpad_r;       set dial_dpad_r       0.0
             variable dial_dpad_angle;   set dial_dpad_angle   -1.0
+            variable dial_dpad_sector;  set dial_dpad_sector  -1
+            variable dial_dpad_want;    set dial_dpad_want    -1
             variable dial_dpad_last_us; set dial_dpad_last_us 0
             variable dial_dpad_hold_us;  set dial_dpad_hold_us  0
             variable dial_dpad_homing;   set dial_dpad_homing   0
@@ -1252,14 +1261,27 @@ namespace eval ess {
         # is the "return" being required rather than performed for them.
         if { $dial_dpad_homing } { dial_dpad_stop; return }
 
-        # RE-AIM the spoke at the current radius rather than steering
-        # freely in 2D. The report then always names one of the eight
-        # directions the device can actually express, and the display
-        # reads as travel along a spoke. A free 2D velocity would let the
-        # path curve and land the report between sectors, which is a
-        # precision the four switches do not have.
-        set dial_dpad_angle \
-            [dial_norm2pi [expr {(90.0 - 45.0*$data)*$dial_pi/180.0}]]
+        # Record what the stick is ASKING for. The cursor does not move here
+        # -- dial_dpad_tick decides how to get there, and the answer is never
+        # "instantly".
+        #
+        # A new direction is reached BY WAY OF THE CENTRE: the cursor
+        # retracts along the spoke it is on, and only once it reaches zero
+        # does it set out along the new one. Re-aiming at the current radius
+        # was the earlier rule and it swung the cursor around the circle --
+        # a jump to the other side, which reads as a teleport rather than as
+        # the subject's own doing.
+        #
+        # It also keeps a real contingency: changing your mind costs the
+        # travel you already spent, and passing through the centre is the
+        # same return-to-centre skill the joystick task is teaching.
+        #
+        # The report still names one of the eight directions the device can
+        # express, because the cursor is only ever ON a spoke. A free 2D
+        # velocity would curve the path and land the report between sectors,
+        # a precision four switches do not have.
+        variable dial_dpad_want
+        set dial_dpad_want $data
 
         if { $dial_dpad_timer eq "" } {
             set dial_dpad_last_us [now]
@@ -1289,9 +1311,17 @@ namespace eval ess {
         variable dial_pointer_x
         variable dial_pointer_y
 
+        variable dial_dpad_sector
+        variable dial_dpad_want
+        variable dial_pi          ;# the spoke's angle is computed HERE now
+
         set dial_dpad_timer ""
         if { !$dial_active || $dial_armed_time == 0 } return
-        if { $dial_dpad_angle < 0 } return
+        # Nothing to do only when there is neither a spoke to be on nor one
+        # being asked for. Guarding on the ANGLE here was wrong once the
+        # spoke came to be adopted inside this proc: the angle is still -1
+        # on the first tick of a reach, so the cursor never set out at all.
+        if { $dial_dpad_sector < 0 && $dial_dpad_want < 0 } return
 
         set t  [now]
         set dt [expr {($t - $dial_dpad_last_us)/1.0e6}]
@@ -1326,9 +1356,34 @@ namespace eval ess {
             return
         }
 
-        set held [expr {($t - $dial_dpad_hold_us)/1.0e6}]
-        set dial_dpad_r \
-            [expr {$dial_dpad_r + [dial_dpad_rate_now $held]*$dt}]
+        variable dial_dpad_sector
+        variable dial_dpad_want
+        variable dial_dpad_rate
+
+        # First deflection of the window: adopt the spoke and set out.
+        if { $dial_dpad_sector < 0 && $dial_dpad_want >= 0 } {
+            set dial_dpad_sector $dial_dpad_want
+            set dial_dpad_angle [dial_norm2pi \
+                [expr {(90.0 - 45.0*$dial_dpad_sector)*$dial_pi/180.0}]]
+        }
+
+        if { $dial_dpad_want >= 0 && $dial_dpad_want != $dial_dpad_sector } {
+            # Asked for a different spoke: come back in first. No
+            # acceleration on the way home -- reconsidering is not a race.
+            set dial_dpad_r [expr {$dial_dpad_r - $dial_dpad_rate*$dt}]
+            if { $dial_dpad_r <= 0.0 } {
+                set dial_dpad_r      0.0
+                set dial_dpad_sector $dial_dpad_want
+                set dial_dpad_angle [dial_norm2pi \
+                    [expr {(90.0 - 45.0*$dial_dpad_sector)*$dial_pi/180.0}]]
+                # The new spoke is a new hold, so acceleration starts over.
+                set dial_dpad_hold_us $t
+            }
+        } else {
+            set held [expr {($t - $dial_dpad_hold_us)/1.0e6}]
+            set dial_dpad_r \
+                [expr {$dial_dpad_r + [dial_dpad_rate_now $held]*$dt}]
+        }
 
         # Park at the band's outer edge. With commit "ring" this is barely
         # reachable, but with commit "none" it keeps a held switch from
