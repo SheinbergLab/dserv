@@ -498,31 +498,51 @@ wait_for_chrony() {
 # Never fatal: a grandmaster with a bad time source is worse than one with a
 # stale package list, but neither is a reason to refuse the role.
 ensure_chrony_over_timesyncd() {
-    if have chronyc; then
-        return 0
-    fi
+    # The trigger is what is STEERING the clock, not what is installed. Asking
+    # "is chrony installed?" first would no-op on the host where chrony sits
+    # installed-but-stopped while timesyncd runs -- which is the same bad
+    # outcome and the harder one to spot, because the package is right there.
     if [ "$(systemctl is-active systemd-timesyncd.service 2>/dev/null)" != active ]; then
         return 0
     fi
-    if ! have apt-get; then
+
+    if have chronyc; then
+        echo "systemd-timesyncd is steering this grandmaster while chrony sits installed"
+        echo "  but stopped; starting chrony."
+        systemctl enable --now chrony.service 2>/dev/null \
+            || systemctl enable --now chronyd.service 2>/dev/null \
+            || echo "WARNING: could not start chrony (try: systemctl enable --now chrony)."
+    elif ! have apt-get; then
         echo "NOTE: systemd-timesyncd is steering this grandmaster and chrony is not"
         echo "      installed, but apt-get is unavailable. Install chrony by hand and"
         echo "      re-run, or this host will inject SNTP jitter into every box."
         return 0
+    else
+        echo "systemd-timesyncd is steering this grandmaster; installing chrony to replace it."
+        echo "  (measured here: timesyncd sd 53 us vs chrony sd 92 ns into phc2sys)"
+        # Lock::Timeout for the reason the ntp-client tier uses it: a
+        # bootstrap-driven apply lands ~20 s before the deferred dserv-agent
+        # migration's own apt run, so wait for the dpkg lock instead of failing.
+        if ! DEBIAN_FRONTEND=noninteractive apt-get install -y \
+                -o DPkg::Lock::Timeout=300 chrony >/dev/null 2>&1; then
+            echo "WARNING: could not install chrony (try by hand: apt-get install -y chrony)."
+            echo "         The grandmaster role still applies, but timesyncd keeps steering"
+            echo "         this clock and its jitter reaches every box on the segment."
+            return 0
+        fi
+        echo "chrony installed."
     fi
-    echo "systemd-timesyncd is steering this grandmaster; installing chrony to replace it."
-    echo "  (measured here: timesyncd sd 53 us vs chrony sd 92 ns into phc2sys)"
-    # Lock::Timeout for the reason the ntp-client tier uses it: a
-    # bootstrap-driven apply lands ~20 s before the deferred dserv-agent
-    # migration's own apt run, so wait for the dpkg lock instead of failing.
-    if ! DEBIAN_FRONTEND=noninteractive apt-get install -y \
-            -o DPkg::Lock::Timeout=300 chrony >/dev/null 2>&1; then
-        echo "WARNING: could not install chrony (try by hand: apt-get install -y chrony)."
-        echo "         The grandmaster role still applies, but timesyncd keeps steering"
-        echo "         this clock and its jitter reaches every box on the segment."
-        return 0
+
+    # Belt and braces. Installing chrony is expected to displace timesyncd
+    # through the package conflict, and chrony's unit is expected to Conflicts=
+    # it -- but "expected to" is not what a grandmaster's time source should
+    # rest on, and two daemons steering CLOCK_REALTIME read as drift, not as an
+    # error. Check what is actually running and settle it.
+    if [ "$(systemctl is-active systemd-timesyncd.service 2>/dev/null)" = active ]; then
+        echo "stopping systemd-timesyncd; chrony is this grandmaster's time source now."
+        systemctl disable --now systemd-timesyncd.service 2>/dev/null \
+            || echo "WARNING: systemd-timesyncd is STILL running alongside chrony -- stop it by hand."
     fi
-    echo "chrony installed; systemd-timesyncd displaced by the package conflict."
     return 0
 }
 

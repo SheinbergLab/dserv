@@ -1279,8 +1279,19 @@ UNIT
     local wired
     wired=$(ip -o link show 2>/dev/null | awk -F': ' '$2 ~ /^(eth|en)/ {print $2; exit}')
     if [[ -n "$wired" ]]; then
-        run systemctl enable --now "dserv-disable-eee@${wired}"
-        ok "EEE off on ${wired} (persists across boots)"
+        # Guarded like every other --now in this script, and for a reason that
+        # cost a provision: inside a chroot systemd refuses --now outright
+        # ("cannot be used when systemd is not running"), the unguarded run
+        # returned nonzero, and errexit took the whole bootstrap down HERE --
+        # upstream of step_record_identity, so the box installed everything and
+        # was left with no profile, no time role and no registration. Enabling
+        # still succeeded; only the immediate start could not happen, which on
+        # an image being baked is exactly right: it starts on first boot.
+        if run systemctl enable --now "dserv-disable-eee@${wired}"; then
+            ok "EEE off on ${wired} (persists across boots)"
+        else
+            warn "Could not start dserv-disable-eee@${wired} now (no running systemd?); it is enabled and will apply on boot"
+        fi
     else
         info "No wired interface detected; enable later: systemctl enable --now dserv-disable-eee@<iface>"
     fi
@@ -1298,7 +1309,10 @@ wifi.powersave = 2
 connection.autoconnect-retries = 0
 NMCONF
         fi
-        run systemctl reload NetworkManager
+        # Same guard: NetworkManager is not running in a chroot, and this
+        # step is tuning -- never a reason to strand the box unrecorded.
+        run systemctl reload NetworkManager || \
+            warn "Could not reload NetworkManager (not running?); the config applies on its next start"
         local wifi
         wifi=$(ip -o link show 2>/dev/null | awk -F': ' '$2 ~ /^wl/ {print $2; exit}')
         if [[ -n "$wifi" ]] && command -v iw &>/dev/null; then
@@ -1516,7 +1530,9 @@ main() {
     # every step that makes the box registrable. Scripts are recoverable from
     # the panel; an unregistered box is not.
     soft_step step_sync_scripts
-    step_power_mgmt
+    # Soft for the same reason as the sync: power tuning is an optimisation
+    # sitting upstream of everything that makes the box registrable.
+    soft_step step_power_mgmt
     # Retire before start: a unit the new profile excludes goes down before
     # anything it might race with comes up. Identity is recorded before the
     # services start so a failed start still leaves the box declared.
