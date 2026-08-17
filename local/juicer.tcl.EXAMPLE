@@ -8,6 +8,7 @@ juicerSetPin 0 27
 #   setting juicer destination auto   ;# auto | usb | gpio | extio |
 #                                      # extio:<box> | extio:<box>/<pin>
 #   setting juicer ms_per_ml 1667     ;# valve-open ms per ml (extio + gpio)
+#   setting juicer hand_ml 0.5        ;# Juice-button (bare `reward`) amount
 #
 # auto prefers: usb pump > first live extio digital out labeled juice* > gpio.
 # An explicit destination never falls back: unavailable means reward drops

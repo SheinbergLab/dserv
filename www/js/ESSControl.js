@@ -187,8 +187,7 @@ class ESSControl {
                         <span class="ess-obs-label">Obs:</span>
                         <span class="ess-obs-value" id="ess-obs-display">–/–</span>
                         <div class="ess-status-spacer"></div>
-                        <button id="ess-btn-juice" class="ess-mini-btn juice">Juice</button>
-                        <input type="number" id="ess-juice-amount" class="ess-juice-input" value="0.5" min="0.1" max="5" step="0.1" title="Juice amount (sec)">
+                        <button id="ess-btn-juice" class="ess-mini-btn juice" title="Manual reward (amount set in ⚙)">Juice</button>
                         <button id="ess-btn-juice-settings" class="ess-mini-btn ess-juicer-gear" title="Juicer settings">⚙</button>
                         <button id="ess-btn-mute" class="ess-mini-btn ess-mute-btn" title="Mute task sounds">🔊</button>
                         <div class="ess-volume-control">
@@ -527,7 +526,6 @@ class ESSControl {
             btnGo: this.container.querySelector('#ess-btn-go'),
             btnStop: this.container.querySelector('#ess-btn-stop'),
             btnJuice: this.container.querySelector('#ess-btn-juice'),
-            juiceAmount: this.container.querySelector('#ess-juice-amount'),
             btnJuiceSettings: this.container.querySelector('#ess-btn-juice-settings'),
             muteBtn: this.container.querySelector('#ess-btn-mute'),
             volumeBtn: this.container.querySelector('#ess-btn-volume'),
@@ -986,6 +984,16 @@ class ESSControl {
         this.dpManager.subscribe('juicer/error', (data) => {
             this.state.juicerError = data.value || '';
             this.updateJuicerGear();
+        });
+        this.dpManager.subscribe('juicer/hand_ml', (data) => {
+            const v = parseFloat(data.value);
+            this.state.juicerHandMl = isNaN(v) ? null : v;
+            // face stays "Juice" (a changing label wiggles the row); the
+            // amount lives in the tooltip and the gear dialog
+            if (this.state.juicerHandMl != null) {
+                this.elements.btnJuice.title =
+                    `Manual reward: ${this.state.juicerHandMl} ml (set in ⚙)`;
+            }
         });
 
         this.dpManager.subscribe('ess/systems', (data) => {
@@ -1989,6 +1997,14 @@ updateConfigRunButtons() {
                         <div class="ess-juicer-dest-list" id="ess-juicer-dest-list"></div>
                     </div>
                     <div class="ess-modal-section">
+                        <label class="ess-modal-label">Juice button amount (ml)</label>
+                        <div class="ess-juicer-msml">
+                            <input type="number" class="ess-modal-input" id="ess-juicer-handml-input"
+                                   min="0.01" max="5" step="0.05">
+                            <button class="ess-mini-btn" id="ess-juicer-handml-set" type="button">Set</button>
+                        </div>
+                    </div>
+                    <div class="ess-modal-section">
                         <label class="ess-modal-label">Valve ms per ml (extio + GPIO routes)</label>
                         <div class="ess-juicer-msml">
                             <input type="number" class="ess-modal-input" id="ess-juicer-msml-input"
@@ -2009,6 +2025,8 @@ updateConfigRunButtons() {
 
         const routeEl = modal.querySelector('#ess-juicer-route');
         const listEl = modal.querySelector('#ess-juicer-dest-list');
+        const handmlInput = modal.querySelector('#ess-juicer-handml-input');
+        const handmlSetBtn = modal.querySelector('#ess-juicer-handml-set');
         const msmlInput = modal.querySelector('#ess-juicer-msml-input');
         const msmlSetBtn = modal.querySelector('#ess-juicer-msml-set');
         const errorEl = modal.querySelector('#ess-juicer-modal-error');
@@ -2019,6 +2037,7 @@ updateConfigRunButtons() {
         const setBusy = (isBusy) => {
             busy = isBusy;
             listEl.classList.toggle('busy', isBusy);
+            handmlSetBtn.disabled = isBusy;
             msmlSetBtn.disabled = isBusy;
             rescanBtn.disabled = isBusy;
         };
@@ -2096,6 +2115,9 @@ updateConfigRunButtons() {
                 input.addEventListener('change', () => setDestination(input.value));
             });
 
+            if (document.activeElement !== handmlInput) {
+                handmlInput.value = status.hand_ml;
+            }
             if (document.activeElement !== msmlInput) {
                 msmlInput.value = status.ms_per_ml;
             }
@@ -2135,25 +2157,28 @@ updateConfigRunButtons() {
             }
         };
 
-        const setMsPerMl = async () => {
+        const setNumber = async (cmd, input, describe) => {
             if (busy) return;
-            const v = msmlInput.value.trim();
+            const v = input.value.trim();
             if (!v) return;
             setBusy(true);
             try {
-                const reply = await this.sendJuicerCommandAsync(
-                    `juicer_set_ms_per_ml {${v}}`);
+                const reply = await this.sendJuicerCommandAsync(`${cmd} {${v}}`);
                 status = JSON.parse(reply);
                 showError('');
-                this.emit('log', { message: `Juicer ms/ml → ${status.ms_per_ml}`, level: 'info' });
+                this.emit('log', { message: describe(status), level: 'info' });
             } catch (e) {
                 showError(e.message);
                 this.emit('log', { message: `Juicer: ${e.message}`, level: 'error' });
             } finally {
                 setBusy(false);
-                render();
+                render();   // on failure this restores the real value
             }
         };
+        const setHandMl = () => setNumber('juicer_set_hand_ml', handmlInput,
+            (s) => `Juice button amount → ${s.hand_ml} ml`);
+        const setMsPerMl = () => setNumber('juicer_set_ms_per_ml', msmlInput,
+            (s) => `Juicer ms/ml → ${s.ms_per_ml}`);
 
         const closeModal = () => {
             if (busy) return;
@@ -2171,6 +2196,13 @@ updateConfigRunButtons() {
             if (e.target === modal) closeModal();
         });
         rescanBtn.addEventListener('click', () => refresh('juicer_rescan'));
+        handmlSetBtn.addEventListener('click', () => setHandMl());
+        handmlInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                setHandMl();
+            }
+        });
         msmlSetBtn.addEventListener('click', () => setMsPerMl());
         msmlInput.addEventListener('keydown', (e) => {
             if (e.key === 'Enter') {
@@ -2229,8 +2261,14 @@ updateConfigRunButtons() {
     }
     
     giveJuice() {
-        const amount = this.elements.juiceAmount.value || 50;
-        this.sendCommand(`send juicer reward ${amount}`);
+        // Bare `reward` uses the rig's `juicer hand_ml` setting. The datapoint
+        // having arrived is the proof this dserv understands the no-arg form;
+        // against an older conf, fall back to the historical explicit 0.5.
+        if (this.state.juicerHandMl != null) {
+            this.sendCommand('send juicer reward');
+        } else {
+            this.sendCommand('send juicer {reward 0.5}');
+        }
     }
 
     // The ess API owns all sound policy (validation, persistence, which

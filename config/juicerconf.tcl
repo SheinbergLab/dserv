@@ -405,6 +405,29 @@ proc juicer_ms_per_ml_apply {v} {
     dservSet juicer/ms_per_ml $v
 }
 
+proc juicer_handml_norm {v} {
+    if { ![string is double -strict $v] } {
+	error "juicer hand_ml: '$v' is not a number"
+    }
+    set v [expr {double($v)}]
+    if { $v < 0.01 || $v > 5.0 } {
+	error "juicer hand_ml: $v out of range 0.01..5.0 ml"
+    }
+    return $v
+}
+
+# The experimenter's manual reward (the Juice button, and `reward` with no
+# amount). A rig declaration, not a per-browser-tab value: every page shows
+# and dispenses the same amount.
+settings::declare juicer hand_ml -default 0.5 \
+    -validate juicer_handml_norm \
+    -doc "manual (Juice button) reward amount in ml" \
+    -apply {::juicer_hand_ml_apply}
+
+proc juicer_hand_ml_apply {v} {
+    dservSet juicer/hand_ml $v
+}
+
 #
 # route binding
 #
@@ -567,7 +590,8 @@ proc init {} {
 #
 # our "API" commands
 #
-proc reward { ml } {
+proc reward { {ml ""} } {
+    if { $ml eq "" } { set ml [settings::get juicer hand_ml] }
     if { ![string is double -strict $ml] || $ml <= 0 } { return }
     switch -- [$::juicer backend] {
 	usb {
@@ -619,6 +643,7 @@ proc juicer_status {} {
     $o map_key backend string [$::juicer backend]
     $o map_key target string [expr {[dservExists juicer/target] ? [dservGet juicer/target] : ""}]
     $o map_key ms_per_ml number [settings::get juicer ms_per_ml]
+    $o map_key hand_ml double [settings::get juicer hand_ml]
     $o map_key usb map_open \
 	map_key present bool [$::juicer is_open] \
 	map_key path string [$::juicer path] map_close
@@ -652,6 +677,11 @@ proc juicer_set_ms_per_ml { v } {
     return [juicer_status]
 }
 
+proc juicer_set_hand_ml { v } {
+    settings::put juicer hand_ml $v -persist
+    return [juicer_status]
+}
+
 # Re-probe the pump (covers a pump plugged in after boot) and re-resolve.
 proc juicer_rescan {} {
     if { ![$::juicer is_open] } {
@@ -669,6 +699,7 @@ init
 # settings land now: settings::get doesn't run -apply, so push the effective
 # values once, then watch extio topology and resolve the route
 juicer_ms_per_ml_apply [settings::get juicer ms_per_ml]
+juicer_hand_ml_apply [settings::get juicer hand_ml]
 juicer_watch_extio
 juicer_bind
 
