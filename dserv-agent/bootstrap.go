@@ -370,6 +370,31 @@ run() {
     fi
 }
 
+# Run a step whose failure must not strand the box.
+#
+# Everything after the script sync is what makes a box a box: the recorded
+# identity that IS its registration, its services, and its declared time role.
+# A convenience step that refreshes ESS scripts has no business preventing any
+# of them -- but under set -euo pipefail one nonzero status inside it did
+# exactly that, and the wreckage was quiet: components installed, no box.conf,
+# no time role, never appears in the fleet. It reads as "the installer works
+# but does not register", which is a much harder thing to go looking for than
+# a step that says it failed.
+#
+# The subshell re-arms errexit explicitly. Bash suppresses errexit for a
+# command on the left of || -- INCLUDING inside a subshell there -- so the
+# obvious "( step ) || warn" would let the step blunder on past its own
+# failure, which is worse than aborting. This way it still stops at the first
+# error, and only the parent is spared.
+soft_step() {
+    local name=$1 rc=0
+    set +e
+    ( set -e; "$name" )
+    rc=$?
+    set -e
+    [[ $rc -eq 0 ]] || warn "${name} failed (exit ${rc}) — continuing; the box is still provisioned, recorded and registered"
+}
+
 # run() cannot guard a shell redirection, so every "cat > /etc/..." in this
 # script used to write for real even under --dry-run: a preview of what the
 # bootstrap WOULD do quietly rewrote the agent's unit file and config on a live
@@ -1149,13 +1174,31 @@ SYSTEMDIR
     # without this the log of a destructive step looks identical to a first
     # install -- and "how many scripts were already there" is the one number
     # you want when someone asks what happened to their edits.
-    local existing
-    existing=$(find "$dest" -type f \( -name "*.tcl" -o -name "*.tm" \) 2>/dev/null | wc -l)
+    # -d first: find exits 1 on a missing path, and under set -euo pipefail
+    # that status propagates out of the pipeline and kills the whole bootstrap.
+    # On a FRESH box $dest does not exist yet -- mkdir is two lines below -- so
+    # counting what was there stranded exactly the boxes with nothing to count.
+    # The provision died here, before identity was recorded or the time role
+    # applied, and looked like a components-only install that would not register.
+    local existing=0
+    if [[ -d "$dest" ]]; then
+        existing=$(find "$dest" -type f \( -name "*.tcl" -o -name "*.tm" \) 2>/dev/null | wc -l || echo 0)
+    fi
     if [[ "$existing" -gt 0 ]]; then
         warn "Overwriting ${existing} existing scripts in ${dest} (--skip-scripts to keep them)"
     fi
 
     run mkdir -p "$dest"
+    # unzip is NOT a declared prerequisite (step_prerequisites installs curl,
+    # jq and ca-certificates), so on a minimal image this is the second way
+    # this step took the run down with it -- an unguarded command substitution
+    # under errexit. Skip the sync rather than abort: scripts are recoverable
+    # from the panel, an unregistered box is not.
+    if ! command -v unzip &>/dev/null; then
+        warn "unzip is not installed — skipping script sync (apt install unzip, then re-run)"
+        rm -f "$zip_file"
+        return
+    fi
     local zip_list
     zip_list=$(unzip -Z1 "$zip_file")
     run unzip -o "$zip_file" -d "$dest"
@@ -1469,7 +1512,10 @@ main() {
     step_install_components
     step_stim_launcher
     step_configure_dserv
-    step_sync_scripts
+    # Soft: refreshing ESS scripts is a convenience, and it sits upstream of
+    # every step that makes the box registrable. Scripts are recoverable from
+    # the panel; an unregistered box is not.
+    soft_step step_sync_scripts
     step_power_mgmt
     # Retire before start: a unit the new profile excludes goes down before
     # anything it might race with comes up. Identity is recorded before the
