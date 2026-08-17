@@ -1,2 +1,18 @@
-# juicer line0 set to pin 27
+# Host-gpio solenoid pin (only needed if this rig can reward via a timed
+# host pin; skip when juice is a USB pump or an extio *juice* digital out)
 juicerSetPin 0 27
+
+# Reward ROUTING and the ml->ms calibration are settings (local/rig.tcl),
+# editable from the gear next to the Juice button in ESS Control, or by hand:
+#
+#   setting juicer destination auto   ;# auto | usb | gpio | extio |
+#                                      # extio:<box> | extio:<box>/<pin>
+#   setting juicer ms_per_ml 1667     ;# valve-open ms per ml (extio + gpio)
+#
+# auto prefers: usb pump > first live extio digital out labeled juice* > gpio.
+# An explicit destination never falls back: unavailable means reward drops
+# with a juicer/error breadcrumb, so a mis-set rig is loud, not quiet.
+#
+# (Historical note: `set ::juicer_ms_per_ml <n>` in this file still works as
+# a runtime override until `setting juicer ms_per_ml` is declared; prefer the
+# setting.)

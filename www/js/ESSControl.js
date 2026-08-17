@@ -189,6 +189,7 @@ class ESSControl {
                         <div class="ess-status-spacer"></div>
                         <button id="ess-btn-juice" class="ess-mini-btn juice">Juice</button>
                         <input type="number" id="ess-juice-amount" class="ess-juice-input" value="0.5" min="0.1" max="5" step="0.1" title="Juice amount (sec)">
+                        <button id="ess-btn-juice-settings" class="ess-mini-btn ess-juicer-gear" title="Juicer settings">⚙</button>
                         <button id="ess-btn-mute" class="ess-mini-btn ess-mute-btn" title="Mute task sounds">🔊</button>
                         <div class="ess-volume-control">
                             <button id="ess-btn-volume" class="ess-mini-btn ess-volume-btn" title="Sound level">🎚️</button>
@@ -527,6 +528,7 @@ class ESSControl {
             btnStop: this.container.querySelector('#ess-btn-stop'),
             btnJuice: this.container.querySelector('#ess-btn-juice'),
             juiceAmount: this.container.querySelector('#ess-juice-amount'),
+            btnJuiceSettings: this.container.querySelector('#ess-btn-juice-settings'),
             muteBtn: this.container.querySelector('#ess-btn-mute'),
             volumeBtn: this.container.querySelector('#ess-btn-volume'),
             volumePopup: this.container.querySelector('#ess-volume-popup'),
@@ -680,6 +682,7 @@ class ESSControl {
         
         // Juice button
         this.elements.btnJuice.addEventListener('click', () => this.giveJuice());
+        this.elements.btnJuiceSettings.addEventListener('click', () => this.showJuicerSettingsModal());
 
         // Two separate single-purpose controls: a mute button (task sounds)
         // and a volume button that opens a vertical master-level slider popup.
@@ -968,6 +971,21 @@ class ESSControl {
             const g = parseFloat(data.value);
             this.state.masterGain = isNaN(g) ? 1.0 : g;
             this.updateVolumeUI();
+        });
+
+        // Juicer route: the gear's tooltip mirrors the bound backend/target,
+        // and a declared destination that isn't available tints it red.
+        this.dpManager.subscribe('juicer/backend', (data) => {
+            this.state.juicerBackend = data.value || '';
+            this.updateJuicerGear();
+        });
+        this.dpManager.subscribe('juicer/target', (data) => {
+            this.state.juicerTarget = data.value || '';
+            this.updateJuicerGear();
+        });
+        this.dpManager.subscribe('juicer/error', (data) => {
+            this.state.juicerError = data.value || '';
+            this.updateJuicerGear();
         });
 
         this.dpManager.subscribe('ess/systems', (data) => {
@@ -1918,11 +1936,253 @@ updateConfigRunButtons() {
             }
         });
         document.addEventListener('keydown', onKeyDown);
-        
+
         renderList();
         inputEl.focus();
     }
-    
+
+    /**
+     * Juicer gear: tint red when the declared destination is unavailable,
+     * and carry the bound route in the tooltip.
+     */
+    updateJuicerGear() {
+        const btn = this.elements.btnJuiceSettings;
+        if (!btn) return;
+        const backend = this.state.juicerBackend || '';
+        const target = this.state.juicerTarget || '';
+        const err = this.state.juicerError || '';
+        btn.classList.toggle('route-missing', backend === 'none' || err !== '');
+        let tip = 'Juicer settings';
+        if (backend) {
+            tip += ` — ${backend}`;
+            if (target && backend !== 'gpio') tip += ` ${target}`;
+        }
+        if (err) tip += `\n${err}`;
+        btn.title = tip;
+    }
+
+    /**
+     * Juicer settings modal — pick the reward destination (USB pump, an extio
+     * *juice* digital out, host GPIO, or auto) and set the ml→ms calibration.
+     * All state comes from the juicer subprocess (`juicer_status`); setters
+     * persist to local/rig.tcl and reply with a fresh snapshot to re-render.
+     */
+    showJuicerSettingsModal() {
+        let busy = false;
+        let status = null;
+
+        const modal = document.createElement('div');
+        modal.className = 'ess-modal-overlay';
+        modal.innerHTML = `
+            <div class="ess-modal">
+                <div class="ess-modal-header">
+                    <span class="ess-modal-title">Juicer</span>
+                    <button class="ess-modal-close" type="button">×</button>
+                </div>
+                <div class="ess-modal-body">
+                    <div class="ess-modal-section">
+                        <label class="ess-modal-label">Bound Route</label>
+                        <div class="ess-juicer-route" id="ess-juicer-route">loading…</div>
+                    </div>
+                    <div class="ess-modal-section">
+                        <label class="ess-modal-label">Destination</label>
+                        <div class="ess-juicer-dest-list" id="ess-juicer-dest-list"></div>
+                    </div>
+                    <div class="ess-modal-section">
+                        <label class="ess-modal-label">Valve ms per ml (extio + GPIO routes)</label>
+                        <div class="ess-juicer-msml">
+                            <input type="number" class="ess-modal-input" id="ess-juicer-msml-input"
+                                   min="1" max="4999" step="1">
+                            <button class="ess-mini-btn" id="ess-juicer-msml-set" type="button">Set</button>
+                        </div>
+                    </div>
+                    <div class="ess-juicer-modal-error" id="ess-juicer-modal-error" hidden></div>
+                </div>
+                <div class="ess-modal-footer">
+                    <button class="ess-modal-btn" id="ess-juicer-rescan" type="button">Rescan</button>
+                    <button class="ess-modal-btn cancel" type="button">Close</button>
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(modal);
+
+        const routeEl = modal.querySelector('#ess-juicer-route');
+        const listEl = modal.querySelector('#ess-juicer-dest-list');
+        const msmlInput = modal.querySelector('#ess-juicer-msml-input');
+        const msmlSetBtn = modal.querySelector('#ess-juicer-msml-set');
+        const errorEl = modal.querySelector('#ess-juicer-modal-error');
+        const rescanBtn = modal.querySelector('#ess-juicer-rescan');
+        const closeBtn = modal.querySelector('.ess-modal-close');
+        const cancelBtn = modal.querySelector('.ess-modal-btn.cancel');
+
+        const setBusy = (isBusy) => {
+            busy = isBusy;
+            listEl.classList.toggle('busy', isBusy);
+            msmlSetBtn.disabled = isBusy;
+            rescanBtn.disabled = isBusy;
+        };
+
+        const showError = (msg) => {
+            errorEl.textContent = msg || '';
+            errorEl.hidden = !msg;
+        };
+
+        const badge = (text, cls) =>
+            `<span class="ess-juicer-badge ${cls}">${this.escapeHtml(text)}</span>`;
+
+        const render = () => {
+            if (!status) return;
+            const bound = status.backend || 'none';
+            const target = status.target || '';
+            if (bound === 'none') {
+                routeEl.innerHTML = `${badge('no route', 'err')} <span class="ess-juicer-route-err">${this.escapeHtml(status.error || '')}</span>`;
+            } else {
+                const desc = bound === 'gpio' ? 'host GPIO (timed pin)'
+                    : bound === 'usb' ? `USB pump ${target}` : `extio ${target}`;
+                routeEl.innerHTML = `${badge(bound, 'ok')} <span>${this.escapeHtml(desc)}</span>`;
+            }
+
+            // candidate rows: auto, usb, one per extio *juice* out pin, gpio
+            const rows = [];
+            rows.push({
+                id: 'auto', label: 'Auto',
+                desc: 'USB pump → extio juice pin → host GPIO',
+                enabled: true
+            });
+            rows.push({
+                id: 'usb', label: 'USB pump',
+                desc: status.usb.path || '/dev/ttyACM*',
+                badge: status.usb.present ? ['connected', 'ok'] : ['not found', 'warn'],
+                enabled: true
+            });
+            for (const c of status.extio || []) {
+                rows.push({
+                    id: `extio:${c.box}/${c.pin}`,
+                    label: `extio ${c.box} pin ${c.pin}`,
+                    desc: `"${c.label}"`,
+                    badge: c.out ? ['output', 'ok'] : ['not an output', 'warn'],
+                    enabled: !!c.out
+                });
+            }
+            rows.push({
+                id: 'gpio', label: 'Host GPIO',
+                desc: 'timed pin on this computer',
+                badge: status.gpio.available ? null : ['n/a on this host', 'warn'],
+                enabled: !!status.gpio.available
+            });
+            // a hand-declared form with no row of its own (bare extio,
+            // extio:<box>) still has to show as selected, not vanish
+            if (!rows.some(r => r.id === status.destination)) {
+                rows.push({
+                    id: status.destination,
+                    label: `Declared: ${status.destination}`,
+                    desc: 'set by hand in local/rig.tcl',
+                    enabled: true
+                });
+            }
+
+            listEl.innerHTML = rows.map(r => `
+                <label class="ess-juicer-dest-row${r.enabled ? '' : ' disabled'}">
+                    <input type="radio" name="ess-juicer-dest" value="${this.escapeAttr(r.id)}"
+                           ${r.id === status.destination ? 'checked' : ''} ${r.enabled ? '' : 'disabled'}>
+                    <span class="ess-juicer-dest-label">${this.escapeHtml(r.label)}</span>
+                    <span class="ess-juicer-dest-desc">${this.escapeHtml(r.desc || '')}</span>
+                    ${r.badge ? badge(r.badge[0], r.badge[1]) : ''}
+                </label>
+            `).join('');
+
+            listEl.querySelectorAll('input[name="ess-juicer-dest"]').forEach(input => {
+                input.addEventListener('change', () => setDestination(input.value));
+            });
+
+            if (document.activeElement !== msmlInput) {
+                msmlInput.value = status.ms_per_ml;
+            }
+        };
+
+        const refresh = async (cmd = 'juicer_status') => {
+            if (busy) return;
+            setBusy(true);
+            try {
+                const reply = await this.sendJuicerCommandAsync(cmd);
+                status = JSON.parse(reply);
+                showError('');
+                render();
+            } catch (e) {
+                showError(e.message);
+                this.emit('log', { message: `Juicer: ${e.message}`, level: 'error' });
+            } finally {
+                setBusy(false);
+            }
+        };
+
+        const setDestination = async (dest) => {
+            if (busy) return;
+            setBusy(true);
+            try {
+                const reply = await this.sendJuicerCommandAsync(
+                    `juicer_set_destination {${dest}}`);
+                status = JSON.parse(reply);
+                showError('');
+                this.emit('log', { message: `Juicer destination → ${dest}`, level: 'info' });
+            } catch (e) {
+                showError(e.message);
+                this.emit('log', { message: `Juicer: ${e.message}`, level: 'error' });
+            } finally {
+                setBusy(false);
+                render();   // on failure this restores the real selection
+            }
+        };
+
+        const setMsPerMl = async () => {
+            if (busy) return;
+            const v = msmlInput.value.trim();
+            if (!v) return;
+            setBusy(true);
+            try {
+                const reply = await this.sendJuicerCommandAsync(
+                    `juicer_set_ms_per_ml {${v}}`);
+                status = JSON.parse(reply);
+                showError('');
+                this.emit('log', { message: `Juicer ms/ml → ${status.ms_per_ml}`, level: 'info' });
+            } catch (e) {
+                showError(e.message);
+                this.emit('log', { message: `Juicer: ${e.message}`, level: 'error' });
+            } finally {
+                setBusy(false);
+                render();
+            }
+        };
+
+        const closeModal = () => {
+            if (busy) return;
+            document.removeEventListener('keydown', onKeyDown);
+            modal.remove();
+        };
+
+        const onKeyDown = (e) => {
+            if (e.key === 'Escape') closeModal();
+        };
+
+        closeBtn.addEventListener('click', closeModal);
+        cancelBtn.addEventListener('click', closeModal);
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) closeModal();
+        });
+        rescanBtn.addEventListener('click', () => refresh('juicer_rescan'));
+        msmlSetBtn.addEventListener('click', () => setMsPerMl());
+        msmlInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                setMsPerMl();
+            }
+        });
+        document.addEventListener('keydown', onKeyDown);
+
+        refresh();
+    }
+
     // ESS Commands
     setSubject(subject) {
         if (!subject) return;
@@ -3465,6 +3725,15 @@ updateConfigRunButtons() {
             throw new Error('Not connected');
         }
         return await this.dpManager.connection.sendRaw(`send ess {${cmd}}`);
+    }
+
+    async sendJuicerCommandAsync(cmd) {
+        if (!this.dpManager.connection.ws || !this.dpManager.connection.connected) {
+            throw new Error('Not connected');
+        }
+        // evalAsync rejects on Tcl errors, including the "!TCL_ERROR " strings
+        // `send` returns as successful results — so callers get clean try/catch
+        return await this.dpManager.connection.evalAsync(`send juicer {${cmd}}`);
     }
     
     parseListData(data) {

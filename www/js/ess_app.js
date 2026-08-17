@@ -165,6 +165,7 @@ function requestInitialData() {
           system/net/wifi/signal_dbm system/net/wifi/bars
           powermon/pct powermon/charging powermon/hrs_remaining powermon/v powermon/a powermon/w
           juicer/juice_level juicer/reward_mls juicer/reward_number
+          juicer/backend juicer/target juicer/error juicer/ms_per_ml
           configs/list configs/tags configs/quick_picks configs/current
           configs/remote_servers
           queues/list queues/state queues/items

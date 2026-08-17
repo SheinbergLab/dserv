@@ -5472,3 +5472,122 @@ select.ess-param-select {
     line-height: 1.5;
     color: var(--ess-text-muted);
 }
+
+/* ============================================================
+   Juicer settings (gear next to the Juice button)
+   ============================================================ */
+
+.ess-juicer-gear.route-missing {
+    color: var(--ess-error);
+    border-color: var(--ess-error);
+}
+
+.ess-juicer-route {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--ess-text-primary);
+    font-family: 'SF Mono', Monaco, Consolas, monospace;
+}
+
+.ess-juicer-route-err {
+    color: var(--ess-error);
+    font-family: inherit;
+    font-size: 11px;
+}
+
+.ess-juicer-dest-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.ess-juicer-dest-list.busy {
+    opacity: 0.55;
+    pointer-events: none;
+    cursor: wait;
+}
+
+.ess-juicer-dest-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    background: var(--ess-bg-panel);
+    border: 1px solid var(--ess-border);
+    border-radius: 4px;
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.ess-juicer-dest-row:hover {
+    border-color: var(--ess-accent);
+}
+
+.ess-juicer-dest-row.disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+.ess-juicer-dest-row.disabled:hover {
+    border-color: var(--ess-border);
+}
+
+.ess-juicer-dest-label {
+    color: var(--ess-text-primary);
+    white-space: nowrap;
+}
+
+.ess-juicer-dest-desc {
+    color: var(--ess-text-muted);
+    font-size: 11px;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ess-juicer-badge {
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 8px;
+    white-space: nowrap;
+}
+
+.ess-juicer-badge.ok {
+    color: var(--ess-success);
+    border: 1px solid var(--ess-success);
+}
+
+.ess-juicer-badge.warn {
+    color: var(--ess-warning);
+    border: 1px solid var(--ess-warning);
+}
+
+.ess-juicer-badge.err {
+    color: var(--ess-error);
+    border: 1px solid var(--ess-error);
+}
+
+.ess-juicer-msml {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.ess-juicer-msml .ess-modal-input {
+    width: 110px;
+}
+
+.ess-juicer-modal-error {
+    margin-top: 10px;
+    padding: 8px 10px;
+    font-size: 11px;
+    color: var(--ess-error);
+    background: var(--ess-bg-panel);
+    border: 1px solid var(--ess-error);
+    border-radius: 4px;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
