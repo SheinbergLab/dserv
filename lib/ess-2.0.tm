@@ -3915,11 +3915,29 @@ namespace eval ess {
     # passes to joystick_init, so a rig points "the joystick" at its box
     # group without protocol edits. Persists across systems.
     #   joystick_bind box {* joystick}      ;# (leading {} placeholder optional)
+    #
+    # Called with NO arguments this REPORTS the current binding rather than
+    # setting one -- the same contract as ::ess::dial_bind.
+    #
+    # It used to fall through and store the empty args, so `joystick_bind`
+    # typed to ask "what is bound?" silently UNBOUND the joystick. That is
+    # a read destroying the thing it reads, and nothing announces it: the
+    # d-pad simply stops answering at the next joystick_init. It cost a
+    # live rig its routing while checking exactly that.
+    #
+    # To clear deliberately, pass an explicit empty binding:
+    #   joystick_bind {}
     variable joystick_binding {}
     proc joystick_bind {args} {
         variable joystick_binding
+        if { [llength $args] == 0 } { return $joystick_binding }
+        if { [llength $args] == 1 && [lindex $args 0] eq "" } {
+            set joystick_binding {}
+            return $joystick_binding
+        }
         if { [lindex $args 0] eq "box" } { set args [linsert $args 0 {}] }
         set joystick_binding $args
+        return $joystick_binding
     }
 
     # fan a bitmask out to any button channels bound with `joystick <bit>`
@@ -4287,9 +4305,40 @@ namespace eval ess {
     variable button_bindings
     array set button_bindings {}
 
-    proc button_bind {chan args} {
+    # `button_bind <chan>` with no source REPORTS that channel's binding
+    # ("" if unbound); `button_bind` with no channel at all reports every
+    # bound channel as a {chan binding} dict. Same contract as dial_bind and
+    # joystick_bind: reading must never write.
+    #
+    # Without the first guard, asking what channel 0 was bound to UNBOUND
+    # it -- and a status page rendering a list of channels would have
+    # cleared every one of them as it drew.
+    #
+    # To clear deliberately, pass an explicit empty binding:
+    #   button_bind 0 {}
+    proc button_bind {args} {
 	variable button_bindings
+	if { [llength $args] == 0 } {
+	    set d [dict create]
+	    foreach c [lsort -integer [array names button_bindings]] {
+		dict set d $c $button_bindings($c)
+	    }
+	    return $d
+	}
+	set chan [lindex $args 0]
+	set args [lrange $args 1 end]
+	if { [llength $args] == 0 } {
+	    if { [info exists button_bindings($chan)] } {
+		return $button_bindings($chan)
+	    }
+	    return ""
+	}
+	if { [llength $args] == 1 && [lindex $args 0] eq "" } {
+	    unset -nocomplain button_bindings($chan)
+	    return ""
+	}
 	set button_bindings($chan) $args
+	return $button_bindings($chan)
     }
 
     ########################################################################
