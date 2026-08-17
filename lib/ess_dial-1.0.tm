@@ -57,7 +57,6 @@ namespace eval ess {
     variable dial_arc_halfwidth  180.0   ;# degrees; 180 = whole circle
     variable dial_radius         0.0     ;# ring radius, touch source only
     variable dial_ring_tolerance 0.0     ;# band half-width around it
-    variable dial_cursor_dpoint  ess/cursor
 
     # --- per-response state ----------------------------------------------
     # dial_armed_time is the gate: 0 means disarmed, otherwise nothing that
@@ -199,22 +198,19 @@ namespace eval ess {
 
     # Where the dot is, in degrees: "x,y,show,in_band".
     #
-    # The mouse's ONLY publication. It does not drive ess/cursor: a free dot
-    # already shows where the report is being aimed, and a ring ghost
-    # tracking alongside it meant two things moving at once, the second of
-    # which is the swipe mode's own cursor object and reads as that older
-    # idiom. One moving thing, one instruction.
+    # The dial's ONE output, written by every source. A steering source
+    # places its cursor on the ring; a pointing source places it where the
+    # hand is. Either way a consumer draws this and nothing else.
     #
-    # Publishing once per sample also keeps the mouse off a hazard in the
+    # It replaced ess/cursor's "angle_rad,show". Carrying both meant every
+    # stim needed a branch to decide which was authoritative, and getting
+    # that precedence wrong hid the catcher on the exact frame the mouse
+    # wanted it drawn.
+    #
+    # One publication per sample also keeps the dial off a hazard in the
     # dserv->stim path: two datapoints published back-to-back with no work
-    # between them can lose the first, which a dual publish did on every
-    # sample at mouse rate.
-    #
-    # A SEPARATE datapoint rather than a wider ess/cursor, because the two
-    # are different objects: the cursor is a report indicator on the ring,
-    # the pointer is where a pointing device is. Widening "angle_rad,show"
-    # would also break a format three ported protocols and the ess_control
-    # panel already parse.
+    # between them could lose the first (a stim2 defect, since fixed), which
+    # a dual publish hit on every sample at mouse rate.
     #
     # in_band is the affordance, and it is not optional. A press that misses
     # is silently ignored (it must be -- see above), so without a visible
@@ -386,7 +382,6 @@ namespace eval ess {
         variable dial_arc_halfwidth
         variable dial_radius
         variable dial_ring_tolerance
-        variable dial_cursor_dpoint
         # Every namespace variable this proc assigns MUST be declared here.
         # Without the declaration `set` makes a LOCAL, the namespace value
         # keeps its default, and the option is silently ignored -- which is
@@ -431,7 +426,6 @@ namespace eval ess {
         set dial_stick_min_scale 1.0
         set dial_stick_invert   0
         set dial_stick_commit_dp "extio/*/state/group/stick_select"
-        set dial_cursor_dpoint  ess/cursor
         set dial_pointer_dpoint ess/dial/pointer
 
         foreach { k v } $args {
@@ -463,7 +457,12 @@ namespace eval ess {
                 -stick_min_scale { set dial_stick_min_scale $v }
                 -stick_invert   { set dial_stick_invert [expr {$v ? 1 : 0}] }
                 -stick_commit   { set dial_stick_commit_dp $v }
-                -cursor_dpoint  { set dial_cursor_dpoint $v }
+                # ess/cursor is no longer written by any source; the one
+                # output is ess/dial/pointer (-pointer_dpoint).
+                -cursor_dpoint  { error "::ess::dial_init: -cursor_dpoint is\
+                                         gone with ess/cursor; the dial\
+                                         publishes ess/dial/pointer, set with\
+                                         -pointer_dpoint" }
                 default { error "::ess::dial_init: unknown option '$k'" }
             }
         }
@@ -599,14 +598,14 @@ namespace eval ess {
     # arc and the cursor as ricochet, mp_pulsed and motionpatch each do now.
     #
     # ess/dial/geometry : "arc_center_deg,arc_halfwidth_deg,radius"
-    # ess/cursor        : "angle_rad,show"   (published live; see above)
-    # ess/dial/pointer  : "x_deg,y_deg,show,in_band"  (free pointer only)
+    # ess/dial/pointer  : "x_deg,y_deg,show,in_band"   (the live cursor)
     #
-    # A stim that draws the dot draws it from ess/dial/pointer and needs to
-    # know nothing about which transport is feeding it -- sources with no
-    # 2D position (stick, joystick, swipe) simply never show one. That is
-    # what keeps "who feeds the dial" a rig decision (dial_bind) rather
-    # than something a protocol has to encode.
+    # A stim draws ess/dial/pointer and needs to know nothing about which
+    # transport is feeding it: a swipe or a stick puts the cursor on the
+    # ring, a mouse or a d-pad puts it where the hand is, and the drawing
+    # is identical. That is what keeps "who answers this dial" a rig
+    # decision (dial_bind) rather than something a protocol encodes -- and
+    # it is why there is one datapoint here rather than two.
     # Which sources this dial is listening to.
     #
     # Published because the dial's input is otherwise invisible: with
@@ -748,14 +747,26 @@ namespace eval ess {
         # window with the dot at the origin. Only the mouse also has a
         # device cursor to recentre; the dpad's cursor is ours and simply
         # starts at zero.
+        variable dial_radius
+        variable dial_ring_tolerance
+        # Every source but the bare joystick now needs a RADIUS: the
+        # steering ones place their cursor on the ring, the pointing ones
+        # measure against it. Only the ones that accept BY the band need a
+        # tolerance as well.
+        set needs_ring [expr {[llength [lsearch -all -inline \
+            -regexp $dial_sources {^(swipe|stick|mouse|dpad|touch)$}]] > 0}]
+        set needs_band [expr {[llength [lsearch -all -inline \
+            -regexp $dial_sources {^(mouse|dpad|touch)$}]] > 0}]
+        if { $needs_ring && $dial_radius <= 0 } {
+            error "::ess::dial_arm: this dial needs a ring radius --\
+                   call dial_set_radius (the cursor is placed on it)"
+        }
+        if { $needs_band && $dial_ring_tolerance <= 0 } {
+            error "::ess::dial_arm: this dial accepts by the ring band and\
+                   needs a tolerance -- pass one to dial_set_radius, or\
+                   -ring_tolerance to dial_init"
+        }
         if { ("mouse" in $dial_sources) || ("dpad" in $dial_sources) } {
-            variable dial_radius
-            variable dial_ring_tolerance
-            if { $dial_radius <= 0 || $dial_ring_tolerance <= 0 } {
-                error "::ess::dial_arm: a pointer source needs a ring band --\
-                       call dial_set_radius with a tolerance, or pass\
-                       -ring_tolerance to dial_init"
-            }
             if { "mouse" in $dial_sources } {
                 catch { send input "inputRecenter mouse" }
             }
@@ -793,10 +804,9 @@ namespace eval ess {
             # the trigger; the cause is not understood and is worth finding,
             # because anything else that publishes in pairs is exposed to it.
             #
-            # The ghost clear is not merely deferred, it is UNNECESSARY: the
-            # mouse no longer drives ess/cursor at all, and a stim showing a
-            # pointer takes its catcher from the pointer, ignoring ess/cursor
-            # entirely. There is no stale ghost left for it to take down.
+            # The ghost clear is not merely deferred, it is UNNECESSARY:
+            # ess/cursor is not written by anything now, so there is no
+            # second indicator left to take down.
             dial_pointer_update 0 0 1 0
         }
     }
@@ -881,9 +891,34 @@ namespace eval ess {
     # loop — no rmtSend round trip, no extra redraws, no vsync stall on the
     # state loop. This format is a contract with the stim side; both ported
     # protocols already used it, and owning it here keeps it uniform.
+    # Place the report cursor ON THE RING at this angle, as a POINTER.
+    #
+    # One output contract for every source. The steering sources (swipe,
+    # stick) name an angle and nothing else, so their cursor is placed at
+    # the ring radius; the pointing sources (mouse, dpad) place theirs
+    # wherever the hand is. A consumer therefore draws ess/dial/pointer and
+    # never learns which transport is feeding it -- which is what makes
+    # "who answers this dial" a rig decision the stim cannot see.
+    #
+    # This replaced ess/cursor's "angle_rad,show". Two contracts meant every
+    # stim carried a branch, and getting the precedence wrong hid a catcher
+    # on the frame the mouse wanted it shown. in_band is 1 here because a
+    # steered angle is always clamped into the arc: if it is on screen at
+    # all, committing it is legal.
     proc dial_cursor_update { angle show } {
-        variable dial_cursor_dpoint
-        dservSet $dial_cursor_dpoint "$angle,$show"
+        variable dial_radius
+        variable dial_pointer_shown
+        variable dial_pointer_band
+        variable dial_pointer_x
+        variable dial_pointer_y
+        if { !$show } { dial_pointer_hide; return }
+        set px [expr {$dial_radius*cos($angle)}]
+        set py [expr {$dial_radius*sin($angle)}]
+        set dial_pointer_x     $px
+        set dial_pointer_y     $py
+        set dial_pointer_band  1
+        set dial_pointer_shown 1
+        dial_pointer_update $px $py 1 1
     }
 
     # ---------------------------------------------------------------------
@@ -1544,10 +1579,12 @@ namespace eval ess {
     # methods that run after responded has already returned.
     # Explicit cursor control, for protocols that want the committed angle
     # to stay on screen as confirmation (or to clear it immediately).
-    proc dial_show { angle } { dial_cursor_update $angle 1 }
+    proc dial_show { angle } { variable dial_cursor_shown
+                               set dial_cursor_shown 1
+                               dial_cursor_update $angle 1 }
     proc dial_hide {}        { variable dial_cursor_shown
                                set dial_cursor_shown 0
-                               dial_cursor_update 0 0 }
+                               dial_pointer_hide }
 
     proc dial_angle  {} { variable dial_report_angle;  return $dial_report_angle }
     proc dial_time   {} { variable dial_report_time;   return $dial_report_time }

@@ -716,9 +716,14 @@
       *
       * The dial is self-describing, so this widget is system-agnostic:
       * ess/dial/geometry carries "arc_center_deg,arc_halfwidth_deg,radius"
-      * and ess/cursor carries "angle_rad,show". Nothing here knows about
-      * ricochet or mp_pulsed -- any system that calls dial_init gets the
-      * panel, drawn to its own arc.
+      * and ess/dial/pointer carries "x_deg,y_deg,show,in_band". Nothing
+      * here knows about ricochet or mp_pulsed -- any system that calls
+      * dial_init gets the panel, drawn to its own arc.
+      *
+      * ONE datapoint carries the cursor whatever is driving it: a swipe or
+      * a stick places it on the ring, a mouse or a d-pad places it where
+      * the hand is. So this panel does not know, and does not need to know,
+      * which transport is answering.
       */
      class DialControls {
          constructor(dpManager) {
@@ -810,21 +815,21 @@
                  this.pointer = (show && !isNaN(x) && !isNaN(y))
                      ? { x, y, inBand: parseInt(p[3]) > 0 }
                      : null;
+                 // The angle is DERIVED, not published: every source now
+                 // reports one position, and what it means as a dial
+                 // reading is atan2 of it. A steering source puts that
+                 // point on the ring, so this reads exactly as the old
+                 // ess/cursor angle did.
+                 this.cursorAngle = this.pointer
+                     ? Math.atan2(this.pointer.y, this.pointer.x)
+                     : null;
+                 this.angleValue.textContent = this.cursorAngle === null
+                     ? '\u2014'
+                     : `${Math.round(((this.cursorAngle * 180 / Math.PI) + 360) % 360)}\u00b0`;
                  this.draw();
              });
 
-             // "angle_rad,show" -- real swipes, touches and simulated
-             // commits all land here, so the panel mirrors the real cursor
-             this.dpManager?.subscribe('ess/cursor', (data) => {
-                 const parts = String(data.value ?? '').split(',');
-                 const a = parseFloat(parts[0]);
-                 const show = parseInt(parts[1]) > 0;
-                 this.cursorAngle = (show && !isNaN(a)) ? a : null;
-                 this.angleValue.textContent = this.cursorAngle === null
-                     ? '\u2014'
-                     : `${Math.round(this.cursorAngle * 180 / Math.PI)}\u00b0`;
-                 this.draw();
-             });
+
          }
 
          draw() {
@@ -863,8 +868,10 @@
              }
              g.stroke();
 
-             // live cursor
-             if (this.cursorAngle !== null) {
+             // The reading, drawn on the ring: a spoke to the angle the
+             // pointer names. Shown only while that angle would be taken,
+             // so the panel never draws a report the dial would refuse.
+             if (this.cursorAngle !== null && this.pointer?.inBand) {
                  const a = toCanvas(this.cursorAngle);
                  const x = cx + R * Math.cos(a), y = cy + R * Math.sin(a);
                  g.strokeStyle = '#4ade80';
