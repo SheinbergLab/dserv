@@ -458,6 +458,14 @@ Bootstrap (server mode):
   curl -sSL https://yourserver/setup | bash -s -- --dry-run  # preview changes
   curl -sSL https://yourserver/setup | bash -s -- --workgroup mylab  # override workgroup
 
+  # Profile AND time role in one step -- quote it, an unquoted & backgrounds
+  # the command and silently drops the role.
+  curl -sSL "https://yourserver/setup?profile=incage&time_role=grandmaster+eth0" | bash
+
+  time_role takes "grandmaster IFACE", "client IFACE", "ntp-client SERVER",
+  or "none" to clear one; omitting it leaves any existing declaration alone.
+  It is the only channel that reaches a box the panel cannot open a socket to.
+
   Profiles: incage (all components), server (dserv+dlsh), minimal
   List profiles: curl -sSL https://yourserver/setup/profiles
 
@@ -1002,6 +1010,19 @@ func (a *Agent) handleLandingPage(w http.ResponseWriter, r *http.Request) {
             </div>
             <p class="note">Point the control box at it with <code>ESS_RMT_HOST</code>; its STIM chip then links straight here for updates.</p>
           </div>
+
+          <div class="card">
+            <div class="card-head">
+              <h3>Set up a cage box and its clock</h3>
+              <span class="platform">Linux · one step</span>
+            </div>
+            <p class="card-desc">The from-scratch path for an in-cage rig: everything above, plus a time role applied at the end and recorded in <code>box.conf</code>. Recording it is what makes the role stick — a re-run re-applies the declaration, and the box&rsquo;s panel converges any drift back to it.</p>
+            <div class="cmd">
+              <code>curl -sSL "__BASE__/setup?profile=incage&amp;time_role=grandmaster+eth0" | bash</code>
+              <button class="copy" data-cmd="curl -sSL &quot;__BASE__/setup?profile=incage&amp;time_role=grandmaster+eth0&quot; | bash">Copy</button>
+            </div>
+            <p class="note">Keep the quotes — an unquoted <code>&amp;</code> would background the command and drop the role. Use <code>client+eth0</code> on boxes that follow the site clock, or <code>ntp-client+SERVER</code> where the NIC can&rsquo;t hardware-timestamp; exactly one grandmaster per segment. This is also the only way to give a role to a box you can&rsquo;t reach: the panel needs a socket <em>to</em> the box, while this needs only the box&rsquo;s own outbound fetch.</p>
+          </div>
         </div>
 
         <h2>Lab time</h2>
@@ -1016,7 +1037,7 @@ func (a *Agent) handleLandingPage(w http.ResponseWriter, r *http.Request) {
               <code>curl -sSL __BASE__/ptp/setup | sudo bash</code>
               <button class="copy" data-cmd="curl -sSL __BASE__/ptp/setup | sudo bash">Copy</button>
             </div>
-            <p class="note">Then <code>dserv-ptp-setup candidates</code>, and one of <code>grandmaster IFACE</code> &middot; <code>client IFACE</code> &middot; <code>ntp-client SERVER</code> &mdash; or append the role to the curl: <code>| sudo bash -s -- client eth0</code>.</p>
+            <p class="note">Then <code>dserv-ptp-setup candidates</code>, and one of <code>grandmaster IFACE</code> &middot; <code>client IFACE</code> &middot; <code>ntp-client SERVER</code> &mdash; or append the role to the curl: <code>| sudo bash -s -- client eth0</code>. Whichever way you set it, the role is recorded in <code>box.conf</code>. Provisioning a box from scratch? Declare it in the same step instead &mdash; see &ldquo;Set up a cage box and its clock&rdquo; above.</p>
           </div>
         </div>
 
