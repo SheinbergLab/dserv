@@ -47,12 +47,6 @@ triggerAdd test/done 1 exit_when_done
 
 dservSetPrivate test/secret shh2
 dservSet test/pub world
-
-# settle before exiting: an instant exit races the detached websocket
-# thread's SSL context init against OpenSSL's atexit teardown (observed
-# segfault in SSL_CTX_new_ex vs __cxa_finalize) -- a pre-existing
-# startup/shutdown race, not part of what this test checks
-after 500
 dservSet test/done 1
 
 puts "End private test."

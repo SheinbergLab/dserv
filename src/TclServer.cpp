@@ -72,6 +72,37 @@ TclServer::TclServer(int argc, char **argv, Dataserver *dserv,
 {
 }
 
+/*
+ * Websocket startup latch.
+ *
+ *  A websocket server thread spends its first moments inside
+ * uWS::SSLApp construction -- SSL_CTX_new, cipher loading, engine
+ * lookups against OpenSSL's process-global locks.  Those locks are
+ * freed by OpenSSL's atexit cleanup, so a process that exits while a
+ * websocket thread is still starting (a --tscript that finishes in
+ * ~150ms) segfaults in pthread_rwlock_rdlock on freed memory.  The
+ * threads are deliberately detached (a blocked app.run() cannot be
+ * joined), so exit paths instead wait -- bounded -- for every
+ * websocket thread to get past that window: Tcl-level exit via the
+ * exit proc in dserv.cpp, orderly shutdown via graceful_shutdown().
+ */
+static std::atomic<int> ws_threads_starting{0};
+
+void TclServer::mark_websocket_started(void)
+{
+  if (!ws_started.exchange(true))
+    ws_threads_starting.fetch_sub(1);
+}
+
+void TclServer::wait_websocket_startups(int timeout_ms)
+{
+  auto deadline = std::chrono::steady_clock::now() +
+    std::chrono::milliseconds(timeout_ms);
+  while (ws_threads_starting.load() > 0 &&
+	 std::chrono::steady_clock::now() < deadline)
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+}
+
 // Add new constructor with WebSocket port
 TclServer::TclServer(int argc, char **argv, Dataserver *dserv,
                      std::string name, int newline_port, int message_port, int websocket_port)
@@ -117,7 +148,10 @@ TclServer::TclServer(int argc, char **argv,
   // create a WebSocket listener if port is not -1
   if (websocket_port() >= 0) {
     std::cout << "Starting WebSocket server on port " << websocket_port() << std::endl;
-    
+
+    // counted before the thread exists so an exit can never miss it
+    ws_threads_starting.fetch_add(1);
+
     // Start the WebSocket server thread
     websocket_thread = std::thread(&TclServer::start_websocket_server, this);
   }
@@ -496,6 +530,13 @@ static const char* get_download_content_type(const std::string& path) {
 
 void TclServer::start_websocket_server(void)
 {
+  /* however this function is left (early return, exception, run()
+     returning), never leave an exit path waiting on our startup */
+  struct StartupLatch {
+    TclServer *ts;
+    ~StartupLatch() { ts->mark_websocket_started(); }
+  } startup_latch{this};
+
   ws_loop = uWS::Loop::get();
   
   // Check for SSL certificates
@@ -1561,7 +1602,13 @@ set www_path /usr/local/dserv/www</code>
                   << " -- exiting so systemd can relaunch clean" << std::endl;
         _exit(1);
       }
-    }).run();
+    });
+
+    /* SSL context, routes and listen socket all exist: past the
+       OpenSSL startup window that process exit must not race */
+    this->mark_websocket_started();
+
+    app.run();
   }; // End of setup_routes lambda
   
   // Create appropriate app type and call setup_routes

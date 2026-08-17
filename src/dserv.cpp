@@ -93,8 +93,24 @@ void signalHandler(int signum) {
   }
 }
 
+/*
+ * Process-exit hook installed via Tcl_SetExitProc: Tcl-level "exit"
+ * (the trigger interp, the main tclserver) ends the process through
+ * Tcl_Exit, whose default lands straight in exit() -- and exit-time
+ * OpenSSL cleanup must not race a websocket thread that is still
+ * creating its SSL context (see the latch in TclServer.cpp).
+ */
+static void dserv_exit_proc(void *clientData)
+{
+  TclServer::wait_websocket_startups(5000);
+  exit((int)(intptr_t) clientData);
+}
+
 static void graceful_shutdown(void) {
   std::cout << "\nShutting down gracefully..." << std::endl;
+
+  /* same latch as dserv_exit_proc: only bites on very fast shutdowns */
+  TclServer::wait_websocket_startups(5000);
 
   /*
    * Shut subprocesses down from C++, NOT via eval("exit").
@@ -301,6 +317,9 @@ int main(int argc, char *argv[])
      of which starts a thread that immediately builds an interpreter. See
      TclInterpInit.h for why Tcl cannot be left to do this itself. */
   tcl_interp_global_init(argv[0]);
+
+  /* route every Tcl-level exit through the websocket startup latch */
+  Tcl_SetExitProc(dserv_exit_proc);
 
   // Create core dserv components
   dserver = new Dataserver(argc, argv);

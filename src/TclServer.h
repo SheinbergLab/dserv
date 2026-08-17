@@ -237,6 +237,14 @@ public:
   
   std::atomic<bool> m_bDone;	// flag to close process loop
 
+  /* websocket startup latch: set once the websocket thread is past its
+     OpenSSL/uWS setup window (or has exited).  Exit paths wait on the
+     aggregate count via wait_websocket_startups() -- exit-time OpenSSL
+     cleanup must not race a thread still inside SSL_CTX_new. */
+  std::atomic<bool> ws_started{false};
+  void mark_websocket_started(void);
+  static void wait_websocket_startups(int timeout_ms);
+
   std::string name;		// name of this TclServer
   
   // identify connection to send process
