@@ -731,6 +731,8 @@
              this.arcCenter = 0;      // degrees
              this.arcHalf = 180;      // degrees; 180 = whole circle
              this.cursorAngle = null; // radians, null = not shown
+             this.radius = 0;         // degrees; 0 = no ring declared yet
+             this.pointer = null;     // {x,y,inBand} in degrees, null = hidden
              this.bindCanvas();
              this.setupSubscriptions();
              this.draw();
@@ -790,6 +792,24 @@
                  if (v.length < 2 || v.some(isNaN)) return;
                  this.arcCenter = v[0];
                  this.arcHalf = v[1];
+                 // The radius is what makes the free pointer drawable: the
+                 // dot arrives in degrees, and the ring is the only thing
+                 // that says how many degrees the canvas is wide.
+                 this.radius = v.length > 2 ? v[2] : 0;
+                 this.draw();
+             });
+
+             // "x,y,show,in_band" -- the free pointer (mouse source). The
+             // panel draws it for the same reason it draws everything else
+             // here: so the operator sees what the subject sees, including
+             // whether a click would currently be accepted.
+             this.dpManager?.subscribe('ess/dial/pointer', (data) => {
+                 const p = String(data.value ?? '').split(',');
+                 const x = parseFloat(p[0]), y = parseFloat(p[1]);
+                 const show = parseInt(p[2]) > 0;
+                 this.pointer = (show && !isNaN(x) && !isNaN(y))
+                     ? { x, y, inBand: parseInt(p[3]) > 0 }
+                     : null;
                  this.draw();
              });
 
@@ -826,16 +846,22 @@
              g.arc(cx, cy, R, 0, 2 * Math.PI);
              g.stroke();
 
-             // reportable arc, bright -- shows the subject's real choices
+             // reportable arc, bright -- shows the subject's real choices.
+             // Brightens further while the pointer is in band: that is the
+             // "a click here would be taken" affordance, and without it a
+             // rejected press is invisible.
              const half = this.arcHalf * Math.PI / 180;
+             const armed = this.pointer?.inBand === true;
+             const ctr = this.arcCenter * Math.PI / 180;
+             g.strokeStyle = armed ? '#4ade80' : '#60a5fa';
+             g.lineWidth = armed ? 5 : 3;
+             g.beginPath();
              if (half < Math.PI - 1e-6) {
-                 const ctr = this.arcCenter * Math.PI / 180;
-                 g.strokeStyle = '#60a5fa';
-                 g.lineWidth = 3;
-                 g.beginPath();
                  g.arc(cx, cy, R, toCanvas(ctr + half), toCanvas(ctr - half));
-                 g.stroke();
+             } else {
+                 g.arc(cx, cy, R, 0, 2 * Math.PI);
              }
+             g.stroke();
 
              // live cursor
              if (this.cursorAngle !== null) {
@@ -851,6 +877,23 @@
                  g.beginPath();
                  g.arc(x, y, 5, 0, 2 * Math.PI);
                  g.fill();
+             }
+
+             // free pointer. Scaled by the declared ring: the dot arrives in
+             // degrees and R is where the ring is, so R/radius is the only
+             // consistent mapping -- and without a radius there is no scale,
+             // so the dot is not drawn rather than drawn somewhere wrong.
+             if (this.pointer && this.radius > 0) {
+                 const s = R / this.radius;
+                 const px = cx + this.pointer.x * s;
+                 const py = cy - this.pointer.y * s;   // canvas y grows down
+                 g.fillStyle = this.pointer.inBand ? '#4ade80' : '#e5e7eb';
+                 g.beginPath();
+                 g.arc(px, py, 4, 0, 2 * Math.PI);
+                 g.fill();
+                 g.strokeStyle = '#111418';
+                 g.lineWidth = 1;
+                 g.stroke();
              }
          }
      }
