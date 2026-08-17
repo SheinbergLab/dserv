@@ -291,6 +291,22 @@ namespace eval ess {
     # comparison rather than a float epsilon.
     variable dial_dpad_sector    -1
     variable dial_dpad_want      -1
+
+    # Which of the eight directions are LIVE this trial. Empty = all of
+    # them, which is the default and the whole-circle case.
+    #
+    # This is the discrete twin of the arc: the arc says which directions
+    # are reportable when the report is continuous, this says it when the
+    # device has eight. A reduced target set is rarely contiguous --
+    # {0 2 4 6} cardinal, {1 3 5 7} oblique -- so an arc cannot express it,
+    # which is why the arc stays the full circle and this carries the
+    # restriction instead.
+    #
+    # A direction that is not live behaves exactly as CENTRED: the cursor
+    # does not move. It is not rejected at the end of a reach, it simply
+    # never sets out, so an animal on the reduced rungs of the ladder gets
+    # no travel at all for a direction that was never on offer.
+    variable dial_dpad_sectors   {}
     # Walking back to the centre after a rejected reach. See dial_rearm:
     # the cursor is never teleported, so the animal's own release is what
     # resets it.
@@ -1207,6 +1223,26 @@ namespace eval ess {
         return $r
     }
 
+    # ::ess::dial_dpad_sectors ?list?
+    #
+    # Per-trial, like dial_set_arc: the protocol names which directions are
+    # on offer. Called with no argument it REPORTS the current list -- the
+    # same contract as dial_bind, and for the same reason: a read that
+    # writes is a trap for anything that displays state.
+    proc dial_dpad_sectors { args } {
+        variable dial_dpad_sectors
+        if { [llength $args] == 0 } { return $dial_dpad_sectors }
+        set dial_dpad_sectors [lindex $args 0]
+        return $dial_dpad_sectors
+    }
+
+    # Is this direction on offer this trial?
+    proc dial_dpad_live { sector } {
+        variable dial_dpad_sectors
+        if { ![llength $dial_dpad_sectors] } { return 1 }   ;# all eight
+        return [expr {[lsearch -exact -integer $dial_dpad_sectors $sector] >= 0}]
+    }
+
     proc dial_dpad_stop {} {
         variable dial_dpad_timer
         if { $dial_dpad_timer ne "" } {
@@ -1255,11 +1291,27 @@ namespace eval ess {
             return
         }
 
+        # Homing is judged on the RAW deflection, before the liveness gate:
+        # while coming home, holding anything at all achieves nothing, and
+        # only letting the stick centre walks the cursor back.
+        if { $dial_dpad_homing } {
+            set dial_dpad_deflected 1
+            dial_dpad_stop
+            return
+        }
+
+        # A direction that is not on offer this trial is treated exactly as
+        # centred: the cursor HOLDS where it is. Not a retraction -- an
+        # off-axis push is "not pushing", and should cost nothing rather
+        # than undo travel already earned. Returning to a live direction
+        # resumes from here, since neither the spoke nor the request moved.
+        if { ![dial_dpad_live $data] } {
+            set dial_dpad_deflected 0
+            dial_dpad_stop
+            return
+        }
+
         set dial_dpad_deflected 1
-        # While homing, holding a direction achieves nothing: the only way
-        # out is to let the stick centre and let the cursor come home. That
-        # is the "return" being required rather than performed for them.
-        if { $dial_dpad_homing } { dial_dpad_stop; return }
 
         # Record what the stick is ASKING for. The cursor does not move here
         # -- dial_dpad_tick decides how to get there, and the answer is never
