@@ -120,9 +120,42 @@ deps_present() {
     for _b in /usr/sbin/ptp4l /usr/sbin/phc2sys; do
         [ -x "$_b" ] || _missing="$_missing $_b"
     done
+
+    # Install them, do not refuse over them. The registry's /ptp/setup installer
+    # has always apt-got linuxptp before handing over, so the curl path worked
+    # -- while the PANEL, which runs this script from the dserv .deb, and the
+    # .deb deliberately does not depend on linuxptp, died right here with
+    # "missing: /usr/sbin/ptp4l". Same tool, same request, two different
+    # answers depending on how you reached it.
+    #
+    # Only the grandmaster and client branches come through here; both are root
+    # and are already changing what disciplines this host's clock. Installing
+    # the binaries their units exec is the smaller half of what was just asked
+    # for. status and candidates never call this, so a read-only look never
+    # touches apt.
+    if [ -n "$_missing" ] && have apt-get; then
+        echo "linuxptp is not installed; installing it and ethtool."
+        DEBIAN_FRONTEND=noninteractive apt-get update -qq >/dev/null 2>&1 || true
+        DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            -o DPkg::Lock::Timeout=300 linuxptp ethtool >/dev/null 2>&1 || true
+        _missing=
+        for _b in /usr/sbin/ptp4l /usr/sbin/phc2sys; do
+            [ -x "$_b" ] || _missing="$_missing $_b"
+        done
+        # These were resolved by absolute path at startup, when the package was
+        # not there yet -- so they are all still empty, and every later use
+        # would silently degrade: no ethtool means the timestamping clock is
+        # neither checked nor selected, and no pmc means enable_pair cannot see
+        # a FAULTY port, which is the check that catches a wrong PHC.
+        ETHTOOL=$(find_tool ethtool || true)
+        PMC=$(find_tool pmc || true)
+        PHC_CTL=$(find_tool phc_ctl || true)
+    fi
+
     [ -z "$_missing" ] || die \
 "missing:$_missing
-   These are the binaries the units exec. Install them:  apt install linuxptp ethtool"
+   These are the binaries the units exec, and installing them here did not
+   produce them. Install by hand:  apt install linuxptp ethtool"
 
     # ethtool is not needed to RUN ptp4l, so it is fatal only where its absence
     # can silently produce wrong time: a host with more than one PHC, where the
