@@ -66,3 +66,28 @@ Log contains 101 vals \\(expecting 101\\)
 vals 0 is 3 \\(expecting 3\\)
 Checked 101 vals."
 )
+
+#
+# ESS unit tests -- pure Tcl, dserv STUBBED.
+#
+# Unlike the tests above these need no server, no rig and no hardware: they
+# source the .tm modules directly and drive them with fake datapoints and a
+# fake clock. That is what makes the dial's geometry and its state machine
+# testable at all, and both of the bugs they caught were invisible on a rig
+# (a guard that returned before the cursor set out; an undeclared `variable`
+# that Tcl silently makes a local).
+#
+# Guarded on tclsh being present so a build host without it still configures.
+#
+find_program(TCLSH_EXECUTABLE NAMES tclsh tclsh9.0 tclsh8.6)
+if(TCLSH_EXECUTABLE)
+  foreach(t ess_dial ess_dial_dpad ess_dial_sectors ess_binds)
+    add_test(
+        NAME ${t}
+        COMMAND ${TCLSH_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tests/test_${t}.tcl"
+    )
+    set_property(TEST ${t} PROPERTY PASS_REGULAR_EXPRESSION "all checks passed")
+  endforeach()
+else()
+  message(STATUS "tclsh not found -- skipping ESS unit tests")
+endif()
