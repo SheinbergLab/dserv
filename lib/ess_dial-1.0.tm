@@ -1274,6 +1274,41 @@ namespace eval ess {
         return [expr {[lsearch -exact -integer $dial_dpad_sectors $sector] >= 0}]
     }
 
+    # ::ess::dial_dpad_tune ?-rate X? ?-accel Y? ?-rate_max Z?
+    #
+    # Retune the travel WITHOUT re-running dial_init, which reads these once
+    # at protocol load. That is what a live param needs to reach: changing
+    # cursor_accel from the params panel updated the variable while the
+    # cursor kept walking at the old speed, with nothing to say why.
+    #
+    #   $s add_live_param cursor_accel 0.0 float {::ess::dial_dpad_tune -accel}
+    #
+    # Takes effect on the NEXT tick, so a hold already in flight keeps the
+    # rate it started with -- with commit "ring" the travel time is part of
+    # that trial's reaction time, and changing it underneath would corrupt
+    # the measurement rather than merely surprise the subject.
+    #
+    # Called with no arguments it REPORTS, per this file's convention.
+    proc dial_dpad_tune { args } {
+        variable dial_dpad_rate
+        variable dial_dpad_accel
+        variable dial_dpad_rate_max
+        if { [llength $args] == 0 } {
+            return [list -rate $dial_dpad_rate -accel $dial_dpad_accel \
+                        -rate_max $dial_dpad_rate_max]
+        }
+        foreach { k v } $args {
+            switch -- $k {
+                -rate     { set dial_dpad_rate $v }
+                -accel    { set dial_dpad_accel $v }
+                -rate_max { set dial_dpad_rate_max $v }
+                default   { error "::ess::dial_dpad_tune: unknown option '$k'" }
+            }
+        }
+        return [list -rate $dial_dpad_rate -accel $dial_dpad_accel \
+                    -rate_max $dial_dpad_rate_max]
+    }
+
     proc dial_dpad_stop {} {
         variable dial_dpad_timer
         if { $dial_dpad_timer ne "" } {

@@ -725,11 +725,22 @@ oo::class create System {
             set type   [lindex $entry 1]
             set ptype  [lindex $entry 2]
             set live   [expr {[llength $entry] >= 4 ? [lindex $entry 3] : 0}]
-            dict set _params $var [list $val $type $ptype $live]
+            # index 4 is the live APPLY spec. Rebuilding the entry without
+            # it would drop the hook the first time the param changed --
+            # which is the one moment it exists to be used.
+            set apply  [expr {[llength $entry] >= 5 ? [lindex $entry 4] : ""}]
+            dict set _params $var [list $val $type $ptype $live $apply]
             my add_variable $var $val
             return $oldval
         }
         return
+    }
+
+    # the live APPLY spec for a param, or "" if it has none
+    method live_param_apply { pname } {
+        if { ![dict exists $_params $pname] } { return "" }
+        set entry [dict get $_params $pname]
+        return [expr {[llength $entry] >= 5 ? [lindex $entry 4] : ""}]
     }
 
     # is the named param marked as live (twiddleable mid-recording)?
@@ -762,9 +773,17 @@ oo::class create System {
 
     # Register a runtime "live" param: designed to be twiddled mid-recording.
     # Always classified as VARIABLE; live=1 marks it for set_live_param dispatch.
-    method add_live_param { pname val ptype } {
+    # apply is a command PREFIX, invoked as {*}$apply <newval> at global
+    # scope when the param changes. Without one, "live" only means "storing
+    # this mid-recording is safe and logged" -- the value lands in the
+    # variable and nothing tells whoever consumed it at init. That is fine
+    # for a param read fresh each trial and useless for one pushed into a
+    # subsystem, which is the case that made this necessary:
+    #
+    #   $s add_live_param cursor_accel 0.0 float {::ess::dial_dpad_tune -accel}
+    method add_live_param { pname val ptype {apply {}} } {
         set t [dict get $::ess::param_types VARIABLE]
-        dict set _params $pname [list $val $t $ptype 1]
+        dict set _params $pname [list $val $t $ptype 1 $apply]
         dict set _default_param_vals $pname $val
         my add_variable $pname $val
     }
@@ -2431,17 +2450,69 @@ namespace eval ess {
 
     # Twiddle a live param. Errors if $param is not registered as live.
     # Allowed mid-recording (the whole point); change is logged via PARAM LIVE.
+    # Re-entrancy state for live-param APPLY handlers. A handler is allowed
+    # to set OTHER params -- that is the useful, powerful case, and a rig
+    # that derives one setting from another wants it. What it must not do is
+    # spin: directly or through a cycle of params.
+    #
+    # Two guards, because the failure modes differ:
+    #
+    #   self-recursion (a handler setting its OWN param) cannot converge and
+    #   is almost always a mistake, so the inner apply is SKIPPED. The value
+    #   is still stored and logged -- only the redundant re-apply is dropped.
+    #
+    #   a cycle across several params CAN be legitimate for a step or two,
+    #   so it is bounded rather than banned, and exceeding the bound is a
+    #   loud error. Silently unwinding would leave the params half-applied
+    #   with nothing to say so, and a real loop would wedge the ess interp
+    #   and with it the serial queue every subprocess command rides on.
+    variable live_apply_inflight
+    array set live_apply_inflight {}
+    variable live_apply_depth 0
+    variable live_apply_max_depth 8
+
     proc set_live_param {param val} {
         variable current
+        variable live_apply_inflight
+        variable live_apply_depth
+        variable live_apply_max_depth
+
         if { ![$current(state_system) is_live_param $param] } {
             error "param '$param' is not a live param"
         }
+        # store and LOG first, so the event stream records what was asked
+        # for even if applying it fails
         $current(state_system) set_param $param $val
         ::ess::evt_put PARAM NAME [now] $param
         ::ess::evt_put PARAM VAL  [now] $val
         ::ess::evt_put PARAM LIVE [now] $param
 
         dservSet ess/params [get_param_vals]
+
+        set apply [$current(state_system) live_param_apply $param]
+        if { $apply eq "" } return
+        if { [info exists live_apply_inflight($param)] } return
+
+        if { $live_apply_depth >= $live_apply_max_depth } {
+            error "::ess::set_live_param: apply chain exceeded\
+                   $live_apply_max_depth levels at '$param' -- a live-param\
+                   handler is setting params in a cycle"
+        }
+
+        set live_apply_inflight($param) 1
+        incr live_apply_depth
+        set code [catch { uplevel #0 [list {*}$apply $val] } msg opts]
+        unset -nocomplain live_apply_inflight($param)
+        incr live_apply_depth -1
+
+        if { $code } {
+            # the value IS stored and logged; say plainly that it did not
+            # take effect rather than letting the two silently disagree
+            puts stderr "ess: live param '$param' set to '$val' but its\
+                         apply handler failed: $msg"
+            return -options $opts $msg
+        }
+        return
     }
 
     proc set_params {args} {
