@@ -256,6 +256,14 @@
                     <div class="ess-panel-header">
                         <span class="ess-panel-title">Stimulus Display</span>
                         <span class="ess-panel-status" id="stim-stats"></span>
+                        <div class="ess-volume-control ess-zoom-control">
+                            <button id="ess-btn-zoom" class="ess-mini-btn ess-volume-btn" title="Display zoom">🔍</button>
+                            <div class="ess-volume-popup" id="ess-zoom-popup" hidden>
+                                <span class="ess-volume-pct" id="ess-zoom-pct">auto</span>
+                                <input type="range" id="ess-viz-zoom" class="ess-master-gain-vert" min="5" max="60" step="1" value="10" title="Display zoom">
+                                <button id="ess-btn-zoom-reset" class="ess-mini-btn" title="Back to the protocol's own choice">auto</button>
+                            </div>
+                        </div>
                     </div>
                     <div class="ess-panel-body ess-canvas-container">
                         <canvas id="stim-canvas" class="ess-canvas" width="512" height="320"></canvas>

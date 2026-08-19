@@ -531,6 +531,11 @@ class ESSControl {
             volumeBtn: this.container.querySelector('#ess-btn-volume'),
             volumePopup: this.container.querySelector('#ess-volume-popup'),
             volumePct: this.container.querySelector('#ess-volume-pct'),
+            zoomBtn: this.container.querySelector('#ess-btn-zoom'),
+            zoomPopup: this.container.querySelector('#ess-zoom-popup'),
+            zoomPct: this.container.querySelector('#ess-zoom-pct'),
+            zoomSlider: this.container.querySelector('#ess-viz-zoom'),
+            zoomReset: this.container.querySelector('#ess-btn-zoom-reset'),
             masterGain: this.container.querySelector('#ess-master-gain'),
             inObsIndicator: this.container.querySelector('#ess-in-obs-indicator'),
             obsDisplay: this.container.querySelector('#ess-obs-display'),
@@ -696,6 +701,25 @@ class ESSControl {
         });
         this.elements.masterGain.addEventListener('change', (e) => this.setMasterGain(e.target.value));
         this.elements.volumePopup.addEventListener('click', (e) => e.stopPropagation());
+
+        // Display zoom: same shape as the volume control, but it drives a
+        // datapoint (ess/viz/zoom) rather than a command, because that is
+        // what ::viz::setup_window already reads.
+        this.elements.zoomBtn?.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.toggleZoomPopup();
+        });
+        // Live label while dragging; commit only on release, so a drag does
+        // not fire a redraw per pixel at the viz subprocess.
+        this.elements.zoomSlider?.addEventListener('input', (e) => {
+            this.elements.zoomPct.textContent = `${(e.target.value / 10).toFixed(1)}\u00d7`;
+        });
+        this.elements.zoomSlider?.addEventListener('change', (e) => this.setVizZoom(e.target.value / 10));
+        this.elements.zoomReset?.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.clearVizZoom();
+        });
+        this.elements.zoomPopup?.addEventListener('click', (e) => e.stopPropagation());
         
         // File buttons
         this.elements.btnFileOpen.addEventListener('click', () => {
@@ -2299,6 +2323,49 @@ updateConfigRunButtons() {
         const level = Math.max(0, Math.min(100, parseInt(percent, 10) || 0)) / 100;
         this.sendEssCommandAsync(`ess::sound_set_master_gain ${level.toFixed(3)}`)
             .catch((e) => this.emit('log', { message: `Master gain failed: ${e.message}`, level: 'error' }));
+    }
+
+    toggleZoomPopup() {
+        const pop = this.elements.zoomPopup;
+        if (!pop) return;
+        if (pop.hidden) {
+            // Sync to whatever is actually in force before showing, so the
+            // slider never claims a value the display is not using.
+            this.sendEssCommandAsync(
+                'if {[dservExists ess/viz/zoom]} {dservGet ess/viz/zoom} else {}')
+                .then((v) => {
+                    const z = parseFloat(v);
+                    if (isFinite(z) && z > 0) {
+                        this.elements.zoomSlider.value = Math.round(z * 10);
+                        this.elements.zoomPct.textContent = `${z.toFixed(1)}\u00d7`;
+                    } else {
+                        this.elements.zoomPct.textContent = 'auto';
+                    }
+                })
+                .catch(() => {});
+            pop.hidden = false;
+        } else {
+            pop.hidden = true;
+        }
+    }
+
+    // ess/viz/zoom is read by ::viz::setup_window and overrides whatever the
+    // protocol asked for, so one control works across every protocol. The viz
+    // subprocess redraws on change if its config defines a `redraw`.
+    setVizZoom(zoom) {
+        const z = Math.max(0.1, Math.min(10, parseFloat(zoom) || 1));
+        this.elements.zoomPct.textContent = `${z.toFixed(1)}\u00d7`;
+        this.sendEssCommandAsync(`dservSet ess/viz/zoom ${z.toFixed(2)}`)
+            .catch((e) => this.emit('log', { message: `Viz zoom failed: ${e.message}`, level: 'error' }));
+    }
+
+    // Hand the choice back to the protocol. There is no "unset a datapoint",
+    // so 0 is the agreed sentinel: setup_window only accepts a positive
+    // number, so anything else falls through to the protocol's own zoom.
+    clearVizZoom() {
+        this.elements.zoomPct.textContent = 'auto';
+        this.sendEssCommandAsync('dservSet ess/viz/zoom 0')
+            .catch((e) => this.emit('log', { message: `Viz zoom reset failed: ${e.message}`, level: 'error' }));
     }
 
     // Mute task/pacing sounds only (stimulus channels unaffected).

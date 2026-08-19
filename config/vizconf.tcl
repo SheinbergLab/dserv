@@ -128,6 +128,15 @@ namespace eval viz {
 	dpointSetScript ess/evt_type_ids [namespace current]::on_evt_type_ids
 	dpointSetScript ess/evt_subtype_ids [namespace current]::on_evt_subtype_ids
 
+	# Operator display controls. setup_window reads these, but a viz only
+	# calls setup_window while DRAWING -- so between trials, or with the
+	# system stopped, changing the zoom would appear to do nothing until
+	# the next event. Watch them and ask the config to redraw.
+	dservAddExactMatch ess/viz/zoom
+	dservAddExactMatch ess/viz/fontsize
+	dpointSetScript ess/viz/zoom     [namespace current]::on_display_control
+	dpointSetScript ess/viz/fontsize [namespace current]::on_display_control
+
 	# Subscribe to events
 	dservAddExactMatch eventlog/events
 
@@ -226,6 +235,31 @@ namespace eval viz {
         }
     }
     
+    # ess/viz/zoom or ess/viz/fontsize changed.
+    #
+    # CONVENTION: a viz config may define `redraw` -- no arguments, re-issues
+    # the frame it last drew. If it does, an operator zoom is immediate. If
+    # it does not, nothing breaks: the new zoom simply takes effect at the
+    # next draw. So this is opt-in per protocol rather than a requirement,
+    # and an unconverted config is never worse off than before.
+    #
+    # A redraw MUST NOT have side effects beyond drawing -- it can fire at
+    # any moment, including mid-trial, and the operator changing the zoom is
+    # not a trial event.
+    proc on_display_control {dpoint data} {
+        variable current_system
+        if { $current_system eq "" } { return }
+        set p ::viz::${current_system}::redraw
+        if { ![llength [info procs $p]] } {
+            log info "$dpoint changed, but ::viz::$current_system defines no\
+                      redraw -- it will apply at the next draw"
+            return
+        }
+        if { [catch { $p } err] } {
+            log error "redraw after $dpoint change failed: $err"
+        }
+    }
+
     proc on_stimdg_received {dpoint data} {
         # Reconstruct stimdg from data
         if {[catch {
