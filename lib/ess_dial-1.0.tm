@@ -1340,9 +1340,27 @@ namespace eval ess {
 
         variable dial_dpad_deflected
         variable dial_dpad_homing
+        # declared HERE, not beside its first use further down: the centred
+        # branch below returns long before that point, and a `set` without
+        # this line makes a LOCAL, leaving the namespace value untouched.
+        # That is the third time this file has been bitten by it.
+        variable dial_dpad_want
 
         if { $data < 0 } {
             set dial_dpad_deflected 0
+            # Clear the REQUEST too, not just the deflection flag.
+            #
+            # Without this, "am I meant to be walking?" lived only in the
+            # timer, so correctness rested on dservAfterCancel winning every
+            # race. A tick already queued when the release landed would find
+            # want still naming the old spoke, extend, re-arm, and keep going
+            # -- and with acceleration on it did not creep, it ran to the ring
+            # and COMMITTED a response nobody made.
+            #
+            # With want cleared, any stray tick hits the centred guard and
+            # stops itself. The state says what should happen; the timer is
+            # only how it happens.
+            set dial_dpad_want -1
             # Centred. Normally that HOLDS the cursor where it got to; while
             # homing it is the opposite -- releasing is the thing that walks
             # it back, so the timer keeps running.
@@ -1398,7 +1416,6 @@ namespace eval ess {
         # express, because the cursor is only ever ON a spoke. A free 2D
         # velocity would curve the path and land the report between sectors,
         # a precision four switches do not have.
-        variable dial_dpad_want
         set dial_dpad_want $data
 
         if { $dial_dpad_timer eq "" } {

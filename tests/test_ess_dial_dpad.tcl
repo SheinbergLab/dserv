@@ -258,13 +258,25 @@ hold_ms 200
 check "armed while walking" [expr {$::TIMER ne ""}] 1
 set r_mid [ptr_r]
 
-# The dir handler stops the timer on release, so a tick running while
-# centred is an ordering we do not expect. It must HOLD, not keep
-# extending a released stick -- and it must not leave a timer running.
-set ::ess::dial_dpad_want -1
-set s $::TIMER; set ::TIMER ""; advance_ms 16; eval $s
-approx "centred tick holds position" [ptr_r] $r_mid 0.001
-check  "and stops the timer"        $::TIMER ""
+# A REAL release, not a hand-set variable -- setting dial_dpad_want by hand
+# is what hid this bug the first time. Releasing must clear the request, so
+# that a tick which runs anyway (a queued timer that outran the cancel)
+# stops itself instead of walking on.
+release
+check "release clears the request" $::ess::dial_dpad_want -1
+set r_held [ptr_r]
+advance_ms 16
+::ess::dial_dpad_tick             ;# a stray tick, as a lost cancel would give
+approx "a stray tick HOLDS, does not extend" [ptr_r] $r_held 0.001
+check  "and does not re-arm itself"          $::TIMER ""
+
+# with acceleration this was not a creep: it reached the ring and committed
+# a response nobody made
+puts "\n  a stray tick cannot manufacture a response:"
+set before $::UPDATES
+for { set i 0 } { $i < 200 } { incr i } { advance_ms 16; ::ess::dial_dpad_tick }
+approx "still parked after 200 stray ticks" [ptr_r] $r_held 0.001
+check  "no phantom commit"                  $::UPDATES $before
 
 puts "\njoystick and dpad are mutually exclusive:"
 check "both sources refused" \
