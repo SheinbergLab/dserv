@@ -292,9 +292,13 @@ namespace eval viz {
     #            region experiments use, and lands close to the windows
     #            protocols had picked by hand.
     #   aspect   pad the SHORT dimension to the canvas aspect (getaspect).
-    #            A window whose aspect differs from the viewport draws
-    #            anisotropically, so markers come out elliptical. Padding
-    #            keeps one scale in x and y and letterboxes instead.
+    #            A window whose aspect differs from the viewport gets
+    #            DIFFERENT scales in x and y, so POSITIONS distort: measured
+    #            on emcalib's old -12 -8 12 8, a dot at (5,5) landed +132.6
+    #            px across but +149.2 px up, a symmetric grid rendered 12.5%
+    #            taller than wide. Markers themselves stay round (fcircle
+    #            carries a single size), which is exactly why this hides.
+    #            Padding keeps one scale in x and y and letterboxes instead.
     #
     # Zoom precedence, chosen so an operator control always works: the
     # ess/viz/zoom datapoint (live) beats -zoom (the protocol's preference)
