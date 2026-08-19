@@ -429,3 +429,42 @@ To check what a frame actually did, read the `setjust` and the `moveto`
 IMMEDIATELY PRECEDING each `drawtext` in `dumpwin json`. Do not scan all
 coordinates: `dlg_text` emits a trailing bookkeeping `moveto` with a wild
 x (−1391 in a 640-wide viewport) that draws nothing.
+
+### The strwidth defect, and why it does not matter
+
+While chasing a mis-centred label I found a genuine bug and then found it
+cannot be reached. Recording both halves, because the first half is the
+kind of thing that gets "fixed" twice.
+
+`strwidth` (`cgraph.c:1787`) falls back to `strlen(str) * f->colsiz` when
+the frame installs no `dstrwidth` handler. `colsiz` defaults to 7.0
+(`cgraph.c:816`), meant as a character cell in DEVICE pixels, but the
+result is consumed in the current USER space — so a "character" measures
+7 user units. It is also independent of the font: `setfont` never touches
+`colsiz`, only `setchrsize` does, and nothing calls it.
+
+You can see it: after every `dlg_text`, the trailing `moveto` in
+`dumpwin json` sits at `anchor - strwidth/2` for centred text. Measured at
+6.99 user units per character, constant across windows (±1, ±10, ±100) and
+across font sizes 13 and 26.
+
+It reaches nothing:
+
+- `drawtext` returns to the gbuf handler at `cgraph.c:1836`, BEFORE the
+  justification switch at 1843 that would apply those offsets. So the
+  recorded event carries the raw anchor plus a separate `setjust`, and
+  justification is each WRITER's job.
+- The canvas writer (`GraphicsRenderer.cmdSetJustification` +
+  `ctx.textAlign`) does it correctly. So does the PDF writer. Both tested
+  with a reference line at x=0 and left/centre/right anchored on it.
+- The bogus value only ever lands in the current point, which nothing
+  reads.
+
+So: do not "fix" `strwidth`. It is shared across three repos, every writer
+in use is correct, and a units change there would move any caller that had
+been compensating by eye. Be explicit with `-just` instead.
+
+Test that settles it, if it ever comes up again: draw the SAME string at
+two font sizes, both centred. A `strwidth`-units bug displaces both by the
+IDENTICAL amount (it ignores the font); ordinary font-metric error
+displaces the larger one more.
