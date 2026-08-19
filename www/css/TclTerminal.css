@@ -76,13 +76,15 @@
     color: #569cd6;
     user-select: none;
     flex-shrink: 0;
-    padding-right: 8px; /* Ensure space after prompt */
+    /* the space after the prompt is the   in its text, so typed
+       and echoed lines start their text in the same column */
 }
 
 .tcl-terminal-input {
     flex: 1;
     background: transparent;
     border: none;
+    padding: 0;
     color: #d4d4d4;
     font-family: inherit;
     font-size: inherit;
