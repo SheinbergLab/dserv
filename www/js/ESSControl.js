@@ -2346,6 +2346,15 @@ updateConfigRunButtons() {
         const pop = this.elements.zoomPopup;
         if (!pop) return;
         if (pop.hidden) {
+            // Dismiss on outside click / Escape, same as the volume popup.
+            // The opening click never reaches document because the button
+            // handler stops propagation, and clicks INSIDE the popup are
+            // stopped by its own handler -- so this only ever fires for a
+            // genuine click elsewhere.
+            this._zoomOutside = () => this.closeZoomPopup();
+            this._zoomKey = (e) => { if (e.key === 'Escape') this.closeZoomPopup(); };
+            document.addEventListener('click', this._zoomOutside);
+            document.addEventListener('keydown', this._zoomKey);
             // Sync to whatever is actually in force before showing, so the
             // slider never claims a value the display is not using.
             this.sendEssCommandAsync(
@@ -2360,8 +2369,14 @@ updateConfigRunButtons() {
                 .catch(() => {});
             pop.hidden = false;
         } else {
-            pop.hidden = true;
+            this.closeZoomPopup();
         }
+    }
+
+    closeZoomPopup() {
+        this.elements.zoomPopup.hidden = true;
+        document.removeEventListener('click', this._zoomOutside);
+        document.removeEventListener('keydown', this._zoomKey);
     }
 
     // ess/viz/zoom is read by ::viz::setup_window and MULTIPLIES whatever the
