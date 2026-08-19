@@ -3933,10 +3933,12 @@ namespace eval ess {
         if { [llength $args] == 0 } { return $joystick_binding }
         if { [llength $args] == 1 && [lindex $args 0] eq "" } {
             set joystick_binding {}
+            catch { joystick_publish_status }
             return $joystick_binding
         }
         if { [lindex $args 0] eq "box" } { set args [linsert $args 0 {}] }
         set joystick_binding $args
+        catch { joystick_publish_status }
         return $joystick_binding
     }
 
@@ -4102,6 +4104,9 @@ namespace eval ess {
         variable io_class
 
         # a rig-level override (from post-pins) wins over the protocol's request
+        variable joystick_req
+        set joystick_req [list $pin {*}$args]
+        catch { joystick_publish_status }
         if { [llength $joystick_binding] } {
             set pin  [lindex $joystick_binding 0]
             set args [lrange $joystick_binding 1 end]
@@ -4167,8 +4172,10 @@ namespace eval ess {
 	}
 	set joystick(source) ""
 	set joystick(dp) ""
+	variable joystick_req; set joystick_req {}
 	joystick_state_reset
 	dservSet ess/joystick_active 0
+	catch { joystick_publish_status }
     }
 
     ########################################################################
@@ -4335,9 +4342,14 @@ namespace eval ess {
 	}
 	if { [llength $args] == 1 && [lindex $args 0] eq "" } {
 	    unset -nocomplain button_bindings($chan)
+	    catch { button_publish_status $chan }
 	    return ""
 	}
 	set button_bindings($chan) $args
+	# Publish the verdict as soon as the rig declares it, so a page can
+	# show that a binding resolves to nothing BEFORE a system loads and
+	# long before a subject presses.
+	catch { button_publish_status $chan }
 	return $button_bindings($chan)
     }
 
@@ -4575,25 +4587,36 @@ namespace eval ess {
 
     variable input_transports {}
 
-    proc input_transport { name resolver } {
+    # Keyed by COMPONENT, not global. The same spec shape means different
+    # things to different components: `box {office 14}` is a DI pin to a
+    # button and `box {* joystick}` is a whole labelled GROUP to a joystick.
+    # A single flat registry would have box_pin claim the joystick's binding
+    # and resolve it to extio/*/state/di/joystick -- confidently wrong,
+    # which is worse than unresolved.
+    proc input_transport { kind name resolver } {
         variable input_transports
-        dict set input_transports $name $resolver
+        dict set input_transports $kind $name $resolver
         return $name
     }
 
-    proc input_transports {} {
+    proc input_transports { kind } {
         variable input_transports
-        return [dict keys $input_transports]
+        if { ![dict exists $input_transports $kind] } { return {} }
+        return [dict keys [dict get $input_transports $kind]]
     }
 
     # A resolver takes {pin opts} and returns a dict, or "" to decline:
     #   status   ok | unresolved | ambiguous
     #   address  what it resolves to now (a datapoint, a pin, a bit)
     #   detail   human-readable, shown when status is not ok
-    proc input_resolve { pin args } {
+    proc input_resolve { kind pin args } {
         variable input_transports
         set opts [expr {[llength $args] == 1 ? [lindex $args 0] : $args}]
-        dict for { name resolver } $input_transports {
+        if { ![dict exists $input_transports $kind] } {
+            return [dict create transport "" status unbound address "" \
+                        detail "no transports registered for '$kind'"]
+        }
+        dict for { name resolver } [dict get $input_transports $kind] {
             set r [$resolver $pin $opts]
             if { $r ne "" } { return [dict merge {transport ""} $r [list transport $name]] }
         }
@@ -4672,10 +4695,44 @@ namespace eval ess {
                     detail "declared, not probed"]
     }
 
-    input_transport box_label    ::ess::resolve_box_label
-    input_transport box_pin      ::ess::resolve_box_pin
-    input_transport joystick_bit ::ess::resolve_joystick_bit
-    input_transport gpio         ::ess::resolve_gpio
+    # A joystick binds the GROUP itself and derives its direction map from
+    # the members' labels, so "does this resolve" means "does a live box
+    # announce that group, with directions in it".
+    proc resolve_box_group { pin opts } {
+        variable io_class
+        if { ![dict exists $opts box] } { return "" }
+        lassign [dict get $opts box] dev grp
+        if { $grp eq "" } { return "" }
+        set pat $io_class/$dev/state/group/$grp/pins
+        set pinsdp [input_live_dpoint $pat]
+        if { $pinsdp eq "" } {
+            return [dict create status unresolved address "" \
+                        detail "no live box announces group '$grp' (want $pat)"]
+        }
+        set gdp [string range $pinsdp 0 end-5]
+        set map [button_group_map $gdp]
+        if { ![dict size $map] } {
+            return [dict create status unresolved address $gdp \
+                        detail "$gdp announces no labelled members yet"]
+        }
+        # a d-pad needs DIRECTIONS; a group of unrelated labels resolves but
+        # will not steer, and saying so beats a joystick that never answers
+        set dirs {}
+        foreach lab [dict keys $map] {
+            if { [joystick_dir_canon $lab] ne "" } { lappend dirs $lab }
+        }
+        if { ![llength $dirs] } {
+            return [dict create status unresolved address $gdp \
+                        detail "no direction labels in {[dict keys $map]}"]
+        }
+        return [dict create status ok address "$gdp dirs {$dirs}" detail ""]
+    }
+
+    input_transport button   box_label    ::ess::resolve_box_label
+    input_transport button   box_pin      ::ess::resolve_box_pin
+    input_transport button   joystick_bit ::ess::resolve_joystick_bit
+    input_transport button   gpio         ::ess::resolve_gpio
+    input_transport joystick box_group    ::ess::resolve_box_group
 
     # What a button CHANNEL resolves to, honouring the rig override exactly
     # as button_init does. Pure.
@@ -4694,21 +4751,44 @@ namespace eval ess {
             return [dict create transport "" status unbound address "" \
                         detail "channel $chan is not bound" origin ""]
         }
-        return [dict merge [input_resolve $pin $opts] [list origin $src]]
+        return [dict merge [input_resolve button $pin $opts] [list origin $src]]
     }
 
-    # ess/inputs/button/<chan> -- what this channel points at and whether
-    # anything answers it. Published on init so a page can show the rig's
-    # wiring without pressing anything.
-    proc button_publish_status { chan } {
-        set r [button_resolve $chan]
-        dservSet ess/inputs/button/$chan \
+    proc joystick_resolve {} {
+        variable joystick_binding
+        variable joystick_req
+        if { [llength $joystick_binding] } {
+            set b $joystick_binding; set src rig
+        } elseif { [info exists joystick_req] && [llength $joystick_req] } {
+            set b $joystick_req; set src protocol
+        } else {
+            return [dict create transport "" status unbound address "" \
+                        detail "no joystick binding" origin ""]
+        }
+        return [dict merge \
+                    [input_resolve joystick [lindex $b 0] [lrange $b 1 end]] \
+                    [list origin $src]]
+    }
+
+    proc input_publish_status { key r } {
+        dservSet ess/inputs/$key \
             [list status [dict get $r status] \
                  transport [dict get $r transport] \
                  address [dict get $r address] \
                  origin [dict get $r origin] \
                  detail [dict get $r detail]]
         return $r
+    }
+
+    proc joystick_publish_status {} {
+        return [input_publish_status joystick [joystick_resolve]]
+    }
+
+    # ess/inputs/button/<chan> -- what this channel points at and whether
+    # anything answers it. Published on init so a page can show the rig's
+    # wiring without pressing anything.
+    proc button_publish_status { chan } {
+        return [input_publish_status button/$chan [button_resolve $chan]]
     }
 
     proc button_init {chan {pin {}} args} {
@@ -4727,6 +4807,9 @@ namespace eval ess {
 	# remember what was ASKED for, so button_resolve can report a channel
 	# whose binding resolves to nothing without re-deriving the override.
 	set buttons(req,$chan) [list $pin $args]
+	# publish the verdict for this channel now that we know what it asked
+	# for; deferred to the end would miss the early-return paths below
+	catch { button_publish_status $chan }
 
 	# initialize channel state and datapoint
 	set buttons(state,$chan) 0
@@ -4992,6 +5075,12 @@ namespace eval ess {
 	    if {[info exists buttons(state,$i)]} {
 		unset buttons(state,$i)
 	    }
+	    # The protocol's request dies with the system; the RIG binding
+	    # outlives it. Re-publishing rather than clearing means the page
+	    # still shows what this rig would answer with, and shows it as
+	    # origin "rig" rather than "protocol".
+	    unset -nocomplain buttons(req,$i)
+	    catch { button_publish_status $i }
 	    dservSet ess/button/$i 0
 	}
 	# drop the shared group dispatchers (one per bound group pattern)
