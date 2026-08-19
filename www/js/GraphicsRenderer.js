@@ -377,11 +377,19 @@ class GraphicsRenderer {
     }
     
     cmdCircle(args, filled) {
+        // args[2] is a DIAMETER, canvas arc() wants a radius.
+        //
+        // cgraph records the circle as centre + size (record_gline), and
+        // within cgraph that size is a diameter -- fcircle computes its
+        // clip box as xarg +/- xsize/2. Passing it straight to arc() drew
+        // every circle in every viz at exactly twice its intended size,
+        // which is why marker sizes throughout the tree had been tuned to
+        // roughly half of what the geometry actually called for.
         this.ctx.beginPath();
         this.ctx.arc(
             this.transformX(args[0]),
             this.transformY(args[1]),
-            this.transformWidth(args[2]),
+            this.transformWidth(args[2]) / 2,
             0, 2 * Math.PI
         );
         

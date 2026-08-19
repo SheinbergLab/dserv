@@ -368,13 +368,21 @@ write it this way.
 **Option form.** `-size N -scaletype x` is a different path: it multiplies
 by `getxscale()` alone, which is ~1.0, so N is in user units.
 
-With the OPTION form and `fcircle`, N behaves as a **radius**: to draw a
-disc of diameter D, pass `D/2`. Confirmed on screen against a stim2 disc of
-known size (`scaleObj` on a unit-quad `polycirc` sets the DIAMETER, so a
-stim disc and a viz marker of the same nominal size differ by 2x until you
-halve the marker). The C is misleading here -- `fcircle` computes its clip
-box as `xarg +/- xsize/2`, which reads like a diameter, but the circle it
-actually draws does not match that box.
+`-size` is a **DIAMETER**, in both forms. So is the stim's `scaleObj` on a
+unit-quad `polycirc`, which is what makes a viz marker and a stim disc of
+the same nominal size comparable.
+
+It LOOKED like a radius for years, and that was a bug in the web renderer
+rather than in dlsh: `GraphicsRenderer.cmdCircle` passed the recorded size
+straight to canvas `arc()`, which takes a radius, so every circle in every
+web viz drew at 2x. Fixed 2026-08-19. If you find a viz whose marker sizes
+look half what they should be, it was probably tuned against the old
+doubling -- the numbers want doubling, not the renderer re-broken.
+
+Measuring this without eyes: `setwindow -1 -1 1 1`, draw one marker, then
+`dumpwin json`. cgraph records `{"cmd":"fcircle","args":[cx,cy,size,fill]}`
+in viewport pixels, so you can check the size directly against the window
+width.
 
 Do NOT drop `-scaletype x` to "simplify" a call that has it: with neither a
 suffix nor a scaletype the marker becomes invisible rather than merely
