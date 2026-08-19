@@ -303,29 +303,64 @@ namespace eval viz {
     #
     # Safe to call repeatedly -- that is how a live zoom re-applies.
     proc setup_window { args } {
-        set zoom 2.0
+        set zoom ""
+        set hx ""; set hy ""
+        set framed_on_content 0
         foreach { k v } $args {
             switch -- $k {
                 -zoom   { set zoom $v }
+                -halfx  { set hx $v; set framed_on_content 1 }
+                -halfy  { set hy $v; set framed_on_content 1 }
                 default { error "::viz::setup_window: unknown option '$k'" }
             }
+        }
+
+        # Two ways to frame, and they want different zoom defaults.
+        #
+        #   DISPLAY-framed (no -halfx/-halfy): show the screen, so a
+        #   stimulus sits where the subject sees it. 2.0 by default because
+        #   a faithful view leaves a lot of empty canvas.
+        #
+        #   CONTENT-framed (-halfx/-halfy given): the caller has already
+        #   worked out what it wants in frame -- ricochet sizes on its
+        #   response ring, which is the thing an operator watches. Zooming
+        #   that by 2 would crop the very content it was asked to show, so
+        #   the default is 1.0.
+        #
+        # The ess/viz/zoom datapoint still overrides either, so an operator
+        # control works the same everywhere.
+        if { $zoom eq "" } {
+            set zoom [expr {$framed_on_content ? 1.0 : 2.0}]
         }
         catch {
             set z [dservGet ess/viz/zoom]
             if { [string is double -strict $z] && $z > 0 } { set zoom $z }
         }
 
-        set hx ""; set hy ""
-        catch { set hx [dservGet ess/screen_halfx] }
-        catch { set hy [dservGet ess/screen_halfy] }
+        if { !$framed_on_content } {
+            catch { set hx [dservGet ess/screen_halfx] }
+            catch { set hy [dservGet ess/screen_halfy] }
+        } else {
+            # One extent is usually all a caller has -- ricochet knows its
+            # ring radius and nothing else. Mirror it and let the aspect
+            # padding below widen whichever dimension needs it.
+            if { $hx eq "" } { set hx $hy }
+            if { $hy eq "" } { set hy $hx }
+        }
         if { ![string is double -strict $hx] || $hx <= 0 ||
              ![string is double -strict $hy] || $hy <= 0 } {
             # SAY SO. A silently guessed window looks like a drawing bug --
             # markers at the wrong size and eccentricities in the wrong
             # place -- and sends you hunting in the wrong file.
-            log warning "screen extents unavailable (ess/screen_halfx|halfy);\
-                         using a fallback window -- sizes and positions will\
-                         not match the display"
+            if { $framed_on_content } {
+                log warning "setup_window: -halfx/-halfy must both be\
+                             positive numbers; using a fallback window"
+            } else {
+                log warning "screen extents unavailable\
+                             (ess/screen_halfx|halfy); using a fallback\
+                             window -- sizes and positions will not match\
+                             the display"
+            }
             set hx 13.0; set hy 11.0
         }
 
