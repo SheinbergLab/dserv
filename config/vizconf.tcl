@@ -272,6 +272,79 @@ namespace eval viz {
         update_display
     }
     
+    # ::viz::setup_window ?-zoom N?
+    #
+    # The window a viz should draw in, derived from the display rather than
+    # hand-picked. Replaces the per-protocol "setwindow -13 -11 13 11",
+    # which was wrong twice over: a target at 6 degrees landed at the wrong
+    # fraction of the frame, and an aspect that did not match the canvas
+    # drew circles as ellipses.
+    #
+    # Three things it does, in order:
+    #
+    #   extent   from ess/screen_halfx|halfy. This interp has no ess
+    #            package but can read datapoints, which is why ess
+    #            publishes them.
+    #   zoom     how much of the display to show. 1.0 is a faithful scale
+    #            model -- what the subject actually sees, which for a ring
+    #            at 6 deg on a 27 deg half-width is a small ring in a lot of
+    #            empty canvas. The default 2.0 fills the frame with the
+    #            region experiments use, and lands close to the windows
+    #            protocols had picked by hand.
+    #   aspect   pad the SHORT dimension to the canvas aspect (getaspect).
+    #            A window whose aspect differs from the viewport draws
+    #            anisotropically, so markers come out elliptical. Padding
+    #            keeps one scale in x and y and letterboxes instead.
+    #
+    # Zoom precedence, chosen so an operator control always works: the
+    # ess/viz/zoom datapoint (live) beats -zoom (the protocol's preference)
+    # beats the 2.0 default. A protocol stating -zoom is declaring what
+    # suits it, not forbidding someone from looking closer.
+    #
+    # Safe to call repeatedly -- that is how a live zoom re-applies.
+    proc setup_window { args } {
+        set zoom 2.0
+        foreach { k v } $args {
+            switch -- $k {
+                -zoom   { set zoom $v }
+                default { error "::viz::setup_window: unknown option '$k'" }
+            }
+        }
+        catch {
+            set z [dservGet ess/viz/zoom]
+            if { [string is double -strict $z] && $z > 0 } { set zoom $z }
+        }
+
+        set hx ""; set hy ""
+        catch { set hx [dservGet ess/screen_halfx] }
+        catch { set hy [dservGet ess/screen_halfy] }
+        if { ![string is double -strict $hx] || $hx <= 0 ||
+             ![string is double -strict $hy] || $hy <= 0 } {
+            # SAY SO. A silently guessed window looks like a drawing bug --
+            # markers at the wrong size and eccentricities in the wrong
+            # place -- and sends you hunting in the wrong file.
+            log warning "screen extents unavailable (ess/screen_halfx|halfy);\
+                         using a fallback window -- sizes and positions will\
+                         not match the display"
+            set hx 13.0; set hy 11.0
+        }
+
+        set hx [expr {$hx/double($zoom)}]
+        set hy [expr {$hy/double($zoom)}]
+
+        set asp [expr {$hx/$hy}]
+        catch { set a [getaspect]
+                if { [string is double -strict $a] && $a > 0 } { set asp $a } }
+        if { [expr {$hx/$hy}] > $asp } {
+            set hy [expr {$hx/$asp}]
+        } else {
+            set hx [expr {$hy*$asp}]
+        }
+
+        setwindow [expr {-$hx}] [expr {-$hy}] $hx $hy
+        return [list [expr {-$hx}] [expr {-$hy}] $hx $hy]
+    }
+
     proc clear_display {} {
         clearwin
         update_display
