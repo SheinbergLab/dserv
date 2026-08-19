@@ -335,9 +335,16 @@ namespace eval viz {
     #            Padding keeps one scale in x and y and letterboxes instead.
     #
     # Zoom precedence, chosen so an operator control always works: the
-    # ess/viz/zoom datapoint (live) beats -zoom (the protocol's preference)
-    # beats the 2.0 default. A protocol stating -zoom is declaring what
-    # suits it, not forbidding someone from looking closer.
+    # ess/viz/zoom is a RELATIVE factor applied on top of whatever the
+    # protocol chose, NOT an absolute replacement for it. 1.0 always means
+    # "as the protocol asked", whichever way it framed.
+    #
+    # This matters because the two framings have different natural zooms --
+    # 2.0 display-framed, 1.0 content-framed -- so an absolute control put
+    # the same detent in two different places depending on what was loaded:
+    # 1.0x meant "as asked" on emcalib but "half of as-asked" on a
+    # display-framed protocol. An operator pushing the knob back and forth
+    # should not have to know which kind of viz they are looking at.
     #
     # Safe to call repeatedly -- that is how a live zoom re-applies.
     #
@@ -364,6 +371,7 @@ namespace eval viz {
         #   DISPLAY-framed (no -halfx/-halfy): show the screen, so a
         #   stimulus sits where the subject sees it. 2.0 by default because
         #   a faithful view leaves a lot of empty canvas.
+        #   (ess/viz/zoom then multiplies whichever of these applies.)
         #
         #   CONTENT-framed (-halfx/-halfy given): the caller has already
         #   worked out what it wants in frame -- ricochet sizes on its
@@ -371,14 +379,17 @@ namespace eval viz {
         #   that by 2 would crop the very content it was asked to show, so
         #   the default is 1.0.
         #
-        # The ess/viz/zoom datapoint still overrides either, so an operator
-        # control works the same everywhere.
+        # The ess/viz/zoom datapoint multiplies either, so one operator
+        # control means the same thing everywhere.
         if { $zoom eq "" } {
             set zoom [expr {$framed_on_content ? 1.0 : 2.0}]
         }
+        # relative, so 1.0 is a no-op whatever the framing chose above
         catch {
             set z [dservGet ess/viz/zoom]
-            if { [string is double -strict $z] && $z > 0 } { set zoom $z }
+            if { [string is double -strict $z] && $z > 0 } {
+                set zoom [expr {$zoom * $z}]
+            }
         }
 
         if { !$framed_on_content } {

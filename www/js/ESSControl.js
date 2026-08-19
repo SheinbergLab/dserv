@@ -2352,12 +2352,10 @@ updateConfigRunButtons() {
                 'if {[dservExists ess/viz/zoom]} {dservGet ess/viz/zoom} else {}')
                 .then((v) => {
                     const z = parseFloat(v);
-                    if (isFinite(z) && z > 0) {
-                        this.elements.zoomSlider.value = Math.round(z * 10);
-                        this.elements.zoomPct.textContent = `${z.toFixed(1)}\u00d7`;
-                    } else {
-                        this.elements.zoomPct.textContent = 'auto';
-                    }
+                    // absent or non-positive both mean "protocol's own"
+                    const eff = (isFinite(z) && z > 0) ? z : 1.0;
+                    this.elements.zoomSlider.value = Math.round(eff * 10);
+                    this.elements.zoomPct.textContent = `${eff.toFixed(1)}\u00d7`;
                 })
                 .catch(() => {});
             pop.hidden = false;
@@ -2366,9 +2364,10 @@ updateConfigRunButtons() {
         }
     }
 
-    // ess/viz/zoom is read by ::viz::setup_window and overrides whatever the
-    // protocol asked for, so one control works across every protocol. The viz
-    // subprocess redraws on change if its config defines a `redraw`.
+    // ess/viz/zoom is read by ::viz::setup_window and MULTIPLIES whatever the
+    // protocol asked for, so 1.0 always means "as the protocol framed it"
+    // whether that viz frames on the display or on its own content. The viz
+    // subprocess redraws on change if its config defines a redraw proc.
     setVizZoom(zoom) {
         const z = Math.max(0.1, Math.min(10, parseFloat(zoom) || 1));
         this.elements.zoomPct.textContent = `${z.toFixed(1)}\u00d7`;
@@ -2376,12 +2375,13 @@ updateConfigRunButtons() {
             .catch((e) => this.emit('log', { message: `Viz zoom failed: ${e.message}`, level: 'error' }));
     }
 
-    // Hand the choice back to the protocol. There is no "unset a datapoint",
-    // so 0 is the agreed sentinel: setup_window only accepts a positive
-    // number, so anything else falls through to the protocol's own zoom.
+    // Hand the framing back to the protocol. Since the factor is relative,
+    // that is simply 1.0 -- no sentinel needed, and the slider has a real
+    // detent for it rather than a value it can never land on.
     clearVizZoom() {
-        this.elements.zoomPct.textContent = 'auto';
-        this.sendEssCommandAsync('dservSet ess/viz/zoom 0')
+        this.elements.zoomSlider.value = 10;
+        this.elements.zoomPct.textContent = '1.0\u00d7';
+        this.sendEssCommandAsync('dservSet ess/viz/zoom 1.0')
             .catch((e) => this.emit('log', { message: `Viz zoom reset failed: ${e.message}`, level: 'error' }));
     }
 
