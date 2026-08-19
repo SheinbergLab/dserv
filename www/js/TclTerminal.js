@@ -29,13 +29,24 @@ class TclTerminal {
         this.inputElement = null;
         this.history = JSON.parse(localStorage.getItem(this.options.historyKey) || '[]');
         this.historyIndex = this.history.length;
-        
+
+        // Interpreters reachable via /name switching; fed by the host page
+        // through updateAvailableInterps() (dserv/interps datapoint)
+        this.availableInterps = ['dserv'];
+
+        // Relay command advertised by the current interpreter in its
+        // <name>/proxy datapoint (e.g. stim's stimSend forwards to the
+        // stim program). Commands are wrapped `<proxy> {cmd}`; completion
+        // and errorInfo still address the subprocess interp itself.
+        this.currentProxy = null;
+
         // Tab completion state
         this.completionMatches = [];
         this.completionIndex = -1;
         this.completionOriginal = '';
         this.completionPending = false;
         this.waitingForCompletion = false;
+        this.completionPrefix = '';
         
         this.init();
     }
@@ -172,25 +183,54 @@ class TclTerminal {
             // Cycle through existing matches
             this.completionIndex = (this.completionIndex + 1) % this.completionMatches.length;
             this.inputElement.value = this.completionMatches[this.completionIndex];
-            this.inputElement.setSelectionRange(this.completionMatches[this.completionIndex].length, 
+            this.inputElement.setSelectionRange(this.completionMatches[this.completionIndex].length,
                                                this.completionMatches[this.completionIndex].length);
-        } else {
-            // Request new completions
-            const input = this.inputElement.value;
-            
-            if (!input.trim()) {
-                return; // Don't complete empty input
-            }
-            
-            this.completionOriginal = input;
-            this.waitingForCompletion = true;
-            
-            // Use backend 'complete' command for context-aware completion
-            // This handles nested commands like "dl_tcllist [dl_fro<TAB>"
-            const completionScript = `complete {${input}}`;
-            
-            this.executeCommand(completionScript, true);
+            return;
         }
+
+        // Request new completions
+        const input = this.inputElement.value;
+
+        if (!input.trim()) {
+            return; // Don't complete empty input
+        }
+
+        // "/na<TAB>" completes interpreter names locally
+        if (input.startsWith('/') && !/\s/.test(input)) {
+            const partial = input.slice(1);
+            const matches = this.availableInterps
+                .filter(name => name.startsWith(partial))
+                .map(name => '/' + name);
+            this.applyCompletionMatches(matches, ' ');
+            return;
+        }
+
+        // "/name cmd<TAB>" completes in that interp, keeping the /name prefix;
+        // anything else completes in the current interp
+        this.completionPrefix = '';
+        let targetInterp = null;
+        let completeInput = input;
+        const oneOff = input.match(/^\/(\S+)\s+([\s\S]*)$/);
+        if (oneOff) {
+            if (!this.availableInterps.includes(oneOff[1])) {
+                return;
+            }
+            targetInterp = oneOff[1];
+            this.completionPrefix = input.slice(0, input.length - oneOff[2].length);
+            completeInput = oneOff[2];
+            if (!completeInput.trim()) {
+                return;
+            }
+        }
+
+        this.completionOriginal = input;
+        this.waitingForCompletion = true;
+
+        // Use backend 'complete' command for context-aware completion
+        // This handles nested commands like "dl_tcllist [dl_fro<TAB>"
+        const completionScript = `complete {${completeInput}}`;
+
+        this.executeCommand(completionScript, true, targetInterp);
     }
     
     submitCommand() {
@@ -227,31 +267,134 @@ class TclTerminal {
             localStorage.setItem(this.options.historyKey, JSON.stringify(this.history));
         }
         this.historyIndex = this.history.length;
-        
+
+        // Slash commands: /name switches interpreter, /name cmd is a one-off
+        if (command.startsWith('/')) {
+            this.handleSlashCommand(command);
+            return;
+        }
+
         // Execute command
         this.executeCommand(command, false);
     }
-    
-    async executeCommand(command, isCompletion) {
-        try {
-            let response;
+
+    async handleSlashCommand(command) {
+        const match = command.match(/^\/(\S*)\s*([\s\S]*)$/);
+        const target = match[1];
+        const oneOff = match[2];
+
+        if (!target) {
+            this.showInfo(`Available interpreters: ${this.availableInterps.join(', ')}`);
+            this.showInfo('Usage: /name to switch, /name command for a one-off');
+            this.createInputLine();
+            return;
+        }
+
+        if (!this.availableInterps.includes(target)) {
+            this.showError(`Unknown interpreter: ${target}. Available: ${this.availableInterps.join(', ')}`, false);
+            this.createInputLine();
+            return;
+        }
+
+        if (!oneOff) {
             if (this.options.useLinkedSubprocess) {
-                response = await this.connection.sendToLinked(command);
-            } else if (this.options.interpreter === 'dserv') {
-                // For main dserv connection, send directly without wrapping
-                response = await this.connection.sendRaw(command);
-            } else {
-                response = await this.connection.send(command, this.options.interpreter);
+                // Switching would be a lie: routing always prefers the
+                // linked subprocess. One-offs still work.
+                this.showWarning(`This terminal is bound to its own subprocess; use /${target} <command> for one-offs`);
+                this.createInputLine();
+                return;
             }
-            
+            this.setInterpreter(target);
+            this.currentProxy = await this._fetchProxy(target);
+            this.showInfo(this.currentProxy
+                ? `Switched to ${target} (relaying via ${this.currentProxy})`
+                : `Switched to ${target}`);
+            this.createInputLine();
+            return;
+        }
+
+        const proxy = await this._fetchProxy(target);
+        this.executeCommand(oneOff, false, target, proxy);
+    }
+
+    // A subprocess can advertise a relay command in <name>/proxy
+    // (e.g. stim/proxy = stimSend). Returns it, or null for none.
+    async _fetchProxy(interp) {
+        if (interp === 'dserv') {
+            return null;
+        }
+        try {
+            const response = await this.connection.send(`dservGet ${interp}/proxy`, interp);
+            const proxy = (response || '').trim();
+            if (!proxy || proxy.startsWith('!TCL_ERROR')) {
+                return null;
+            }
+            return proxy;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    /**
+     * Feed the list of reachable interpreters (the dserv/interps datapoint,
+     * as a space-separated string or an array). 'dserv' is always included.
+     */
+    updateAvailableInterps(interps) {
+        const list = Array.isArray(interps)
+            ? interps
+            : String(interps || '').trim().split(/\s+/).filter(Boolean);
+        this.availableInterps = ['dserv', ...list.filter(name => name !== 'dserv')];
+
+        // If the current interpreter's subprocess exited, fall back to dserv
+        if (!this.options.useLinkedSubprocess &&
+            !this.availableInterps.includes(this.options.interpreter)) {
+            this.showWarning(`Interpreter ${this.options.interpreter} is gone; back to dserv`);
+            this.setInterpreter('dserv');
+        }
+    }
+    
+    // Route a command to targetInterp if given, else to the terminal's
+    // current interpreter (or its linked subprocess)
+    _routeCommand(command, targetInterp = null) {
+        if (targetInterp === null && this.options.useLinkedSubprocess) {
+            return this.connection.sendToLinked(command);
+        }
+        const target = targetInterp || this.options.interpreter;
+        if (target === 'dserv') {
+            // For main dserv connection, send directly without wrapping
+            return this.connection.sendRaw(command);
+        }
+        return this.connection.send(command, target);
+    }
+
+    async executeCommand(command, isCompletion, targetInterp = null, proxy = null) {
+        // Relay through an advertised proxy where one applies (e.g. the
+        // stim> prompt, or a /stim one-off); completion always addresses
+        // the subprocess interp itself
+        let effectiveProxy = null;
+        if (!isCompletion) {
+            if (targetInterp !== null) {
+                effectiveProxy = proxy;
+            } else if (this.currentProxy && !this.options.useLinkedSubprocess &&
+                       this.options.interpreter !== 'dserv') {
+                effectiveProxy = this.currentProxy;
+            }
+        }
+        const toSend = effectiveProxy ? `${effectiveProxy} {${command}}` : command;
+
+        try {
+            const response = await this._routeCommand(toSend, targetInterp);
+
             if (isCompletion) {
                 this.handleCompletionResponse(response);
             } else {
-                this.handleCommandResponse(response);
+                this.handleCommandResponse(response, targetInterp, effectiveProxy);
             }
         } catch (e) {
-            if (!isCompletion) {
-                this.showError(e.message || 'Command failed');
+            if (isCompletion) {
+                this.waitingForCompletion = false;
+            } else {
+                this.showError(e.message || 'Command failed', false);
                 this.createInputLine();
             }
         }
@@ -259,56 +402,75 @@ class TclTerminal {
     
     handleCompletionResponse(response) {
         this.waitingForCompletion = false;
-        
+
         try {
-            // Parse Tcl list
-            const matches = this.parseTclList(response);
-            
-            if (matches.length === 0) {
-                // No matches
-                this.completionPending = false;
-            } else if (matches.length === 1) {
-                // Single match - auto-complete
-                this.inputElement.value = matches[0];
-                this.inputElement.setSelectionRange(matches[0].length, matches[0].length);
-                this.completionPending = false;
-            } else {
-                // Multiple matches - set up for cycling
-                this.completionMatches = matches;
-                this.completionIndex = 0;
-                this.completionPending = true;
-                
-                // Show first match
-                this.inputElement.value = matches[0];
-                this.inputElement.setSelectionRange(matches[0].length, matches[0].length);
-            }
+            // Parse Tcl list; restore any /name one-off prefix
+            const matches = this.parseTclList(response)
+                .map(m => this.completionPrefix + m);
+            this.applyCompletionMatches(matches);
         } catch (e) {
             this.completionPending = false;
         }
     }
-    
-    handleCommandResponse(response) {
+
+    applyCompletionMatches(matches, singleMatchSuffix = '') {
+        if (matches.length === 0) {
+            // No matches
+            this.completionPending = false;
+        } else if (matches.length === 1) {
+            // Single match - auto-complete
+            const value = matches[0] + singleMatchSuffix;
+            this.inputElement.value = value;
+            this.inputElement.setSelectionRange(value.length, value.length);
+            this.completionPending = false;
+        } else {
+            // Multiple matches - set up for cycling
+            this.completionMatches = matches;
+            this.completionIndex = 0;
+            this.completionPending = true;
+
+            // Show first match
+            this.inputElement.value = matches[0];
+            this.inputElement.setSelectionRange(matches[0].length, matches[0].length);
+        }
+    }
+
+    handleCommandResponse(response, targetInterp = null, proxy = null) {
         // Check for Tcl error
         if (response && response.startsWith('!TCL_ERROR ')) {
             const errorMsg = response.substring('!TCL_ERROR '.length);
             this.showError(errorMsg);
-            
-            // Request errorInfo for stack trace
-            this.requestErrorInfo();
+
+            // Request errorInfo for stack trace (from the interp that errored)
+            this.requestErrorInfo(targetInterp, proxy);
         } else if (response) {
             this.showResult(response);
         }
         this.createInputLine();
     }
-    
-    async requestErrorInfo() {
+
+    async requestErrorInfo(targetInterp = null, proxy = null) {
         try {
-            let errorInfo;
-            if (this.options.useLinkedSubprocess) {
-                errorInfo = await this.connection.sendToLinked('set errorInfo');
-            } else {
-                errorInfo = await this.connection.send('set errorInfo', this.options.interpreter);
+            let errorInfo = null;
+
+            // A proxied command's error usually happened in the relayed
+            // program, whose errorInfo only the proxy can reach. If the
+            // relay itself is what failed, this fetch fails the same way
+            // and the subprocess's own errorInfo below has the trace.
+            if (proxy) {
+                const relayed = await this._routeCommand(`${proxy} {set errorInfo}`, targetInterp);
+                if (relayed && !relayed.startsWith('!TCL_ERROR')) {
+                    errorInfo = relayed;
+                }
             }
+
+            if (errorInfo === null) {
+                const local = await this._routeCommand('set errorInfo', targetInterp);
+                if (local && !local.startsWith('!TCL_ERROR')) {
+                    errorInfo = local;
+                }
+            }
+
             if (errorInfo && errorInfo.trim()) {
                 this.showErrorInfo(errorInfo);
             }
@@ -422,24 +584,26 @@ class TclTerminal {
         this._insertBeforeInput(line);
     }
     
-    showError(text) {
+    showError(text, expandable = true) {
         const line = document.createElement('div');
         line.className = 'tcl-terminal-line tcl-terminal-error';
-        
+
         const errorText = document.createElement('span');
         errorText.textContent = 'Error: ' + text;
-        
-        const expandIcon = document.createElement('span');
-        expandIcon.className = 'tcl-terminal-error-expand';
-        expandIcon.textContent = ' ▶';
-        expandIcon.title = 'Click to show stack trace';
-        
         line.appendChild(errorText);
-        line.appendChild(expandIcon);
-        
-        // Store for later when we get errorInfo
-        this.lastErrorLine = line;
-        
+
+        // Expander only makes sense when a stack trace may follow
+        if (expandable) {
+            const expandIcon = document.createElement('span');
+            expandIcon.className = 'tcl-terminal-error-expand';
+            expandIcon.textContent = ' ▶';
+            expandIcon.title = 'Click to show stack trace';
+            line.appendChild(expandIcon);
+
+            // Store for later when we get errorInfo
+            this.lastErrorLine = line;
+        }
+
         this._insertBeforeInput(line);
     }
     
@@ -502,13 +666,18 @@ Tcl Terminal Help
 
 Commands are sent directly to the active Tcl interpreter.
 
+Interpreters:
+  /           - List available interpreters
+  /name       - Switch to interpreter 'name' (e.g. /ess, /dserv)
+  /name cmd   - Run one command in 'name' without switching
+
 Local Commands:
   help        - Show this help
   clear/cls   - Clear terminal
 
 Keyboard Shortcuts:
   ↑/↓         - Navigate command history
-  Tab         - Auto-complete commands (if enabled)
+  Tab         - Auto-complete commands (works after /name too)
   Ctrl+C      - Clear current line
   Ctrl+L      - Clear terminal
   Enter       - Execute command
@@ -548,9 +717,13 @@ Keyboard Shortcuts:
     
     setInterpreter(name) {
         this.options.interpreter = name;
+        this.currentProxy = null;
+        this.completionPending = false;
+        this.completionMatches = [];
+        this.completionIndex = -1;
         const promptElement = this.container.querySelector('.tcl-terminal-prompt');
         if (promptElement) {
-            promptElement.textContent = `${name}> `;
+            promptElement.textContent = `${name}> `;
         }
     }
 }

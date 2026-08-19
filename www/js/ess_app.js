@@ -106,7 +106,8 @@ async function init() {
         initBatteryIndicator();
         initNetStatusIndicator();
         initSyncDirtyBadge();
-        
+        initInterpTracking();
+
         // Small delay to ensure subscriptions are registered on server
         // before we touch the datapoints
         await new Promise(resolve => setTimeout(resolve, 100));
@@ -173,6 +174,7 @@ function requestInitialData() {
           queues/list queues/state queues/items
           projects/list projects/active projects/active_detail
           ess/registry/url ess/registry/workgroup ess/registry/sync_status
+          dserv/interps
         } {
           catch { dservTouch $v }
         }
@@ -1292,6 +1294,21 @@ function escapeHtml(text) {
 }
 
 let tclTerminal = null;
+let terminalInterps = 'dserv';
+
+/**
+ * Track available subprocess interpreters for the terminal's /name
+ * switching. Subscribed at startup (before the initial-data touch)
+ * because the terminal itself is created lazily on first tab switch.
+ */
+function initInterpTracking() {
+    dpManager.subscribe('dserv/interps', (data) => {
+        terminalInterps = data.data !== undefined ? data.data : data.value;
+        if (tclTerminal) {
+            tclTerminal.updateAvailableInterps(terminalInterps);
+        }
+    });
+}
 let activeBottomTab = 'console';
 
 // Initialize when DOM is ready
@@ -1315,8 +1332,9 @@ function initTerminal() {
                 interpreter: 'dserv',
                 useLinkedSubprocess: false,
                 showWelcome: true,
-                welcomeMessage: 'dserv Terminal - Type "help" for assistance'
+                welcomeMessage: 'dserv Terminal - Type "help" for assistance, /name to target a subprocess'
             });
+            tclTerminal.updateAvailableInterps(terminalInterps);
         } catch (e) {
             console.error('Failed to initialize terminal:', e);
         }
