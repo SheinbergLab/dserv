@@ -531,11 +531,16 @@ class ESSControl {
             volumeBtn: this.container.querySelector('#ess-btn-volume'),
             volumePopup: this.container.querySelector('#ess-volume-popup'),
             volumePct: this.container.querySelector('#ess-volume-pct'),
-            zoomBtn: this.container.querySelector('#ess-btn-zoom'),
-            zoomPopup: this.container.querySelector('#ess-zoom-popup'),
-            zoomPct: this.container.querySelector('#ess-zoom-pct'),
-            zoomSlider: this.container.querySelector('#ess-viz-zoom'),
-            zoomReset: this.container.querySelector('#ess-btn-zoom-reset'),
+            // NOT this.container: the zoom control lives in the Stimulus
+            // Display panel, which is static markup in ess_control.html and
+            // sits OUTSIDE #ess-control-container (the div this class fills
+            // with its own template). Scoping these to the container returns
+            // null and the button renders inert.
+            zoomBtn: document.getElementById('ess-btn-zoom'),
+            zoomPopup: document.getElementById('ess-zoom-popup'),
+            zoomPct: document.getElementById('ess-zoom-pct'),
+            zoomSlider: document.getElementById('ess-viz-zoom'),
+            zoomReset: document.getElementById('ess-btn-zoom-reset'),
             masterGain: this.container.querySelector('#ess-master-gain'),
             inObsIndicator: this.container.querySelector('#ess-in-obs-indicator'),
             obsDisplay: this.container.querySelector('#ess-obs-display'),
@@ -705,21 +710,33 @@ class ESSControl {
         // Display zoom: same shape as the volume control, but it drives a
         // datapoint (ess/viz/zoom) rather than a command, because that is
         // what ::viz::setup_window already reads.
-        this.elements.zoomBtn?.addEventListener('click', (e) => {
-            e.stopPropagation();
-            this.toggleZoomPopup();
-        });
-        // Live label while dragging; commit only on release, so a drag does
-        // not fire a redraw per pixel at the viz subprocess.
-        this.elements.zoomSlider?.addEventListener('input', (e) => {
-            this.elements.zoomPct.textContent = `${(e.target.value / 10).toFixed(1)}\u00d7`;
-        });
-        this.elements.zoomSlider?.addEventListener('change', (e) => this.setVizZoom(e.target.value / 10));
-        this.elements.zoomReset?.addEventListener('click', (e) => {
-            e.stopPropagation();
-            this.clearVizZoom();
-        });
-        this.elements.zoomPopup?.addEventListener('click', (e) => e.stopPropagation());
+        //
+        // Checked once and LOUDLY: these elements are in the page's static
+        // markup rather than this class's template, so a rename in the HTML
+        // silently unhooks them. Optional chaining on each listener hides
+        // exactly that -- the button still draws, it just does nothing.
+        if (!this.elements.zoomBtn || !this.elements.zoomPopup ||
+            !this.elements.zoomSlider) {
+            console.warn('ESSControl: display-zoom control not found in the ' +
+                         'page (#ess-btn-zoom / #ess-zoom-popup / #ess-viz-zoom)');
+        } else {
+            this.elements.zoomBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.toggleZoomPopup();
+            });
+            // Live label while dragging; commit only on release, so a drag
+            // does not fire a redraw per pixel at the viz subprocess.
+            this.elements.zoomSlider.addEventListener('input', (e) => {
+                this.elements.zoomPct.textContent = `${(e.target.value / 10).toFixed(1)}\u00d7`;
+            });
+            this.elements.zoomSlider.addEventListener('change',
+                (e) => this.setVizZoom(e.target.value / 10));
+            this.elements.zoomReset?.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.clearVizZoom();
+            });
+            this.elements.zoomPopup.addEventListener('click', (e) => e.stopPropagation());
+        }
         
         // File buttons
         this.elements.btnFileOpen.addEventListener('click', () => {
