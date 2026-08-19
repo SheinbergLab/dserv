@@ -302,15 +302,21 @@ namespace eval viz {
     # suits it, not forbidding someone from looking closer.
     #
     # Safe to call repeatedly -- that is how a live zoom re-applies.
+    #
+    # It also sets the BASE FONT (see text_size below), because a viz that
+    # has just declared its window is exactly the point where the text
+    # scale is known.
     proc setup_window { args } {
         set zoom ""
         set hx ""; set hy ""
         set framed_on_content 0
+        set fontsize ""
         foreach { k v } $args {
             switch -- $k {
-                -zoom   { set zoom $v }
-                -halfx  { set hx $v; set framed_on_content 1 }
-                -halfy  { set hy $v; set framed_on_content 1 }
+                -zoom     { set zoom $v }
+                -halfx    { set hx $v; set framed_on_content 1 }
+                -halfy    { set hy $v; set framed_on_content 1 }
+                -fontsize { set fontsize $v }
                 default { error "::viz::setup_window: unknown option '$k'" }
             }
         }
@@ -377,7 +383,90 @@ namespace eval viz {
         }
 
         setwindow [expr {-$hx}] [expr {-$hy}] $hx $hy
+
+        set_base_font $fontsize
+
         return [list [expr {-$hx}] [expr {-$hy}] $hx $hy]
+    }
+
+    #########################################################################
+    # Text scale
+    #########################################################################
+    #
+    # Text does NOT live in the window setup_window just chose. Everything
+    # cgraph dumps is in a fixed 640x480 viewport, and the renderer draws a
+    # font at `size * min(canvasW/640, canvasH/480)` -- so `-size 11` is 11
+    # pixels on a 640-wide virtual canvas no matter what setwindow said.
+    # That is why viz text reads small on a real panel, and why every
+    # protocol picking its own 11/12/13 by hand drifts apart.
+    #
+    # So: one base here, and protocols ask for text RELATIVE to it.
+    #
+    #   dlg_text $x $y $s -size [::viz::text_size large]
+    #
+    # Change base_fontsize (or publish ess/viz/fontsize) and the whole tree
+    # moves together. 16 is the base because 11-13 was measurably too small
+    # to read on the rig panels.
+    variable default_fontsize 16
+    variable base_fontsize    16
+    variable base_fontfamily  Helvetica
+
+    # Named steps rather than raw multipliers, so "large" means the same
+    # thing in every protocol. A number is still accepted and is treated as
+    # a multiplier, for the odd case that needs something in between.
+    variable text_steps
+    array set text_steps {
+        tiny 0.7  small 0.85  normal 1.0  large 1.25  huge 1.6
+    }
+
+    proc text_size { { which normal } } {
+        variable base_fontsize
+        variable text_steps
+        if { [info exists text_steps($which)] } {
+            set mult $text_steps($which)
+        } elseif { [string is double -strict $which] && $which > 0 } {
+            set mult $which
+        } else {
+            log warning "text_size: unknown size '$which'; using normal"
+            set mult 1.0
+        }
+        return [expr {round($base_fontsize * $mult)}]
+    }
+
+    # Applies the base font as the CURRENT font.
+    #
+    # MEASURED, because the obvious assumption is wrong: a dlg_text with no
+    # -size does NOT inherit this. It emits its own `setfont Helvetica 10`
+    # first, draws, then restores. So the base font only reaches raw cgraph
+    # drawtext, and `-size [text_size ...]` is the mechanism that actually
+    # matters for protocol text. Do not "simplify" a call site by dropping
+    # its -size and expecting the base to apply -- it will silently shrink
+    # to 10.
+    #
+    # Called from setup_window; the ess/viz/fontsize
+    # datapoint overrides, mirroring how ess/viz/zoom overrides -zoom, so
+    # one operator control can resize text everywhere.
+    proc set_base_font { { size "" } } {
+        variable base_fontsize
+        variable base_fontfamily
+        variable default_fontsize
+        # Reset rather than leave the previous value in place: the viz
+        # interp outlives a protocol switch, so a protocol that once passed
+        # -fontsize would otherwise silently set the scale for whatever
+        # loaded next.
+        if { [string is double -strict $size] && $size > 0 } {
+            set base_fontsize $size
+        } else {
+            set base_fontsize $default_fontsize
+        }
+        catch {
+            set f [dservGet ess/viz/fontsize]
+            if { [string is double -strict $f] && $f > 0 } {
+                set base_fontsize $f
+            }
+        }
+        catch { setfont $base_fontfamily $base_fontsize }
+        return $base_fontsize
     }
 
     proc clear_display {} {
