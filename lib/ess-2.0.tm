@@ -4544,6 +4544,173 @@ namespace eval ess {
     #   button_init 0 {} box {office 14}  ;# box "office" DI pin 14 -> channel 0
     #                                     ;#   (extio/office/state/di/14)
     ########################################################################
+    ########################################################################
+    # Transport resolution: what does a binding point AT, right now?
+    #
+    # button_init has always answered this as a side effect of wiring -- the
+    # dispatch and the dservAddMatch/gpioLineRequest live in one if/elseif
+    # chain -- so the answer could not be obtained without activating a
+    # channel, and could not be obtained AT ALL for a binding that resolves
+    # to nothing. That is invisible in exactly the way that hurts: a
+    # `box {* response left}` naming a group no live box announces looks
+    # perfect in local/post-input.tcl and fails only when a subject presses.
+    #
+    # These procs are PURE -- they read datapoints and return a verdict, and
+    # wire nothing. That is what makes them usable both by *_init and by a
+    # status page, and testable without hardware.
+    #
+    # Resolution reuses button_group_map / button_group_bit, the same procs
+    # the live path uses. A second implementation of label matching would
+    # drift, and this file already carries two bugs that were exactly that.
+    #
+    # Adding a transport (a keyboard, a touchscreen region, an analog
+    # threshold) is a registration here, not another arm of an if/elseif:
+    #
+    #   ::ess::input_transport key ::ess::resolve_key
+    #
+    # NOTE the split that remains: this registry decides what a binding
+    # MEANS. Wiring it up is still button_init's if/elseif, so a NEW
+    # transport needs a branch there too until that is table-driven as well.
+    ########################################################################
+
+    variable input_transports {}
+
+    proc input_transport { name resolver } {
+        variable input_transports
+        dict set input_transports $name $resolver
+        return $name
+    }
+
+    proc input_transports {} {
+        variable input_transports
+        return [dict keys $input_transports]
+    }
+
+    # A resolver takes {pin opts} and returns a dict, or "" to decline:
+    #   status   ok | unresolved | ambiguous
+    #   address  what it resolves to now (a datapoint, a pin, a bit)
+    #   detail   human-readable, shown when status is not ok
+    proc input_resolve { pin args } {
+        variable input_transports
+        set opts [expr {[llength $args] == 1 ? [lindex $args 0] : $args}]
+        dict for { name resolver } $input_transports {
+            set r [$resolver $pin $opts]
+            if { $r ne "" } { return [dict merge {transport ""} $r [list transport $name]] }
+        }
+        return [dict create transport "" status unbound address "" \
+                    detail "no transport claims this binding"]
+    }
+
+    # Expand a possibly-globbed box datapoint against what is LIVE. Returns
+    # the concrete datapoint, or "" when no present box matches -- which is
+    # the "declared but nothing answers it" case worth reporting.
+    proc input_live_dpoint { pat } {
+        if { [string first * $pat] < 0 } {
+            return [expr {[dservExists $pat] ? $pat : ""}]
+        }
+        foreach k [dservKeys] { if { [string match $pat $k] } { return $k } }
+        return ""
+    }
+
+    proc resolve_box_label { pin opts } {
+        variable io_class
+        if { ![dict exists $opts box] } { return "" }
+        if { [llength [dict get $opts box]] < 3 } { return "" }
+        lassign [dict get $opts box] dev grp lab
+        # Resolve on the MANIFEST (state/group/<g>/pins), not on the group's
+        # event datapoint. The event is a bitmask the box publishes when the
+        # group CHANGES, so a live, correctly-configured box that nobody has
+        # pressed since boot has not published one -- and resolving on it
+        # would report a perfectly good binding as unresolved.
+        set pat $io_class/$dev/state/group/$grp/pins
+        set pinsdp [input_live_dpoint $pat]
+        if { $pinsdp eq "" } {
+            return [dict create status unresolved address "" \
+                        detail "no live box announces group '$grp' (want $pat)"]
+        }
+        set gdp [string range $pinsdp 0 end-5]   ;# drop the trailing "/pins"
+        set map [button_group_map $gdp]
+        if { ![dict size $map] } {
+            return [dict create status unresolved address $gdp \
+                        detail "$gdp announces no labelled members yet"]
+        }
+        lassign [button_group_bit $map $lab] bit n
+        if { $bit < 0 } {
+            return [dict create status unresolved address $gdp \
+                        detail "no member labelled '$lab' in {[dict keys $map]}"]
+        }
+        set st [expr {$n > 1 ? "ambiguous" : "ok"}]
+        set d  [expr {$n > 1 ? "'$lab' matches $n members of {[dict keys $map]}" : ""}]
+        return [dict create status $st address "$gdp bit $bit" detail $d]
+    }
+
+    proc resolve_box_pin { pin opts } {
+        variable io_class
+        if { ![dict exists $opts box] } { return "" }
+        lassign [dict get $opts box] dev bpin
+        set pat $io_class/$dev/state/di/$bpin
+        set dp [input_live_dpoint $pat]
+        if { $dp eq "" } {
+            return [dict create status unresolved address "" \
+                        detail "no live box publishes $pat"]
+        }
+        return [dict create status ok address $dp detail ""]
+    }
+
+    proc resolve_joystick_bit { pin opts } {
+        if { ![dict exists $opts joystick] } { return "" }
+        return [dict create status ok \
+                    address "joystick bit [dict get $opts joystick]" detail ""]
+    }
+
+    proc resolve_gpio { pin opts } {
+        if { $pin eq "" } { return "" }
+        # A local line cannot be probed the way a box manifest can -- asking
+        # the kernel would mean requesting it, which is the wiring we are
+        # deliberately not doing. Declared is the honest verdict.
+        return [dict create status ok address "gpio pin $pin" \
+                    detail "declared, not probed"]
+    }
+
+    input_transport box_label    ::ess::resolve_box_label
+    input_transport box_pin      ::ess::resolve_box_pin
+    input_transport joystick_bit ::ess::resolve_joystick_bit
+    input_transport gpio         ::ess::resolve_gpio
+
+    # What a button CHANNEL resolves to, honouring the rig override exactly
+    # as button_init does. Pure.
+    proc button_resolve { chan } {
+        variable button_bindings
+        variable buttons
+        if { [info exists button_bindings($chan)] } {
+            set ov  $button_bindings($chan)
+            set pin [lindex $ov 0]
+            set opts [lrange $ov 1 end]
+            set src rig
+        } elseif { [info exists buttons(req,$chan)] } {
+            lassign $buttons(req,$chan) pin opts
+            set src protocol
+        } else {
+            return [dict create transport "" status unbound address "" \
+                        detail "channel $chan is not bound" origin ""]
+        }
+        return [dict merge [input_resolve $pin $opts] [list origin $src]]
+    }
+
+    # ess/inputs/button/<chan> -- what this channel points at and whether
+    # anything answers it. Published on init so a page can show the rig's
+    # wiring without pressing anything.
+    proc button_publish_status { chan } {
+        set r [button_resolve $chan]
+        dservSet ess/inputs/button/$chan \
+            [list status [dict get $r status] \
+                 transport [dict get $r transport] \
+                 address [dict get $r address] \
+                 origin [dict get $r origin] \
+                 detail [dict get $r detail]]
+        return $r
+    }
+
     proc button_init {chan {pin {}} args} {
 	variable buttons
 	variable io_class
@@ -4556,6 +4723,10 @@ namespace eval ess {
 	    set pin  [lindex $ov 0]
 	    set args [lrange $ov 1 end]
 	}
+
+	# remember what was ASKED for, so button_resolve can report a channel
+	# whose binding resolves to nothing without re-deriving the override.
+	set buttons(req,$chan) [list $pin $args]
 
 	# initialize channel state and datapoint
 	set buttons(state,$chan) 0
