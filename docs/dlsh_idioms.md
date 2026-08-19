@@ -395,3 +395,37 @@ mis-sized.
 wrong twice over: it misstates eccentricity (a target at 6 deg lands at the
 wrong fraction of the frame) and, if its aspect differs from the viewport's,
 it draws circles as ellipses.
+
+## dlg_text justification
+
+`-just` passes straight through to cgraph's `setjust`, and the constants
+are **not** the 0/1/2 you might assume (`cgraph.h:197`):
+
+| `-just` | meaning |
+|--------:|---------|
+| `-1`    | left — the anchor is the string's left edge |
+| `0`     | **centre** — the anchor is the string's middle |
+| `1`     | right — the anchor is the string's right edge |
+
+Two consequences that bite:
+
+**The default is CENTRE, not left.** A `dlg_text` with no `-just` inherits
+whatever was set last, and a fresh frame starts at `setjust 0`. So a label
+anchored at the left edge of the window straddles that edge and hangs half
+of itself off the frame. This was true of pursuit's and ricochet's readout
+columns for as long as they have existed; it is invisible until you look
+for it, because the missing half is just... missing.
+
+**Justification is sticky.** It persists across `dlg_text` calls, so one
+call that sets `-just 1` silently re-aligns every later call that does not
+say otherwise. Be explicit wherever alignment matters.
+
+Prefer anchoring to a frame edge with the matching justification —
+`-just 1` at `$hx-0.5` right-aligns a readout so its string length stops
+mattering — over hand-picking an x that happens to look right for one
+string at one window size.
+
+To check what a frame actually did, read the `setjust` and the `moveto`
+IMMEDIATELY PRECEDING each `drawtext` in `dumpwin json`. Do not scan all
+coordinates: `dlg_text` emits a trailing bookkeeping `moveto` with a wild
+x (−1391 in a 640-wide viewport) that draws nothing.
