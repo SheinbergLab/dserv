@@ -366,18 +366,23 @@ namespace eval viz {
             }
         }
 
-        # Two ways to frame, and they want different zoom defaults.
+        # DISPLAY-framed is the model. This window is a VIEW OF THE
+        # DISPLAY, so a stimulus sits where the subject sees it and one
+        # screen position is the same panel position in every protocol. A
+        # protocol that needs to see more or less says so with -zoom; 2.0 is
+        # the default because a faithful view leaves a lot of empty canvas.
+        # ess/viz/zoom then multiplies whatever was chosen.
         #
-        #   DISPLAY-framed (no -halfx/-halfy): show the screen, so a
-        #   stimulus sits where the subject sees it. 2.0 by default because
-        #   a faithful view leaves a lot of empty canvas.
-        #   (ess/viz/zoom then multiplies whichever of these applies.)
-        #
-        #   CONTENT-framed (-halfx/-halfy given): the caller has already
-        #   worked out what it wants in frame -- ricochet sizes on its
-        #   response ring, which is the thing an operator watches. Zooming
-        #   that by 2 would crop the very content it was asked to show, so
-        #   the default is 1.0.
+        # CONTENT-framed (-halfx/-halfy) is an ESCAPE HATCH and currently
+        # has no callers. It breaks the property above -- two protocols
+        # framing on their own content put the same screen coordinate in
+        # different places on the panel -- so reach for it only when the
+        # content extent is genuinely unknowable ahead of time, and prefer a
+        # -zoom that clears the widest case. Everything that looked like it
+        # needed content framing (emcalib's per-variant grid, planko's
+        # world, ricochet's ring) fits display-framed at zoom 1.6-2.0. Its
+        # zoom default is 1.0, since zooming content the caller already
+        # sized would crop the very thing it asked to show.
         #
         # The ess/viz/zoom datapoint multiplies either, so one operator
         # control means the same thing everywhere.
