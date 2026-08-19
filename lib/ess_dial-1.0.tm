@@ -111,6 +111,9 @@ namespace eval ess {
     # input_reset -- bindings describe the rig and persist across systems,
     # exactly as button_bind / joystick_bind do. Empty = unbound.
     variable dial_bound_sources  {}
+    # Where dial_sources came from: protocol | rig | default. Published so
+    # the operator can see WHY a dial is answering the way it is.
+    variable dial_source_origin  default
 
     # Reaching the ring band (dial_radius +/- dial_ring_tolerance, inside the
     # arc) LOCKS ON, once per response window. After that the radius stops
@@ -383,6 +386,7 @@ namespace eval ess {
         variable dial_bound_sources
         if { [llength $args] == 0 } { return $dial_bound_sources }
         set dial_bound_sources [lindex $args 0]
+        dservSet ess/dial/bound $dial_bound_sources
         return $dial_bound_sources
     }
 
@@ -428,8 +432,14 @@ namespace eval ess {
         # set. Sources default to the RIG's binding when it has one, so a
         # protocol need not -- and should not -- name hardware.
         variable dial_bound_sources
-        set dial_sources        [expr {[llength $dial_bound_sources] ?
-                                       $dial_bound_sources : {swipe touch}}]
+        variable dial_source_origin
+        if { [llength $dial_bound_sources] } {
+            set dial_sources       $dial_bound_sources
+            set dial_source_origin rig
+        } else {
+            set dial_sources       {swipe touch}
+            set dial_source_origin default
+        }
         set dial_deadband_deg   2.0
         set dial_arc_center     0.0
         set dial_arc_halfwidth  180.0
@@ -451,7 +461,8 @@ namespace eval ess {
 
         foreach { k v } $args {
             switch -- $k {
-                -sources        { set dial_sources $v }
+                -sources        { set dial_sources $v
+                                  set dial_source_origin protocol }
                 -deadband_deg   { set dial_deadband_deg $v }
                 -arc_center     { set dial_arc_center $v }
                 -arc_halfwidth  { set dial_arc_halfwidth $v }
@@ -609,6 +620,12 @@ namespace eval ess {
         # Clear the companions too, so the panel cannot show a previous
         # system's sources or arc if it is ever displayed again.
         dservSet ess/dial/sources {}
+        dservSet ess/dial/source_origin {}
+        # The BINDING is a rig property and outlives any system, so it is
+        # re-asserted rather than cleared -- the panel should still be able
+        # to say what this rig answers dials with when none is loaded.
+        variable dial_bound_sources
+        dservSet ess/dial/bound $dial_bound_sources
         dial_pointer_hide
     }
 
@@ -639,7 +656,21 @@ namespace eval ess {
     # than a mystery.
     proc dial_publish_sources {} {
         variable dial_sources
+        variable dial_source_origin
+        variable dial_bound_sources
         dservSet ess/dial/sources $dial_sources
+        # WHY these sources, not just which. A protocol naming -sources
+        # WINS over the rig's binding, and until this was published nothing
+        # on screen said so: the rig could declare {mouse touch}, the loaded
+        # system answer with a dpad, and the config you could read was not
+        # the config in effect. That is the same shape as a joystick_init
+        # sitting inert in local/ -- found the hard way the same day.
+        #
+        #   protocol : the loaded system named them (dial_init -sources)
+        #   rig      : ::ess::dial_bind in local/post-input.tcl
+        #   default  : neither, so the module's own {swipe touch}
+        dservSet ess/dial/source_origin $dial_source_origin
+        dservSet ess/dial/bound         $dial_bound_sources
     }
 
     proc dial_publish_geometry {} {

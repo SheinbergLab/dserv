@@ -177,6 +177,30 @@ feed 511 50 3
 check "dot hidden" [pointer] "0.0000,0.0000,0,0"
 check "ess/cursor still never written" [dservExists ess/cursor] 0
 
+puts "\nwhy these sources, not just which:"
+::ess::dial_bind {}                     ;# no rig declaration
+::ess::dial_init -ring_tolerance 2.0
+check "default: the module's own" [dservGet ess/dial/sources] "swipe touch"
+check "origin says so"            [dservGet ess/dial/source_origin] "default"
+check "no binding published"      [dservGet ess/dial/bound] ""
+
+::ess::dial_bind {mouse touch}          ;# the rig declares
+check "dial_bind publishes immediately" [dservGet ess/dial/bound] "mouse touch"
+::ess::dial_init -ring_tolerance 2.0
+check "rig binding wins over the default" [dservGet ess/dial/sources] "mouse touch"
+check "origin: rig"                       [dservGet ess/dial/source_origin] "rig"
+
+::ess::dial_init -sources dpad -ring_tolerance 2.0   ;# protocol overrides
+check "protocol wins over the rig"  [dservGet ess/dial/sources] "dpad"
+check "origin: protocol"            [dservGet ess/dial/source_origin] "protocol"
+check "and the rig binding is still visible beside it" \
+    [dservGet ess/dial/bound] "mouse touch"
+::ess::dial_deinit
+check "deinit clears the effective sources" [dservGet ess/dial/sources] ""
+check "but the rig binding outlives the system" \
+    [dservGet ess/dial/bound] "mouse touch"
+::ess::dial_bind {}                     ;# restore for later blocks
+
 puts "\none contract: a steering source places its cursor on the ring:"
 ::ess::dial_init -sources swipe -ring_tolerance 2.0
 ::ess::dial_set_radius 8.0

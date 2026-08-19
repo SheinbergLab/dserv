@@ -156,7 +156,7 @@ function requestInitialData() {
           ess/buttons/channels ess/slider_active slider/settings
           ess/joystick_active ess/joystick/dir ess/joystick/response
           ess/dial_active ess/dial/geometry ess/dial/sources
-          ess/dial/pointer
+          ess/dial/source_origin ess/dial/bound ess/dial/pointer
           ess/session_stats
           em/settings em/source_active mesh/peers
           openephys/status

@@ -738,6 +738,9 @@
              this.cursorAngle = null; // radians, null = not shown
              this.radius = 0;         // degrees; 0 = no ring declared yet
              this.pointer = null;     // {x,y,inBand} in degrees, null = hidden
+             this.sources = '';       // effective sources
+             this.sourceOrigin = '';  // protocol | rig | default
+             this.boundSources = '';  // what the rig declared
              this.bindCanvas();
              this.setupSubscriptions();
              this.draw();
@@ -785,8 +788,23 @@
              // looks unrelated; with the mouse source no slider panel
              // appears at all. Naming it here makes both cases legible.
              this.dpManager?.subscribe('ess/dial/sources', (data) => {
-                 const v = String(data.value ?? '').trim();
-                 this.sourcesValue.textContent = v === '' ? '\u2014' : v;
+                 this.sources = String(data.value ?? '').trim();
+                 this.renderSources();
+             });
+
+             // WHY those sources. A protocol naming -sources wins over the
+             // rig's dial_bind, and without this the panel showed the
+             // winner with no hint that anything had been overridden --
+             // so a rig could declare {mouse touch}, the loaded system
+             // answer with a dpad, and the config you could read was not
+             // the config in effect.
+             this.dpManager?.subscribe('ess/dial/source_origin', (data) => {
+                 this.sourceOrigin = String(data.value ?? '').trim();
+                 this.renderSources();
+             });
+             this.dpManager?.subscribe('ess/dial/bound', (data) => {
+                 this.boundSources = String(data.value ?? '').trim();
+                 this.renderSources();
              });
 
              // "arc_center_deg,arc_halfwidth_deg,radius" -- republished by
@@ -830,6 +848,23 @@
              });
 
 
+         }
+
+         // "dpad \u2014 set by protocol (rig binds: mouse touch)"
+         renderSources() {
+             const s = this.sources;
+             if (!s) { this.sourcesValue.textContent = '\u2014'; return; }
+             let why = '';
+             if (this.sourceOrigin === 'protocol') {
+                 why = this.boundSources && this.boundSources !== s
+                     ? ` \u2014 set by protocol (rig binds: ${this.boundSources})`
+                     : ' \u2014 set by protocol';
+             } else if (this.sourceOrigin === 'rig') {
+                 why = ' \u2014 from rig binding';
+             } else if (this.sourceOrigin === 'default') {
+                 why = ' \u2014 default (no rig binding)';
+             }
+             this.sourcesValue.textContent = s + why;
          }
 
          draw() {
