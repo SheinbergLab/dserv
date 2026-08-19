@@ -1882,11 +1882,18 @@ class Terminal {
         this.ws.on('terminal:response', (data) => this.handleResponse(data));
         this.ws.on('datapoint:update', (data) => this.handleDatapointUpdate(data));
         
-        // Proxy management (allow the recipient subprocess to forward with this cmd)
-        this.currentProxy = null;
-        
+        // Proxy commands advertised by subprocesses in <name>/proxy
+        // datapoints (e.g. stim/proxy = stimSend): commands sent to that
+        // interp relay through the proxy to its attached program
+        this.interpProxies = {};
+
         // Initialize
         this.init();
+    }
+
+    // Proxy for the interpreter the prompt is on (null if none)
+    get currentProxy() {
+        return this.interpProxies[this.currentInterp] || null;
     }
 
     init() {
@@ -1917,7 +1924,13 @@ class Terminal {
 
     handleConnected() {
         this.showInfo('Connected to dserv');
-        
+        // A completion request in flight when the link dropped would
+        // otherwise swallow the first response after reconnect
+        this.waitingForCompletion = false;
+        this.completionPending = false;
+        this.completionMatches = [];
+        this.completionIndex = -1;
+
         // Subscribe to interpreter list
         this.ws.send({
             cmd: 'subscribe',
@@ -1954,13 +1967,12 @@ class Terminal {
             }
         }
         
-		// Check if this is a proxy response for current interpreter
+		// Record advertised proxy commands for any interpreter
 		const proxyMatch = data.name && data.name.match(/^(.+)\/proxy$/);
-		if (proxyMatch && proxyMatch[1] === this.currentInterp) {
+		if (proxyMatch) {
 			const proxyCmd = data.data !== undefined ? data.data : data.value;
-			this.currentProxy = (proxyCmd && proxyCmd.trim()) ? proxyCmd.trim() : null;
-			console.log(`Proxy for ${this.currentInterp}: ${this.currentProxy || 'none'}`);
-			this.updatePrompt();
+			this.interpProxies[proxyMatch[1]] = (proxyCmd && proxyCmd.trim()) ? proxyCmd.trim() : null;
+			console.log(`Proxy for ${proxyMatch[1]}: ${this.interpProxies[proxyMatch[1]] || 'none'}`);
 		}
     }
 
@@ -1972,6 +1984,15 @@ class Terminal {
 	
 	// Notify ConsoleMonitor of interpreter list update
 	this.ws.emit('interp-list-updated', this.availableInterps);
+
+	// Seed each interp's advertised proxy for one-off routing
+	// (get responses arrive as datapoint updates; interps with
+	// no <name>/proxy dpoint simply answer nothing)
+	for (const interp of this.availableInterps) {
+	    if (interp !== 'dserv') {
+	        this.ws.send({ cmd: 'get', name: `${interp}/proxy` });
+	    }
+	}
 	
 	// Check if current interpreter still exists
 	if (!this.availableInterps.includes(this.currentInterp)) {
@@ -2000,7 +2021,8 @@ class Terminal {
         
         this.currentInterp = interpName;
         
-		this.currentProxy = null;  // Clear until we get response
+		// Refresh this interp's advertised proxy (the map already holds
+		// the value seeded when the interp list arrived)
 		if (interpName !== 'dserv') {
 			this.ws.send({
 				cmd: 'get',
@@ -2313,10 +2335,10 @@ class Terminal {
     }
 
     handleSlashCommand(command) {
-        // Parse: /interp [command...]
-        const parts = command.slice(1).split(/\s+/);
-        const targetInterp = parts[0];
-        const oneOffCommand = parts.slice(1).join(' ');
+        // Parse: /interp [command...] -- keep the command text verbatim
+        const match = command.match(/^\/(\S*)\s*([\s\S]*)$/);
+        const targetInterp = match[1];
+        const oneOffCommand = match[2];
 
         if (!targetInterp) {
             this.showError('Usage: /interp [command] or just /interp to switch');
@@ -2336,31 +2358,19 @@ class Terminal {
             this.switchInterpreter(targetInterp);
             this.createInputLine();
         } else {
-            // "/ess pwd" - one-off command, don't switch
-            // Build the command to send
+            // "/ess pwd" - one-off command, don't switch. Everything
+            // routes via the main interp, so one wrap reaches any
+            // subprocess; a proxied interp (stim) relays to its attached
+            // program, same as at its own prompt.
             let scriptToSend;
-            
-            if (this.currentInterp === 'dserv') {
-                // From dserv, can directly route to target
-                if (targetInterp === 'dserv') {
-                    scriptToSend = oneOffCommand;
-                } else {
-                    scriptToSend = `send ${targetInterp} {${oneOffCommand}}`;
-                }
+            if (targetInterp === 'dserv') {
+                scriptToSend = oneOffCommand;
             } else {
-                // From subprocess, must route through current subprocess
-                if (targetInterp === 'dserv') {
-                    // One-off to dserv from subprocess - just send command to dserv directly
-                    scriptToSend = oneOffCommand;
-                } else if (targetInterp === this.currentInterp) {
-                    // Same interpreter - just wrap once
-                    scriptToSend = `send ${targetInterp} {${oneOffCommand}}`;
-                } else {
-                    // Different subprocess - double wrap through current interp
-                    scriptToSend = `send ${this.currentInterp} {send ${targetInterp} {${oneOffCommand}}}`;
-                }
+                const proxy = this.interpProxies[targetInterp] || null;
+                const payload = proxy ? `${proxy} {${oneOffCommand}}` : oneOffCommand;
+                scriptToSend = `send ${targetInterp} {${payload}}`;
             }
-            
+
             this.ws.send({
                 cmd: 'eval',
                 script: scriptToSend
