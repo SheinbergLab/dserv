@@ -348,3 +348,42 @@ dl_set $g:correct_x [dl_add [dl_mult $left  $left_x] \
 When in doubt about an op's exact semantics, the per-function dokuwiki page
 under `docsys/dokuwiki/4_function_reference/dl_functions/<name>.txt` usually
 has a working example.
+
+## dlg_markers sizing (verified by eye, 2026-08-19)
+
+`-size` has TWO conventions and they are different code paths in
+`tcl_dlg.c`. Getting the wrong one is silent -- markers draw, just at the
+wrong scale, or (with no scaletype at all) too small to see.
+
+**Suffix form -- what the rest of the tree uses.** A trailing letter on the
+value selects the scale:
+
+    dlg_markers $x $y -marker fcircle -size 0.3x -color $c
+
+`x` multiplies by `xres/|window width| * getxscale()`, i.e. it is relative
+to the RESOLUTION, not to user units (~23x with a 640 px viewport on a
+27-degree window). `emcalib/planko_trials.tcl` and `launch/occlusion` all
+write it this way.
+
+**Option form.** `-size N -scaletype x` is a different path: it multiplies
+by `getxscale()` alone, which is ~1.0, so N is in user units.
+
+With the OPTION form and `fcircle`, N behaves as a **radius**: to draw a
+disc of diameter D, pass `D/2`. Confirmed on screen against a stim2 disc of
+known size (`scaleObj` on a unit-quad `polycirc` sets the DIAMETER, so a
+stim disc and a viz marker of the same nominal size differ by 2x until you
+halve the marker). The C is misleading here -- `fcircle` computes its clip
+box as `xarg +/- xsize/2`, which reads like a diameter, but the circle it
+actually draws does not match that box.
+
+Do NOT drop `-scaletype x` to "simplify" a call that has it: with neither a
+suffix nor a scaletype the marker becomes invisible rather than merely
+mis-sized.
+
+**Viz windows.** `setwindow` in a viz config should come from
+`ess/screen_halfx` / `ess/screen_halfy` (datapoints -- the viz interp has no
+`ess` package but can read them), padded to the CANVAS aspect from
+`getaspect`, optionally divided by a zoom factor. A hand-picked window is
+wrong twice over: it misstates eccentricity (a target at 6 deg lands at the
+wrong fraction of the frame) and, if its aspect differs from the viewport's,
+it draws circles as ellipses.
