@@ -248,6 +248,24 @@ check "resumes from where it held" [expr {[ptr_r] > $r_live + 1.0}] 1
 
 ::ess::dial_dpad_sectors {}     ;# restore for later blocks
 
+puts "\nthe timer is re-armed at the TOP, so only a deliberate stop ends it:"
+::ess::dial_init -sources dpad -ring_tolerance 2.0 -dpad_rate 8.0
+::ess::dial_set_radius 10.0
+::ess::dial_set_arc 0.0 180.0
+::ess::dial_arm
+deflect 0
+hold_ms 200
+check "armed while walking" [expr {$::TIMER ne ""}] 1
+set r_mid [ptr_r]
+
+# The dir handler stops the timer on release, so a tick running while
+# centred is an ordering we do not expect. It must HOLD, not keep
+# extending a released stick -- and it must not leave a timer running.
+set ::ess::dial_dpad_want -1
+set s $::TIMER; set ::TIMER ""; advance_ms 16; eval $s
+approx "centred tick holds position" [ptr_r] $r_mid 0.001
+check  "and stops the timer"        $::TIMER ""
+
 puts "\njoystick and dpad are mutually exclusive:"
 check "both sources refused" \
     [catch { ::ess::dial_init -sources {joystick dpad} }] 1

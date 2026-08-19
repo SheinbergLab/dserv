@@ -1433,13 +1433,28 @@ namespace eval ess {
         variable dial_dpad_want
         variable dial_pi          ;# the spoke's angle is computed HERE now
 
-        set dial_dpad_timer ""
-        if { !$dial_active || $dial_armed_time == 0 } return
+        # RESCHEDULE FIRST, and let dial_dpad_stop be the only thing that
+        # ends the walk.
+        #
+        # It used to reschedule on the last line, which made every early
+        # return a decision to stop -- three of them deliberate, and any
+        # fourth one (an unexpected error, a guard added later) a silent
+        # freeze of the cursor with nothing to say why. A one-shot timer
+        # that must be re-armed at the bottom of its own body is only as
+        # reliable as its least-travelled exit path.
+        #
+        # dserv has no periodic timer a subprocess may claim freely: the
+        # timer pool is handed to the state machine wholesale
+        # (timerSetScript over 0..nTimers-1 -> do_update), so dservAfter is
+        # what there is. This gets the robustness without needing one.
+        set dial_dpad_timer [dservAfter $dial_dpad_tick_ms ::ess::dial_dpad_tick]
+
+        if { !$dial_active || $dial_armed_time == 0 } { dial_dpad_stop; return }
         # Nothing to do only when there is neither a spoke to be on nor one
         # being asked for. Guarding on the ANGLE here was wrong once the
         # spoke came to be adopted inside this proc: the angle is still -1
         # on the first tick of a reach, so the cursor never set out at all.
-        if { $dial_dpad_sector < 0 && $dial_dpad_want < 0 } return
+        if { $dial_dpad_sector < 0 && $dial_dpad_want < 0 } { dial_dpad_stop; return }
 
         set t  [now]
         set dt [expr {($t - $dial_dpad_last_us)/1.0e6}]
@@ -1467,10 +1482,8 @@ namespace eval ess {
             set dial_pointer_band  0
             set dial_pointer_shown 1
             dial_pointer_update $px $py 1 0
-            if { $dial_dpad_homing } {
-                set dial_dpad_timer \
-                    [dservAfter $dial_dpad_tick_ms ::ess::dial_dpad_tick]
-            }
+            # arrived home -- nothing left to walk
+            if { !$dial_dpad_homing } { dial_dpad_stop }
             return
         }
 
@@ -1485,7 +1498,13 @@ namespace eval ess {
                 [expr {(90.0 - 45.0*$dial_dpad_sector)*$dial_pi/180.0}]]
         }
 
-        if { $dial_dpad_want >= 0 && $dial_dpad_want != $dial_dpad_sector } {
+        # Centred with nothing to walk back: hold where we are. The dir
+        # handler stops the timer on release, so reaching here means an
+        # ordering we did not expect -- holding is the safe reading, and
+        # extending on a released stick would be the damaging one.
+        if { $dial_dpad_want < 0 } { dial_dpad_stop; return }
+
+        if { $dial_dpad_want != $dial_dpad_sector } {
             # Asked for a different spoke: come back in first. No
             # acceleration on the way home -- reconsidering is not a race.
             set dial_dpad_r [expr {$dial_dpad_r - $dial_dpad_rate*$dt}]
@@ -1530,11 +1549,10 @@ namespace eval ess {
             # Arriving IS the response: no second action to learn, and the
             # animal has watched the cursor earn it the whole way.
             set dial_pending [list $dial_dpad_angle dpad]
+            dial_dpad_stop
             do_update
             return
         }
-
-        set dial_dpad_timer [dservAfter $dial_dpad_tick_ms ::ess::dial_dpad_tick]
     }
 
     # Commits arrive asynchronously via dial_dpad_tick latching dial_pending,
