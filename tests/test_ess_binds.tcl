@@ -23,16 +23,40 @@ namespace eval ess {
     array set button_bindings {}
 }
 
-# pull the two procs out of the installed source so the test tracks the file
+# Pull the two procs out of the real source so the test tracks the file
+# rather than a copy of it.
+#
+# Located by string search, NOT by a regex over the whole file: ess-2.0.tm
+# is ~310 KB and a non-greedy (.*?) across it backtracked for TWENTY
+# SECONDS. The scan below is linear, and the regex only ever sees one
+# proc's worth of text.
 set fh [open [file join $::REPO lib ess-2.0.tm]]
 set src [read $fh]
 close $fh
+
+# Returns {arglist body}, or "" if the proc could not be found.
+#
+# No regex at all. Beyond the backtracking, a pattern matching literal
+# braces has to spell them \\{ and \\}, and Tcl's brace counter counts
+# those when it parses the script -- so the pattern unbalances the very
+# proc that contains it. The proc's own header line is already a Tcl list
+# once its trailing brace is trimmed, so lindex does the work.
+proc extract_proc { src name } {
+    set start [string first "\n    proc $name " $src]
+    if { $start < 0 } { return "" }
+    set end [string first "\n    \}\n" $src $start]
+    if { $end < 0 } { return "" }
+    set nl   [string first "\n" $src [expr {$start + 1}]]
+    set head [string trimright [string range $src [expr {$start + 1}] \
+                                    [expr {$nl - 1}]] " \{"]
+    set body [string range $src [expr {$nl + 1}] [expr {$end - 1}]]
+    return [list [lindex $head 2] $body]
+}
+
 foreach p {joystick_bind button_bind} {
-    if { ![regexp "\n    proc $p \\{\[^\n\]*\\n(.*?)\n    \\}\n" $src -> body] } {
-        puts "FAIL: could not extract proc $p"; exit 1
-    }
-    regexp "\n    proc $p (\\{\[^\n\]*\\})" $src -> arglist
-    proc ::ess::$p [lindex $arglist 0] $body
+    set got [extract_proc $src $p]
+    if { $got eq "" } { puts "FAIL: could not extract proc $p"; exit 1 }
+    proc ::ess::$p [lindex $got 0] [lindex $got 1]
 }
 
 set FAIL 0
