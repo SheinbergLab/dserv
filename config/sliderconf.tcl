@@ -231,14 +231,30 @@ namespace eval slider {
 
     # Publish calibrated x/y to slider/position + side outputs.
     # Used by all input paths.
-    proc publish { x y } {
+    #
+    # ts carries the SOURCE's timestamp when the source has one worth keeping.
+    # The extio path does: the box stamps each scan on its own PTP-disciplined
+    # grid, and that stamp is the only thing downstream that makes a reaction
+    # time immune to subprocess dispatch and Tcl scheduling. Restamping with
+    # [now] here threw it away one hop from the box -- silently, since a
+    # host-stamped position looks identical to a box-stamped one.
+    #
+    # It was worth finding: ::ess::dial_stick_sample integrates dt from these
+    # timestamps and documents them as the box's grid, and ::ess::joystick's
+    # analog transport reports this stamp as the movement onset behind every
+    # RT. Both were reading a host clock and saying otherwise.
+    #
+    # Default [now] for the paths with nothing better -- virtual has no real
+    # source time, and the trackpad's own event time is not carried this far.
+    proc publish { x y {ts 0} } {
         variable last_x
         variable last_y
         set last_x $x
         set last_y $y
 
+        if { $ts <= 0 } { set ts [now] }
         set posvals [binary format ff $x $y]
-        dservSetData slider/position [now] 2 $posvals ;# 2 = DSERV_FLOAT
+        dservSetData slider/position $ts 2 $posvals ;# 2 = DSERV_FLOAT
 
         dservSet ess/slider_pos "$x $y"
     }
@@ -383,6 +399,12 @@ namespace eval slider {
         set nchan [llength $col]
         if { $nchan == 0 } return
 
+        # The box's stamp for this block, carried through to slider/position.
+        # With batch 1 (the rule for any source feeding a response) that IS
+        # the scan's own time; batched, it is the block's, which is the same
+        # approximation ain_latest already makes.
+        set ts [dservTimestamp $dpoint]
+
         dict with settings {
             set raw_x [expr {($chan_x >= 0 && $chan_x < $nchan) ? [lindex $col $chan_x] : 0}]
             set raw_y [expr {($chan_y >= 0 && $chan_y < $nchan) ? [lindex $col $chan_y] : 0}]
@@ -390,7 +412,7 @@ namespace eval slider {
             set current_raw_y $raw_y
 
             set rawvals [binary format ss $raw_x $raw_y]
-            dservSetData slider/raw [now] 4 $rawvals ;# 4 = DSERV_SHORT
+            dservSetData slider/raw $ts 4 $rawvals ;# 4 = DSERV_SHORT
 
             # Displacement from the calibrated centre -- which for a stick is
             # both the absolute position AND the swipe vector, so the same
@@ -403,7 +425,7 @@ namespace eval slider {
             } else {
                 set y 0.0
             }
-            publish $x $y
+            publish $x $y $ts
 
             if { $continuity_mode eq "swipe" } {
                 set mag [expr {sqrt($x*$x + $y*$y)}]
