@@ -2525,10 +2525,34 @@ namespace eval ess {
         for {set i 0} {$i < $nargs} {incr i 2} {
 	    set pname [lindex $args $i]
 	    set pval  [lindex [lindex $args [expr {$i + 1}]] 0]
+
+	    # A LIVE param exists precisely so that setting it PUSHES the
+	    # value into whatever subsystem already consumed it. Storing it
+	    # here and skipping the apply chain left the variable and the
+	    # subsystem disagreeing, silently and in the direction that looks
+	    # correct: `ess::get_params` reports the new value, the running
+	    # dial (or whatever) is still on the old one.
+	    #
+	    # This path is how a VARIANT configures itself
+	    # (params_defaults, then the variant's own `params`), so the
+	    # casualty was exactly the case live params were added for -- a
+	    # variant that says `params {cursor_rate 12.0}` got a cursor
+	    # still travelling at 8. Which is also why a variant could not
+	    # simply select a different dial source: the param moved and
+	    # nothing acted on it.
+	    #
+	    # set_live_param does its own store, log and publish, so this
+	    # delegates rather than doing both -- calling both would log the
+	    # change twice into the event stream.
+	    if { [$current(state_system) is_live_param $pname] } {
+		set_live_param $pname $pval
+		continue
+	    }
+
 	    $current(state_system) set_param $pname $pval
 	    ::ess::evt_put PARAM NAME [now] $pname
 	    ::ess::evt_put PARAM VAL [now] $pval
-	    
+
 	    # set param datapoint for clients
 	    dservSet ess/params [get_param_vals]
         }
@@ -3960,6 +3984,30 @@ namespace eval ess {
     array set joystick_dirmap { 1 0  9 1  8 2  10 3  2 4  6 5  4 6  5 7 }
     variable joystick_dir_names { up up_right right down_right down down_left left up_left }
 
+    # The inverse of joystick_dirmap: sector 0-7 -> canonical nibble. Needed
+    # by every source that knows a DIRECTION and has to say it as switches --
+    # joystick_simulate and the analog transport both do.
+    variable joystick_sector_nibbles { 1 9 8 10 2 6 4 5 }
+
+    ########################################################################
+    # analog transport state (see joystick_process_analog)
+    #
+    # An analog stick reports a bearing and a magnitude; this decodes them
+    # into the SAME eight sectors a four-switch d-pad expresses, so the
+    # transport is invisible above joystick_ingest.
+    #
+    # sector is the last sector EMITTED, not the last one computed: the
+    # difference is the whole point. slider/position arrives at the box's
+    # sample rate (200 Hz on the rigs this was written for) and
+    # joystick_ingest calls do_update, so ingesting every sample would spin
+    # the state machine at the sample rate for a stick that is not moving.
+    # Only a change reaches ingest.
+    ########################################################################
+    variable joystick_analog
+    array set joystick_analog {
+        dpoint "" sector -1 step 1 threshold 4.0 release 2.5 margin 8.0
+    }
+
     # Cut a box string datapoint at the first NUL. Firmware before the
     # dserv_msg_string strlen fix sent strlen+1, so labels/pins arrive with a
     # trailing "\x00" -- which silently breaks an exact `switch` match ("up\0"
@@ -3986,6 +4034,7 @@ namespace eval ess {
     # passes to joystick_init, so a rig points "the joystick" at its box
     # group without protocol edits. Persists across systems.
     #   joystick_bind box {* joystick}      ;# (leading {} placeholder optional)
+    #   joystick_bind analog {threshold 5.0}  ;# a rig whose stick is analog
     #
     # Called with NO arguments this REPORTS the current binding rather than
     # setting one -- the same contract as ::ess::dial_bind.
@@ -4007,7 +4056,7 @@ namespace eval ess {
             catch { joystick_publish_status }
             return $joystick_binding
         }
-        if { [lindex $args 0] eq "box" } { set args [linsert $args 0 {}] }
+        if { [lindex $args 0] in {box analog} } { set args [linsert $args 0 {}] }
         set joystick_binding $args
         catch { joystick_publish_status }
         return $joystick_binding
@@ -4084,6 +4133,147 @@ namespace eval ess {
             [dservTimestamp $dpoint]
     }
 
+    ########################################################################
+    # analog transport: a thumbstick's x/y -> the same eight sectors.
+    #
+    # WHY QUANTIZE AT ALL, when the stick can express a continuous bearing.
+    # Because the thing above this line is a d-pad contract, and the systems
+    # built on it -- the joystick training ladder above all -- are built out
+    # of sectors end to end: joystick_centered gates letgo, joystick_dir
+    # highlights the pointed-at target, joystick_response latches one of
+    # eight, and ::ess::dial's dpad source walks its cursor along a SPOKE
+    # because "the cursor is only ever on a spoke" is what makes the reach
+    # legible. Feeding those a continuous bearing would not enrich them, it
+    # would bypass them. A dial that wants the true bearing already has one
+    # (::ess::dial's `stick` source); this is the other question.
+    #
+    # Reads slider/position rather than the box block directly, which buys
+    # three things: the rig's measured centre (a stick rests where its pots
+    # rest, never at 2048, and "centred" is a LIE without it -- the letgo
+    # gate would never open or never close), one calibration shared with
+    # every other analog consumer, and scale/invert/swap already applied.
+    # The cost is a dependency on sliderconf's `source` being pointed at the
+    # stick, which is exactly what resolve_joystick_analog reports on.
+    ########################################################################
+
+    # Circular difference in SECTOR units, period 8, result in (-4, 4].
+    proc joystick_analog_sdiff { a b } {
+        return [expr {fmod($a - $b + 12.0, 8.0) - 4.0}]
+    }
+
+    # Calibrated x/y -> sector 0-7, or -1 for centred.
+    proc joystick_analog_sector { x y } {
+        variable joystick_analog
+        set cur $joystick_analog(sector)
+
+        # Radial gate, hysteretic. A single threshold has a stick resting
+        # near it crossing back and forth at the sample rate, and every
+        # crossing is a fresh "first deflection" for the latch -- so the
+        # response would be whichever way it happened to wobble.
+        set mag [expr {sqrt($x*$x + $y*$y)}]
+        if { $cur < 0 } {
+            if { $mag < $joystick_analog(threshold) } { return -1 }
+        } else {
+            if { $mag < $joystick_analog(release) } { return -1 }
+        }
+
+        # Screen angles run counter-clockwise from +x; sectors run clockwise
+        # from up. sector = (90 - deg)/45, the same identity the dial uses to
+        # convert its committed angle back (targets.tcl `responded`).
+        set deg [expr {atan2($y, $x)*180.0/3.14159265358979}]
+        set s   [expr {(90.0 - $deg)/45.0}]
+
+        set step $joystick_analog(step)
+        set k [expr {int(round($s/double($step)))*$step}]
+        set k [expr {(($k % 8) + 8) % 8}]
+
+        if { $cur < 0 || $k == $cur } { return $k }
+
+        # Angular hysteresis. Already on a spoke, the bearing must clear the
+        # boundary by `margin` degrees before the sector changes -- otherwise
+        # a hand holding a diagonal sits on the boundary and alternates
+        # between two sectors 200 times a second.
+        set need [expr {$step/2.0 + $joystick_analog(margin)/45.0}]
+        if { abs([joystick_analog_sdiff $s $cur]) <= $need } { return $cur }
+        return $k
+    }
+
+    proc joystick_process_analog { dpoint data } {
+        variable joystick_analog
+        variable joystick_sector_nibbles
+
+        lassign $data x y
+        if { $x eq "" } return
+        if { $y eq "" } { set y 0.0 }
+
+        set k [joystick_analog_sector $x $y]
+        if { $k == $joystick_analog(sector) } return    ;# see the state comment
+        set joystick_analog(sector) $k
+
+        # The box's stamp, carried through sliderconf's publish: movement
+        # onset on the box's own grid rather than whenever Tcl got round to
+        # it. Quantized to the sample interval (5 ms at 200 Hz), which is
+        # the honest limit of an analog source -- a debounced switch edge is
+        # sharper, and that difference is real.
+        joystick_ingest \
+            [expr {$k < 0 ? 0 : [lindex $joystick_sector_nibbles $k]}] \
+            [dservTimestamp $dpoint]
+    }
+
+    # Live adjustment, mirroring ::ess::dial_dpad_tune: threshold and margin
+    # are things you find by watching a subject, not by reading a spec, so
+    # they want to be reachable from an add_live_param without a reload.
+    #
+    #   joystick_analog_tune -threshold 5.0 -release 3.0 -margin 10.0
+    #   joystick_analog_tune -divisions 4        ;# cardinals only
+    proc joystick_analog_tune { args } {
+        variable joystick_analog
+        set given {}
+        foreach { k v } $args {
+            switch -- $k {
+                -threshold {
+                    if { $v <= 0 } {
+                        error "joystick_analog_tune: threshold must be > 0"
+                    }
+                    set joystick_analog(threshold) [expr {double($v)}]
+                }
+                -release { set joystick_analog(release) [expr {double($v)}] }
+                -margin  { set joystick_analog(margin)  [expr {double($v)}] }
+                -divisions {
+                    if { $v ni {4 8} } {
+                        error "joystick_analog_tune: divisions must be 4 or 8"
+                    }
+                    # 4 divisions snaps a sloppy 45-degree push to the nearer
+                    # CARDINAL, which is not the same as leaving the diagonals
+                    # off a dial_dpad_sectors list: there an off-list push is
+                    # treated as centred and buys the animal nothing. Early in
+                    # shaping you usually want the snap.
+                    set joystick_analog(step) [expr {8/$v}]
+                }
+                default { error "joystick_analog_tune: unknown option '$k'" }
+            }
+            lappend given $k
+        }
+
+        # Moving the threshold alone RE-DERIVES the release, so the
+        # hysteresis band keeps its shape. The alternative -- leaving release
+        # where it was -- means raising the threshold silently widens the
+        # band, and a stick that engages at 10 but only releases at 2.5 reads
+        # as deflected nearly all the way home. That is the letgo gate's
+        # failure mode, and it would arrive by turning an unrelated knob.
+        #
+        # Passing -release in the SAME call is how you say you meant it.
+        if { "-threshold" in $given && "-release" ni $given } {
+            set joystick_analog(release) [expr {0.6*$joystick_analog(threshold)}]
+        }
+
+        if { $joystick_analog(release) >= $joystick_analog(threshold) } {
+            error "joystick_analog_tune: release ($joystick_analog(release)) must be\
+                   below threshold ($joystick_analog(threshold))"
+        }
+        return [array get joystick_analog]
+    }
+
     # incoming group bitmask -> canonical nibble via a {dir bitidx ...} map
     proc joystick_nibble {data map} {
         set data [expr {int($data)}]
@@ -4147,8 +4337,16 @@ namespace eval ess {
     proc joystick_state_reset {} {
         variable joystick
         variable joystick_maps
+        variable joystick_analog
         array unset joystick_maps
         array set joystick_maps {}
+        # The analog decoder's last EMITTED sector has to go back with the
+        # rest of it. Left behind, a stick still held at the moment of a
+        # reset matches its own stale sector and emits nothing, so
+        # ess/joystick/dir stays -1 while the stick is plainly deflected --
+        # and the letgo gate would wave the trial through on a held stick,
+        # which is the one thing it exists to prevent.
+        set joystick_analog(sector) -1
         set joystick(mask) 0
         set joystick(dir) -1
         set joystick(armed) 0
@@ -4168,6 +4366,16 @@ namespace eval ess {
     #   joystick_init {} box {* joystick}    ;# any box's group "joystick"
     #                                        ;#   (glob = hot-swap transparent)
     #   joystick_init {} box {office hat} map {up 0 down 1 left 2 right 3}
+    #   joystick_init {} analog {}           ;# an analog stick, via the slider
+    #   joystick_init {} analog {threshold 5.0 divisions 4}
+    #
+    # analog options, all optional:
+    #   threshold  magnitude (in slider output units) that reads as deflected
+    #   release    magnitude that reads as centred again; default 0.6*threshold
+    #   margin     degrees past a sector boundary needed to change sector
+    #   divisions  8 (default, full d-pad) or 4 (cardinals; a diagonal push
+    #              snaps to the nearer cardinal instead of falling between)
+    #   dpoint     source; default slider/position
     ########################################################################
     proc joystick_init { {pin {}} args } {
         variable joystick
@@ -4211,6 +4419,48 @@ namespace eval ess {
                 dpointSetScript $dp ::ess::joystick_process_group
                 if { [dservExists $dp] } { joystick_process_group $dp [dservGet $dp] }
             }
+        } elseif { [dict exists $opts analog] } {
+            # an analog stick, decoded from the calibrated slider stream
+            variable joystick_analog
+            set cfg [dict get $opts analog]
+            set dp [expr {[dict exists $cfg dpoint] ?
+                          [dict get $cfg dpoint] : "slider/position"}]
+
+            # Defaults first, THEN the caller's, so a second joystick_init
+            # with fewer options does not inherit the first one's tuning.
+            array set joystick_analog {
+                sector -1 step 1 threshold 4.0 release 2.5 margin 8.0
+            }
+            set joystick_analog(dpoint) $dp
+            # One tune call, so its threshold/release rule applies here too:
+            # a protocol naming a threshold and no release gets a band, not
+            # the default release paired with an unrelated threshold.
+            set tune {}
+            foreach k { divisions threshold release margin } {
+                if { [dict exists $cfg $k] } {
+                    lappend tune -$k [dict get $cfg $k]
+                }
+            }
+            if { [llength $tune] } { joystick_analog_tune {*}$tune }
+
+            set joystick(source) analog
+            set joystick(dp) $dp
+
+            # AddScript, not SetScript: ::ess::slider_process and the dial's
+            # own observers live on slider/position too, and SetScript would
+            # silently delete whichever registered first. append() dedupes,
+            # so a second joystick_init still registers once.
+            dservAddExactMatch $dp
+            dpointAddScript    $dp ::ess::joystick_process_analog
+
+            # SEED from the current position. slider/position is a level, not
+            # an event: a stick held at init publishes nothing new until it
+            # moves, so without this joystick_centered would report a held
+            # stick as centred until the subject happened to shift it -- and
+            # the letgo gate would pass on exactly the state it guards.
+            if { [dservExists $dp] } {
+                catch { joystick_process_analog $dp [dservGet $dp] }
+            }
         } else {
             # legacy HID path (dsconf.tcl) - unchanged
             set joystick(source) legacy
@@ -4234,6 +4484,12 @@ namespace eval ess {
 	if { $joystick(source) eq "box" && $joystick(dp) ne "" } {
 	    catch { dpointSetScript $joystick(dp) {} }
 	    catch { dservRemoveMatch $joystick(dp) }
+	}
+	if { $joystick(source) eq "analog" && $joystick(dp) ne "" } {
+	    # Remove only OUR handler, and do NOT drop the match: slider/position
+	    # is shared ground -- ::ess::slider_process and the dial observe it
+	    # too, and removing the match would silence them along with us.
+	    catch { dpointRemoveScript $joystick(dp) ::ess::joystick_process_analog }
 	}
 	if {[dservExists joystick/value]} {
 	    dservRemoveMatch joystick/value
@@ -4312,7 +4568,8 @@ namespace eval ess {
     # validates end-to-end.
     proc joystick_simulate {what} {
 	variable joystick_dir_names
-	set sector_nibbles {1 9 8 10 2 6 4 5}
+	variable joystick_sector_nibbles
+	set sector_nibbles $joystick_sector_nibbles
 	if { $what eq "center" || $what eq "-1" } {
 	    set nib 0
 	} elseif { [string is integer -strict $what] } {
@@ -4799,11 +5056,47 @@ namespace eval ess {
         return [dict create status ok address "$gdp dirs {$dirs}" detail ""]
     }
 
+    # An analog joystick resolves through the SLIDER, so "does this resolve"
+    # is really two questions: is anything publishing a position, and is the
+    # slider subprocess pointed at the stick rather than at some other analog
+    # input. The second is the one that bites -- sliderconf's `source` gate
+    # makes process_stick return on its first line, so a perfectly configured
+    # box streams at 200 Hz into a subprocess that drops every block, and
+    # nothing anywhere says so. Name it here, where someone is already asking
+    # why the joystick does not answer.
+    proc resolve_joystick_analog { pin opts } {
+        if { ![dict exists $opts analog] } { return "" }
+        set cfg [dict get $opts analog]
+        set dp [expr {[dict exists $cfg dpoint] ?
+                      [dict get $cfg dpoint] : "slider/position"}]
+
+        set src ""
+        if { [dservExists slider/settings] } {
+            catch { set src [dict get [dservGet slider/settings] source] }
+        }
+        if { $src ne "" && $src ni {extio auto} } {
+            return [dict create status unresolved address $dp \
+                        detail "slider source is '$src', so the extio stick path\
+                                is gated off (want extio, or auto)"]
+        }
+        if { ![dservExists $dp] } {
+            set hint [expr {$src eq "" ? "is the slider subprocess running?" :
+                            "no stick group has published yet"}]
+            return [dict create status unresolved address $dp \
+                        detail "nothing publishes $dp -- $hint"]
+        }
+        return [dict create status ok address $dp \
+                    detail [expr {$src eq "auto" ?
+                        "slider source is 'auto'; set it explicitly on a rig\
+                         with more than one analog input wired" : ""}]]
+    }
+
     input_transport button   box_label    ::ess::resolve_box_label
     input_transport button   box_pin      ::ess::resolve_box_pin
     input_transport button   joystick_bit ::ess::resolve_joystick_bit
     input_transport button   gpio         ::ess::resolve_gpio
     input_transport joystick box_group    ::ess::resolve_box_group
+    input_transport joystick analog       ::ess::resolve_joystick_analog
 
     # What a button CHANNEL resolves to, honouring the rig override exactly
     # as button_init does. Pure.
@@ -5349,6 +5642,63 @@ namespace eval ess {
     proc em_sampler_rate {{slot 0}} {
 	# Return current sample rate in Hz
 	return [samplerGetRate $slot]
+    }
+
+    ###########################################################################
+    ######################## analog stick response shaping ####################
+    ###########################################################################
+    #
+    # Turning a stick's deflection into a rate. Shared, because this had been
+    # written twice already -- ::ess::dial's `stick` source (1-D, rotating a
+    # bearing) and its `astick` source (2-D, driving a cursor) -- and a third
+    # copy was about to go into the roaming mode.
+    #
+    # That is the exact failure ess_dial exists to have fixed: it was
+    # extracted from two protocols carrying the same ~40-line machine, and
+    # the two copies had DRIFTED into two separate bugs. Two copies of this
+    # had not diverged yet. Three would have.
+    #
+    # Lives here rather than in ess_dial so a roaming mode can use it without
+    # depending on the dial. Resolution is at call time, so ess_dial being
+    # `package require`d at the top of this file is not an ordering problem.
+
+    # Shape a deflection FRACTION (|deflection| / full_scale) into a 0..1
+    # gain. Returns 0.0 inside the deadzone.
+    #
+    # The rescale past the deadzone is the part worth not re-deriving:
+    # without it, clearing an 8% deadzone jumps straight to 8% of full rate,
+    # so the fine-control region does not merely start small, it does not
+    # exist. Matters more, not less, with a Hall-effect stick whose deadzone
+    # can be tiny.
+    #
+    # expo shapes the curve: 1.0 linear; 2-3 gives a slow, fine region near
+    # centre with full speed still available at the edge -- one knob for
+    # "gentle gain" and "fast gain" at once. Clamped BEFORE the exponent, so
+    # over-range deflection cannot exceed full rate.
+    proc stick_gain { f deadzone expo } {
+        if { $f < $deadzone } { return 0.0 }
+        set g [expr {($f - $deadzone)/(1.0 - $deadzone)}]
+        if { $g <= 0.0 } { return 0.0 }
+        if { $g > 1.0 } { set g 1.0 }
+        if { $expo != 1.0 } { set g [expr {pow($g, $expo)}] }
+        return $g
+    }
+
+    # A 2-D deflection -> a velocity vector in units/s. {0.0 0.0} at rest.
+    #
+    # Speed comes from the MAGNITUDE and direction from the raw vector, never
+    # per-axis. Shaping x and y separately bends the path: with expo 2 a push
+    # at 45 degrees has both components squared, which happens to preserve
+    # the diagonal and NO other bearing, so the cursor bows away from where
+    # the hand is actually pointing.
+    proc stick_velocity { x y scale deadzone expo rate } {
+        if { $scale <= 0.0 } { return {0.0 0.0} }
+        set mag [expr {sqrt($x*$x + $y*$y)}]
+        if { $mag <= 0.0 } { return {0.0 0.0} }
+        set g [stick_gain [expr {$mag/$scale}] $deadzone $expo]
+        if { $g <= 0.0 } { return {0.0 0.0} }
+        set speed [expr {$rate*$g}]
+        return [list [expr {$x/$mag*$speed}] [expr {$y/$mag*$speed}]]
     }
 
     ###########################################################################

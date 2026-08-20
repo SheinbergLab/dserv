@@ -11,6 +11,12 @@
 # That is why it lives beside ess-2.0.tm rather than inside it — the next
 # response mode gets its own file rather than growing the framework's.
 #
+# Sources: swipe | touch | joystick | mouse | stick | dpad | astick.
+# Three of them read an analog stick and they are NOT interchangeable:
+#   stick   deflection rotates a bearing; cursor pinned to the ring. 1-D.
+#   dpad    deflection quantized to 8 sectors; cursor walks out a spoke.
+#   astick  deflection IS the cursor's velocity; continuous, speed-graded.
+#
 # The division of labour, which matters:
 #
 #   the dial owns   acquisition, geometry, gating, the live cursor, and
@@ -315,6 +321,115 @@ namespace eval ess {
     # resets it.
     variable dial_dpad_homing    0
 
+    # --- astick source (rate control from an analog stick) ----------------
+    #
+    # The third reading of a stick in this file, and the distinctions are
+    # worth stating because all three get called "the analog stick":
+    #
+    #   stick    horizontal deflection rotates a BEARING at a rate; the
+    #            cursor is pinned to the ring. One-dimensional -- it reads
+    #            y and ignores it.
+    #   dpad     the deflection is quantized to one of eight SECTORS (by
+    #            ::ess::joystick's analog transport) and the cursor walks
+    #            out along that spoke at a fixed rate.
+    #   astick   the deflection vector IS the cursor's velocity. Direction
+    #            continuous, speed proportional to how far you push.
+    #
+    # What rate control buys over the dpad is that speed becomes the
+    # subject's to control -- a hard push crosses the field, a gentle one
+    # trims -- and that the bearing is not confined to eight spokes.
+    #
+    # What it costs is the spoke itself, and that cost is specific: the
+    # dpad's dial_dpad_sectors ("only these directions are live this trial",
+    # the mechanism behind the reduced rungs of a shaping ladder) is
+    # meaningful only because the cursor can never be anywhere BUT on a
+    # spoke. With a free 2D velocity an animal can simply curve around an
+    # off-list direction, so there is deliberately no dial_astick_sectors.
+    # A protocol that needs that gating wants the dpad.
+    #
+    # NO TIMER, unlike the dpad. That is not an oversight and not a
+    # simplification -- it is the whole reason this source is shorter. The
+    # dpad carries a dservAfter tick because four switches emit one event
+    # and then fall silent, so something has to keep the cursor moving. An
+    # analog stick streams at the box's sample rate whether or not it is
+    # moving, and every sample carries the box's own timestamp -- so the
+    # integration rides the samples, and its dt comes off a PTP-disciplined
+    # grid rather than a ~60 Hz Tcl timer that drifts with scheduler load.
+    #
+    # Holding on release survives, which was the surprise: a spring stick
+    # returning to centre means velocity zero, so the cursor STOPS where it
+    # got to rather than snapping home. Progress made in a short push is
+    # kept, which is the property the dpad was built around for shaping.
+    variable dial_astick_rate     8.0   ;# deg of travel per second, full push
+    variable dial_astick_deadzone 0.08  ;# fraction of full scale
+    # Response curve applied to SPEED only, never per-axis. Shaping x and y
+    # separately would bend the path: with expo 2, a push at 45 degrees has
+    # both components squared, which preserves the diagonal but NOT any
+    # other bearing -- the cursor would bow away from the direction the hand
+    # is actually pointing. Magnitude in, direction untouched.
+    variable dial_astick_expo     2.0
+    # Full-scale deflection in slider output units. NO default that pretends
+    # to be right and no learning from the largest sample seen: a learned
+    # scale means the speed changes as the subject pushes harder over a
+    # session, and the resting offset of an uncalibrated stick once defined
+    # full deflection outright (see dial_stick_min_scale). dial_arm errors
+    # if this is unset, the same way it errors on a missing radius.
+    variable dial_astick_scale    0.0
+    variable dial_astick_commit   ring  ;# ring | none
+    # Per-response state: where the cursor is, in degrees, and when we last
+    # integrated.
+    variable dial_astick_x        0.0
+    variable dial_astick_y        0.0
+    variable dial_astick_last_ts  0
+    variable dial_astick_moved    0
+    # Arrived and committed. Cleared by dial_arm / dial_rearm. See the
+    # commit branch: without it this source has no way to stop, because
+    # unlike the dpad it has no timer whose cancellation ends the reach.
+    variable dial_astick_committed 0
+    # Optional throttle on POINTER publishes, in ms. 0 = OFF, and off is the
+    # right default. Set it only if a rig has a specific reason to cap the
+    # traffic, and then check the arithmetic below first.
+    #
+    # This defaulted to 16 for one revision, on the reasoning that 200
+    # updates a second into a 60 Hz display is two thirds of them discarded.
+    # True about bandwidth, BACKWARDS about smoothness, and measurably so:
+    # publishing faster than the display only costs bytes, while publishing
+    # slower than it guarantees repeated frames, which is visible judder.
+    #
+    # Worse, the achievable rates are QUANTIZED. Samples arrive on the box's
+    # grid (5 ms at 200 Hz), so a gate of N ms actually yields 200/ceil(N/5)
+    # Hz -- 200, 100, 66.7, 50, 40 and nothing in between. 16 ms does not
+    # give 62.5 Hz, it gives 50: under the display, and juddering.
+    #
+    # The positional deadband is the honest limiter, because it asks the
+    # right question -- would the drawn picture actually change -- rather
+    # than a clock's. See dial_astick_min_step.
+    variable dial_astick_pub_ms   0
+    variable dial_astick_last_pub 0
+    # Movement below this is not worth a publish, in degrees. Much smaller
+    # than dial_pointer_deadband (0.05), which is sized as insurance against
+    # a 1 kHz mouse and is far too coarse here: at a slow 3 deg/s it holds
+    # publishes back to 50 Hz -- under the display again, for the very
+    # motion where smoothness is most visible. This source is already capped
+    # by the sample rate, so it only needs to skip a cursor that is not
+    # moving at all.
+    variable dial_astick_min_step 0.002
+    # Largest gap this will integrate across, in seconds. A gap longer than
+    # this is capped, not skipped -- see the sample handler for why. 0.1 is
+    # comfortably above a healthy 0.005 and well under the 0.175 stalls the
+    # teensy box was measured producing.
+    variable dial_astick_max_dt   0.1
+    # Diagnostics, per response window. Cleared by dial_arm; readable via
+    # dial_astick_tune with no arguments. These count things done to this
+    # source by its input, not by the subject, and having them on the rig is
+    # what turns "the cursor feels wrong" into a number.
+    variable dial_astick_n_dup    0
+    variable dial_astick_n_gap    0
+    # Set by dial_rearm when a rejected reach left the cursor in the band.
+    # While set, arriving does not commit -- the cursor must first come back
+    # inside the band. See dial_rearm for why astick cannot use homing.
+    variable dial_astick_reapproach 0
+
     # ---------------------------------------------------------------------
     # angle helpers
     # ---------------------------------------------------------------------
@@ -426,6 +541,13 @@ namespace eval ess {
         variable dial_stick_min_scale
         variable dial_stick_invert
         variable dial_stick_commit_dp
+        variable dial_astick_rate
+        variable dial_astick_deadzone
+        variable dial_astick_expo
+        variable dial_astick_scale
+        variable dial_astick_commit
+        variable dial_astick_pub_ms
+        variable dial_astick_min_step
 
         # defaults on every init, so a protocol that omits an option gets
         # the documented value rather than whatever the previous protocol
@@ -455,6 +577,16 @@ namespace eval ess {
         set dial_stick_deadzone 0.08
         set dial_stick_expo     2.0
         set dial_stick_min_scale 1.0
+        set dial_astick_rate      8.0
+        set dial_astick_deadzone  0.08
+        set dial_astick_expo      2.0
+        # 0 = unset. dial_arm refuses rather than sitting motionless.
+        set dial_astick_scale     0.0
+        set dial_astick_commit    ring
+        # 0 = no throttle, which is the right default: see the variable's
+        # own comment for why a clock-based cap made the cursor judder.
+        set dial_astick_pub_ms    0
+        set dial_astick_min_step  0.002
         set dial_stick_invert   0
         set dial_stick_commit_dp "extio/*/state/group/stick_select"
         set dial_pointer_dpoint ess/dial/pointer
@@ -489,6 +621,13 @@ namespace eval ess {
                 -stick_min_scale { set dial_stick_min_scale $v }
                 -stick_invert   { set dial_stick_invert [expr {$v ? 1 : 0}] }
                 -stick_commit   { set dial_stick_commit_dp $v }
+                -astick_rate     { set dial_astick_rate $v }
+                -astick_deadzone { set dial_astick_deadzone $v }
+                -astick_expo     { set dial_astick_expo $v }
+                -astick_scale    { set dial_astick_scale $v }
+                -astick_commit   { set dial_astick_commit $v }
+                -astick_pub_ms   { set dial_astick_pub_ms [expr {int($v)}] }
+                -astick_min_step { set dial_astick_min_step [expr {double($v)}] }
                 # ess/cursor is no longer written by any source; the one
                 # output is ess/dial/pointer (-pointer_dpoint).
                 -cursor_dpoint  { error "::ess::dial_init: -cursor_dpoint is\
@@ -499,10 +638,17 @@ namespace eval ess {
             }
         }
 
-        # Both read slider/position and would fight over the cursor.
-        if { "swipe" in $dial_sources && "stick" in $dial_sources } {
-            error "::ess::dial_init: swipe and stick are alternative readings\
-                   of the same device -- choose one"
+        # swipe, stick and astick are three readings of ONE slider/position,
+        # and any two of them would fight over the same cursor. dpad joins
+        # the exclusion because on an analog rig its sectors are DERIVED
+        # from that same stick (::ess::joystick's analog transport), so
+        # dpad+astick is one hand driving the cursor two ways at once --
+        # which reads on screen as a cursor that will not track.
+        set steering [lsearch -all -inline -regexp $dial_sources \
+                          {^(swipe|stick|astick|dpad)$}]
+        if { [llength $steering] > 1 } {
+            error "::ess::dial_init: {$steering} are alternative readings of\
+                   the same device -- choose one"
         }
         # Both read the same four switches: one reports a settled sector,
         # the other walks a cursor out along it.
@@ -512,9 +658,9 @@ namespace eval ess {
         }
 
         foreach s $dial_sources {
-            if { $s ni {swipe touch joystick mouse stick dpad} } {
+            if { $s ni {swipe touch joystick mouse stick dpad astick} } {
                 error "::ess::dial_init: unknown source '$s'\
-                       (want swipe|touch|joystick|mouse|stick|dpad)"
+                       (want swipe|touch|joystick|mouse|stick|dpad|astick)"
             }
         }
 
@@ -538,6 +684,18 @@ namespace eval ess {
             dpointAddScript    slider/position ::ess::dial_stick_sample
             dservAddMatch      $dial_stick_commit_dp
             dpointAddScript    $dial_stick_commit_dp ::ess::dial_stick_commit
+        }
+
+        if { "astick" in $dial_sources } {
+            variable dial_astick_x;       set dial_astick_x       0.0
+            variable dial_astick_y;       set dial_astick_y       0.0
+            variable dial_astick_last_ts; set dial_astick_last_ts 0
+            variable dial_astick_moved;   set dial_astick_moved   0
+            variable dial_astick_committed;  set dial_astick_committed  0
+            variable dial_astick_reapproach; set dial_astick_reapproach 0
+            variable dial_astick_last_pub;   set dial_astick_last_pub   0
+            dservAddExactMatch slider/position
+            dpointAddScript    slider/position ::ess::dial_astick_sample
         }
 
         if { "dpad" in $dial_sources } {
@@ -608,6 +766,7 @@ namespace eval ess {
         # Remove only OUR scripts; slider_process keeps its registration.
         catch { dpointRemoveScript slider/position ::ess::dial_slider_sample }
         catch { dpointRemoveScript slider/position ::ess::dial_stick_sample }
+        catch { dpointRemoveScript slider/position ::ess::dial_astick_sample }
         variable dial_stick_commit_dp
         catch { dpointRemoveScript $dial_stick_commit_dp ::ess::dial_stick_commit }
         catch { dpointRemoveScript ess/joystick/dir ::ess::dial_dpad_dir }
@@ -753,6 +912,21 @@ namespace eval ess {
         variable dial_stick_last_ts; set dial_stick_last_ts 0
         variable dial_stick_moved;   set dial_stick_moved 0
         variable dial_stick_angle;   set dial_stick_angle 0.0
+        # astick starts each window at the ORIGIN, for the same reason the
+        # mouse does: a cursor left where the last trial ended anchors the
+        # report toward the previous answer, and makes the directions no
+        # longer equidistant. Clearing last_ts as well, so the first sample
+        # of the window establishes dt rather than integrating across the
+        # inter-trial gap.
+        variable dial_astick_x;       set dial_astick_x       0.0
+        variable dial_astick_y;       set dial_astick_y       0.0
+        variable dial_astick_last_ts; set dial_astick_last_ts 0
+        variable dial_astick_moved;   set dial_astick_moved   0
+        variable dial_astick_reapproach; set dial_astick_reapproach 0
+        variable dial_astick_committed;  set dial_astick_committed  0
+        variable dial_astick_last_pub;   set dial_astick_last_pub   0
+        variable dial_astick_n_dup;      set dial_astick_n_dup      0
+        variable dial_astick_n_gap;      set dial_astick_n_gap      0
 
         # Consume whatever is already sitting in the transports, so a commit
         # that landed before the window cannot be picked up as the first
@@ -808,9 +982,9 @@ namespace eval ess {
         # measure against it. Only the ones that accept BY the band need a
         # tolerance as well.
         set needs_ring [expr {[llength [lsearch -all -inline \
-            -regexp $dial_sources {^(swipe|stick|mouse|dpad|touch)$}]] > 0}]
+            -regexp $dial_sources {^(swipe|stick|astick|mouse|dpad|touch)$}]] > 0}]
         set needs_band [expr {[llength [lsearch -all -inline \
-            -regexp $dial_sources {^(mouse|dpad|touch)$}]] > 0}]
+            -regexp $dial_sources {^(mouse|dpad|astick|touch)$}]] > 0}]
         if { $needs_ring && $dial_radius <= 0 } {
             error "::ess::dial_arm: this dial needs a ring radius --\
                    call dial_set_radius (the cursor is placed on it)"
@@ -820,7 +994,21 @@ namespace eval ess {
                    needs a tolerance -- pass one to dial_set_radius, or\
                    -ring_tolerance to dial_init"
         }
-        if { ("mouse" in $dial_sources) || ("dpad" in $dial_sources) } {
+        # astick converts a deflection into a SPEED, so it needs to know what
+        # full deflection is. Refuse here rather than sit motionless: a
+        # cursor that never leaves the origin looks exactly like a subject
+        # who will not respond, which is the failure this file already calls
+        # the worse one.
+        if { "astick" in $dial_sources } {
+            variable dial_astick_scale
+            if { $dial_astick_scale <= 0 } {
+                error "::ess::dial_astick: no full-scale deflection --\
+                       pass -astick_scale to dial_init (in slider output\
+                       units; measure it, do not assume 2048 counts of throw)"
+            }
+        }
+        if { ("mouse" in $dial_sources) || ("dpad" in $dial_sources) ||
+             ("astick" in $dial_sources) } {
             if { "mouse" in $dial_sources } {
                 catch { send input "inputRecenter mouse" }
             }
@@ -912,6 +1100,33 @@ namespace eval ess {
                 variable dial_dpad_timer
                 if { $dial_dpad_timer eq "" } { dial_dpad_tick }
             }
+        }
+
+        # astick cannot borrow the dpad's homing, and the reason is worth
+        # stating: homing works because releasing a d-pad means "walk back",
+        # whereas releasing an analog stick means velocity ZERO -- the cursor
+        # simply stops. So a rejected reach would sit out in the band, and
+        # the next twitch in any direction would re-commit instantly from
+        # where it already was, scoring a response the subject never made.
+        #
+        # Instead the commit is LATCHED OFF until the cursor has come back
+        # inside the band under the subject's own steering. Retrying costs a
+        # real journey in and out again, which is the same contingency the
+        # dpad's homing creates by different means.
+        if { "astick" in $dial_sources } {
+            variable dial_astick_reapproach
+            variable dial_astick_x
+            variable dial_astick_y
+            variable dial_radius
+            variable dial_ring_tolerance
+            set r [expr {sqrt($dial_astick_x*$dial_astick_x +
+                              $dial_astick_y*$dial_astick_y)}]
+            set dial_astick_reapproach \
+                [expr {$r >= $dial_radius - $dial_ring_tolerance ? 1 : 0}]
+            # The commit latch has to come off or the re-opened window would
+            # be dead: nothing would integrate, and the trial would wait out
+            # its timeout with a frozen cursor.
+            variable dial_astick_committed; set dial_astick_committed 0
         }
         return
     }
@@ -1576,6 +1791,232 @@ namespace eval ess {
     # which dial_response consumes before it polls. Nothing to poll here.
     proc dial_poll_dpad {} { return "" }
 
+    # ---------------------------------------------------------------------
+    # astick: the deflection vector is the cursor's velocity
+    # ---------------------------------------------------------------------
+
+    # Runs on every slider sample. Like every other cursor observer here it
+    # does NOT wake the state machine -- the SM hears about the commit, not
+    # about the cursor.
+    proc dial_astick_sample { dpoint data } {
+        variable dial_active
+        variable dial_armed_time
+        variable dial_astick_rate
+        variable dial_astick_deadzone
+        variable dial_astick_expo
+        variable dial_astick_scale
+        variable dial_astick_commit
+        variable dial_astick_x
+        variable dial_astick_y
+        variable dial_astick_last_ts
+        variable dial_astick_moved
+        variable dial_radius
+        variable dial_ring_tolerance
+        variable dial_pending
+        variable dial_pointer_shown
+        variable dial_pointer_band
+        variable dial_pointer_x
+        variable dial_pointer_y
+        variable dial_pointer_deadband
+
+        variable dial_astick_committed
+        if { !$dial_active || $dial_armed_time == 0 } return
+        if { $dial_astick_committed } return
+        if { $dial_astick_scale <= 0 } return
+
+        lassign $data sx sy
+        if { $sx eq "" } return
+        if { $sy eq "" } { set sy 0.0 }
+
+        # dt from the DATAPOINT, which carries the box's stamp (sliderconf
+        # passes it through), not a Tcl clock.
+        set ts [dservTimestamp $dpoint]
+        if { $dial_astick_last_ts == 0 } { set dial_astick_last_ts $ts; return }
+        set dt [expr {($ts - $dial_astick_last_ts)/1.0e6}]
+        set dial_astick_last_ts $ts
+
+        # A ZERO dt carries no time to integrate, so there is nothing to do
+        # with it -- but it is not rare and it is not this file's fault.
+        # Measured on a teensy box at 200 Hz: 7.4% of blocks arrive stamped
+        # IDENTICALLY to the one before, microseconds apart in host time.
+        # Counted rather than silently skipped, because "the box duplicates
+        # timestamps" is a claim that should be checkable from the rig.
+        variable dial_astick_n_dup
+        if { $dt <= 0 } { incr dial_astick_n_dup; return }
+
+        # A LARGE gap means samples stopped arriving. Measured on the same
+        # box: 41 gaps over 105 ms, worst 175 ms, with the box's own
+        # dropped/late/slips/overruns counters all flat.
+        #
+        # This used to `return`, discarding the gap entirely -- and that is
+        # what made a box-side stall look like a cursor bug. The subject was
+        # holding the stick the whole time, so the travel WAS intended;
+        # throwing it away freezes the cursor for the full duration of the
+        # stall. The d-pad never showed the same stalls because its timer
+        # integrates from [now] and simply catches up.
+        #
+        # So catch up, but CAP it: integrating a full 175 ms at speed is a
+        # visible jump, and integrating an arbitrarily long gap (a paused
+        # box, a resumed trial) would teleport the cursor across the field.
+        # The cap turns a freeze into a small jump, which is the least-wrong
+        # reading of "the stick was held and we did not hear about it".
+        variable dial_astick_max_dt
+        variable dial_astick_n_gap
+        if { $dt > $dial_astick_max_dt } {
+            incr dial_astick_n_gap
+            set dt $dial_astick_max_dt
+        }
+
+        # Deflection -> velocity, in ::ess::stick_velocity: deadzone,
+        # rescale, expo, and speed-from-magnitude-direction-from-the-vector.
+        # Shared with the `stick` source and the roaming mode.
+        lassign [stick_velocity $sx $sy $dial_astick_scale \
+                     $dial_astick_deadzone $dial_astick_expo \
+                     $dial_astick_rate] vx vy
+        if { $vx == 0.0 && $vy == 0.0 } return     ;# at rest: cursor holds
+
+        set dial_astick_x [expr {$dial_astick_x + $vx*$dt}]
+        set dial_astick_y [expr {$dial_astick_y + $vy*$dt}]
+        set dial_astick_moved 1
+
+        set r [expr {sqrt($dial_astick_x*$dial_astick_x +
+                          $dial_astick_y*$dial_astick_y)}]
+        set a [expr {atan2($dial_astick_y, $dial_astick_x)}]
+
+        # The ARC still gates, and out-of-arc is CLAMPED rather than
+        # rejected -- astick is a steering source, the subject is watching
+        # the cursor and can see where it is, which is the side of this
+        # file's documented asymmetry that clamps. Clamp the BEARING and
+        # keep the radius, then write the position back so the integrator
+        # does not keep accumulating into a wall.
+        set ca [dial_clamp_arc $a]
+        if { $ca != $a } {
+            set a $ca
+            set dial_astick_x [expr {$r*cos($a)}]
+            set dial_astick_y [expr {$r*sin($a)}]
+        }
+
+        # Park at the band's outer edge, as the dpad does: with commit
+        # "none" a held stick would otherwise drive the cursor off screen.
+        set rmax [expr {$dial_radius + $dial_ring_tolerance}]
+        if { $r > $rmax } {
+            set r $rmax
+            set dial_astick_x [expr {$r*cos($a)}]
+            set dial_astick_y [expr {$r*sin($a)}]
+        }
+
+        set band [expr {[dial_in_ring $r] ? 1 : 0}]
+
+        # Publish when the drawn picture would change, and NEVER gate a
+        # change of band on either limiter -- the affordance has to be crisp
+        # even when the cursor is barely moving, or the ring lights late and
+        # the subject cannot tell that arriving will be accepted.
+        variable dial_astick_pub_ms
+        variable dial_astick_last_pub
+        variable dial_astick_min_step
+        set due [expr {$dial_astick_pub_ms <= 0 ||
+                       ($ts - $dial_astick_last_pub)/1000.0 >=
+                       $dial_astick_pub_ms}]
+        set moved [expr {abs($dial_astick_x - $dial_pointer_x) +
+                         abs($dial_astick_y - $dial_pointer_y)}]
+        if { !$dial_pointer_shown || $band != $dial_pointer_band ||
+             ($due && $moved > $dial_astick_min_step) } {
+            set dial_astick_last_pub $ts
+            set dial_pointer_x     $dial_astick_x
+            set dial_pointer_y     $dial_astick_y
+            set dial_pointer_band  $band
+            set dial_pointer_shown 1
+            dial_pointer_update $dial_astick_x $dial_astick_y 1 $band
+        }
+
+        # A rejected reach left the cursor out here; it does not count again
+        # until it has come back inside the band under the subject's own
+        # steering (see dial_rearm).
+        variable dial_astick_reapproach
+        if { $dial_astick_reapproach } {
+            if { $r < $dial_radius - $dial_ring_tolerance } {
+                set dial_astick_reapproach 0
+            }
+            return
+        }
+
+        # Commit on reaching the RING RADIUS -- the target's centre, not the
+        # band's near edge -- so the cursor lands ON the thing it chose.
+        # Arriving IS the response: no second action to learn, and the
+        # subject has watched the cursor earn it the whole way.
+        if { $r >= $dial_radius && $dial_astick_commit eq "ring" } {
+            # LATCH, and stop. The dpad's equivalent calls dial_dpad_stop
+            # here, which kills its timer and ends the walk; this source has
+            # no timer to kill, so without an explicit latch it simply keeps
+            # running -- re-setting dial_pending and calling do_update on
+            # EVERY sample, at the box's 200 Hz, until the state machine
+            # gets round to reading the response and disarming.
+            #
+            # Two things came of that, and the first is the one you see: the
+            # state machine woken 200 times a second in the middle of a
+            # trial. The second is that the cursor kept integrating after it
+            # had already committed, so it crept on past the target it had
+            # just chosen.
+            #
+            # A latch rather than a disarm: disarming is dial_response's
+            # job, and doing it here would consume the window before the
+            # protocol had read the answer out of it.
+            set dial_astick_committed 1
+            set dial_pending [list $a astick]
+            do_update
+        }
+    }
+
+    # Live adjustment, mirroring dial_dpad_tune. rate and expo are found by
+    # watching a subject, so they want to be reachable from an
+    # add_live_param without a reload.
+    proc dial_astick_tune { args } {
+        variable dial_astick_rate
+        variable dial_astick_deadzone
+        variable dial_astick_expo
+        variable dial_astick_scale
+        variable dial_astick_commit
+        variable dial_astick_max_dt
+        variable dial_astick_n_dup
+        variable dial_astick_n_gap
+        foreach { k v } $args {
+            switch -- $k {
+                -rate     { set dial_astick_rate     [expr {double($v)}] }
+                -deadzone { set dial_astick_deadzone [expr {double($v)}] }
+                -expo     { set dial_astick_expo     [expr {double($v)}] }
+                -scale    { set dial_astick_scale    [expr {double($v)}] }
+                -pub_ms   {
+                    variable dial_astick_pub_ms
+                    set dial_astick_pub_ms [expr {int($v)}]
+                }
+                -min_step {
+                    variable dial_astick_min_step
+                    set dial_astick_min_step [expr {double($v)}]
+                }
+                -max_dt   { set dial_astick_max_dt [expr {double($v)}] }
+                -commit   {
+                    if { $v ni {ring none} } {
+                        error "::ess::dial_astick_tune: commit is ring|none"
+                    }
+                    set dial_astick_commit $v
+                }
+                default { error "::ess::dial_astick_tune: unknown option '$k'" }
+            }
+        }
+        if { $dial_astick_deadzone < 0 || $dial_astick_deadzone >= 1.0 } {
+            error "::ess::dial_astick_tune: deadzone is a FRACTION of full\
+                   scale, in [0,1)"
+        }
+        return [list rate $dial_astick_rate deadzone $dial_astick_deadzone \
+                     expo $dial_astick_expo scale $dial_astick_scale \
+                     commit $dial_astick_commit max_dt $dial_astick_max_dt \
+                     dup_stamps $dial_astick_n_dup gaps $dial_astick_n_gap]
+    }
+
+    # Commits arrive asynchronously via dial_astick_sample latching
+    # dial_pending. Nothing to poll.
+    proc dial_poll_astick {} { return "" }
+
     # Velocity steering from a self-centring stick.
     #
     # Reads slider/position, so it inherits sliderconf's centre, deadzone,
@@ -1634,25 +2075,19 @@ namespace eval ess {
         }
         if { $dial_stick_scale <= 0 } return
 
-        set f [expr {$x/$dial_stick_scale}]
-        set af [expr {abs($f)}]
-        if { $af < $dial_stick_deadzone } return   ;# at rest: no drift
-
-        # RESCALE past the deadzone so the slowest achievable rotation is a
-        # creep rather than a step. Without this, clearing an 8% deadzone
-        # jumped straight to 8% of full rate -- so the fine-control region
-        # was not merely small, it did not exist. Matters more, not less,
-        # with a Hall-effect stick whose deadzone can be tiny.
-        set af [expr {($af - $dial_stick_deadzone) /
-                      (1.0 - $dial_stick_deadzone)}]
-        if { $af <= 0.0 } return
-        if { $af > 1.0 } { set af 1.0 }
-
-        # Expo curve: slow and fine near centre, full speed at the edge.
+        # Deadzone, the rescale past it, and the expo curve are all in
+        # ::ess::stick_gain, shared with the astick source (and the roaming
+        # mode) so the three cannot drift apart -- which is the whole reason
+        # this file exists. See its comment for why the rescale matters.
+        #
+        # The SIGN stays here, because this source is one-dimensional: a
+        # deflection either way rotates the bearing the corresponding way,
+        # where a 2-D source gets its direction from the vector instead.
         variable dial_stick_expo
-        if { $dial_stick_expo != 1.0 } {
-            set af [expr {pow($af, $dial_stick_expo)}]
-        }
+        set f  [expr {$x/$dial_stick_scale}]
+        set af [stick_gain [expr {abs($f)}] \
+                    $dial_stick_deadzone $dial_stick_expo]
+        if { $af <= 0.0 } return                   ;# at rest: no drift
         set f [expr {$f < 0 ? -$af : $af}]
         if { $dial_stick_invert } { set f [expr {-$f}] }
 
