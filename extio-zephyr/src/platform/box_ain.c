@@ -130,6 +130,8 @@ static void stream_stop_if_running(void)
 }
 
 static uint32_t st_sweeps, st_blocks, st_dropped, st_late, st_throttled;
+static uint32_t st_sweep_err;   /* sweeps the DRIVER refused (not -EAGAIN) */
+static int32_t  st_sweep_rc;    /* the last such errno, for the autopsy */
 static uint32_t sat_run;   /* consecutive cadence syncs that never parked */
 /* +26 stall ledger: how LONG each starvation was, not just that one
  * happened -- (fired-1)*period is the floor of the gap. A 1-2 ms gap
@@ -539,6 +541,18 @@ static void ain_thread_fn(void *a, void *b, void *c)
 		int n = box_adc_sweep(union_mask, raw, AIN_MAX_CH, &t_us);
 
 		if (n <= 0) {
+			/* COUNT the failure. This `continue` used to be the whole
+			 * story, and it is how a driver refusing every sweep (the
+			 * RT1062 SAR handed an oversample it lacks was the finder)
+			 * looked exactly like a box with nothing on its inputs:
+			 * enabled, running, publishing nothing, no counter moving.
+			 * -EAGAIN is excluded -- that is the ordinary
+			 * suspended-converter race the hold path produces, and
+			 * counting it would bury the signal in every OTA. */
+			if (n < 0 && n != -EAGAIN) {
+				st_sweep_err++;
+				st_sweep_rc = n;
+			}
 			continue;
 		}
 		if (warmup) {
@@ -708,6 +722,12 @@ void box_ain_late_gaps(uint32_t *last_us, uint32_t *max_us)
 	if (max_us)  *max_us  = st_late_gap_max_us;
 }
 
+void box_ain_sweep_errs(uint32_t *errs, int32_t *last_rc)
+{
+	if (errs)    *errs    = st_sweep_err;
+	if (last_rc) *last_rc = st_sweep_rc;
+}
+
 void box_ain_stats_reset(void)
 {
 	st_sweeps = st_blocks = st_dropped = st_late = st_throttled = 0;
@@ -715,6 +735,7 @@ void box_ain_stats_reset(void)
 	 * a 32 ms worst gap against a late count of zero. */
 	st_late_gap_last_us = st_late_gap_max_us = 0;
 	st_stream_fails = st_resyncs = 0;
+	st_sweep_err = 0;             /* st_sweep_rc kept: the last autopsy stands */
 #if defined(CONFIG_BOX_ADC_STREAM)
 	box_adc_stream_stats_reset();
 #endif
@@ -732,6 +753,8 @@ uint32_t box_ain_holds(void) { return 0; }
 int  box_ain_pop(ain_block_t *out) { ARG_UNUSED(out); return 0; }
 void box_ain_stats(uint32_t *s, uint32_t *b, uint32_t *d, uint32_t *l, uint32_t *t)
 { if (s) *s = 0; if (b) *b = 0; if (d) *d = 0; if (l) *l = 0; if (t) *t = 0; }
+void box_ain_sweep_errs(uint32_t *errs, int32_t *last_rc)
+{ if (errs) *errs = 0; if (last_rc) *last_rc = 0; }
 void box_ain_late_gaps(uint32_t *last_us, uint32_t *max_us)
 {
 	if (last_us) *last_us = st_late_gap_last_us;

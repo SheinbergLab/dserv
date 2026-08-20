@@ -5720,3 +5720,165 @@ What is missing is only that `extio_cfg_set` returns before any of it arrives,
 so a SCRIPT believes a refused write landed. The counter is the thing to key
 on: read `refused_n` before the write, and treat an increment (with `refused`
 naming your leaf) as failure. Same shape as the `cmd/save` receipt.
+
+## 2026-08-20 — the Teensys catch up: two build breaks, and an oversample menu the grammar oversold
+
+The bench teensy40 was still running pre-+62 firmware (its console did not know
+`ver` OR `ain oversample`), which dates the last flash to before the entire
+hw-averaging / saturation-guard / rate-calibration arc. Bringing it to +98
+surfaced everything below. v0.4.0+98.
+
+### Both Teensy builds had been broken for days, and nothing said so
+
+Two compile breaks, both landed by mcxn-era work and invisible because only
+`build-mcxn-ota` gets rebuilt routinely:
+
+* **`cfg_refuse_pub` was defined inside `#if defined(BOX_HAVE_OTA_SLOT)`**
+  (+86 parked it among the ota_* pub helpers) while its call site in the
+  dispatch path is unconditional. Refusing a config write has nothing to do
+  with having a second image slot; every HalfKay-bootloader board lost its
+  build to placement. Moved above the guard.
+* **`box_adc_input_of()` read `dt_ch[ch].input_positive` unconditionally.**
+  That field EXISTS only under `CONFIG_ADC_CONFIGURABLE_INPUTS`, which is a
+  driver-selected symbol (adc.h says so, in the comment right above the
+  field). The LPADC selects it; the RT1062's `adc_mcux_12b1msps_sar` does not
+  -- on that converter `channel_id` IS the physical input, so the accessor now
+  returns `channel_id` when the Kconfig is absent. Same answer, said by the
+  field that exists.
+
+The lesson is not either fix, it is that the teensy targets need to be in
+whatever passes for CI here (even just publish.sh building all three) --
+a board file that stops compiling is this project's version of a config field
+that lies.
+
+### `ain oversample`: three drivers, three different answers to the same field
+
+`adc_sequence.oversampling` is a request, and the audit of what actually
+happens per driver:
+
+| driver | 1x | 2x | 4x | 8x | 16x | 32x | 64x | 128x |
+|---|---|---|---|---|---|---|---|---|
+| adc_mcux_lpadc (MCXN947) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| adc_mcux_12b1msps_sar (RT1062) | ✓ | **-ENOTSUP** | ✓ | ✓ | ✓ | ✓ | **-ENOTSUP** | **-ENOTSUP** |
+| adc_mcp320x (RW612 Click) | ✓ | *ignored* | *ignored* | *ignored* | *ignored* | *ignored* | *ignored* | *ignored* |
+
+The SAR driver refuses at **adc_read() time** -- every sweep fails -- and the
+polled sampler's `if (n <= 0) continue;` made that failure PERFECTLY silent:
+enabled, running, publishing nothing, no counter moving. `ain oversample 64`
+on a Teensy was a live-looking box with no analog. The mcp320x is the quieter
+lie: it never reads the field, so any value "works" and the silicon averages
+nothing while the config reports 64x.
+
+What the box does about it now (all four layers, because each covers a hole
+the others cannot):
+
+* `box_adc_ovs_mask()` -- the audited per-compatible menu, in box_adc.c next
+  to ADC_DT_CHANNELS. A part not listed claims only 1x until someone reads its
+  driver.
+* Both write paths refuse a factor off the menu: dserv_dispatch returns
+  CFG_UNKNOWN (-> `cfg/refused`, counter and all), and the CLI answers
+  `ERR ain oversample on this converter: 1|4|8|16|32` -- the real menu, not
+  the grammar.
+* Boot HEALS a persisted value the converter cannot do (blob from older
+  firmware, or exported from a board with the full menu): clamps DOWN, says so
+  on the console, and writes the healed value back into cfg so show/dump/
+  announce keep agreeing with the silicon.
+* `box_adc_set_oversample()` clamps as belt-and-braces, downward only --
+  rounding down trades noise; rounding up could blow the sweep-duration budget
+  the saturation guard protects.
+
+And the silent-skip is gone: `ain/dbg/sweep_err` (health tier) counts sweeps
+the driver refused, `ain/dbg/sweep_rc` carries the last errno (negated;
+5 = EIO, 134 = ENOTSUP). The dead-but-running fingerprint is now `sweeps`
+frozen while `sweep_err` climbs.
+
+### teensy41 joins the analog bench: same eight inputs, one pad dispute
+
+teensy41 gets the identical `box_adc` block (reg IS the hardware input; see
+the canonical note in teensy40.overlay), so a group config moves between the
+two boards unchanged. The one collision: AD_B1_02 -- adc1_in7, silkscreen A0
+-- was the 1588 EVENT2 pad. Two pinctrl states claiming one pad means
+whichever device initialises last owns the mux, and an A0 that reads the 1588
+event line by coupling is exactly the plausible-wrong-pad failure the channel
+map exists to prevent. EVENT0 has alternates on B1_12/13 (pins 35/34,
+otherwise UART5, unused), so the PTP claim moved there; box pins 28/29 are now
+in `box-reserved` so `pin 28 mode out` cannot re-mux a pad the PTP block
+holds. teensy41 also gains the silk maps (`box-pin-silk`, `box-ain-silk`) it
+never had.
+
+## 2026-08-20 (later) — the USB write-wedge: a stack overflow wearing a driver-bug costume
+
+Testing the oversample refusals found it: on the teensy40 at +98, EVERY config
+write arriving over the USB data pipe killed the box's CDC TX within one frame
+-- mid-frame, 101 of 128 bytes -- and the rest died in stages (inbound still
+dispatched for ~6 s: the LED answered `do/3` once post-wedge; USB OUT stopped
+ACKing ~21 s in; the box later re-enumerated by itself; macOS's CDC driver
+ended up hanging opens until a replug). The box itself stayed alive the whole
+time -- sampler running, control endpoint enumerating. 5/5 reproducible.
+
+What it was NOT, each ruled out on hardware:
+
+* NOT the announce's content or count: `box_announce_burst` (RESET branch) is
+  a SUPERSET of the fatal manifest and ran clean 5+ times, including three
+  DTR-cycle reconnects in one boot.
+* NOT `box_ain_apply`: a `pin/5/label` write -- announce only -- wedged
+  identically.
+* NOT inbound processing: an unknown-leaf write (2-frame refusal reply, no
+  announce) was harmless.
+* NOT dserv stealing the port this time (it was stopped -- though its 2 s
+  console poll DID explain one earlier "idle" wedge of the day).
+* NOT a +98 change: bisect. +61 clean, +87 clean, `4eac623b` clean,
+  `e1ce57c5` (+90) wedged, 2/2 deterministic.
+
+And +90's compiled delta on a teensy40 contains NOTHING in the write path --
+receipts, a factory verb, a smoke-test scratch. The tell was WHERE the scratch
+lives: `box_config_t smoke = cfg;` as a main() local, and main never returns.
+objdump closed the case:
+
+    main() frame   4eac623b: 4544 B     e1ce57c5: 5760 B  (+1216 = sizeof cfg)
+
+On this board's 8 KB main stack that left 2432 bytes for the deepest chain
+the firmware has -- inbound dispatch -> full manifest announce -- which is a
+few frames DEEPER than the RX_RESET branch's identical announce. One context
+overflowed, the other fit. That is the entire "announce from dispatch wedges,
+announce from connect doesn't" mystery: STACK DEPTH, nothing else. Rebuilt
+with the scratch scoped (frame back to 4128): clean. Root cause proven.
+
+The overflow was silent because the 32-byte MPU stack guard is JUMPABLE: the
+chain's sub-sp lands past the guard region and its writes never touch the
+guarded bytes -- it corrupted whatever thread the linker placed below, which
+on this image was the CDC/system-workqueue machinery: TX died instantly,
+RX-side work stopped once its pool/ring state rotted, OUT re-arm never ran
+again. The MCXN947 never sees any of this because it runs a 16 KB main stack.
+
+The fix, both halves in this tree:
+
+* the smoke test moved into `boot_codec_smoke()` (noinline): ~3.5 KB of
+  boot-only scratch (smoke + persist blob + restored twin) now POPS. main's
+  loop-time frame: 5760 -> 1948 bytes.
+* both Teensy confs go to `CONFIG_MAIN_STACK_SIZE=12288`: 8 KB was within
+  ~1 KB of the deepest path even BEFORE +90, and the guard cannot be trusted
+  to catch a jump. Margin is the protection.
+
+Verified on hardware: the fixed image survived the full oversample battery --
+nine announce-provoking writes back to back, 18,830 analog frames without a
+gap, `ain/oversample` transitions announced, three off-menu refusals counted,
+`sweep_err` 0 throughout, and `sweep_max_us` 44 -> 61 -> 197 across 1x/4x/32x
+(the SAR's hardware averaging, visibly scaling).
+
+Lessons with names on them:
+
+* **main() locals are FOREVER locals in this firmware** -- main becomes the
+  service loop. Boot-time scratch belongs in a function that returns.
+* A 32-byte MPU guard is a tripwire, not a wall. Any frame > 32 B can step
+  over it, and the deepest paths here are hundreds of bytes per frame.
+* `teensy_loader_cli -s` cannot soft-reboot this firmware (custom VID; PJRC's
+  soft-reboot touch never reaches it) -- every Teensy reflash needs the
+  button. Teensy 4 can enter HalfKay from software (`bkpt #251`, the
+  bootloader chip watches for it); wiring that into `cmd/bootsel` would make
+  bench reflashes hands-free. TODO.
+* The whole hunt ran without a UART adapter: verdicts came from the data
+  pipe's own silence, the box LED as a liveness bit, USB registry ids for
+  re-enumeration, and objdump for the arithmetic. The lpuart6 console would
+  have named the victim thread in one boot; wiring one to the bench Teensy
+  is still worth doing.

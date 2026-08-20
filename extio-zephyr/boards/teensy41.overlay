@@ -9,9 +9,38 @@
  * NOTE: no radio on Teensy, so block #6's BLE ingress is excluded (see
  * boards/teensy41.conf -- no CONFIG_BT). Everything else builds.
  */
+
+#include <zephyr/dt-bindings/adc/adc.h>   /* ADC_ACQ_TIME_DEFAULT */
 / {
 	aliases {
 		box-gpio-port     = &gpio2;   /* box pin n -> gpio2.n (3 = board LED) */
+	};
+
+	zephyr,user {
+		/* ---- SILK: what is PRINTED on the board, per box pin ----
+		 * Same scheme as teensy40.overlay (which see): positional, index =
+		 * box pin = gpio2 bit, "" where the pad is not bonded out. The 4.1
+		 * brings four MORE gpio2 pads to the header than the 4.0: B1_02/03
+		 * (pins 36/37) and B1_12/13 (pins 35/34) -- the latter pair is
+		 * claimed by the 1588 EVENT pinmux below, hence `box-reserved`.
+		 * Values from Zephyr's board doc pin->pad table crossed with the
+		 * GPIO2 bank, not from the silkscreen. */
+		box-pin-silk = "T10","T12","T11","T13","","","","","","",
+			       "T6","T9","T32","","","","T8","T7","T36","T37",
+			       "","","","","","","","","T35","T34";
+
+		/* B1_12/13 (box pins 28/29 = silk 35/34) belong to the ENET 1588
+		 * EVENT pinmux -- see &pinctrl below. Reserved so `pin 28 mode out`
+		 * cannot re-mux a pad the PTP block is holding. */
+		box-reserved = [1c 1d];
+
+		/* ain channel -> what is printed. Identical to the teensy40: the
+		 * same eight adc1 inputs land on the same silk names on both
+		 * boards (on the 4.1, A10/A11 are header pins 24/25 rather than
+		 * bottom pads). reg IS the hardware ADC input, so silkscreen A0
+		 * is channel 7 -- the teensy40.overlay note has the whole map. */
+		box-ain-silk = "A7 (T21)","A10 (T24)","A11 (T25)","(no pin)","(no pin)",
+			       "A5 (T19)","A4 (T18)","A0 (T14)";
 	};
 
 	/* zephyr,console stays on lpuart6 (Teensy pins 0/1) for Zephyr's own printk
@@ -55,16 +84,21 @@
  * what `ptp_ready=0` was. Mirrors the RT1060 EVK, same SoC family.
  *
  * The 1588 EVENT pads are for external timestamp capture/trigger, which we do
- * not use -- they are here to give the driver a valid state to apply. They land
- * on Teensy pins 14/15 (AD_B1_02/03), otherwise LPUART2, which this box does not
- * use (our hardware console is lpuart6 on pins 0/1). Claiming them costs those
- * two pins for UART duty; they remain usable as plain GPIO for box pins.
+ * not use -- they are here to give the driver a valid state to apply. They
+ * lived on AD_B1_02/03 (pins 14/15, "otherwise LPUART2") until the ADC arrived:
+ * AD_B1_02 is adc1_in7, i.e. silkscreen A0, and two pinctrl states claiming one
+ * pad means whichever device initialises LAST owns the mux -- an A0 that reads
+ * the 1588 event line by coupling would be exactly the plausible-wrong-pad
+ * failure the channel map exists to prevent. EVENT0 has alternates on B1_12/13
+ * (pins 35/34, otherwise UART5, which this box does not use), so the claim
+ * moves there: analog stays identical to the teensy40, and those two pads stop
+ * being box pins (28/29 -- reserved in zephyr,user above).
  */
 &pinctrl {
 	pinmux_ptp: pinmux_ptp {
 		group0 {
-			pinmux = <&iomuxc_gpio_ad_b1_02_enet_1588_event2_out>,
-				 <&iomuxc_gpio_ad_b1_03_enet_1588_event2_in>;
+			pinmux = <&iomuxc_gpio_b1_13_enet_1588_event0_out>,
+				 <&iomuxc_gpio_b1_12_enet_1588_event0_in>;
 			drive-strength = "r0-6";
 			slew-rate = "slow";
 			nxp,speed = "100-mhz";
@@ -98,4 +132,67 @@
 		rx-fifo-size = <8192>;
 		tx-fifo-size = <8192>;
 	};
+};
+
+/*
+ * ---- ANALOG: the RT1062's on-chip 12-bit SAR (adc1) ----
+ *
+ * BYTE-FOR-BYTE the teensy40's analog front end -- same silicon, same eight
+ * inputs, same silk names -- so a group config moves between the two boards
+ * unchanged. boards/teensy40.overlay carries the canonical note: reg IS the
+ * hardware input on this converter (channel_id goes straight into
+ * ADC_HC[ADCH]), the pad map, and why all eight channels are declared.
+ *
+ * The one 4.1-specific consequence is above: AD_B1_02 (in7 = A0) was the 1588
+ * EVENT pad, so pinmux_ptp moved to B1_12/13.
+ */
+&pinctrl {
+	pinmux_box_ain: pinmux_box_ain {
+		group0 {
+			pinmux = <&iomuxc_gpio_ad_b1_11_adc1_in0>,
+				 <&iomuxc_gpio_ad_b0_12_adc1_in1>,
+				 <&iomuxc_gpio_ad_b0_13_adc1_in2>,
+				 <&iomuxc_gpio_ad_b0_14_adc1_in3>,
+				 <&iomuxc_gpio_ad_b0_15_adc1_in4>,
+				 <&iomuxc_gpio_ad_b1_00_adc1_in5>,
+				 <&iomuxc_gpio_ad_b1_01_adc1_in6>,
+				 <&iomuxc_gpio_ad_b1_02_adc1_in7>;
+			drive-strength = "r0-6";
+			slew-rate = "slow";
+			nxp,speed = "100-mhz";
+		};
+	};
+};
+
+box_adc: &adc1 {
+	status = "okay";
+	pinctrl-0 = <&pinmux_box_ain>;
+	pinctrl-names = "default";
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	channel@0 { reg = <0>; zephyr,gain = "ADC_GAIN_1";
+		zephyr,reference = "ADC_REF_INTERNAL"; zephyr,vref-mv = <3300>;
+		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>; zephyr,resolution = <12>; };
+	channel@1 { reg = <1>; zephyr,gain = "ADC_GAIN_1";
+		zephyr,reference = "ADC_REF_INTERNAL"; zephyr,vref-mv = <3300>;
+		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>; zephyr,resolution = <12>; };
+	channel@2 { reg = <2>; zephyr,gain = "ADC_GAIN_1";
+		zephyr,reference = "ADC_REF_INTERNAL"; zephyr,vref-mv = <3300>;
+		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>; zephyr,resolution = <12>; };
+	channel@3 { reg = <3>; zephyr,gain = "ADC_GAIN_1";
+		zephyr,reference = "ADC_REF_INTERNAL"; zephyr,vref-mv = <3300>;
+		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>; zephyr,resolution = <12>; };
+	channel@4 { reg = <4>; zephyr,gain = "ADC_GAIN_1";
+		zephyr,reference = "ADC_REF_INTERNAL"; zephyr,vref-mv = <3300>;
+		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>; zephyr,resolution = <12>; };
+	channel@5 { reg = <5>; zephyr,gain = "ADC_GAIN_1";
+		zephyr,reference = "ADC_REF_INTERNAL"; zephyr,vref-mv = <3300>;
+		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>; zephyr,resolution = <12>; };
+	channel@6 { reg = <6>; zephyr,gain = "ADC_GAIN_1";
+		zephyr,reference = "ADC_REF_INTERNAL"; zephyr,vref-mv = <3300>;
+		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>; zephyr,resolution = <12>; };
+	channel@7 { reg = <7>; zephyr,gain = "ADC_GAIN_1";
+		zephyr,reference = "ADC_REF_INTERNAL"; zephyr,vref-mv = <3300>;
+		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>; zephyr,resolution = <12>; };
 };

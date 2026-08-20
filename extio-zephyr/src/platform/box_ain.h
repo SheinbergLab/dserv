@@ -126,6 +126,14 @@ void box_ain_stats_reset(void);
 /* +26 stall ledger: floor length of the last / worst sweep starvation gap */
 void box_ain_late_gaps(uint32_t *last_us, uint32_t *max_us);
 
+/* Sweeps the DRIVER refused (adc_read() < 0, -EAGAIN excluded), and the last
+ * such errno. The polled loop SKIPS a failed sweep -- correct per sweep, and
+ * before this counter it meant a converter refusing every conversion (wrong
+ * oversample, wrong reference) was indistinguishable from a box with quiet
+ * inputs: enabled, running, publishing nothing. `sweeps` climbing while
+ * `sweep_err` climbs with it is the fingerprint to look for. */
+void box_ain_sweep_errs(uint32_t *errs, int32_t *last_rc);
+
 /* ---- v25 pacing: what is RUNNING, next to what was ASKED FOR ----
  *
  * Published as a pair (ain/dbg/pace, ain/dbg/pace_want) on purpose. Hardware

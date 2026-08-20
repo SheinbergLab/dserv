@@ -36,9 +36,48 @@ static uint32_t sweep_max_us, sweep_n;
 static uint32_t pm_suspends, pm_resumes;
 static uint8_t  ovs_exp;      /* hw-average exponent (0..7 -> 1x..128x); v24 */
 
+/* ---- which average factors the fitted converter's DRIVER accepts ----
+ *
+ * `adc_sequence.oversampling` is a request, not a guarantee, and the three
+ * drivers this tree has met answer it three different ways:
+ *
+ *   * adc_mcux_lpadc     maps exp 0..7 to AVGS 1x..128x -- the full grammar;
+ *   * adc_mcux_12b1msps_sar (RT1062) maps only 0/2/3/4/5 (1,4,8,16,32) and
+ *     returns -ENOTSUP from EVERY adc_read() for the rest -- which the polled
+ *     sampler skips silently, i.e. `ain oversample 64` = a live-looking box
+ *     that never publishes a sample;
+ *   * adc_mcp320x never reads the field at all -- any value "works" and the
+ *     silicon averages nothing.
+ *
+ * Audited per compatible, like ADC_DT_CHANNELS above; a part not listed here
+ * claims only 1x until someone reads its driver, because refusing capability
+ * a part might have is recoverable and promising capability it lacks is the
+ * dead/lying sampler both listed non-defaults actually produce. */
+#if DT_NODE_HAS_COMPAT(ADC_NODE, nxp_lpc_lpadc)
+#define ADC_OVS_MASK 0xFFu
+#elif DT_NODE_HAS_COMPAT(ADC_NODE, nxp_mcux_12b1msps_sar)
+#define ADC_OVS_MASK (BIT(0) | BIT(2) | BIT(3) | BIT(4) | BIT(5))
+#else
+#define ADC_OVS_MASK BIT(0)
+#endif
+
+uint8_t box_adc_ovs_mask(void)
+{
+	return ADC_OVS_MASK;      /* compile-time fact: valid before init() */
+}
+
 void box_adc_set_oversample(uint8_t exp)
 {
-	ovs_exp = (uint8_t) (exp & 7);
+	exp &= 7;
+	/* Clamp DOWN to the nearest factor the driver performs (bit 0 is set in
+	 * every mask). Both write paths refuse unsupported values, so this only
+	 * fires for a value persisted by older firmware -- and rounding down
+	 * trades noise, never the sweep-duration budget the saturation guard
+	 * protects, which rounding up could blow. */
+	while (exp && !(ADC_OVS_MASK & BIT(exp))) {
+		exp--;
+	}
+	ovs_exp = exp;
 }
 
 /* How many channels the fitted part has.
@@ -245,7 +284,16 @@ int box_adc_input_of(uint8_t ch, uint8_t *differential)
 		if (dt_ch[ch].gain != ADC_GAIN_1) {
 			return -1;
 		}
+#if defined(CONFIG_ADC_CONFIGURABLE_INPUTS)
 		return (int) dt_ch[ch].input_positive;
+#else
+		/* No input mux on this converter -- the driver did not select
+		 * ADC_CONFIGURABLE_INPUTS, so `input_positive` does not exist
+		 * in adc_channel_cfg at all and channel_id IS the physical
+		 * input (adc_mcux_12b1msps_sar writes it straight into
+		 * ADC_HC[ADCH]; the teensy overlays declare reg accordingly). */
+		return (int) dt_ch[ch].channel_id;
+#endif
 	}
 #else
 	ARG_UNUSED(ch);
@@ -372,6 +420,8 @@ void box_adc_stats_reset(void) { sweep_max_us = sweep_n = 0; }
 
 #else  /* no ADC node on this board */
 
+uint8_t     box_adc_ovs_mask(void) { return 0xFFu; }  /* nothing fitted to disagree */
+void        box_adc_set_oversample(uint8_t exp) { ARG_UNUSED(exp); }
 int         box_adc_init(void)     { return -ENODEV; }
 int         box_adc_ready(void)    { return 0; }
 int         box_adc_suspend(void)  { return -ENODEV; }

@@ -532,8 +532,18 @@ static inline cli_action_t box_cli_exec(box_config_t *c, const char *line,
     if (sscanf(line, "ain oversample %d", &v) == 1) {
         uint8_t e = 0;
         while ((1 << e) < v && e < 7) e++;
-        if (v < 1 || (1 << e) != v) {
-            snprintf(out, outsz, "ERR ain oversample 1|2|4|8|16|32|64|128\r\n"); return CLI_ERR;
+        /* The refusal lists what THIS converter performs, not the grammar:
+         * the RT1062's SAR does 1|4|8|16|32 and an accepted 64 would fail
+         * every sweep, silently -- same class of lie as the channel ceiling
+         * above, refused in the same place the user is looking. */
+        if (v < 1 || (1 << e) != v || !(box_adc_ovs_mask() & (1u << e))) {
+            char lst[48]; int p = 0;
+            for (uint8_t i = 0; i < 8; i++)
+                if (box_adc_ovs_mask() & (1u << i))
+                    p += snprintf(lst + p, sizeof lst - (size_t) p,
+                                  "%s%d", p ? "|" : "", 1 << i);
+            snprintf(out, outsz, "ERR ain oversample on this converter: %s\r\n", lst);
+            return CLI_ERR;
         }
         c->ain_ovs = e;
         snprintf(out, outsz, "OK ain oversample=%dx (hw average per trigger)\r\n", v);

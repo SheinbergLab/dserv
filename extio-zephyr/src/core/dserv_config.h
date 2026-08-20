@@ -609,6 +609,25 @@ static inline int ain_total_bps(const box_config_t *c)
 static inline int dserv_cfg_ain_ovs_count(const box_config_t *c)
 { return 1 << (c->ain_ovs & 7); }
 
+/* Which hardware-average factors the fitted converter actually performs: bit e
+ * set = 2^e conversions per trigger is REAL. The grammar (1..128, powers of
+ * two) is the LPADC's menu, and it is not portable: the RT1062's SAR driver
+ * refuses 2x/64x/128x at adc_read() time -- every sweep then fails and the
+ * polled sampler skips failures silently, so a box with a plausible-looking
+ * `ain oversample 64` publishes NOTHING -- and adc_mcp320x never reads the
+ * oversampling field at all, which is the quieter lie (configured 64x,
+ * silicon does 1x). Both write paths below refuse what the converter cannot
+ * do, so the config can never promise averaging the hardware will not deliver.
+ *
+ * Defined by box_adc.c from the devicetree compatible; the fallback covers the
+ * host simulator and no-ADC builds, where there is no converter to disagree
+ * with the grammar and refusing writes would only break config round-trips. */
+#if defined(BOX_HAVE_ADC)
+uint8_t box_adc_ovs_mask(void);
+#else
+static inline uint8_t box_adc_ovs_mask(void) { return 0xFFu; }
+#endif
+
 /* number of active analog groups (chans mask non-zero). */
 static inline int dserv_ain_active_count(const box_config_t *c)
 { int n = 0; for (int g = 0; g < BOX_NAGROUPS; g++) if (c->ain_group_chans[g]) n++; return n; }
@@ -975,6 +994,8 @@ static inline cfg_result_t dserv_cfg__config(box_config_t *c, const char *k,
         uint8_t e = 0;
         while ((1 << e) < v && e < 7) e++;
         if (v < 1 || (1 << e) != v) return CFG_UNKNOWN;   /* exact powers of two only */
+        if (!(box_adc_ovs_mask() & (1u << e))) return CFG_UNKNOWN; /* grammar-valid, but
+                                                * not on THIS converter -- see the mask above */
         c->ain_ovs = e; c->applied_count++; return CFG_AIN;
     }
     if (strcmp(k, "ain/clk_ppm") == 0) {   /* CTIMER source deviation, signed ppm */

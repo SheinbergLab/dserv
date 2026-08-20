@@ -535,6 +535,9 @@ static int ain_dbg_is_health(const char *leaf)
 {
 	static const char *const h[] = {
 		"ain/dbg/sweeps",   /* is it sampling at all */
+		"ain/dbg/sweep_err",/* ...or asking and being REFUSED (the dead-but-
+				     * running fingerprint: sweeps 0, sweep_err
+				     * climbing) */
 		"ain/dbg/running",  /* ...and does it think it is */
 		"ain/dbg/powered",
 		"ain/dbg/pace",     /* hardware or software paced RIGHT NOW */
@@ -551,6 +554,40 @@ static int ain_dbg_is_health(const char *leaf)
 		}
 	}
 	return 0;
+}
+
+/* A CONFIG WRITE THE BOX DECLINED.
+ *
+ * dserv_dispatch() returns CFG_UNKNOWN and applies nothing -- which until now
+ * published nothing either, so a host writing config/ain/rate 3000 got no
+ * signal at all and extio_cfg_set still answered "set ... LIVE". That is the
+ * exact failure the config-layer refusals exist to prevent, one layer up: the
+ * operator believes a setting that never took.
+ *
+ * EVENT class, for the reason ota_ack_* gives below -- a verdict displaced by a
+ * manifest burst reads as a box that never answered. The counter is what makes
+ * a REPEATED refusal of the same leaf visible: dserv retains, so re-sending the
+ * same bad value would leave the string unchanged and look like nothing
+ * happened.
+ *
+ * NOT inside the OTA-slot guard below: refusing a config write has nothing to
+ * do with having a second image slot, and parking it there cost every
+ * HalfKay-bootloader board (both Teensys) its build. */
+static uint32_t cfg_refused_n;
+
+static void cfg_refuse_pub(const char *cfgleaf)
+{
+	uint8_t f[DSERV_MSG_LEN];
+	char nm[80];
+
+	cfg_refused_n++;
+	dserv_state_name(&cfg, nm, sizeof nm, "cfg/refused");
+	dserv_msg_string(f, nm, 0, cfgleaf);
+	box_pub_event(f);
+	dserv_state_name(&cfg, nm, sizeof nm, "cfg/refused_n");
+	dserv_msg_int(f, nm, 0, (int32_t) cfg_refused_n);
+	box_pub_event(f);
+	box_console_printf("config REFUSED: %s\n", cfgleaf);
 }
 
 #if defined(BOX_HAVE_OTA_SLOT)
@@ -587,36 +624,6 @@ static void ota_ack_int(const char *leaf, int32_t v)
 	dserv_state_name(&cfg, nm, sizeof nm, leaf);
 	dserv_msg_int(f, nm, 0, v);
 	box_pub_event(f);
-}
-
-/* A CONFIG WRITE THE BOX DECLINED.
- *
- * dserv_dispatch() returns CFG_UNKNOWN and applies nothing -- which until now
- * published nothing either, so a host writing config/ain/rate 3000 got no
- * signal at all and extio_cfg_set still answered "set ... LIVE". That is the
- * exact failure the config-layer refusals exist to prevent, one layer up: the
- * operator believes a setting that never took.
- *
- * EVENT class, for the reason ota_ack_* gives above -- a verdict displaced by a
- * manifest burst reads as a box that never answered. The counter is what makes
- * a REPEATED refusal of the same leaf visible: dserv retains, so re-sending the
- * same bad value would leave the string unchanged and look like nothing
- * happened. */
-static uint32_t cfg_refused_n;
-
-static void cfg_refuse_pub(const char *cfgleaf)
-{
-	uint8_t f[DSERV_MSG_LEN];
-	char nm[80];
-
-	cfg_refused_n++;
-	dserv_state_name(&cfg, nm, sizeof nm, "cfg/refused");
-	dserv_msg_string(f, nm, 0, cfgleaf);
-	box_pub_event(f);
-	dserv_state_name(&cfg, nm, sizeof nm, "cfg/refused_n");
-	dserv_msg_int(f, nm, 0, (int32_t) cfg_refused_n);
-	box_pub_event(f);
-	box_console_printf("config REFUSED: %s\n", cfgleaf);
 }
 
 static void ota_ack_str(const char *leaf, const char *v)
@@ -2515,6 +2522,80 @@ static cfg_result_t feed(box_config_t *c, const uint8_t *frame, gpio_cmd_t *cmd)
 	return dserv_dispatch(c, &m, cmd);
 }
 
+/* The boot codec smoke test -- ITS OWN FUNCTION, and the function IS the fix.
+ *
+ * These locals -- a scratch box_config_t, a persist blob, and the blob's
+ * restored twin -- total ~3.5 KB, and main() never returns: as main locals
+ * they were a PERMANENT tax on the service loop's stack, not a boot-time one.
+ * +90's scratch copy raised main's frame from 4544 to 5760 bytes, leaving
+ * 2432 of the teensy40's 8 KB for the deepest chain this firmware has
+ * (inbound dispatch -> full manifest announce) -- which overflowed, silently,
+ * into whatever the linker placed below. Measured on hardware 2026-08-20 as
+ * the USB write-wedge: EVERY config write over USB killed the box's CDC TX
+ * mid-frame (both CDC instances dead within ~20 s, box otherwise alive),
+ * while the RESET-branch announce -- the same manifest, a few frames
+ * shallower -- survived every time. The wedge followed sizeof(smoke) through
+ * a three-point bisect and vanished when the scratch left main's frame.
+ *
+ * A frame that POPS makes the cost boot-only, which is what the +90 comment
+ * believed stack placement was buying. noinline so no optimizer can hoist
+ * these locals back into main's prologue. */
+static __attribute__((noinline)) void boot_codec_smoke(int cfg_loaded)
+{
+	uint8_t f[DSERV_MSG_LEN];
+	gpio_cmd_t cmd;
+	cfg_result_t r;
+
+	box_console_printf("\n=== extio core smoke test (Zephyr %s) ===\n", KERNEL_VERSION_STRING);
+
+	/* SCRATCH, seeded from the live config so the codec sees realistic input
+	 * while its mutations go nowhere. (+90's stack-not-static reasoning still
+	 * holds; it just belongs on a frame that returns.) */
+	box_config_t smoke = cfg;
+
+	/* config datapoint: set pin 5 to output */
+	dserv_msg_int(f, "extio/box/config/pin/5/mode", 0, 1);
+	r = feed(&smoke, f, &cmd);
+	box_console_printf("apply config/pin/5/mode=out    -> %-9s pin_mode[5]=%u\n",
+	       dserv_cfg_result_str(r), smoke.pin_mode[5]);
+
+	/* No demo dserv target: leaving dserv_ip unset keeps eth from claiming the
+	 * uplink (it needs a configured target), so a bench box stays on USB and
+	 * reachable. A real box gets its target from persisted config / the console
+	 * CLI (a later block). */
+
+	/* transient command: box-timed pulse on pin 6 -> a gpio_cmd for the platform */
+	dserv_msg_int(f, "extio/box/cmd/do/6/pulse_us", 0, 500);
+	r = feed(&smoke, f, &cmd);
+	box_console_printf("apply cmd/do/6/pulse_us=500    -> %-9s op=%d pin=%u value=%u\n",
+	       dserv_cfg_result_str(r), cmd.op, cmd.pin, cmd.value);
+
+	/* persistence round-trip (the flash write itself is platform; the codec is core) */
+	uint8_t blob[BOX_PERSIST_BLOB_MAX];
+	uint32_t n = box_persist_serialize(&cfg, blob, sizeof blob);
+	box_config_t restored = {0};
+	int ok = box_persist_deserialize(blob, n, &restored);
+	box_console_printf("persist round-trip             -> %-9s %u bytes, applied_count=%u\n",
+	       ok == 0 ? "ok" : "FAIL", n, restored.applied_count);
+
+#if defined(BOX_HAVE_PERSIST)
+	/* (the store was mounted + loaded above, before the console bound) */
+	box_console_printf("persist store                  -> config %s\n",
+	       cfg_loaded ? "LOADED from flash" : "fresh (defaults)");
+#else
+	ARG_UNUSED(cfg_loaded);
+	box_console_printf("persist store                  -> none on this board\n");
+#endif
+
+	/* the box's datapoint identity */
+	char pfx[64];
+	dserv_cfg_prefix(&cfg, pfx, sizeof pfx);
+	box_console_printf("datapoint prefix               -> %s  (dserv port %u)\n",
+	       pfx, dserv_cfg_port(&cfg));
+
+	box_console_printf("=== codec smoke test done ===\n\n");
+}
+
 int main(void)
 {
 	uint8_t f[DSERV_MSG_LEN];
@@ -2606,6 +2687,24 @@ int main(void)
 	 * exists, and no-op while ain_en is clear. */
 	dserv_cfg_ain_default(&cfg);
 
+	/* HEAL a persisted oversample this converter cannot perform. The write
+	 * paths refuse one now (dserv_dispatch + the CLI), but a blob saved by
+	 * older firmware -- or by this config on a board whose converter has the
+	 * full menu -- can still carry e.g. 64x onto an RT1062 whose driver would
+	 * then fail every sweep. Heal the CONFIG, not just the applied value, so
+	 * show/dump/announce keep agreeing with what the silicon does; say so,
+	 * because a setting that changes itself silently is its own kind of lie. */
+	if (!(box_adc_ovs_mask() & (1u << (cfg.ain_ovs & 7)))) {
+		uint8_t e = (uint8_t) (cfg.ain_ovs & 7);
+
+		while (e && !(box_adc_ovs_mask() & (1u << e))) {
+			e--;
+		}
+		box_console_printf("ain oversample %dx not on this converter; healed to %dx\n",
+				   1 << (cfg.ain_ovs & 7), 1 << e);
+		cfg.ain_ovs = e;
+	}
+
 	/* After the persisted config (rate/groups come from it) and before the
 	 * service loop, so the first blocks are already queued when the uplink
 	 * comes up. Returns -ENODEV on a box with no Click fitted, which is the
@@ -2657,58 +2756,10 @@ int main(void)
 	box_ain_hold(BOX_AIN_BOOT_HOLD_STEP_MS);
 #endif
 
-	box_console_printf("\n=== extio core smoke test (Zephyr %s) ===\n", KERNEL_VERSION_STRING);
-
-	/* SCRATCH, seeded from the live config so the codec sees realistic input
-	 * while its mutations go nowhere.
-	 *
-	 * On the stack, not in .bss: this is ~1.2 kB used once at boot, and the
-	 * board with the smallest main stack running this code has 8 kB (every
-	 * board in boards/ overrides CONFIG_MAIN_STACK_SIZE; the 4096 in prj.conf
-	 * is only a fallback). Making it static would spend permanent RAM on a
-	 * boot-time self-test, and this part is already at ~92%. */
-	box_config_t smoke = cfg;
-
-	/* config datapoint: set pin 5 to output */
-	dserv_msg_int(f, "extio/box/config/pin/5/mode", 0, 1);
-	r = feed(&smoke, f, &cmd);
-	box_console_printf("apply config/pin/5/mode=out    -> %-9s pin_mode[5]=%u\n",
-	       dserv_cfg_result_str(r), smoke.pin_mode[5]);
-
-	/* No demo dserv target: leaving dserv_ip unset keeps eth from claiming the
-	 * uplink (it needs a configured target), so a bench box stays on USB and
-	 * reachable. A real box gets its target from persisted config / the console
-	 * CLI (a later block). */
-
-	/* transient command: box-timed pulse on pin 6 -> a gpio_cmd for the platform */
-	dserv_msg_int(f, "extio/box/cmd/do/6/pulse_us", 0, 500);
-	r = feed(&smoke, f, &cmd);
-	box_console_printf("apply cmd/do/6/pulse_us=500    -> %-9s op=%d pin=%u value=%u\n",
-	       dserv_cfg_result_str(r), cmd.op, cmd.pin, cmd.value);
-
-	/* persistence round-trip (the flash write itself is platform; the codec is core) */
-	uint8_t blob[BOX_PERSIST_BLOB_MAX];
-	uint32_t n = box_persist_serialize(&cfg, blob, sizeof blob);
-	box_config_t restored = {0};
-	int ok = box_persist_deserialize(blob, n, &restored);
-	box_console_printf("persist round-trip             -> %-9s %u bytes, applied_count=%u\n",
-	       ok == 0 ? "ok" : "FAIL", n, restored.applied_count);
-
-#if defined(BOX_HAVE_PERSIST)
-	/* (the store was mounted + loaded above, before the console bound) */
-	box_console_printf("persist store                  -> config %s\n",
-	       cfg_loaded ? "LOADED from flash" : "fresh (defaults)");
-#else
-	box_console_printf("persist store                  -> none on this board\n");
-#endif
-
-	/* the box's datapoint identity */
-	char pfx[64];
-	dserv_cfg_prefix(&cfg, pfx, sizeof pfx);
-	box_console_printf("datapoint prefix               -> %s  (dserv port %u)\n",
-	       pfx, dserv_cfg_port(&cfg));
-
-	box_console_printf("=== codec smoke test done ===\n\n");
+	/* The codec smoke test lives in its own (noinline) function so its ~3.5 kB
+	 * of scratch pops before the loop below runs -- see boot_codec_smoke for
+	 * the wedge that taught us main locals are FOREVER locals here. */
+	boot_codec_smoke(cfg_loaded);
 
 	/* ---- block #3: GPIO (already initialised above, before the console) ---- */
 	/* The board's own LED and button, reported as HARDWARE FACTS rather than
@@ -3254,6 +3305,9 @@ int main(void)
 					box_ain_late_gaps(&ain_gap_l, &ain_gap_m);
 					box_adc_stats(&amx, &an);
 					box_adc_pm_stats(&asp, &arm);
+					uint32_t aerr = 0;
+					int32_t  aerc = 0;
+					box_ain_sweep_errs(&aerr, &aerc);
 					uint32_t s_trig = 0, s_fails = 0, s_resync = 0;
 					uint16_t s_spacing = 0;
 					uint8_t  s_avgs = 0, s_clamped = 0;
@@ -3277,6 +3331,13 @@ int main(void)
 						{ "ain/dbg/dropped",   adr },
 						{ "ain/dbg/late",      alt },
 						{ "ain/dbg/throttled", ath },
+						/* sweeps the driver REFUSED -- the once-invisible
+						 * failure class (wrong oversample, wrong reference:
+						 * enabled, running, publishing nothing). sweep_rc is
+						 * the last errno, negated to fit the uint table;
+						 * 5 = EIO, 134 = ENOTSUP on this libc. */
+						{ "ain/dbg/sweep_err", aerr },
+						{ "ain/dbg/sweep_rc",  (uint32_t) -aerc },
 						{ "ain/dbg/sweep_max_us", amx },
 						{ "ain/dbg/chans",     box_adc_channels() },
 						/* WHAT THE BOX IS DOING, next to what it was told.
