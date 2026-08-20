@@ -302,7 +302,50 @@ proc extio_find_data_port {} {
         # means there is nothing to identify. Identity-first behaviour is
         # unchanged whenever a device is actually present. Linux is already
         # cheap (a by-id glob, no exec) and needs no equivalent.
-        if { ![llength [glob -nocomplain /dev/cu.usbmodem*]] } { return "" }
+        set cand [lsort [glob -nocomplain /dev/cu.usbmodem*]]
+        if { ![llength $cand] } {
+            set ::extio_port_sig   ""
+            set ::extio_port_cache ""
+            return ""
+        }
+
+        # CACHE THE IDENTITY, keyed on the set of candidate ttys.
+        #
+        # The guard above only skips ioreg when NOTHING is plugged in, so a rig
+        # WITH a box present paid the exec every 2 s forever -- and the cost
+        # noted above is long out of date. Measured 2026-08-20 on this Mac:
+        # 184.8 ms, not 40-67, because fork/exec scales with the threads and
+        # address space of the process doing it, and dserv has grown.
+        #
+        # It does not merely waste time, it DESTROYS DATA on a USB box. The
+        # fork stalls the usbio reader thread for its whole duration; the box
+        # keeps writing (400 frames/s with two continuous analog groups, ~9.5 kB
+        # across 185 ms); and a CDC tty has no flow control, so macOS silently
+        # discards the overflow. Nothing counts it anywhere -- the box wrote
+        # every frame (ain/dbg/* and pub_* all clean) and usbioStats reports no
+        # bad frames, because whole frames are lost rather than mangled.
+        #
+        # MEASURED by moving this poll and changing nothing else:
+        #   2 s poll  -> 21 gaps of 145-270 ms per 45 s, 633 duplicate stamps
+        #   30 s poll ->  1 gap,                          41 duplicate stamps
+        # Downstream that is an analog cursor freezing twice a second.
+        #
+        # Ethernet boxes never showed this: TCP has flow control, and there is
+        # no tty buffer to overflow.
+        #
+        # Identity depends on WHICH devices exist, so re-running ioreg over an
+        # unchanged device set cannot produce a different answer. Hot-swap still
+        # works -- plugging or unplugging changes the glob, which busts the
+        # cache -- and the dead-reader reopen path keys off usbioAlive in
+        # extio_service, not off this proc.
+        if { [info exists ::extio_port_sig] &&
+             [info exists ::extio_port_cache] &&
+             $cand eq $::extio_port_sig } {
+            return $::extio_port_cache
+        }
+        set ::extio_port_sig   $cand
+        set ::extio_port_cache ""
+
         if { ![catch { exec ioreg -r -c IOUSBHostDevice -l -w0 } out] } {
             set product ""; set best ""
             foreach line [split $out \n] {
@@ -315,8 +358,15 @@ proc extio_find_data_port {} {
                     }
                 }
             }
-            if { $best ne "" } { return $best }
+            if { $best ne "" } {
+                set ::extio_port_cache $best
+                return $best
+            }
         }
+        # An ioreg that failed or identified nothing leaves the cache "" for
+        # this device set. That is deliberately still cached: retrying a failing
+        # exec every 2 s is the same data-destroying stall as succeeding at it,
+        # and a device appearing later changes the glob and busts the cache.
         # NO FALLBACK, deliberately -- removed 2026-07-29 to match Linux below.
         #
         # This used to end with `lindex [lsort -dictionary [glob /dev/cu.usbmodem*]]
