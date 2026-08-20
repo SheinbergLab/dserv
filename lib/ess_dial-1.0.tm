@@ -267,7 +267,26 @@ namespace eval ess {
     # catcher at the band, the in_band affordance. A stim that already
     # draws a mouse dial draws this one with no changes at all.
     variable dial_dpad_rate      8.0    ;# deg of travel per second held
-    variable dial_dpad_tick_ms   16     ;# ~60 Hz
+    # How finely the walking cursor is DRAWN, in ms. Not how fast it travels:
+    # dial_dpad_tick integrates rate*dt from [now], so changing this changes
+    # smoothness and nothing else.
+    #
+    # Was 16 ("about a frame") before anything measured it, and 60 Hz is
+    # precisely the wrong neighbour to sit next to: 1000/16 = 62.5 Hz beats
+    # against a 60 Hz display at 2.5 Hz, so roughly every 400 ms one frame
+    # gets two updates or none. That reads as a periodic hitch rather than as
+    # uniform motion, and it is the milder twin of a bug this file already
+    # had once -- astick shipped a 16 ms publish gate, measured 50 Hz, and
+    # juddered for exactly the same reason.
+    #
+    # 8 ms (125 Hz) clears any display rate, so every frame draws a fresh
+    # position. The cost is 125 timer wakeups a second instead of 62.5 and a
+    # ~30-byte datapoint at 125 Hz -- negligible beside the analog stream a
+    # stick-driven dpad is already carrying.
+    #
+    # It also halves the quantization on WHEN the cursor reached the ring,
+    # since the commit check runs per tick, so arrival RT gets sharper too.
+    variable dial_dpad_tick_ms   8      ;# 125 Hz, above any display rate
     # ring: reaching the band IS the response. Held apart from the travel
     # so the criterion can be sharpened later -- a dwell rule ("stop on the
     # target and stay there") changes only this switch and dial_dpad_tick's
@@ -571,7 +590,7 @@ namespace eval ess {
         set dial_dpad_rate        8.0
         set dial_dpad_accel       0.0
         set dial_dpad_rate_max    0.0
-        set dial_dpad_tick_ms     16
+        set dial_dpad_tick_ms     8     ;# see the variable: 16 beat with 60 Hz
         set dial_dpad_commit      ring
         set dial_stick_rate     180.0
         set dial_stick_deadzone 0.08
