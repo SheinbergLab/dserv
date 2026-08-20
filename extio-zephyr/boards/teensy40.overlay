@@ -154,6 +154,15 @@
 			drive-strength = "r0-6";
 			slew-rate = "slow";
 			nxp,speed = "100-mhz";
+			/* NOT OPTIONAL for analog: Zephyr encodes PKE as
+			 * !bias-disable (soc/nxp/imxrt/imxrt10xx/pinctrl_soc.h),
+			 * so omitting this leaves the pad KEEPER on -- a weak
+			 * digital latch that fights the source and compresses a
+			 * pot's apparent range (the classic RT10xx analog trap;
+			 * PJRC's core clears PKE for analog pins for the same
+			 * reason). Found 2026-08-20 as a joystick that could not
+			 * reach the rails. */
+			bias-disable;
 		};
 	};
 };
