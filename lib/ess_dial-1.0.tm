@@ -50,6 +50,7 @@
 #
 
 package provide ess_dial 1.0
+package require settings   ;# rig-declared dial routing (see dial sources)
 
 namespace eval ess {
 
@@ -523,6 +524,78 @@ namespace eval ess {
         dservSet ess/dial/bound $dial_bound_sources
         return $dial_bound_sources
     }
+
+    ########################################################################
+    # The binding, DECLARED
+    #
+    # Same argument as `joystick transport`: dial_bind is the mechanism, and
+    # calling it from local/post-input.tcl leaves the routing in hand-written
+    # Tcl that no page can see or validate. Declared, it rides the settings
+    # API and publishes a schema a GUI renders itself from.
+    #
+    #     setting dial sources {mouse touch}
+    #     setting dial sources stick
+    #
+    # EMPTY IS THE DEFAULT AND A NO-OP, exactly as `none` is for the joystick
+    # transport: it means "this rig does not declare one", which is not the
+    # same as "there is none". A rig with a hand-written dial_bind keeps
+    # working untouched.
+    #
+    # Note the module default when nothing is bound is {swipe touch}, chosen
+    # in dial_init -- not here. Declaring "" leaves that alone rather than
+    # asserting it, so the two cannot drift apart.
+    #
+    # THE EXCLUSIONS ARE CHECKED AT THE DOOR. dial_init enforces them too and
+    # must keep doing so (a protocol can pass -sources directly), but a rig
+    # file is read at boot and a bad line there would otherwise surface much
+    # later as an error from whichever system happened to load first. The
+    # settings contract is that a wrong declared value is rejected where it
+    # is written, with a message that teaches.
+    proc dial_sources_norm { v } {
+        set v [string trim $v]
+        if { $v eq "" } { return "" }
+        set valid {swipe touch joystick mouse stick dpad astick}
+        foreach s $v {
+            if { $s ni $valid } {
+                error "dial sources: unknown source '$s' -- want any of: $valid"
+            }
+        }
+        # swipe/stick/astick all read slider/position, and on an analog rig
+        # dpad's sectors are derived from that same stick, so any two of them
+        # would drive one cursor two ways.
+        set steering [lsearch -all -inline -regexp $v {^(swipe|stick|astick|dpad)$}]
+        if { [llength $steering] > 1 } {
+            error "dial sources: {$steering} are alternative readings of the\
+                   same device -- choose one"
+        }
+        if { "joystick" in $v && "dpad" in $v } {
+            error "dial sources: joystick and dpad are alternative readings of\
+                   the same switches -- choose one"
+        }
+        return $v
+    }
+
+    settings::declare dial sources -default "" \
+        -validate ::ess::dial_sources_norm \
+        -doc "which transports answer a dial: any combination of\
+              swipe touch joystick mouse stick dpad astick, first to commit\
+              wins. Empty leaves it to the protocol and the module default\
+              {swipe touch}. A protocol's own -sources still wins over this\
+              (the joystick task names its own, because there the transport\
+              IS the experiment)" \
+        -apply {::ess::dial_bind_from_settings}
+
+    proc dial_bind_from_settings { args } {
+        if { [catch { ::settings::get dial sources } v] } { return }
+        if { [string trim $v] eq "" } { return }   ;# no-op; see above
+        dial_bind $v
+        return
+    }
+
+    # Apply whatever the rig declared, once, at load. `get` lazy-loads the
+    # file, so there is no boot ordering to get wrong; catch because a bare
+    # interp with no rig file is a normal way to load this module.
+    catch { dial_bind_from_settings }
 
     # ::ess::dial_init ?-sources {swipe touch}?
     #                  ?-deadband_deg N?
