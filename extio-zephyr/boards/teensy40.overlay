@@ -47,12 +47,9 @@
 	 * console CDC -- separate devices, no conflict. */
 };
 
-/* No settings storage on the Teensy 4.0 (XIP-from-flash write hazard, and no SD
- * slot). This board is the minimal USB-HS test system; persistence is on the
- * RW612 (NVS) and, for the 4.1, optionally the SD card. */
-
 /* Settings storage: NVS needs a `storage_partition`, which the teensy4 board does
- * not define. Carve the last 32 KB of the 2 MB W25Q16, far past the ~114 KB app.
+ * not define. Carve 32 KB near the top of the 2 MB W25Q16, far past the ~140 KB
+ * app -- but NOT the last sector. See the note below; that one is not writable.
  *
  * 32 KB = EIGHT 4096-byte sectors. NVS requires a MINIMUM OF TWO (nvs_mount:
  * `sector_count < 2` -> -EINVAL) because garbage collection moves still-valid
@@ -63,16 +60,49 @@
  *
  * Writing the flash the chip XIP-executes from is safe here because
  * CONFIG_FLASH_MCUX_FLEXSPI_XIP=y (enabled automatically by the RT10xx SoC
- * defconfig) relocates the erase/write path to ITCM. See PORTING.md. */
+ * defconfig) relocates the erase/write path to ITCM. See PORTING.md.
+ *
+ * 0x1f7000, NOT 0x1f8000 -- BACKED OFF BY ONE SECTOR, and that one sector is the
+ * whole reason persistence never worked on this board.
+ *
+ * Measured on hardware 2026-08-21 with the boot-time sector scan (box_flash.c):
+ * of the eight sectors in the old 0x1f8000 partition, 0-6 erased clean and
+ * sector 7 -- 0x1FF000, the LAST 4 KB of the 2 MB part -- did not erase at all.
+ * flash_erase() returned 0 and byte 0 still read 0x46. The chip accepts the
+ * erase command for that sector and silently does nothing, which is what a
+ * write-protected / reserved region looks like from software. (Consistent with
+ * HalfKay preserving that region across reflashes -- PORTING.md 2026-07-23
+ * noted config surviving a reflash and read it as a courtesy; it is more likely
+ * that the top sector is simply not erasable.)
+ *
+ * NVS's failure mode from that one sector was total, not partial: nvs_mount()
+ * erases as it scans, nvs_flash_erase_sector() compares the WHOLE sector after
+ * erasing and returns -ENXIO when the readback is not the erase value, so
+ * hitting sector 7 failed the entire mount. Every `save` then returned that
+ * stored -ENXIO and the box silently reverted its whole configuration on each
+ * power cycle.
+ *
+ * 0x1f7000 + 32 KB ends at exactly 0x1FF000, so the partition still gets its
+ * eight sectors and stops one byte short of the sector that cannot be erased.
+ * If you ever move this, keep the end <= 0x1FF000.
+ *
+ * WHY THE TEENSY41 NEVER SAW THIS, and why that made it look validated: its
+ * partition is 64 KB at 0x7f0000 = 16 sectors, but box_flash.c caps NVS at
+ * BOX_NVS_SECTORS (8), so NVS only ever touches 0x7f0000-0x7f8000 and the 8 MB
+ * part's final sector at 0x7FF000 sits inside the partition but outside the
+ * range NVS uses. The 4.1 passed by luck of geometry. This board's partition
+ * was EXACTLY eight sectors, so the cap clipped nothing and the last one was in
+ * play. The 4.1 needs no change -- but do not shrink its partition to 32 KB
+ * without moving its base down too. */
 &w25q16jvuxim {
 	partitions {
 		compatible = "fixed-partitions";
 		#address-cells = <1>;
 		#size-cells = <1>;
 
-		storage_partition: partition@1f8000 {
+		storage_partition: partition@1f7000 {
 			label = "storage";
-			reg = <0x001f8000 DT_SIZE_K(32)>;
+			reg = <0x001f7000 DT_SIZE_K(32)>;
 		};
 	};
 };

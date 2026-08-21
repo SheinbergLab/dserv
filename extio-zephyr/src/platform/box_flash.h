@@ -30,6 +30,24 @@ void box_flash_geometry(uint32_t *sector_size, uint32_t *sector_count);
 /* Raw inputs to the mount, for diagnosing a geometry failure. */
 void box_flash_debug(int *pi_rc, uint32_t *pi_size, uint32_t *offset);
 
+/* Erase probe, run ONLY when the mount failed: 8 bytes at the partition offset
+ * before and after an explicit one-sector erase, plus the three return codes
+ * (rd/rd2/er; 1 = the probe did not run). All-0xFF `after` means the erase took
+ * and NVS's readback verify is the liar; `after` == `before` means the erase is
+ * a silent no-op -- chip, LUT, or block-protect bits. The two need opposite
+ * fixes, and -ENXIO alone cannot tell them apart. */
+void box_flash_probe(const uint8_t **before, const uint8_t **after,
+                     int *rd, int *rd2, int *er);
+
+/* Full-sector erase scan, also mount-failure only. For each of `n` sectors:
+ * er[] = flash_erase rc, bad[] = first offset that is NOT the erase value
+ * (-1 = the whole sector erased clean, -2 = read error), val[] = the byte
+ * found there. This is the question NVS actually asks -- nvs_flash_cmp_const()
+ * compares the entire sector, so a PARTIAL erase passes a few-byte check and
+ * still fails the mount. */
+void box_flash_sector_scan(uint32_t *n, const int32_t **bad,
+                           const uint8_t **val, const int **er);
+
 /* Load the stored blob into buf (<= max). Returns byte count, or -1 if none/err. */
 int box_flash_load(uint8_t *buf, uint32_t max);
 /* Delete the saved config so the next boot uses the compiled defaults. NOT the

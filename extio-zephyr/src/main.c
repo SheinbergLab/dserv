@@ -2790,9 +2790,27 @@ int main(void)
 	} else {
 		box_console_printf("eth: no lease (link=%d)\n", box_net_eth_link());
 	}
+	box_console_printf("PTP hw clock: ready=%d  now=%llu ns\n",
+	       (int) box_ptp_ready(), (unsigned long long) box_ptp_now_ns());
+#else
+	box_console_printf("no Ethernet on this board -- USB-only uplink\n");
+#endif
+
 #if defined(BOX_HAVE_PERSIST)
 	/* Say so LOUDLY when persistence is dead: every `save` will fail and every
-	 * reboot silently reverts to defaults, which reads as a firmware bug. */
+	 * reboot silently reverts to defaults, which reads as a firmware bug.
+	 *
+	 * OUTSIDE the CONFIG_NETWORKING block, and that placement is the whole
+	 * point. This sat inside it until 2026-08-21, so the one board that most
+	 * needs it never printed it: teensy40 is the USB-ONLY target and compiles
+	 * networking out, which took the warning with it. A teensy40 with a dead
+	 * NVS therefore booted in complete silence, accepted a full configuration,
+	 * acknowledged every write -- and lost the lot on the next replug, with
+	 * `save FAILED err=-6` on a console nobody had attached as the only clue.
+	 * Persistence has nothing to do with having an Ethernet MAC; this is the
+	 * same mistake as +86's cfg_refuse_pub inside BOX_HAVE_OTA_SLOT, which
+	 * cost both Teensys their build. Board-independent concern, board-
+	 * independent placement. */
 	if (box_persist_mount_err) {
 		/* Everything needed to diagnose it, in one line: a bare "FAILED" sent
 		 * this hunt into the FlexSPI driver for hours when the answer was a
@@ -2806,12 +2824,45 @@ int main(void)
 		                   "sectors %ux%u\n",
 		                   (unsigned) poff, pirc, (unsigned) pisz,
 		                   (unsigned) sc, (unsigned) ss);
+		/* The erase probe. `after` all-FF => the erase TOOK and NVS's readback
+		 * verify is misreading (coherence: FlexSPI AHB buffers / D-cache).
+		 * `after` == `before` => the erase is a silent no-op (chip/LUT/
+		 * block-protect). See box_flash.h. */
+		const uint8_t *pb = NULL, *pa = NULL;
+		int prd = 1, prd2 = 1, per = 1;
+		box_flash_probe(&pb, &pa, &prd, &prd2, &per);
+		if (prd != 1 && pb && pa) {
+			box_console_printf("persist:   probe rd=%d/%d erase=%d\n",
+			                   prd, prd2, per);
+			box_console_printf("persist:   before %02x %02x %02x %02x "
+			                   "%02x %02x %02x %02x\n",
+			                   pb[0], pb[1], pb[2], pb[3],
+			                   pb[4], pb[5], pb[6], pb[7]);
+			box_console_printf("persist:   after  %02x %02x %02x %02x "
+			                   "%02x %02x %02x %02x\n",
+			                   pa[0], pa[1], pa[2], pa[3],
+			                   pa[4], pa[5], pa[6], pa[7]);
+		}
+		/* The full-sector scan -- the question NVS actually asks. `clean` on
+		 * every sector puts the fault in NVS's read path; a first-bad offset
+		 * names the granularity that really erased. */
+		uint32_t sn = 0; const int32_t *sbad = NULL;
+		const uint8_t *sval = NULL; const int *ser = NULL;
+		box_flash_sector_scan(&sn, &sbad, &sval, &ser);
+		for (uint32_t s = 0; s < sn && sbad && sval && ser; s++) {
+			if (sbad[s] == -1) {
+				box_console_printf("persist:   sect %u erase=%d clean\n",
+				                   (unsigned) s, ser[s]);
+			} else if (sbad[s] == -2) {
+				box_console_printf("persist:   sect %u erase=%d READ ERROR\n",
+				                   (unsigned) s, ser[s]);
+			} else {
+				box_console_printf("persist:   sect %u erase=%d first_bad="
+				                   "0x%x val=%02x\n", (unsigned) s, ser[s],
+				                   (unsigned) sbad[s], sval[s]);
+			}
+		}
 	}
-#endif
-	box_console_printf("PTP hw clock: ready=%d  now=%llu ns\n",
-	       (int) box_ptp_ready(), (unsigned long long) box_ptp_now_ns());
-#else
-	box_console_printf("no Ethernet on this board -- USB-only uplink\n");
 #endif
 	box_console_printf("console: %s (config/console cdc|uart; save+reboot)\n",
 	       dserv_console_str((uint8_t) dserv_cfg_console_mode(&cfg)));

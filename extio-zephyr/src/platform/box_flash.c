@@ -33,6 +33,37 @@ static int  mount_err;            /* last nvs/flash errno, for reporting */
 static int  dbg_pi_rc;            /* flash_get_page_info_by_offs() rc */
 static uint32_t dbg_pi_size;      /* ...and the page size it reported */
 
+/* Mount-failure erase probe (see box_flash_init) -- valid only when the mount
+ * failed; zeroed otherwise. */
+static uint8_t dbg_probe_before[8], dbg_probe_after[8];
+static int dbg_probe_rd = 1, dbg_probe_rd2 = 1, dbg_probe_er = 1;  /* 1 = not run */
+
+/* Per-sector full-sector erase scan. bad[] is the first non-erased offset in
+ * that sector, -1 = fully erased ("clean"), -2 = read error. */
+static int32_t dbg_sect_bad[8];
+static uint8_t dbg_sect_val[8];
+static int     dbg_sect_er[8];
+static uint32_t dbg_sect_n;
+
+void box_flash_sector_scan(uint32_t *n, const int32_t **bad,
+                           const uint8_t **val, const int **er)
+{
+	if (n)   *n   = dbg_sect_n;
+	if (bad) *bad = dbg_sect_bad;
+	if (val) *val = dbg_sect_val;
+	if (er)  *er  = dbg_sect_er;
+}
+
+void box_flash_probe(const uint8_t **before, const uint8_t **after,
+                     int *rd, int *rd2, int *er)
+{
+	if (before) *before = dbg_probe_before;
+	if (after)  *after  = dbg_probe_after;
+	if (rd)     *rd     = dbg_probe_rd;
+	if (rd2)    *rd2    = dbg_probe_rd2;
+	if (er)     *er     = dbg_probe_er;
+}
+
 int box_flash_last_error(void) { return mount_err; }
 
 void box_flash_geometry(uint32_t *sector_size, uint32_t *sector_count)
@@ -81,6 +112,78 @@ int box_flash_init(void)
 	rc = nvs_mount(&fs);
 	if (rc != 0) {
 		mount_err = rc;                  /* -EDEADLK = unrecognised region */
+		/* ERASE PROBE -- runs ONLY on a failed mount, and it exists to split
+		 * the one ambiguity -ENXIO leaves.
+		 *
+		 * -ENXIO out of nvs_mount comes from nvs_flash_erase_sector(): it
+		 * erases, reads back, and returns -ENXIO when the readback is not the
+		 * erase value. Two very different faults produce that, and they need
+		 * opposite fixes:
+		 *
+		 *   erase never happened   -> chip/LUT/protection (wrong part, or the
+		 *                             status-register block-protect bits are
+		 *                             set over this region)
+		 *   erase happened, read   -> coherence: the FlexSPI AHB buffers or the
+		 *   came back stale           D-cache are serving pre-erase bytes
+		 *
+		 * flash_flexspi_nor_erase() returns 0 unconditionally -- it discards
+		 * the result of every erase_sector it issues -- so the driver cannot
+		 * tell us which. Read 8 bytes, erase that one sector, read the same 8
+		 * bytes again, print both. All-0xFF after means the erase DID take and
+		 * NVS's verify is the liar; unchanged bytes mean the erase is a no-op.
+		 *
+		 * Safe: the partition failed to mount, so it holds nothing we can lose,
+		 * and this touches only the first sector of storage_partition.
+		 *
+		 * Reported through box_flash_probe() rather than printk, for the same
+		 * reason the mount errno is: this board's Zephyr console is not the
+		 * console a person is reading. The box CDC is, and main() owns it. */
+		dbg_probe_rd  = flash_read(fs.flash_device, fs.offset,
+		                           dbg_probe_before, sizeof dbg_probe_before);
+		dbg_probe_er  = flash_erase(fs.flash_device, fs.offset, fs.sector_size);
+		dbg_probe_rd2 = flash_read(fs.flash_device, fs.offset,
+		                           dbg_probe_after, sizeof dbg_probe_after);
+
+		/* SCAN THE WHOLE SECTOR, because 8 bytes is not the question NVS asks.
+		 *
+		 * The first cut of this probe read 8 bytes either side of the erase,
+		 * saw ff ff ff ff ff ff ff ff, and concluded the erase was fine --
+		 * while nvs_flash_erase_sector() was still returning -ENXIO for the
+		 * same sector. nvs_flash_cmp_const() compares ALL sector_size bytes.
+		 * A partial erase -- one page cleared, the rest of the sector left
+		 * dirty -- passes an 8-byte check and fails NVS's, and every board
+		 * where this works would look identical at 8 bytes.
+		 *
+		 * So: erase each sector in turn and report the FIRST offset that is
+		 * not the erase value. `clean` on every sector means the erase really
+		 * is complete and the fault is in NVS's read path; a first_bad offset
+		 * names the granularity that actually erased. */
+		for (uint32_t s = 0; s < fs.sector_count && s < 8; s++) {
+			off_t base = fs.offset + (off_t) s * fs.sector_size;
+			uint8_t buf[64];
+			int er = flash_erase(fs.flash_device, base, fs.sector_size);
+
+			dbg_sect_er[s] = er;
+			dbg_sect_bad[s] = -1;          /* -1 = clean */
+			dbg_sect_val[s] = 0xff;
+			for (uint32_t off = 0; off < fs.sector_size; off += sizeof buf) {
+				if (flash_read(fs.flash_device, base + off, buf, sizeof buf)) {
+					dbg_sect_bad[s] = -2;  /* -2 = read error */
+					break;
+				}
+				for (uint32_t i = 0; i < sizeof buf; i++) {
+					if (buf[i] != 0xff) {
+						dbg_sect_bad[s] = (int32_t) (off + i);
+						dbg_sect_val[s] = buf[i];
+						break;
+					}
+				}
+				if (dbg_sect_bad[s] != -1) {
+					break;
+				}
+			}
+		}
+		dbg_sect_n = fs.sector_count < 8 ? fs.sector_count : 8;
 		return rc;
 	}
 	mounted = true;
