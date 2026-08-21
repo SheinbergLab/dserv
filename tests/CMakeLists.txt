@@ -81,7 +81,7 @@ Checked 101 vals."
 #
 find_program(TCLSH_EXECUTABLE NAMES tclsh tclsh9.0 tclsh8.6)
 if(TCLSH_EXECUTABLE)
-  foreach(t ess_dial ess_dial_dpad ess_dial_sectors ess_binds ess_resolve ess_live_params)
+  foreach(t ess_dial ess_dial_dpad ess_dial_sectors ess_binds ess_resolve ess_live_params ess_transports)
     add_test(
         NAME ${t}
         COMMAND ${TCLSH_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tests/test_${t}.tcl"
