@@ -107,6 +107,62 @@ comment saying where the routing went. Keep a `.bak-declared` copy.
 Migrate a binding even if it currently resolves to nothing — it records
 intent, and `ess/inputs/<key>` is what reports whether hardware answers.
 
+## 3a. Swapping a box: the LABEL form is what survives
+
+Prefer `box:<dev>/<group>/<label>` over `box:<dev>/<pin>`. Measured on
+psychophysics 2026-08-21, swapping an rp2350 box for an mcxn947: `btn_left`
+moved from `response` bit 1 to bit 0, on different pins, and **the host config
+needed no edit at all** — the label resolves through the box's own manifest.
+A pin-addressed binding would have silently pointed at the wrong line.
+
+So the new box only has to reproduce the NAMES: the group label, and the
+member labels. Pin numbers are free.
+
+**JOYSTICK LABELS MUST BE BARE DIRECTION WORDS. Buttons token-match; the
+joystick does not.** `button_group_map` splits on `_`/`-`, so `btn_left`
+resolves to `left`. `joystick_dir_canon` is an exact switch on
+`up|down|left|right` (or `u|d|l|r`), so `joy_up`, `resp_up`, `hat_up` do NOT
+canonicalize. Labelling the joystick consistently with the buttons is the
+natural thing to do and it is exactly what this punishes.
+
+With no canonical label, `joystick_map_for` warns and falls back to
+POSITIONAL bits 0-3 = up, down, left, right in ascending pin order. On
+psychobox (`joy_down`/`joy_up`/`joy_right`/`joy_left` on pins 2,3,4,6) that
+fallback would have given a clean up<->down AND left<->right flip — the same
+symmetric flip that cost a rig session once before, where the ess decode was
+blameless.
+
+Check the map BEFORE binding, and confirm it is not the fallback:
+
+    dservctl -H <rig> ess '
+      array unset ::ess::joystick_maps; array set ::ess::joystick_maps {}
+      ::ess::joystick_map_for extio/<box>/state/group/joystick'
+
+The fallback is exactly `{up 0 down 1 left 2 right 3}`. Anything else is
+label-derived and therefore honest about the wiring.
+
+## 3b. A relabel does NOT invalidate the resolver's cache
+
+After relabelling a box, `ess/inputs/*` keeps reporting the OLD labels until
+the cache is flushed or dserv restarts — and it lies in the alarming
+direction, saying `unresolved` for a rig that is actually fine:
+
+    status unresolved ... detail {no direction labels in {joy_down joy_up ...}}
+
+while `joystick_map_for` on the same box already derives the correct map.
+Two independent caches: `joystick_maps` (which `joystick_init` clears) and
+`button_group_maps` (which nothing clears on a `state/label/*` change).
+
+    dservctl -H <rig> ess '
+      array unset ::ess::button_group_maps;   array set ::ess::button_group_maps {}
+      array unset ::ess::button_group_warned; array set ::ess::button_group_warned {}
+      ::ess::joystick_publish_status
+      ::ess::button_publish_status 0
+      ::ess::button_publish_status 1'
+
+Worth fixing at source: `button_group_map` should invalidate on a label
+update, the way `extioconf` already purges its decoded map.
+
 ## 4. Verify by WIPE and cold reload
 
 This is the step that makes the migration real. Anything short of it can pass
@@ -141,14 +197,64 @@ cost a wrong conclusion about rpi500's buttons, which work fine.
 without hardcoding anything, and `/source` shows whether a value is a default,
 declared in the file, or a live override.
 
+## Getting to a rig at all
+
+The lab rigs sit on their own LAN behind a MikroTik; the office reaches a
+CONSOLE by a forwarded ssh port, and the dserv host is another hop in. So:
+
+    Host rig1                    # the console, via the MikroTik's forwarded port
+        HostName 10.2.145.116
+        Port 322
+        User lab
+        IdentityFile ~/.ssh/id_qpcsnet
+        IdentitiesOnly yes
+
+    Host rig1-dserv              # the dserv host, one hop further
+        HostName 192.168.88.40
+        HostKeyAlias rig1-dserv
+        User lab
+        ProxyJump rig1
+        IdentityFile ~/.ssh/id_qpcsnet
+        IdentitiesOnly yes
+
+**EVERY RIG LAN REUSES 192.168.88.x, SO EVERY HOST NEEDS A `HostKeyAlias`.**
+Without it, rig1's `.40` and psychophysics's `.40` are the same key in
+`known_hosts`, and the second one you touch fails with
+`REMOTE HOST IDENTIFICATION HAS CHANGED`. This is not hypothetical — it bit on
+`.50` (the stim partners) on 2026-08-21. `HostKeyAlias` keys `known_hosts` by
+the alias instead of the address, so each host is tracked separately.
+
+`IdentitiesOnly yes` matters too when several keys exist: ssh otherwise offers
+them all in order and a server with the default `MaxAuthTries 6` can refuse
+before reaching the right one — which reads as "permission denied", not "I ran
+out of attempts".
+
+The key must be on BOTH hops. `ssh-copy-id -i <key>.pub <alias>` handles the
+second one through `ProxyJump` once the first is in.
+
+`dservctl` has no port option (it always dials 2560), so a tunnel would have to
+land on the local 2560 and collide with a dev machine's own dserv. Running
+`dservctl` ON the rig over ssh avoids that entirely, and is what the commands
+in this runbook assume.
+
 ## Status by rig (2026-08-21)
 
 | rig | joystick | buttons | dial | slider calibration |
 |---|---|---|---|---|
-| dev Mac | declared | declared | n/a | pending |
+| dev Mac | declared | declared | n/a | in db (`stick` profile) |
 | rpi500 | declared | declared | declared | in db |
 | raspberrypi | nothing to migrate — never had imperative bindings or a `local/slider.tcl` | | | |
-| officepi | imperative | imperative | imperative | not run |
+| officepi | declared | declared | declared | in db |
+| rig1 | unbound (hw present, labelled) | declared **by pin** | n/a | n/a |
+| psychophysics | declared | declared | n/a | n/a |
 
 A rig with nothing to migrate is a normal outcome. Check before assuming
 there is work.
+
+**rig1 is the one with work left.** Its buttons are pin-addressed
+(`box:*/14`), which will not survive the mcxn947 swap — put pins 13/14 into a
+labelled group on the box first, as pins 6-9 already are, and the binding
+becomes `box:*/<group>/btn_left` and stops caring about pins. Its joystick
+group is wired and canonically labelled but bound to nothing;
+`setting joystick transport box_group` is the one line, after checking the map
+is label-derived per 3a.
