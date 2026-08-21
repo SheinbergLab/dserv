@@ -7,6 +7,7 @@ package require tcljson
 package require dslog
 package require ess_paths
 package require ess_dial
+package require settings   ;# rig-declared input routing (see joystick transport)
 package require qpcs 3.42 ;# stim-event sync + variable-length binary push (dsSocketSendBytesVar)
 
 catch {System destroy}
@@ -4061,6 +4062,87 @@ namespace eval ess {
         catch { joystick_publish_status }
         return $joystick_binding
     }
+
+    ########################################################################
+    # The binding, DECLARED
+    #
+    # joystick_bind above is the mechanism, and calling it from
+    # local/post-input.tcl means the routing lives in hand-written Tcl: not
+    # visible to a page, not validated, not changeable without editing a
+    # file. Declaring it instead puts it on the settings API, which publishes
+    # settings/<sub>/<key>/schema -- the type, the allowed values and the doc
+    # -- so a GUI renders the right control without hardcoding any of it, and
+    # settings::put ... -persist writes local/rig.tcl surgically.
+    #
+    # The declaration is the source of truth; joystick_bind stays the
+    # mechanism it drives. `none` is the default and a NO-OP, so a rig with a
+    # hand-written joystick_bind and no setting keeps working exactly as it
+    # did -- this adds a way to say it, it does not take the old one away.
+    #
+    # See config/juicerconf.tcl for the same shape on `juicer destination`.
+    settings::declare joystick transport -default none \
+        -values {none analog box_group} \
+        -doc "what answers joystick_dir: `analog` reads the calibrated stick\
+              (slider/position) and quantizes it to eight sectors;\
+              `box_group` reads four switches as an extio chord group;\
+              `none` leaves the choice to whatever a protocol asks for" \
+        -apply {::ess::joystick_bind_from_settings}
+
+    # Engage at this fraction of the stick's MEASURED travel
+    # (slider/full_scale, which slider::cal_* measures). A fraction rather
+    # than an absolute threshold because "2.0" only means something against a
+    # particular stick: the right value was 2.0, 3.9 and 3.8 on three sticks
+    # in one afternoon, and any of them written here would go stale the
+    # moment that stick was recalibrated.
+    settings::declare joystick threshold_frac -default 0.40 -type double \
+        -doc "analog transport: deflection past this fraction of measured\
+              travel reads as deflected (release is 0.6 of it)" \
+        -apply {::ess::joystick_bind_from_settings}
+
+    settings::declare joystick box_device -default * \
+        -doc "box_group transport: which box, or * to follow whichever is\
+              present (hot-swap transparent)" \
+        -apply {::ess::joystick_bind_from_settings}
+
+    settings::declare joystick box_group -default joystick \
+        -doc "box_group transport: the chord group's label on the box, whose\
+              members are labelled up/down/left/right" \
+        -apply {::ess::joystick_bind_from_settings}
+
+    # Reads every key rather than just the one that changed: the transport
+    # decides which of the others even apply, so a change to any of them
+    # rebuilds the same way.
+    proc joystick_bind_from_settings { args } {
+        if { [catch { ::settings::get joystick transport } t] } { return }
+        switch -exact -- $t {
+            none {
+                # Deliberately NOT joystick_bind {} -- that would CLEAR an
+                # imperative binding a rig may still be relying on. `none`
+                # means "this rig does not declare one", not "there is none".
+                return
+            }
+            analog {
+                set cfg {}
+                catch {
+                    set tf [::settings::get joystick threshold_frac]
+                    if { $tf > 0 } { lappend cfg threshold_frac $tf }
+                }
+                joystick_bind analog $cfg
+            }
+            box_group {
+                set dev * ; set grp joystick
+                catch { set dev [::settings::get joystick box_device] }
+                catch { set grp [::settings::get joystick box_group] }
+                joystick_bind box [list $dev $grp]
+            }
+        }
+        return
+    }
+
+    # Apply whatever the rig declared, once, at load. `get` lazy-loads the
+    # file, so there is no boot ordering to get wrong; catch because a bare
+    # interp with no rig file is a perfectly normal way to load this module.
+    catch { joystick_bind_from_settings }
 
     # fan a bitmask out to any button channels bound with `joystick <bit>`
     # (shared by the legacy value stream and the box-group ingest, so
