@@ -1501,6 +1501,75 @@ namespace eval ess {
         return [input_publish_status button/$chan [button_resolve $chan]]
     }
 
+    # Every channel that has an opinion: initialised ones, plus any bound by
+    # a rig before a protocol asked for them.
+    proc button_publish_all {} {
+        variable buttons
+        variable button_bindings
+        set chans {}
+        if { [info exists buttons(n_channels)] } {
+            for { set i 0 } { $i < $buttons(n_channels) } { incr i } { lappend chans $i }
+        }
+        foreach c [array names button_bindings] { lappend chans $c }
+        foreach c [lsort -unique $chans] { catch { button_publish_status $c } }
+        return
+    }
+
+    ########################################################################
+    # A BOX RELABEL MUST INVALIDATE THE DERIVED MAPS
+    #
+    # button_group_map and joystick_map_for both cache label->bit maps, and
+    # nothing cleared them when a box's labels changed. So after relabelling a
+    # box, ess/inputs/* kept answering from the OLD labels -- and it answered
+    # in the alarming direction, reporting
+    #
+    #     unresolved ... {no direction labels in {joy_down joy_up ...}}
+    #
+    # for a rig that was in fact fine, while joystick_map_for (whose own cache
+    # joystick_init had cleared) already had the right map. Two caches, one
+    # flushed, one not, disagreeing about the same box. Found on psychophysics
+    # 2026-08-21 after swapping in a new box and relabelling it.
+    #
+    # extioconf already does this for its decoded-label map; the transports
+    # did not. Same fix, same trigger: the box re-announces state/label/<pin>
+    # and state/group/<g>/pins on any live change, so watch those.
+    #
+    # PURGE EVERYTHING rather than the one device that changed. The maps are
+    # small and rebuilt lazily on the next lookup, a relabel is rare, and
+    # scoping the purge would mean parsing the datapoint to find its device --
+    # more code and another thing to get subtly wrong for no measurable gain.
+    #
+    # button_group_warned goes too: it suppresses repeat "no such label"
+    # warnings, and a relabel is exactly when someone wants to hear them again.
+    proc input_maps_invalidate { args } {
+        variable button_group_maps
+        variable button_group_warned
+        variable joystick_maps
+        array unset button_group_maps   ; array set button_group_maps   {}
+        array unset button_group_warned ; array set button_group_warned {}
+        array unset joystick_maps       ; array set joystick_maps       {}
+        # Re-resolve now rather than at the next press: ess/inputs/* is what a
+        # page and an operator read to answer "is this rig wired up", and a
+        # stale answer there is the whole bug.
+        catch { joystick_publish_status }
+        catch { button_publish_all }
+        return
+    }
+
+    # Registered at load. Glob matches, so a box appearing later is covered
+    # without re-registering. dpointAddScript (not Set) so this cannot delete
+    # another subsystem's handler on the same pattern.
+    proc input_watch_labels {} {
+        variable io_class
+        foreach pat [list $io_class/*/state/label/* \
+                          $io_class/*/state/group/*/pins] {
+            catch { dservAddMatch   $pat }
+            catch { dpointAddScript $pat ::ess::input_maps_invalidate }
+        }
+        return
+    }
+    catch { input_watch_labels }
+
     proc button_init {chan {pin {}} args} {
 	variable buttons
 	variable io_class

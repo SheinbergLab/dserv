@@ -119,6 +119,59 @@ ok "  and warns"                         [expr {[llength $::WARN] > 0}] 1
 ok "2-way pad" [mapfor 4,6 {joy_left joy_right}]        {left 0 right 1}
 ok "3-way pad" [mapfor 2,3,4 {joy_up joy_down joy_left}] {up 0 down 1 left 2}
 
+
+# --- a relabel must INVALIDATE the derived maps -------------------------
+#
+# button_group_map and joystick_map_for both cache label->bit maps. Nothing
+# cleared them on a label change, so after relabelling a box ess/inputs/*
+# kept answering from the OLD labels -- and answered `unresolved` for a rig
+# that was fine, while joystick_map_for (cleared by joystick_init) already
+# had the right map. Two caches disagreeing about one box.
+proc setlabels { pins labels } {
+    set ::DP(extio/box/state/group/joystick/pins) $pins
+    foreach p [split $pins ,] l $labels { set ::DP(extio/box/state/label/$p) $l }
+}
+array unset ::DP ; array set ::DP {}
+array unset ::ess::joystick_maps       ; array set ::ess::joystick_maps {}
+array unset ::ess::button_group_maps   ; array set ::ess::button_group_maps {}
+array unset ::ess::button_group_warned ; array set ::ess::button_group_warned {}
+
+# Label it one way and read, which populates both caches. The two labellings
+# below must produce DIFFERENT maps or this test proves nothing -- so they are
+# deliberately inverted (a relabel from joy_down->joy_up etc. would now
+# canonicalize identically and the staleness would be invisible).
+setlabels 2,3,4,6 {joy_down joy_up joy_right joy_left}
+::ess::joystick_map_for extio/box/state/group/joystick
+::ess::button_group_map extio/box/state/group/joystick
+ok "joystick map cached"     [expr {[array size ::ess::joystick_maps] > 0}] 1
+ok "button group map cached" [expr {[array size ::ess::button_group_maps] > 0}] 1
+
+# Relabel underneath the caches, INVERTING the pad. A correct read would now
+# give {up 0 down 1 left 2 right 3}; the stale cache keeps the old answer, and
+# that stale answer is the bug.
+setlabels 2,3,4,6 {joy_up joy_down joy_left joy_right}
+ok "cache is STALE after a relabel" \
+    [::ess::joystick_map_for extio/box/state/group/joystick] {down 0 up 1 right 2 left 3}
+
+# the invalidator clears BOTH, plus the warned set
+set ::ess::button_group_warned(x,y) 1
+::ess::input_maps_invalidate extio/box/state/label/2 down
+ok "invalidate clears joystick maps"  [array size ::ess::joystick_maps] 0
+ok "invalidate clears group maps"     [array size ::ess::button_group_maps] 0
+ok "invalidate clears warned set"     [array size ::ess::button_group_warned] 0
+
+# and the next lookup rebuilds from the NEW labels -- the INVERTED map
+ok "rebuilds from the new labels" \
+    [::ess::joystick_map_for extio/box/state/group/joystick] {up 0 down 1 left 2 right 3}
+
+# a label change on a DIFFERENT device still purges (deliberately global)
+::ess::button_group_map extio/box/state/group/joystick
+::ess::input_maps_invalidate extio/otherbox/state/label/9 left
+ok "purge is global, not per-device" [array size ::ess::button_group_maps] 0
+
+ok "the watcher proc exists" [llength [info procs ::ess::input_watch_labels]] 1
+ok "publish-all proc exists" [llength [info procs ::ess::button_publish_all]] 1
+
 puts ""
 if { $nfail } { puts "$nfail FAILURE(S)"; exit 1 }
 puts "all checks passed"
