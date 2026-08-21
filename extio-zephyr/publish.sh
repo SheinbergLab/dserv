@@ -22,6 +22,11 @@
 #
 #   sh publish.sh [-d build-dir] [-b board-target] [-c channel] [-v version] [-n]
 #
+#   sh publish.sh -d build-mcxn-ota          # frdm_mcxn947/mcxn947/cpu0
+#   sh publish.sh -d build-teensy40-ota      # teensy40/mimxrt1062
+#
+#   -b is DERIVED from the build dir's CONFIG_BOARD_TARGET and only needs giving
+#      if you want it cross-checked; a mismatch is refused. See below.
 #   -n  dry run: print what would be sent, upload nothing.
 #
 # Needs DSERV_AGENT_FIRMWARE_TOKEN (read is open; only publish is gated).
@@ -30,7 +35,8 @@ set -e
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 BUILD_DIR="$HERE/build-mcxn-ota"
-BOARD_TARGET="frdm_mcxn947/mcxn947/cpu0"
+BOARD_TARGET=""
+BOARD_TARGET_SET=0
 CHANNEL="${PUSH_CHANNEL:-dev}"
 VERSION=""
 DRY=0
@@ -38,7 +44,7 @@ DRY=0
 while [ $# -gt 0 ]; do
   case "$1" in
     -d) BUILD_DIR="$2"; shift 2 ;;
-    -b) BOARD_TARGET="$2"; shift 2 ;;
+    -b) BOARD_TARGET="$2"; BOARD_TARGET_SET=1; shift 2 ;;
     -c) CHANNEL="$2"; shift 2 ;;
     -v) VERSION="$2"; shift 2 ;;
     -n) DRY=1; shift ;;
@@ -55,6 +61,35 @@ SHELF="${FW_SHELF_URL:-https://dserv.net}"
 BIN="$BUILD_DIR/extio-zephyr/zephyr/zephyr.signed.bin"
 [ -f "$BIN" ] || { echo "!! no signed image at $BIN
    build it first:  west build -b $BOARD_TARGET . --sysbuild -d $(basename "$BUILD_DIR")" >&2; exit 1; }
+
+# THE BOARD TARGET COMES OUT OF THE BUILD, not off the command line.
+#
+# The shelf lookup is an exact string match: extio_ota_push_shelf picks the image
+# whose `build` equals the box's state/build, which box_announce.c derives from
+# CONFIG_BOARD_TARGET. So the ONE authoritative source for this key is the
+# .config of the very image being published -- reading it here makes the two
+# sides structurally incapable of disagreeing.
+#
+# This used to default to a hard-coded frdm_mcxn947/mcxn947/cpu0 and trust -b,
+# which is a quiet footgun the moment a second board exists: `-b teensy40` is
+# the obvious thing to type (it is what west and buildall.sh take) and yields
+# the key "teensy40", while the box announces "teensy40_mimxrt1062" from its
+# full target. The upload succeeds, the shelf looks right, and the image is
+# simply invisible to every box -- a failure with no error anywhere.
+#
+# -b is still accepted, but now it is CHECKED rather than believed.
+DOTCONFIG="$BUILD_DIR/extio-zephyr/zephyr/.config"
+[ -f "$DOTCONFIG" ] || { echo "!! no $DOTCONFIG -- is $BUILD_DIR a --sysbuild dir?" >&2; exit 1; }
+BUILT_TARGET=$(sed -n 's/^CONFIG_BOARD_TARGET="\(.*\)"$/\1/p' "$DOTCONFIG")
+[ -n "$BUILT_TARGET" ] || { echo "!! no CONFIG_BOARD_TARGET in $DOTCONFIG" >&2; exit 1; }
+
+if [ "$BOARD_TARGET_SET" = 1 ] && [ "$BOARD_TARGET" != "$BUILT_TARGET" ]; then
+  echo "!! -b says '$BOARD_TARGET' but $BUILD_DIR was built as '$BUILT_TARGET'.
+   The shelf key must equal what the box announces, so publishing '$BOARD_TARGET'
+   would upload an image no box can see. Drop -b (it is derived) or rebuild." >&2
+  exit 1
+fi
+BOARD_TARGET="$BUILT_TARGET"
 
 # build key: flatten separators, exactly as box_announce.c's box_build_key() does.
 BUILD_KEY=$(printf '%s' "$BOARD_TARGET" | tr '/' '_')

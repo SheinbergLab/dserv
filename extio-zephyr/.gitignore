@@ -1,3 +1,6 @@
 build/
 build-*/
 *.exe
+# tools/merge_ota_hex.py output -- a build artifact, regenerated from the two
+# sysbuild images and never a source of truth.
+*-ota.hex

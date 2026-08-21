@@ -44,6 +44,15 @@ check teensy41  -b teensy41                     -d build-check-teensy41  "$HERE"
 check rw612     -b frdm_rw612                   -d build-check-rw612     "$HERE"
 check mcxn947   -b frdm_mcxn947/mcxn947/cpu0    -d build-check-mcxn947   "$HERE" --sysbuild
 
+# The teensy40 in its OTA form, which is a DIFFERENT BUILD, not a variant: it
+# pulls in MCUboot as a second image, relinks the app to slot0, and compiles in
+# box_ota_flash.c plus the whole arm/confirm path that the plain build never
+# touches. Checking only `-b teensy40` would leave every one of those unbuilt --
+# exactly the blind spot that let both Teensy targets rot for days before +98,
+# one layer up. The plain build stays in the list because it is what ships on a
+# box with no bootloader, and the two must BOTH keep compiling.
+check teensy40-ota -b teensy40 -d build-check-teensy40-ota "$HERE" --sysbuild
+
 if [ -n "$FAILED" ]; then
   echo "!! broken targets:$FAILED" >&2
   exit 1
