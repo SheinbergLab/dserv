@@ -4441,6 +4441,39 @@ namespace eval ess {
                     lappend tune -$k [dict get $cfg $k]
                 }
             }
+
+            # A threshold in output units is a MEASURED quantity in disguise:
+            # "2.0" only means anything against a particular stick's travel,
+            # and on the three sticks calibrated in one afternoon the right
+            # value was 2.0, 3.9 and 3.8. Written into a rig file it is a
+            # hand-copied measurement that goes stale the moment the stick is
+            # recalibrated -- the exact thing local/slider.tcl was just
+            # cleaned of.
+            #
+            # So the DEFAULT is a fraction of the measured travel, read from
+            # slider/full_scale, and what a rig declares is the intent
+            # ("engage at 40% of travel") rather than a number that depends on
+            # hardware. An explicit `threshold` still wins, for a rig that
+            # genuinely wants an absolute one.
+            #
+            # 0.40 engage / 0.24 release keeps the 0.6 ratio the tuner uses
+            # when it re-derives a release on its own.
+            if { ![dict exists $cfg threshold] } {
+                set tf [expr {[dict exists $cfg threshold_frac] ?
+                              [dict get $cfg threshold_frac] : 0.40}]
+                set rf [expr {[dict exists $cfg release_frac] ?
+                              [dict get $cfg release_frac] : 0.6*$tf}]
+                if { ![dservExists slider/full_scale] } {
+                    error "joystick_init analog: no explicit threshold, and\
+                           this rig does not declare slider/full_scale -- so\
+                           there is nothing to take a fraction OF. Run\
+                           slider::cal_* to measure the stick's travel, or\
+                           pass an absolute {threshold ... release ...}."
+                }
+                set full [dservGet slider/full_scale]
+                lappend tune -threshold [expr {$tf*$full}] \
+                             -release   [expr {$rf*$full}]
+            }
             if { [llength $tune] } { joystick_analog_tune {*}$tune }
 
             set joystick(source) analog
