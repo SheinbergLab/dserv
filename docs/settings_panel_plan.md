@@ -68,10 +68,16 @@ its own name, and its schema datapoint reads
 `… apply {} interp probe`. Covered by `tests/test_settings.tcl` (`ctest -R
 settings`), which also pins the `-interp` rejection.
 
-Not yet verified on a rig with the real declarers — that is the §1 gate:
-`settings/joystick/transport/schema` must read `interp ess`, and
-`settings/juicer/destination/schema` `interp juicer`, on a booted rig before
-any UI is written.
+**§1 gate PASSED** on the Mac rig, 2026-08-21: all 13 declared knobs carry a
+name and none is empty — `button/*`, `dial/sources`, `joystick/*` → `ess`;
+`juicer/*` → `juicer`; `extio/obs_autobind` → `extio`. The live route answers
+too (`send ess {settings::interp_of joystick transport}` → `ess`).
+
+Note for every other rig: the binary and `lib/settings-1.0.tm` must be
+installed TOGETHER. Half-installed (new binary, Aug-15 module) the field is
+simply absent from every schema — `::dserv_interp` is set but nothing copies
+it — so a panel must treat a missing `interp` key as read-only rather than
+assume a route.
 
 ## 1. The settings gear
 
