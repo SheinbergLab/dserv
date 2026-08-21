@@ -4797,6 +4797,118 @@ namespace eval ess {
     }
 
     ########################################################################
+    # The button routing, DECLARED
+    #
+    # The third and last of the imperative routers (see `joystick transport`
+    # and `dial sources`). Buttons differ from those two in being INDEXED --
+    # a rig routes each channel separately -- so this is one key per channel
+    # rather than one key for the subsystem:
+    #
+    #     setting button 0 box:*/response/left
+    #     setting button 1 box:*/response/right
+    #     setting button 2 gpio:17
+    #
+    # The value is a compact ROUTE rather than the flat option list
+    # button_bind takes, because the settings file is meant to be read and
+    # edited by a person and `{} box {* response left}` is four levels of
+    # bracing to express three facts. The four forms map onto the four
+    # resolvers registered for `button`:
+    #
+    #   box:<dev>/<group>/<label>  a labelled member of a chord group --
+    #                              board-independent, and the recommended one
+    #   box:<dev>/<pin>            a box DI pin by number
+    #   gpio:<pin>                 a local GPIO line
+    #   joystick:<bit>             a bit of the joystick nibble
+    #   none                       this rig does not declare this channel
+    #
+    # <dev> may be * to follow whichever box is present.
+    #
+    # CHANNELS ARE DECLARED UP FRONT, 0..3. The runtime count grows as
+    # protocols call button_init, so there is no number to ask for at load
+    # time; four covers the rigs in service and an unused channel costs one
+    # defaulted key that binds nothing. Raise button_nchan_declared to extend.
+    variable button_nchan_declared 4
+
+    # -> the canonical route string, or an error that names the four forms.
+    # Rejecting at the door is the point: a typo'd route would otherwise
+    # surface as a channel that silently never fires.
+    proc button_route_norm { v } {
+        set v [string trim $v]
+        if { $v eq "" || $v eq "none" } { return none }
+        set i [string first : $v]
+        if { $i < 0 } {
+            error "button route '$v': want none | box:<dev>/<group>/<label> |\
+                   box:<dev>/<pin> | gpio:<pin> | joystick:<bit>"
+        }
+        set kind [string range $v 0 [expr {$i-1}]]
+        set rest [string range $v [expr {$i+1}] end]
+        switch -exact -- $kind {
+            box {
+                set parts [split $rest /]
+                if { [llength $parts] ni {2 3} } {
+                    error "button route 'box:$rest': want <dev>/<group>/<label>\
+                           (by label) or <dev>/<pin> (by number)"
+                }
+                foreach p $parts {
+                    if { $p eq "" } {
+                        error "button route 'box:$rest': empty component"
+                    }
+                }
+                if { [llength $parts] == 2 &&
+                     ![string is integer -strict [lindex $parts 1]] } {
+                    error "button route 'box:$rest': the two-part form is\
+                           <dev>/<pin> and '[lindex $parts 1]' is not a pin\
+                           number -- for a labelled member use\
+                           <dev>/<group>/<label>"
+                }
+                return box:$rest
+            }
+            gpio - joystick {
+                if { ![string is integer -strict $rest] } {
+                    error "button route '$v': $kind: wants a number, got '$rest'"
+                }
+                return $kind:$rest
+            }
+            default {
+                error "button route '$v': unknown kind '$kind' -- want box,\
+                       gpio or joystick"
+            }
+        }
+    }
+
+    proc button_bind_from_settings { args } {
+        variable button_nchan_declared
+        for { set c 0 } { $c < $button_nchan_declared } { incr c } {
+            if { [catch { ::settings::get button $c } v] } continue
+            if { $v eq "none" } continue      ;# no-op; never CLEARS a binding
+            set i [string first : $v]
+            set kind [string range $v 0 [expr {$i-1}]]
+            set rest [string range $v [expr {$i+1}] end]
+            switch -exact -- $kind {
+                box {
+                    button_bind $c {} box [split $rest /]
+                }
+                gpio     { button_bind $c $rest }
+                joystick { button_bind $c {} joystick $rest }
+            }
+        }
+        return
+    }
+
+    for { set _c 0 } { $_c < $button_nchan_declared } { incr _c } {
+        settings::declare button $_c -default none \
+            -validate ::ess::button_route_norm \
+            -doc "what drives ess/button/$_c: box:<dev>/<group>/<label> (a\
+                  labelled chord-group member, board-independent),\
+                  box:<dev>/<pin>, gpio:<pin>, joystick:<bit>, or none.\
+                  <dev> may be * to follow whichever box is present" \
+            -apply {::ess::button_bind_from_settings}
+    }
+    unset _c
+
+    catch { button_bind_from_settings }
+
+    ########################################################################
     # Label-keyed button GROUP source (button_init ... box {dev group label}).
     #
     # A box chord GROUP announces state/group/<g>/pins (ascending = bit order)
