@@ -249,11 +249,27 @@ namespace eval slider {
     variable cal
     array set cal { active 0 stage "" n 0 msg "" }
 
+    # A POSITION mark (rest/up/right) reads the RECENT window, not everything
+    # since the previous mark. The distinction is not academic: marks are
+    # driven by a human being asked to hold a stick, so the gap between them
+    # is however long the conversation took -- measured at 107 s on a real
+    # session. Averaging all of that blends the held position with the stick
+    # sitting at rest beforehand and the transit out to it, and the answer
+    # then depends on how chatty the operator was. The same push measured
+    # -284 counts and -593 counts on two attempts for exactly that reason.
+    #
+    # 100 samples is 0.5 s at 200 Hz: long enough to average the noise down,
+    # short enough that it is all "now".
+    #
+    # A SWEEP mark is the opposite question -- what did the stick REACH -- so
+    # its envelope still accumulates over the whole stage. min/max are kept
+    # since the last mark for that reason.
+    variable cal_window 100
+
     proc cal_reset_accum {} {
         variable cal
         set cal(n) 0
-        array unset cal s,*
-        array unset cal ss,*
+        array unset cal ring,*
         array unset cal mn,*
         array unset cal mx,*
     }
@@ -263,16 +279,20 @@ namespace eval slider {
     # cannot be expressed in terms of it.
     proc cal_feed { cols } {
         variable cal
+        variable cal_window
         if { !$cal(active) } return
         set i 0
         foreach v $cols {
             set v [expr {double($v)}]
-            if { ![info exists cal(s,$i)] } {
-                set cal(s,$i) 0.0 ; set cal(ss,$i) 0.0
-                set cal(mn,$i) $v ; set cal(mx,$i) $v
+            if { ![info exists cal(mn,$i)] } {
+                set cal(ring,$i) {} ; set cal(mn,$i) $v ; set cal(mx,$i) $v
             }
-            set cal(s,$i)  [expr {$cal(s,$i) + $v}]
-            set cal(ss,$i) [expr {$cal(ss,$i) + $v*$v}]
+            # recent window, for the POSITION marks
+            lappend cal(ring,$i) $v
+            if { [llength $cal(ring,$i)] > $cal_window } {
+                set cal(ring,$i) [lrange $cal(ring,$i) end-[expr {$cal_window-1}] end]
+            }
+            # envelope since the last mark, for the SWEEP
             if { $v < $cal(mn,$i) } { set cal(mn,$i) $v }
             if { $v > $cal(mx,$i) } { set cal(mx,$i) $v }
             incr i
@@ -333,19 +353,38 @@ namespace eval slider {
                    streaming? (an on-change group publishes NOTHING at rest,\
                    so calibrate a `continuous` group)"
         }
-        set n $cal(n)
         set ncol [expr {[info exists cal(ncol)] ? $cal(ncol) : 0}]
         if { $ncol < 2 } {
             error "slider::cal_mark: only $ncol column(s) in the stream --\
                    a stick needs two"
         }
+        # The recent window for a position mark; the whole stage for a sweep.
+        set n [llength $cal(ring,0)]
         for { set i 0 } { $i < $ncol } { incr i } {
-            set mean [expr {$cal(s,$i)/$n}]
-            set var  [expr {$cal(ss,$i)/$n - $mean*$mean}]
+            set s 0.0 ; set ss 0.0
+            foreach v $cal(ring,$i) { set s [expr {$s+$v}]; set ss [expr {$ss+$v*$v}] }
+            set mean [expr {$s/$n}]
+            set var  [expr {$ss/$n - $mean*$mean}]
             set cal(m,$stage,$i)  $mean
             set cal(sd,$stage,$i) [expr {$var > 0 ? sqrt($var) : 0.0}]
             set cal(min,$stage,$i) $cal(mn,$i)
             set cal(max,$stage,$i) $cal(mx,$i)
+        }
+        # A position mark must be taken while the stick is STILL. A window
+        # that spans the transit averages the journey with the destination,
+        # and the result looks like a plausible reading of a place the stick
+        # never was.
+        if { $stage ne "sweep" } {
+            set moving 0
+            for { set i 0 } { $i < $ncol } { incr i } {
+                if { $cal(sd,$stage,$i) > 8.0 } { set moving 1 }
+            }
+            if { $moving } {
+                error [format "slider::cal_mark: the stick was still MOVING\
+                       (sd %.1f/%.1f counts over the last %d samples). Hold it\
+                       steady, then mark." \
+                       $cal(sd,$stage,0) $cal(sd,$stage,1) $n]
+            }
         }
         set cal(ncols) $ncol
         cal_reset_accum
