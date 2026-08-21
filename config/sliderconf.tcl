@@ -48,6 +48,14 @@ package require dlsh
 # same reason.
 tcl::tm::add $dspath/lib
 package require extio   ;# decode extio state/ain blocks (thumbstick source)
+package require settingsdb  ;# persist the MEASURED stick calibration
+
+# Same store em's eye calibration lives in: one small db for the stable
+# per-setup values a rig learns rather than declares.
+if { ![info exists slider_caldb_path] } {
+    set slider_caldb_path [file join $dspath db calibration.db]
+}
+settingsdb::init $slider_caldb_path
 
 # disable exit
 proc exit {args} { error "exit not available for this subprocess" }
@@ -206,6 +214,319 @@ namespace eval slider {
         set_center_y $current_raw_y
     }
 
+    ###########################################################################
+    ####################### guided stick calibration ##########################
+    ###########################################################################
+    #
+    # Retires the hand-editing. Centre, orientation and throw are things the
+    # system MEASURES, not things a human declares, and they were being written
+    # into local/slider.tcl by hand -- three different sticks in one afternoon,
+    # each with its own numbers, each transcribed by eye. That is the smell the
+    # "humans declare -> files, system learns -> db" rule exists to catch, and
+    # em's eye calibration has been on the right side of it all along.
+    #
+    # WHAT IS LEARNED (persisted here, in db/calibration.db):
+    #   center_x/center_y   where this stick rests
+    #   chan_x/chan_y       which block column is horizontal, which vertical
+    #   invert_x/invert_y   the sign of each
+    #   full_scale          usable throw, in output units
+    #
+    # WHAT STAYS DECLARED (local/slider.tcl, untouched by this):
+    #   source, scale, deadzone, limit, continuity_mode, swipe_threshold
+    #
+    # ORIENTATION IS EIGHT CASES, NOT A FIT. swap x invert_x x invert_y
+    # generates the symmetries of the square, and every mounting of a 2-axis
+    # stick is one of them. TWO pushes pin it down exactly:
+    #
+    #   "up"    names the VERTICAL column and its sign
+    #   "right" names the HORIZONTAL column and its sign
+    #
+    # One push is not enough, and that is not a theoretical worry -- a PSP
+    # stick measured 2026-08-20 reported "up" as "right", which is equally
+    # consistent with a 90-degree ROTATION and with a reflection. Only the
+    # second, non-parallel push separates them. (It was a rotation, which a
+    # bare column swap would NOT have fixed.)
+    variable cal
+    array set cal { active 0 stage "" n 0 msg "" }
+
+    proc cal_reset_accum {} {
+        variable cal
+        set cal(n) 0
+        array unset cal s,*
+        array unset cal ss,*
+        array unset cal mn,*
+        array unset cal mx,*
+    }
+
+    # Fed the RAW COLUMN VECTOR by whichever processor is live, before any
+    # chan_x/chan_y mapping -- calibration is what DECIDES that mapping, so it
+    # cannot be expressed in terms of it.
+    proc cal_feed { cols } {
+        variable cal
+        if { !$cal(active) } return
+        set i 0
+        foreach v $cols {
+            set v [expr {double($v)}]
+            if { ![info exists cal(s,$i)] } {
+                set cal(s,$i) 0.0 ; set cal(ss,$i) 0.0
+                set cal(mn,$i) $v ; set cal(mx,$i) $v
+            }
+            set cal(s,$i)  [expr {$cal(s,$i) + $v}]
+            set cal(ss,$i) [expr {$cal(ss,$i) + $v*$v}]
+            if { $v < $cal(mn,$i) } { set cal(mn,$i) $v }
+            if { $v > $cal(mx,$i) } { set cal(mx,$i) $v }
+            incr i
+        }
+        incr cal(n)
+        set cal(ncol) $i
+    }
+
+    proc cal_publish {} {
+        variable cal
+        dservSet slider/cal/status \
+            [list active $cal(active) stage $cal(stage) samples $cal(n) \
+                  msg $cal(msg)]
+    }
+
+    # Begin. Nothing is applied until cal_apply, and cal_cancel restores
+    # whatever was in force -- a half-finished calibration must never leave the
+    # rig in a state nobody chose.
+    proc cal_begin {} {
+        variable cal
+        variable settings
+        set cal(active) 1
+        set cal(stage) rest
+        set cal(msg) "hold the stick AT REST, then: slider::cal_mark rest"
+        set cal(saved) $settings
+        array unset cal m,*
+        cal_reset_accum
+        cal_publish
+        return $cal(msg)
+    }
+
+    proc cal_cancel {} {
+        variable cal
+        variable settings
+        if { !$cal(active) } { return "not calibrating" }
+        if { [info exists cal(saved)] } { set settings $cal(saved) }
+        set cal(active) 0
+        set cal(stage) ""
+        set cal(msg) "cancelled; previous settings restored"
+        update_settings
+        cal_publish
+        return $cal(msg)
+    }
+
+    # Capture what has accumulated since the last mark as `stage`.
+    #   rest  -> the centre, and the noise floor everything else is judged against
+    #   up    -> vertical column + sign
+    #   right -> horizontal column + sign
+    #   sweep -> the envelope, hence the throw
+    proc cal_mark { stage } {
+        variable cal
+        if { !$cal(active) } { error "slider::cal_mark: call cal_begin first" }
+        if { $stage ni {rest up right sweep} } {
+            error "slider::cal_mark: want rest|up|right|sweep, got '$stage'"
+        }
+        if { $cal(n) < 20 } {
+            error "slider::cal_mark: only $cal(n) samples -- is the stick\
+                   streaming? (an on-change group publishes NOTHING at rest,\
+                   so calibrate a `continuous` group)"
+        }
+        set n $cal(n)
+        set ncol [expr {[info exists cal(ncol)] ? $cal(ncol) : 0}]
+        if { $ncol < 2 } {
+            error "slider::cal_mark: only $ncol column(s) in the stream --\
+                   a stick needs two"
+        }
+        for { set i 0 } { $i < $ncol } { incr i } {
+            set mean [expr {$cal(s,$i)/$n}]
+            set var  [expr {$cal(ss,$i)/$n - $mean*$mean}]
+            set cal(m,$stage,$i)  $mean
+            set cal(sd,$stage,$i) [expr {$var > 0 ? sqrt($var) : 0.0}]
+            set cal(min,$stage,$i) $cal(mn,$i)
+            set cal(max,$stage,$i) $cal(mx,$i)
+        }
+        set cal(ncols) $ncol
+        cal_reset_accum
+        set cal(stage) $stage
+        set cal(msg) "captured $stage ($n samples)"
+        cal_publish
+        return [list stage $stage samples $n \
+                     means [lmap i [lrange {0 1 2 3 4 5 6 7} 0 [expr {$ncol-1}]] \
+                                { format %.1f $cal(m,$stage,$i) }]]
+    }
+
+    # Derive, apply, persist. Refuses rather than guesses -- a calibration that
+    # is wrong in a way nobody notices is worse than one that did not finish.
+    proc cal_apply {} {
+        variable cal
+        variable settings
+        if { !$cal(active) } { error "slider::cal_apply: call cal_begin first" }
+        foreach need { rest up right sweep } {
+            if { ![info exists cal(m,$need,0)] } {
+                error "slider::cal_apply: '$need' was never marked"
+            }
+        }
+        set ncol $cal(ncols)
+
+        # deltas from the resting point
+        for { set i 0 } { $i < $ncol } { incr i } {
+            set du($i) [expr {$cal(m,up,$i)    - $cal(m,rest,$i)}]
+            set dr($i) [expr {$cal(m,right,$i) - $cal(m,rest,$i)}]
+        }
+
+        # The dominant column for each push, and how clearly it dominates.
+        # A sloppy diagonal push makes two columns move nearly equally, and
+        # picking the larger would be a coin toss recorded as a fact.
+        set vcol [cal_dominant du $ncol]
+        set hcol [cal_dominant dr $ncol]
+        lassign $vcol vcol vratio vmag
+        lassign $hcol hcol hratio hmag
+
+        if { $vcol == $hcol } {
+            error "slider::cal_apply: 'up' and 'right' both moved column\
+                   $vcol -- the two pushes were not perpendicular, or one\
+                   axis is not reaching the box"
+        }
+        foreach { nm ratio mag } [list up $vratio $vmag right $hratio $hmag] {
+            if { $ratio < 3.0 } {
+                error [format "slider::cal_apply: the '%s' push was not clean\
+                       -- its two columns moved by a ratio of only %.1f (want\
+                       3 or more). Push straight %s and hold it." \
+                       $nm $ratio $nm]
+            }
+            set floor [expr {10.0*$cal(sd,rest,0) + 5.0}]
+            if { $mag < $floor } {
+                error [format "slider::cal_apply: the '%s' push moved only\
+                       %.1f counts, which is not clear of the resting noise\
+                       (%.1f). Push to the stop and hold." $nm $mag $floor]
+            }
+        }
+
+        # The throw, from the sweep: SHORTEST from centre to a stop across both
+        # live columns. A criterion the stick can only satisfy in one direction
+        # is not a criterion.
+        set throw 1e9
+        foreach i [list $hcol $vcol] {
+            set lo [expr {$cal(m,rest,$i) - $cal(min,sweep,$i)}]
+            set hi [expr {$cal(max,sweep,$i) - $cal(m,rest,$i)}]
+            foreach t [list $lo $hi] { if { $t < $throw } { set throw $t } }
+        }
+        if { $throw < 50 } {
+            error [format "slider::cal_apply: swept throw is only %.0f counts\
+                   -- sweep to every mechanical stop before applying" $throw]
+        }
+
+        # Pushing UP must give +y, pushing RIGHT must give +x.
+        set inv_y [expr {$du($vcol) < 0 ? 1 : 0}]
+        set inv_x [expr {$dr($hcol) < 0 ? 1 : 0}]
+
+        dict set settings chan_x   $hcol
+        dict set settings chan_y   $vcol
+        dict set settings center_x [expr {double($cal(m,rest,$hcol))}]
+        dict set settings center_y [expr {double($cal(m,rest,$vcol))}]
+        dict set settings invert_x $inv_x
+        dict set settings invert_y $inv_y
+
+        set full [expr {$throw * [dict get $settings scale_x]}]
+        dservSet slider/full_scale $full
+
+        set cal(active) 0
+        set cal(stage) done
+        set cal(msg) "applied"
+        update_settings
+        cal_publish
+        save_calibration
+
+        return [list chan_x $hcol chan_y $vcol \
+                     center_x [format %.1f $cal(m,rest,$hcol)] \
+                     center_y [format %.1f $cal(m,rest,$vcol)] \
+                     invert_x $inv_x invert_y $inv_y \
+                     throw_counts [format %.0f $throw] \
+                     full_scale [format %.2f $full] \
+                     rest_noise_sd [format %.2f $cal(sd,rest,0)]]
+    }
+
+    # -> {column ratio magnitude}. ratio is primary/secondary, the measure of
+    # how straight the push was.
+    proc cal_dominant { arrname ncol } {
+        upvar 1 $arrname d
+        set best -1 ; set bmag 0.0 ; set second 0.0
+        for { set i 0 } { $i < $ncol } { incr i } {
+            set m [expr {abs($d($i))}]
+            if { $m > $bmag } { set second $bmag ; set bmag $m ; set best $i } \
+            elseif { $m > $second } { set second $m }
+        }
+        set ratio [expr {$second > 0 ? $bmag/$second : 1e9}]
+        return [list $best $ratio $bmag]
+    }
+
+    # ---- persistence: LEARNED keys only ---------------------------------
+    #
+    # NOT the whole settings dict, unlike em. Persisting everything would let
+    # the db silently override a DECLARED value -- `source` above all, which is
+    # exactly the footgun em documents (a pinned source makes a rig read the
+    # wrong input, days later, with no comment attached). Learned keys are the
+    # ones a human should never be typing.
+    variable cal_keys { chan_x chan_y center_x center_y invert_x invert_y }
+    variable cal_profile default
+
+    proc save_calibration {} {
+        variable settings; variable cal_keys; variable cal_profile
+        set d [dict create]
+        foreach k $cal_keys { dict set d $k [dict get $settings $k] }
+        if { [dservExists slider/full_scale] } {
+            dict set d full_scale [dservGet slider/full_scale]
+        }
+        catch { ::settingsdb::save slider $d $cal_profile }
+    }
+
+    # Sourced AFTER local/slider.tcl, so a stored calibration wins over
+    # hand-written values for LEARNED keys -- measurement beats a guess, and
+    # retiring those guesses is the point. It says so at boot, because a value
+    # that overrides the file someone is reading has to be visible somewhere.
+    proc load_calibration {} {
+        variable settings; variable cal_keys; variable cal_profile
+        set stored [::settingsdb::load slider $cal_profile]
+        if { $stored eq "" } return
+        set applied {}
+        foreach k $cal_keys {
+            if { [dict exists $stored $k] } {
+                dict set settings $k [dict get $stored $k]
+                lappend applied $k
+            }
+        }
+        if { [dict exists $stored full_scale] } {
+            dservSet slider/full_scale [dict get $stored full_scale]
+        }
+        update_settings
+        if { [llength $applied] } {
+            puts "slider: calibration restored from db (profile $cal_profile):\
+                  chan_x/[dict get $settings chan_x] chan_y/[dict get $settings chan_y]\
+                  centre [format %.1f [dict get $settings center_x]],[format %.1f [dict get $settings center_y]]\
+                  invert [dict get $settings invert_x],[dict get $settings invert_y]\
+                  -- these OVERRIDE local/slider.tcl; slider::forget_calibration\
+                  drops back to the file"
+        }
+    }
+
+    proc forget_calibration {} {
+        variable cal_profile
+        catch { ::settingsdb::forget slider $cal_profile }
+        return "slider calibration dropped; local/slider.tcl values apply after a restart"
+    }
+
+    proc calibration {} {
+        variable settings; variable cal_keys
+        set d [dict create]
+        foreach k $cal_keys { dict set d $k [dict get $settings $k] }
+        if { [dservExists slider/full_scale] } {
+            dict set d full_scale [dservGet slider/full_scale]
+        }
+        return $d
+    }
+
     # Apply calibration to one raw axis value.
     # Factored so both axes run through identical math.
     proc calibrate_axis { raw center scale deadzone invert limit } {
@@ -320,6 +641,10 @@ namespace eval slider {
         set nchan [llength $data]
         if { $nchan == 0 } return
 
+        # Calibration sees the RAW columns, before any chan_x/chan_y mapping:
+        # deciding that mapping is what it is for.
+        cal_feed $data
+
         dict with settings {
             # X axis
             if { $chan_x >= 0 && $chan_x < $nchan } {
@@ -398,6 +723,9 @@ namespace eval slider {
         set col [::extio::ain_latest $data]
         set nchan [llength $col]
         if { $nchan == 0 } return
+
+        # See process_ain: calibration works on the raw columns.
+        cal_feed $col
 
         # The box's stamp for this block, carried through to slider/position.
         # With batch 1 (the rule for any source feeding a response) that IS
@@ -734,5 +1062,13 @@ catch { dservTouch mtouch/trackpad/range }
 if { [file exists $dspath/local/slider.tcl] } {
     source $dspath/local/slider.tcl
 }
+
+# AFTER the local file, deliberately. The db holds only what the rig MEASURED
+# (centre, orientation, throw) and the file holds what a human DECLARED
+# (source, scale, limits) -- so on the learned keys the measurement wins,
+# which is the whole point of retiring them from the file. It announces itself
+# at boot, because a value that overrides the file someone is reading must be
+# visible somewhere. slider::forget_calibration drops back to the file.
+slider::load_calibration
 
 puts "slider subprocessor started"
