@@ -277,6 +277,26 @@ function onExtio(msg) {
         return;
     }
 
+    /* Factory tombstone (extio/forgotten = "<name>"): the rename case above with
+     * no successor. extio_factory clears the box's subtree and THEN publishes
+     * this (extioconf.tcl), so the keys:update prune does eventually catch it --
+     * but "eventually" is one @keys round trip, and until it lands the picker
+     * still offers a box that has already erased itself. extio-config.html has
+     * honoured this leaf since it was introduced; this page never did, which is
+     * the whole asymmetry. Guarded by boxes.delete()'s return so a retained
+     * tombstone replayed into a page that never knew the box is a no-op. */
+    if (msg.name === 'extio/forgotten') {
+        let gv = msg.data !== undefined ? msg.data : msg.value;
+        if (typeof gv === 'string') gv = gv.split('\x00')[0];
+        const gone = String(gv || '').trim();
+        if (gone && boxes.delete(gone)) {
+            const el = document.getElementById('box-' + gone);
+            if (el) el.remove();
+            scheduleRender();
+        }
+        return;
+    }
+
     const m = /^extio\/([^/]+)\/(state|host)\/(.+)$/.exec(msg.name);
     if (!m) return;
     const b = boxModel(m[1]);
@@ -1181,12 +1201,27 @@ async function init() {
                 dp.sendGet(k);
             }
         }
+        let pruned = false;
         for (const name of [...boxes.keys()])
             if (!present.has(name)) {
                 boxes.delete(name);
                 const el = document.getElementById('box-' + name);
                 if (el) el.remove();
+                pruned = true;
             }
+        /* THE PICKER LIVES OUTSIDE THIS FUNCTION'S REACH. Pruning edits `boxes`
+         * and the grid directly, but the configure dropdown is rebuilt only by
+         * syncCfgBar(), which only render() calls -- so without this the picker
+         * kept an option for a box that no longer exists, and `open` on it led
+         * to a config page with nothing behind it. forgetBox() has always ended
+         * with scheduleRender() after making exactly these two mutations; this
+         * path simply never did, and leaned on the 1 Hz tick to notice.
+         *
+         * That lean is what made it visible: render() is rAF-driven, and rAF
+         * does not run in a BACKGROUND tab -- which is precisely where this page
+         * sits after `open` hands focus to a config window. Observed on this
+         * bench as a three-option dropdown over a one-box model. */
+        if (pruned) scheduleRender();
         document.getElementById('empty').style.display = boxes.size ? 'none' : '';
         markReadySoon();
     });
