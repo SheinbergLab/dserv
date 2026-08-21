@@ -2553,8 +2553,24 @@ static __attribute__((noinline)) void boot_codec_smoke(int cfg_loaded)
 	 * holds; it just belongs on a frame that returns.) */
 	box_config_t smoke = cfg;
 
+	/* ADDRESS THE FRAMES TO THIS BOX, not to the literal default name.
+	 *
+	 * dserv_dispatch() gates on the box's own prefix (dserv_config.h) and
+	 * returns CFG_NONE for anything addressed elsewhere -- correctly. These
+	 * frames used to be hard-coded to "extio/box/...", which matched only
+	 * while the box was UNNAMED, so the smoke test silently started reporting
+	 * `none` (and printing an unwritten gpio_cmd_t full of Zephyr's 0xaa stack
+	 * fill) the moment a box had a saved name. Invisible on this board until
+	 * 2026-08-21, because `save` had never worked here, so the name was always
+	 * the default -- the persistence fix is what exposed it. A self-test that
+	 * only passes on a factory-fresh box is not testing the codec. */
+	char spfx[64];
+	char sname[96];
+	dserv_cfg_prefix(&cfg, spfx, sizeof spfx);
+
 	/* config datapoint: set pin 5 to output */
-	dserv_msg_int(f, "extio/box/config/pin/5/mode", 0, 1);
+	snprintf(sname, sizeof sname, "%s/config/pin/5/mode", spfx);
+	dserv_msg_int(f, sname, 0, 1);
 	r = feed(&smoke, f, &cmd);
 	box_console_printf("apply config/pin/5/mode=out    -> %-9s pin_mode[5]=%u\n",
 	       dserv_cfg_result_str(r), smoke.pin_mode[5]);
@@ -2565,7 +2581,8 @@ static __attribute__((noinline)) void boot_codec_smoke(int cfg_loaded)
 	 * CLI (a later block). */
 
 	/* transient command: box-timed pulse on pin 6 -> a gpio_cmd for the platform */
-	dserv_msg_int(f, "extio/box/cmd/do/6/pulse_us", 0, 500);
+	snprintf(sname, sizeof sname, "%s/cmd/do/6/pulse_us", spfx);
+	dserv_msg_int(f, sname, 0, 500);
 	r = feed(&smoke, f, &cmd);
 	box_console_printf("apply cmd/do/6/pulse_us=500    -> %-9s op=%d pin=%u value=%u\n",
 	       dserv_cfg_result_str(r), cmd.op, cmd.pin, cmd.value);

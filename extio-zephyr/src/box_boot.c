@@ -93,6 +93,25 @@ static const char *cause_str(uint32_t c)
 	 * Report the most alarming one -- a wedge you have to hear about outranks
 	 * a reboot you asked for. (Clearing, below, keeps this rare.) */
 	if (c & RESET_WATCHDOG)   return "watchdog";
+	/* LOCKUP *AND* SOFTWARE TOGETHER IS A COMMANDED REBOOT, not a wedge.
+	 *
+	 * The i.MX RT10xx has no dedicated lockup bit: MIMXRT1062_features.h sets
+	 * FSL_FEATURE_SRC_HAS_SRSR_LOCKUP to 0 and _LOCKUP_SYSRESETREQ to 1, i.e.
+	 * SRC_SRSR carries ONE bit meaning "CPU lockup OR software SYSRESETREQ" and
+	 * the silicon cannot tell them apart. Zephyr's hwinfo_mcux_src.c therefore
+	 * raises BOTH flags for that single bit, so every `reboot` on a Teensy
+	 * reported 0x102 and printed "lockup" -- the alarming half of an ambiguous
+	 * pair, on the boot the operator had just asked for. Seen 2026-08-21 during
+	 * the MCUboot migration, where it read as a bootloader fault.
+	 *
+	 * Both bits set therefore means the combined-bit SoC, and a commanded reset
+	 * is overwhelmingly the cause; a genuine lockup there is indistinguishable
+	 * and would be caught by the fault handler and the watchdog anyway. On a
+	 * part with separate bits a real lockup sets ONLY RESET_CPU_LOCKUP and
+	 * still reports "lockup" -- which is why this tests for the PAIR rather
+	 * than reordering the checks. Safe because the register is cleared every
+	 * boot (below), so the pair cannot be an accumulation of two real events. */
+	if ((c & RESET_CPU_LOCKUP) && (c & RESET_SOFTWARE)) return "software";
 	if (c & RESET_CPU_LOCKUP) return "lockup";
 	if (c & RESET_SECURITY)   return "security";
 	if (c & RESET_BROWNOUT)   return "brownout";
