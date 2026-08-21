@@ -12,6 +12,15 @@
 
 #include <zephyr/dt-bindings/adc/adc.h>   /* ADC_ACQ_TIME_DEFAULT */
 / {
+	/* Where the APP links when there is a bootloader in front of it. Read ONLY
+	 * when CONFIG_BOOTLOADER_MCUBOOT selects USE_DT_CODE_PARTITION, i.e. under
+	 * --sysbuild; the plain `west build -b teensy41 .` ignores it and keeps
+	 * CONFIG_FLASH_LOAD_OFFSET=0. The PJRC board DTS sets no zephyr,code-partition
+	 * of its own, which is why this has to be here at all. */
+	chosen {
+		zephyr,code-partition = &slot0_partition;
+	};
+
 	aliases {
 		box-gpio-port     = &gpio2;   /* box pin n -> gpio2.n (3 = board LED) */
 	};
@@ -48,32 +57,25 @@
 	 * console CDC -- separate devices, no conflict. */
 };
 
-/* Settings storage: NVS needs a `storage_partition`, which the teensy4 board does
- * not define. Carve the last 64 KB of the 8 MB W25Q64, far past the ~230 KB app
- * image. box_flash.c resolves it via DT_MTD_FROM_FIXED_PARTITION, hence the
- * `fixed-partitions` parent.
+/* Settings storage + the MCUboot A/B layout: boards/teensy41_partitions.dtsi,
+ * because MCUboot needs the IDENTICAL table and cannot see this file. The whole
+ * layout -- including why storage shrank to 32 KB without moving, and why
+ * nothing reaches the part's final sector -- is documented there.
+ *
+ * Present unconditionally and inert without --sysbuild: CONFIG_BOOTLOADER_MCUBOOT
+ * is what selects USE_DT_CODE_PARTITION, so the plain build ignores the chosen
+ * node above and still links at flash base.
  *
  * Writing the flash the chip XIP-executes from IS the hazard that made this look
  * unworkable for a while -- but CONFIG_FLASH_MCUX_FLEXSPI_XIP=y (enabled
  * automatically by the RT10xx SoC defconfig) relocates the erase/write path to
- * ITCM, and it is validated on hardware. The old "hard-faults at boot" verdict
- * was actually a main-thread stack overflow; see PORTING.md.
+ * ITCM, and it is validated on hardware, now including a full MCUboot swap on
+ * the teensy40. The old "hard-faults at boot" verdict was actually a main-thread
+ * stack overflow; see PORTING.md.
  *
- * NOT verified: whether HalfKay full-chip-erases on reflash, which would wipe
- * saved settings on every REFLASH (surviving reboots is what persistence means
- * here, and that IS verified). */
-&w25q64jvxgim {
-	partitions {
-		compatible = "fixed-partitions";
-		#address-cells = <1>;
-		#size-cells = <1>;
-
-		storage_partition: partition@7f0000 {
-			label = "storage";
-			reg = <0x007f0000 DT_SIZE_K(64)>;
-		};
-	};
-};
+ * HalfKay does NOT full-chip-erase on reflash -- saved settings survive a
+ * reflash, verified 2026-07-23. */
+#include "teensy41_partitions.dtsi"
 
 /* The ENET IEEE-1588 clock is `disabled` in the RT1060 SoC dtsi exactly as it is
  * on the RW612 -- enable it so PTP_CLOCK_NXP_ENET instantiates the clock.

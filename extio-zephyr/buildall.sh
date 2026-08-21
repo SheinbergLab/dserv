@@ -52,6 +52,7 @@ check mcxn947   -b frdm_mcxn947/mcxn947/cpu0    -d build-check-mcxn947   "$HERE"
 # one layer up. The plain build stays in the list because it is what ships on a
 # box with no bootloader, and the two must BOTH keep compiling.
 check teensy40-ota -b teensy40 -d build-check-teensy40-ota "$HERE" --sysbuild
+check teensy41-ota -b teensy41 -d build-check-teensy41-ota "$HERE" --sysbuild
 
 if [ -n "$FAILED" ]; then
   echo "!! broken targets:$FAILED" >&2

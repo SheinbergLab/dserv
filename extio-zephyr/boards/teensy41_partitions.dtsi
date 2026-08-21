@@ -1,0 +1,72 @@
+/*
+ * teensy41_partitions.dtsi -- the Teensy 4.1 flash layout, ONE definition,
+ * included by BOTH images. See teensy40_partitions.dtsi for why sharing it is
+ * not optional: MCUboot builds out of bootloader/mcuboot and never sees
+ * boards/teensy41.overlay, and a bootloader and application that disagree about
+ * where slot0 is fail only at the first swap.
+ *
+ *   boot_partition    0x000000  128 KB   MCUboot
+ *   slot0_partition   0x020000    1 MB   the app runs here
+ *   slot1_partition   0x120000    1 MB   OTA writes here
+ *   (unallocated)     0x220000  ~5.8 MB
+ *   storage_partition 0x7f0000   32 KB   NVS
+ *   (unallocated)     0x7f8000    28 KB
+ *   (left alone)      0x7FF000    4 KB   the part's final sector
+ *
+ * 1 MB slots, not the teensy40's 512 KB: this app is 262 KB against the 4.0's
+ * 141 KB (it carries the whole networking stack and PTP), and there are 8 MB
+ * here rather than 2. Equal slots, matching build-mcxn-ota's swap-using-offset.
+ *
+ * STORAGE SHRANK FROM 64 KB TO 32 KB AND DID NOT MOVE, which is the entire
+ * point of doing it this way.
+ *
+ * box_flash.c caps NVS at BOX_NVS_SECTORS (8), so a 64 KB partition here only
+ * ever used its first eight sectors -- 0x7f0000-0x7f8000 -- and the declared
+ * second half was fiction. Shrinking the declaration to what NVS actually uses
+ * changes NOTHING about the running geometry: avail = 32768/4096 = 8, and
+ * MIN(8, 8) is the same 8 sectors at the same base, so every saved config on an
+ * existing 4.1 survives this untouched. Moving the base instead would have
+ * orphaned all of them.
+ *
+ * What it buys is that 0x7FF000 -- the final sector of the part -- is now
+ * outside the declaration rather than accidentally outside the sector cap. On
+ * the teensy40 that exact sector accepts an erase and silently ignores it
+ * (measured 2026-08-21; see teensy40.overlay), and its 32 KB partition WAS
+ * exactly eight sectors, so the cap clipped nothing and NVS hit it. This board
+ * escaped by luck of geometry, and luck is not a layout.
+ *
+ * That is treated here as a FAMILY PROPERTY of the Teensy NOR parts rather than
+ * something to go and measure: nothing in this file ends above 0x7FF000, so
+ * whether this chip's last sector is also dead never has to be answered. It
+ * matters more for the slots than it did for NVS -- MCUboot writes each slot's
+ * image trailer at the END of the slot, so a slot reaching the top of flash
+ * would fail during a swap, the least recoverable moment there is.
+ */
+
+&w25q64jvxgim {
+	partitions {
+		compatible = "fixed-partitions";
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		boot_partition: partition@0 {
+			label = "mcuboot";
+			reg = <0x00000000 DT_SIZE_K(128)>;
+		};
+
+		slot0_partition: partition@20000 {
+			label = "image-0";
+			reg = <0x00020000 DT_SIZE_M(1)>;
+		};
+
+		slot1_partition: partition@120000 {
+			label = "image-1";
+			reg = <0x00120000 DT_SIZE_M(1)>;
+		};
+
+		storage_partition: partition@7f0000 {
+			label = "storage";
+			reg = <0x007f0000 DT_SIZE_K(32)>;
+		};
+	};
+};

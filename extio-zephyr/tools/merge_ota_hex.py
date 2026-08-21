@@ -29,17 +29,35 @@ import sys
 
 from intelhex import IntelHex
 
-# Nothing may extend past here on the teensy40 -- the last sector of the 2 MB
-# W25Q16 accepts an erase and silently ignores it. See boards/teensy40.overlay.
-# This is a FLASH-RELATIVE offset; the hex files are not.
-DEAD_SECTOR = 0x1FF000
+# Both bounds are READ OUT OF THE BUILD, not hardcoded.
+#
+# The first cut of this script baked in 0x1FF000 and 0x60000000 -- correct for
+# the teensy40 and wrong the moment the teensy41 appeared, whose 8 MB part puts
+# the final sector at 0x7FF000. A tool that silently encodes one board's
+# geometry is the same class of bug as a board conf that cannot be conditional:
+# it does not fail, it just checks the wrong thing. CONFIG_FLASH_SIZE (KB) and
+# CONFIG_FLASH_BASE_ADDRESS are in the app image's .config and are exactly what
+# the linker used.
+ERASE_SECTOR = 4096
 
-# RT1062 XIP window. Zephyr emits hex records at the mapped address
-# (0x60000000 + offset) and HalfKay expects exactly that, so every bound in this
-# script converts before comparing against the flash-relative partition table.
-# Getting this wrong is not academic: the first cut of this script compared a
-# mapped address against a flash offset and refused a perfectly good image.
-FLASH_BASE = 0x60000000
+
+def flash_geometry(dotconfig: pathlib.Path) -> tuple:
+    """(flash_base, dead_sector_offset) from the built .config."""
+    size_kb = base = None
+    for line in dotconfig.read_text().splitlines():
+        if line.startswith("CONFIG_FLASH_SIZE="):
+            size_kb = int(line.split("=", 1)[1])
+        elif line.startswith("CONFIG_FLASH_BASE_ADDRESS="):
+            base = int(line.split("=", 1)[1], 0)
+    if size_kb is None or base is None:
+        sys.exit(f"no CONFIG_FLASH_SIZE / CONFIG_FLASH_BASE_ADDRESS in {dotconfig}")
+    # The part's LAST erase sector. On the teensy40 that sector accepts an erase
+    # and silently ignores it (measured 2026-08-21), and the layouts treat that
+    # as a family property of these NOR parts rather than something to re-test
+    # per board -- so nothing may reach it. It matters more for MCUboot than it
+    # did for NVS: image trailers live at the END of a slot, so a slot running to
+    # the top of flash fails during a swap rather than at mount.
+    return base, size_kb * 1024 - ERASE_SECTOR
 
 
 def main() -> int:
@@ -63,7 +81,10 @@ def main() -> int:
     for p in (boot, app):
         if not p.is_file():
             sys.exit(f"missing {p}\nbuild first:\n"
-                     f"  west build -b teensy40 --sysbuild . -d {args.build_dir}")
+                     f"  west build -b <board> --sysbuild . -d {args.build_dir}")
+
+    flash_base, dead_sector = flash_geometry(
+        build / args.app_image / "zephyr" / ".config")
 
     ih_boot, ih_app = IntelHex(str(boot)), IntelHex(str(app))
     b0, b1 = ih_boot.minaddr(), ih_boot.maxaddr()
@@ -79,20 +100,20 @@ def main() -> int:
     merged.merge(ih_boot, overlap="error")
     merged.merge(ih_app, overlap="error")
 
-    end_rel = merged.maxaddr() - FLASH_BASE
-    if end_rel >= DEAD_SECTOR:
+    end_rel = merged.maxaddr() - flash_base
+    if end_rel >= dead_sector:
         sys.exit(f"merged image ends at flash offset 0x{end_rel:x}, at or past "
-                 f"the dead sector 0x{DEAD_SECTOR:x} -- that region cannot be "
-                 f"erased and the flash will not take it.")
+                 f"the part's final sector 0x{dead_sector:x} -- that region is "
+                 f"treated as unerasable on these parts and must stay clear.")
 
     merged.write_hex_file(args.output)
-    rel = lambda a: a - FLASH_BASE
+    rel = lambda a: a - flash_base
     print(f"mcuboot   0x{rel(b0):06x}-0x{rel(b1):06x}  {b1 - b0 + 1:>7} B  ({boot})")
     print(f"app       0x{rel(a0):06x}-0x{rel(a1):06x}  {a1 - a0 + 1:>7} B  ({app})")
     print(f"-> {args.output}   ends 0x{end_rel:06x}, "
-          f"{DEAD_SECTOR - end_rel} B clear of the dead sector")
+          f"{dead_sector - end_rel} B clear of the final sector (0x{dead_sector:06x})")
     print("   (offsets are flash-relative; the hex itself is mapped at "
-          f"0x{FLASH_BASE:08x}, which is what HalfKay wants)")
+          f"0x{flash_base:08x}, which is what HalfKay wants)")
     if args.allow_unsigned:
         print("WARNING: unsigned app -- MCUboot will refuse to boot this.")
     return 0
