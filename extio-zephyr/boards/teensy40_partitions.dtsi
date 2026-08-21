@@ -1,0 +1,67 @@
+/*
+ * teensy40_partitions.dtsi -- the Teensy 4.0 flash layout, ONE definition,
+ * included by BOTH images.
+ *
+ * This file exists because the app and MCUboot must agree, byte for byte, about
+ * where the slots are, and they are configured from different places: the app
+ * gets boards/teensy40.overlay, while MCUboot builds out of
+ * bootloader/mcuboot/boot/zephyr and never sees it. Two copies of this table
+ * that drifted apart would put the bootloader and the application on different
+ * slots -- a fault that appears only at the first swap, bricks the box, and
+ * looks nothing like its cause. So there is one table and both include it.
+ *
+ * The PJRC board DTS defines no partitions at all (unlike the FRDM boards, whose
+ * layout is already in-tree), which is why all four are carved here.
+ *
+ *   boot_partition    0x000000  128 KB   MCUboot
+ *   slot0_partition   0x020000  512 KB   the app runs here
+ *   slot1_partition   0x0A0000  512 KB   OTA writes here
+ *   (unallocated)     0x120000  860 KB   headroom to grow BOTH slots later
+ *   storage_partition 0x1f7000   32 KB   NVS -- OUTSIDE both slots, so config
+ *                                        survives an update
+ *   (unmapped)        0x1FF000    4 KB   THE DEAD SECTOR
+ *
+ * EQUAL SLOTS, deliberately: sysbuild's default here is swap-using-offset, and
+ * build-mcxn-ota -- the configuration actually proven in the field -- pairs it
+ * with equal slots. Swap algorithms disagree about whether the secondary slot
+ * may differ in size, so do not make them unequal without testing a real swap.
+ *
+ * NOTHING MAY EXTEND PAST 0x1FF000. The last sector of this 2 MB W25Q16 accepts
+ * an erase and silently ignores it (measured 2026-08-21; see the long autopsy in
+ * teensy40.overlay). That cost us NVS once. It would cost more here: MCUboot
+ * writes each slot's image trailer at the END of the slot, so a slot running to
+ * the top of flash would fail during a swap -- the least recoverable moment
+ * there is -- rather than at mount time where NVS failed loudly.
+ *
+ * 512 KB is ~3.6x the current ~141 KB app. Sized with headroom rather than to
+ * fill the part, so the slots can grow later without moving storage_partition,
+ * whose base is the one address on this board proven to work.
+ */
+
+&w25q16jvuxim {
+	partitions {
+		compatible = "fixed-partitions";
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		boot_partition: partition@0 {
+			label = "mcuboot";
+			reg = <0x00000000 DT_SIZE_K(128)>;
+		};
+
+		slot0_partition: partition@20000 {
+			label = "image-0";
+			reg = <0x00020000 DT_SIZE_K(512)>;
+		};
+
+		slot1_partition: partition@a0000 {
+			label = "image-1";
+			reg = <0x000a0000 DT_SIZE_K(512)>;
+		};
+
+		storage_partition: partition@1f7000 {
+			label = "storage";
+			reg = <0x001f7000 DT_SIZE_K(32)>;
+		};
+	};
+};

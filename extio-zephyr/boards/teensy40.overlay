@@ -8,6 +8,16 @@
 
 #include <zephyr/dt-bindings/adc/adc.h>   /* ADC_ACQ_TIME_DEFAULT */
 / {
+	/* Where the APP links when there is a bootloader in front of it. Read ONLY
+	 * when CONFIG_BOOTLOADER_MCUBOOT selects USE_DT_CODE_PARTITION, i.e. under
+	 * --sysbuild; the plain `west build -b teensy40 .` ignores it and keeps
+	 * CONFIG_FLASH_LOAD_OFFSET=0. The teensy40 board DTS sets no
+	 * zephyr,code-partition of its own, which is why this has to be here at all
+	 * -- the FRDM boards inherit theirs. */
+	chosen {
+		zephyr,code-partition = &slot0_partition;
+	};
+
 	aliases {
 		box-gpio-port     = &gpio2;   /* box pin n -> gpio2.n (3 = board LED) */
 	};
@@ -94,18 +104,22 @@
  * was EXACTLY eight sectors, so the cap clipped nothing and the last one was in
  * play. The 4.1 needs no change -- but do not shrink its partition to 32 KB
  * without moving its base down too. */
-&w25q16jvuxim {
-	partitions {
-		compatible = "fixed-partitions";
-		#address-cells = <1>;
-		#size-cells = <1>;
-
-		storage_partition: partition@1f7000 {
-			label = "storage";
-			reg = <0x001f7000 DT_SIZE_K(32)>;
-		};
-	};
-};
+/* ---- MCUboot A/B layout (OTA step 1) ----
+ *
+ * The table itself lives in teensy40_partitions.dtsi because MCUboot needs the
+ * IDENTICAL table and cannot see this file -- see the note there.
+ *
+ * PRESENT UNCONDITIONALLY, and inert without --sysbuild. CONFIG_BOOTLOADER_MCUBOOT
+ * is what selects USE_DT_CODE_PARTITION; with it unset the app ignores
+ * `zephyr,code-partition` entirely and still links at flash base with
+ * CONFIG_FLASH_LOAD_OFFSET=0, exactly as before -- verified: the plain build is
+ * unchanged at offset 0. Same arrangement every NXP board in Zephyr uses -- the
+ * layout lives in devicetree, and the bootloader decision is a Kconfig one.
+ *
+ * First flash is one HalfKay button press of the merged MCUboot+app hex; after
+ * that the box is OTA-updatable over the USB carrier (cmd/ota/begin +
+ * cmd/ota/chunk -- cmd/ota/fetch is refused on a non-eth uplink by design). */
+#include "teensy40_partitions.dtsi"
 
 /* console FIRST, data SECOND -- instance order sets USB interface numbering, and
  * the dserv host module expects the data pipe at if02 / the *3 tty. See the note
