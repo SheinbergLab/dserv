@@ -95,12 +95,46 @@ namespace eval ess {
     # if it isn't directional. Accepts full words and single-letter forms, case-
     # insensitively -- so both `label 7 up` and `label 7 U` self-configure the
     # manifest-derived map. (An explicit `map` on joystick_init still overrides.)
-    proc joystick_dir_canon {label} {
-        switch -nocase -- [joystick_denul $label] {
+    # One word -> a canonical direction, or "". Full words and the single-letter
+    # forms, case-insensitively.
+    proc joystick_dir_word {w} {
+        switch -nocase -- $w {
             u - up    { return up }
             d - down  { return down }
             l - left  { return left }
             r - right { return right }
+        }
+        return ""
+    }
+
+    # A pin label -> a canonical direction, or "" if it names no direction.
+    #
+    # EXACT FIRST, THEN PER TOKEN, matching what button_group_bit already does
+    # for buttons (`foreach tok [split $lab "_-"]`). Buttons have token-matched
+    # for a long time, so `btn_left` binds as `left`; the joystick was
+    # exact-only, so `joy_up` did NOT canonicalize -- and labelling a joystick
+    # consistently with the buttons beside it is the obvious thing to do.
+    #
+    # The failure was silent and symmetric: with no canonical label,
+    # joystick_map_for falls back to POSITIONAL bits 0-3 in ascending pin
+    # order, which on a real box (joy_down/joy_up/joy_right/joy_left on pins
+    # 2,3,4,6) reads as a clean up<->down AND left<->right flip. That cost a
+    # rig session once, with the ess decode blameless, and nearly cost another
+    # on 2026-08-21 -- the trap was documented rather than removed. This
+    # removes it.
+    #
+    # TOKENS MUST BE FULL WORDS. The single-letter forms are honoured only as
+    # a WHOLE label, because as one token among several a lone letter is far
+    # more often an abbreviation of something else: `d_pad` means d-pad, not
+    # down. `label 7 d` still works; `d_pad` correctly names no direction.
+    proc joystick_dir_canon {label} {
+        set l [joystick_denul $label]
+        set d [joystick_dir_word $l]
+        if { $d ne "" } { return $d }
+        foreach tok [split $l "_-"] {
+            if { [string length $tok] < 2 } continue   ;# see above
+            set d [joystick_dir_word $tok]
+            if { $d ne "" } { return $d }
         }
         return ""
     }
@@ -474,7 +508,17 @@ namespace eval ess {
                 set ldp $io/$dev/state/label/$p
                 if { [dservExists $ldp] } {
                     set c [joystick_dir_canon [dservGet $ldp]]
-                    if { $c ne "" } { dict set map $c $i }
+                    # TWO MEMBERS CLAIMING ONE DIRECTION used to be resolved
+                    # silently by last-writer-wins, leaving a map that looks
+                    # fine and steers wrongly. More reachable now that labels
+                    # token-match, so say it rather than pick.
+                    if { $c ne "" && [dict exists $map $c] } {
+                        ess_warning "joystick: $dev/$glabel has two members\
+                            naming '$c' (bits [dict get $map $c] and $i);\
+                            keeping the first -- relabel one of them" "joystick"
+                    } elseif { $c ne "" } {
+                        dict set map $c $i
+                    }
                 }
                 incr i
             }
