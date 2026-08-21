@@ -85,6 +85,19 @@ if { [info exists env(DSERV_OFFLINE)] &&
     dservSet system/offline 0
 }
 
+# Rig facts that several interps read -- stim host, registry url/workgroup.
+# HERE and not later: it exports the declared values to the environment, and
+# the environment is what every child inherits, so it must run after the
+# local/pre-*.tcl above (whose env vars it adopts on first boot) and before
+# the first subprocess below. See config/rig_settings.tcl.
+dservSet system/boot_stage rig_settings
+if { [catch { source [file join $dspath config/rig_settings.tcl] } err] } {
+    # Never fatal: an unreadable rig.tcl line or a botched declaration must
+    # not cost stim, ess, mesh and the rest of this file. Without it the
+    # legacy pre-*.tcl exports still stand, which is exactly the old behavior.
+    puts stderr "dsconf: rig_settings FAILED: $err"
+}
+
 # start an eye movement subprocess
 subprocess em "source [file join $dspath config/emconf.tcl]"
 

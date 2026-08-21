@@ -1,5 +1,36 @@
 #
-# configure connection to ess-script registry
+# SUPERSEDED -- there is nothing to copy here any more.
 #
-set env(ESS_REGISTRY_URL) https://dserv.net
-set env(ESS_WORKGROUP)    brown-sheinberg
+# The ess-script registry connection is DECLARED, in local/rig.tcl:
+#
+#     setting registry url       https://dserv.net
+#     setting registry workgroup brown-sheinberg
+#
+# or, without editing anything by hand:
+#
+#     essctrl -c 'settings::put registry url https://dserv.net -persist'
+#     essctrl -c 'settings::put registry workgroup brown-sheinberg -persist'
+#
+# config/rig_settings.tcl exports the pair to ESS_REGISTRY_URL and
+# ESS_WORKGROUP before any subprocess starts, so ess, scripts, sync,
+# trialsync and configs read what they always did -- and a put also reaches
+# those interps while they run. Empty means NOT CONFIGURED: sync and push
+# stay local and trial ingest reports no_workgroup, which is the old
+# behavior of having no file here at all.
+#
+# The same values used to be written in local/mesh.tcl as well
+# (`mesh_configure <url> <workgroup>`). Mesh now falls back to the declared
+# pair when local/mesh.tcl does not configure one, so that file can go too
+# unless this box deliberately meshes somewhere else.
+#
+# A rig that still has a local/pre-registry.tcl is not broken: on the first
+# boot after the upgrade those exports are ADOPTED into local/rig.tcl, and
+# from then on the declaration wins and this file does nothing. dserv says so
+# at boot ("local/pre-registry.tcl is superseded ..."). Delete it once you
+# have seen that line.
+#
+# NOT covered by the setting: dserv-agent has its own --registry and
+# --workgroup flags and is a separate process that must keep working while
+# dserv is down. Changing the setting does not move a running agent; its unit
+# file has to match, and it has to be restarted.
+#

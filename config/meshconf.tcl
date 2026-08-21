@@ -424,6 +424,18 @@ if { [file exists $dspath/local/mesh.tcl] } {
     source $dspath/local/mesh.tcl
 }
 
+# Otherwise take the rig's declared registry (settings `registry url` /
+# `registry workgroup`, exported to the environment by config/rig_settings.tcl
+# before this subprocess existed). Mesh and the script registry are the same
+# server with the same workgroup on every rig here, and having the pair
+# written down twice is how they drift apart. local/mesh.tcl still wins where
+# it exists, so a box that deliberately meshes elsewhere is unaffected.
+if { $mesh_registry eq "" && $mesh_workgroup eq "" &&
+     [info exists ::env(ESS_REGISTRY_URL)] && $::env(ESS_REGISTRY_URL) ne "" &&
+     [info exists ::env(ESS_WORKGROUP)] && $::env(ESS_WORKGROUP) ne "" } {
+    mesh_configure $::env(ESS_REGISTRY_URL) $::env(ESS_WORKGROUP)
+}
+
 # Pick up the network path netmon seeded before we started (netmon runs
 # earlier in dsconf.tcl; a safe no-op on boxes without it). Done here —
 # after mesh_configure has run — so an ip pickup can heartbeat usefully.

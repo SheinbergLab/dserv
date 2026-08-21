@@ -243,13 +243,36 @@ whichever declared LAST, and a put would update only that interp's runtime
 dict — a knob that looks written and half is. When several interps need the
 value, ONE declares and the apply hook pushes to the rest.
 
-Candidate order, easiest first: `stim host` (one clear owner-by-proxy, live
-switchable, retires `local/pre-remote.tcl`), then `registry url` +
-`registry workgroup` together (retires `pre-registry.tcl` and the mesh line,
-and the agent caveat above needs writing into the doc string). Both want a
-`-validate` that rejects an empty string and normalizes a bare hostname; the
-`values` list is a HINT list here (`<host>`, `https://<host>`), i.e. §1's
-free-text-with-hints path, not a dropdown.
+### DONE (2026-08-21) — all three, in `config/rig_settings.tcl`
+
+Sourced by `dsconf.tcl` after the `local/pre-*.tcl` glob and before the first
+subprocess, which is the only window where both halves are true: the legacy
+exports exist to be adopted, and no child has inherited an environment yet.
+
+- **`stim host`** (default `localhost`), **`registry url`**,
+  **`registry workgroup`** (both default EMPTY — `ess::registry`'s own
+  defaults are empty, and a default of `https://dserv.net` would quietly
+  enroll every unconfigured rig).
+- **The migration runs itself.** If the knob is still `source default` and
+  the legacy env var is set, the value is adopted into `local/rig.tcl` with
+  `put -persist` and the boot prints what it did — same one-time carryover
+  `obs_autobind` used. From the second boot the declaration wins even with
+  the legacy file still in place, and a declared EMPTY value *unsets* a stale
+  export, so "no registry" stays sayable.
+- **`local/mesh.tcl` folds in too**: mesh falls back to the declared pair
+  when that file does not `mesh_configure`. Same two values, previously
+  written twice.
+- **No `-values` on the registry knobs.** `_validate`'s wildcard branch
+  matches only a NON-empty value, so any values list at all makes `""`
+  unwritable — the shape goes in `-doc` instead. Worth remembering when the
+  gear renders: a knob whose empty state is meaningful cannot carry hints
+  this way.
+- Covered by `tests/test_rig_settings.tcl` (`ctest -R rig_settings`), which
+  boots each scenario in its own child interp — first boot, second boot, bare
+  rig, declared-empty, validation, fan-out, and a bad line staying non-fatal.
+
+Not yet done on a rig: the adopt-and-delete pass. Every rig prints its own
+instructions at boot; `docs/rig_settings_migration.md` §6 is the runbook.
 
 ## Sequencing
 

@@ -197,6 +197,44 @@ cost a wrong conclusion about rpi500's buttons, which work fine.
 without hardcoding anything, and `/source` shows whether a value is a default,
 declared in the file, or a live override.
 
+## 6. The env-var files — and this one migrates ITSELF
+
+`local/pre-remote.tcl` and `local/pre-registry.tcl` are the other hand-edited
+settings, and they are a different shape from bindings: one value that three
+or four interps each read, distributed by the process environment
+(`ESS_RMT_HOST`, `ESS_REGISTRY_URL`, `ESS_WORKGROUP`). MAIN declares those —
+`config/rig_settings.tcl`, sourced by dsconf before the first subprocess —
+and exports them to the environment, so every reader downstream is unchanged.
+See §3 of `docs/settings_panel_plan.md` for why they cannot be declared in the
+subsystem that uses them.
+
+**There is no manual step.** On the first boot after the upgrade the existing
+exports are ADOPTED into `local/rig.tcl` and the rig behaves identically:
+
+    rig_settings: adopted ESS_RMT_HOST into local/rig.tcl (setting stim host 192.168.88.50)
+    rig_settings: adopted ESS_WORKGROUP into local/rig.tcl (setting registry workgroup brown-sheinberg)
+    rig_settings: local/pre-registry.tcl is superseded by 'registry url/workgroup' in local/rig.tcl -- edits to it no longer take effect; safe to delete
+
+Then delete the legacy file. Leaving it is not dangerous — the declaration
+wins from the second boot on — but it is a file that looks like configuration
+and no longer is, which is the trap this whole migration exists to remove.
+
+`local/mesh.tcl` usually goes too: mesh falls back to the same declared pair
+when that file does not call `mesh_configure`, and on every rig here it was
+the same URL and workgroup written a second time.
+
+Afterwards:
+
+    essctrl -c 'settings::dump'                    # sub key value source, in main
+    essctrl -c 'dservGet settings/stim/host'
+    essctrl -c 'settings::put stim host 192.168.88.50 -persist'
+
+**What does NOT move:** `ESS_IPADDR` stays a file override — it is derived at
+boot from the route toward the stim host, and the derivation beats what a
+person types. And **dserv-agent keeps its own flags**: it is a separate
+process that must work while dserv is down, so a put cannot move it. Match
+its unit file and restart it.
+
 ## Getting to a rig at all
 
 The lab rigs sit on their own LAN behind a MikroTik; the office reaches a

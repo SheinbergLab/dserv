@@ -8,7 +8,18 @@
 #
 
 # Configure the mesh registry and workgroup
-# 
+#
+# MOST RIGS DO NOT NEED THIS FILE ANY MORE. When it is absent (or does not
+# call mesh_configure), mesh takes the pair the rig already declares for the
+# script registry:
+#
+#     setting registry url       https://dserv.net      (local/rig.tcl)
+#     setting registry workgroup brown-sheinberg
+#
+# They were the same two values on every rig here, written down twice, which
+# is how they drift apart. Keep this file only to point MESH somewhere else
+# than the script registry -- it wins where it exists.
+#
 # Registry: URL of the dserv-agent running in --server mode
 #   - Use http://localhost:80 if dserv-agent runs locally as registry
 #   - Use https://your-server.io for a remote registry
