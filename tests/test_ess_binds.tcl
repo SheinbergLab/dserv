@@ -2,8 +2,8 @@
 # test_ess_binds.tcl
 #
 #  button_bind / joystick_bind read guards: reading a binding must never
-#  clear it. Extracts the two procs from lib/ess-2.0.tm so the test
-#  tracks the file rather than a copy of it.
+#  clear it. Extracts the two procs from lib/ess_transports-1.0.tm so the
+#  test tracks the file rather than a copy of it.
 #
 #  A UNIT test: dserv is STUBBED, so this runs under plain tclsh with no
 #  server, no rig and no hardware. That is the point -- the geometry and
@@ -30,7 +30,7 @@ namespace eval ess {
 # is ~310 KB and a non-greedy (.*?) across it backtracked for TWENTY
 # SECONDS. The scan below is linear, and the regex only ever sees one
 # proc's worth of text.
-set fh [open [file join $::REPO lib ess-2.0.tm]]
+set fh [open [file join $::REPO lib ess_transports-1.0.tm]]
 set src [read $fh]
 close $fh
 
