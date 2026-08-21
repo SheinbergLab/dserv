@@ -42,6 +42,16 @@ namespace eval ess {
     proc joystick_response {} { return -1 }
 }
 
+# ess_dial declares its routing on the settings API (`setting dial
+# sources`). Stub the package: declare is a no-op and get errors, which
+# the module treats as its own documented state -- "a bare interp with
+# no rig file is a normal way to load this module".
+package provide settings 1.0
+namespace eval settings {
+    proc declare { args } {}
+    proc get { args } { error "no settings in a unit test" }
+}
+
 source [file join $::REPO lib ess_dial-1.0.tm]
 
 set FAIL 0
