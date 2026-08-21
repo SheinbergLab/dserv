@@ -149,17 +149,17 @@ namespace eval slider {
     # A STICK HAS NO TOUCH, so the trackpad's PRESS/DRAG/RELEASE has to be
     # rebuilt from what a stick does have:
     #
-    #   origin  - the calibrated CENTRE, not a press point. A stick is
+    #   origin  - the calibrated CENTER, not a press point. A stick is
     #             absolute-referenced and spring-returns, so center_{x,y}
     #             already IS the origin and calibrate_axis already reports
     #             displacement from it. Nothing to latch.
     #   engage  - radius crosses swipe_threshold (same threshold, same units
     #             as the trackpad path: post-calibration magnitude).
-    #   commit  - THE SELECT BUTTON, not the return to centre.
+    #   commit  - THE SELECT BUTTON, not the return to center.
     #
     # That last one is the whole reason to wire the button. Committing on
     # "radius fell back below threshold" would sample the angle at the moment
-    # the stick is nearest centre -- where angle is least determined and most
+    # the stick is nearest center -- where angle is least determined and most
     # contaminated by how the finger left the stick. The button commits while
     # the stick is still deflected, so swipe_last_engaged_{x,y} holds a large-
     # radius sample and the committed angle is the one the subject chose.
@@ -218,7 +218,7 @@ namespace eval slider {
     ####################### guided stick calibration ##########################
     ###########################################################################
     #
-    # Retires the hand-editing. Centre, orientation and throw are things the
+    # Retires the hand-editing. Center, orientation and throw are things the
     # system MEASURES, not things a human declares, and they were being written
     # into local/slider.tcl by hand -- three different sticks in one afternoon,
     # each with its own numbers, each transcribed by eye. That is the smell the
@@ -318,7 +318,7 @@ namespace eval slider {
     }
 
     # Capture what has accumulated since the last mark as `stage`.
-    #   rest  -> the centre, and the noise floor everything else is judged against
+    #   rest  -> the center, and the noise floor everything else is judged against
     #   up    -> vertical column + sign
     #   right -> horizontal column + sign
     #   sweep -> the envelope, hence the throw
@@ -404,7 +404,7 @@ namespace eval slider {
             }
         }
 
-        # The throw, from the sweep: SHORTEST from centre to a stop across both
+        # The throw, from the sweep: SHORTEST from center to a stop across both
         # live columns. A criterion the stick can only satisfy in one direction
         # is not a criterion.
         set throw 1e9
@@ -504,7 +504,7 @@ namespace eval slider {
         if { [llength $applied] } {
             puts "slider: calibration restored from db (profile $cal_profile):\
                   chan_x/[dict get $settings chan_x] chan_y/[dict get $settings chan_y]\
-                  centre [format %.1f [dict get $settings center_x]],[format %.1f [dict get $settings center_y]]\
+                  center [format %.1f [dict get $settings center_x]],[format %.1f [dict get $settings center_y]]\
                   invert [dict get $settings invert_x],[dict get $settings invert_y]\
                   -- these OVERRIDE local/slider.tcl; slider::forget_calibration\
                   drops back to the file"
@@ -742,7 +742,7 @@ namespace eval slider {
             set rawvals [binary format ss $raw_x $raw_y]
             dservSetData slider/raw $ts 4 $rawvals ;# 4 = DSERV_SHORT
 
-            # Displacement from the calibrated centre -- which for a stick is
+            # Displacement from the calibrated center -- which for a stick is
             # both the absolute position AND the swipe vector, so the same
             # publish serves every mode.
             set x [calibrate_axis $raw_x $center_x $scale_x \
@@ -787,7 +787,7 @@ namespace eval slider {
     # committing here means a protocol written for the trackpad runs on a stick
     # unchanged. It is also not a layering stretch -- the trackpad's
     # PRESS/RELEASE is already a contact signal this file consumes, and select
-    # is its exact analogue for a stick.
+    # is its exact analog for a stick.
     proc process_stick_select { dpoint data } {
         variable settings
         variable stick_pressed
@@ -1064,7 +1064,7 @@ if { [file exists $dspath/local/slider.tcl] } {
 }
 
 # AFTER the local file, deliberately. The db holds only what the rig MEASURED
-# (centre, orientation, throw) and the file holds what a human DECLARED
+# (center, orientation, throw) and the file holds what a human DECLARED
 # (source, scale, limits) -- so on the learned keys the measurement wins,
 # which is the whole point of retiring them from the file. It announces itself
 # at boot, because a value that overrides the file someone is reading must be

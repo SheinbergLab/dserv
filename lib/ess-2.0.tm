@@ -2155,7 +2155,7 @@ namespace eval ess {
                 return
             }
         }
-        # classic path -- byte-identical to the unbound behaviour a system
+        # classic path -- byte-identical to the unbound behavior a system
         # that never calls obs_schedule_bind has always had
         ::ess::evt_put BEGINOBS INFO [now] $current $total
         dservSet ess/in_obs 1
@@ -4148,8 +4148,8 @@ namespace eval ess {
     # (::ess::dial's `stick` source); this is the other question.
     #
     # Reads slider/position rather than the box block directly, which buys
-    # three things: the rig's measured centre (a stick rests where its pots
-    # rest, never at 2048, and "centred" is a LIE without it -- the letgo
+    # three things: the rig's measured center (a stick rests where its pots
+    # rest, never at 2048, and "centered" is a LIE without it -- the letgo
     # gate would never open or never close), one calibration shared with
     # every other analog consumer, and scale/invert/swap already applied.
     # The cost is a dependency on sliderconf's `source` being pointed at the
@@ -4161,7 +4161,7 @@ namespace eval ess {
         return [expr {fmod($a - $b + 12.0, 8.0) - 4.0}]
     }
 
-    # Calibrated x/y -> sector 0-7, or -1 for centred.
+    # Calibrated x/y -> sector 0-7, or -1 for centered.
     proc joystick_analog_sector { x y } {
         variable joystick_analog
         set cur $joystick_analog(sector)
@@ -4246,7 +4246,7 @@ namespace eval ess {
                     # 4 divisions snaps a sloppy 45-degree push to the nearer
                     # CARDINAL, which is not the same as leaving the diagonals
                     # off a dial_dpad_sectors list: there an off-list push is
-                    # treated as centred and buys the animal nothing. Early in
+                    # treated as centered and buys the animal nothing. Early in
                     # shaping you usually want the snap.
                     set joystick_analog(step) [expr {8/$v}]
                 }
@@ -4371,7 +4371,7 @@ namespace eval ess {
     #
     # analog options, all optional:
     #   threshold  magnitude (in slider output units) that reads as deflected
-    #   release    magnitude that reads as centred again; default 0.6*threshold
+    #   release    magnitude that reads as centered again; default 0.6*threshold
     #   margin     degrees past a sector boundary needed to change sector
     #   divisions  8 (default, full d-pad) or 4 (cardinals; a diagonal push
     #              snaps to the nearer cardinal instead of falling between)
@@ -4456,7 +4456,7 @@ namespace eval ess {
             # SEED from the current position. slider/position is a level, not
             # an event: a stick held at init publishes nothing new until it
             # moves, so without this joystick_centered would report a held
-            # stick as centred until the subject happened to shift it -- and
+            # stick as centered until the subject happened to shift it -- and
             # the letgo gate would pass on exactly the state it guards.
             if { [dservExists $dp] } {
                 catch { joystick_process_analog $dp [dservGet $dp] }
@@ -5672,7 +5672,7 @@ namespace eval ess {
     # can be tiny.
     #
     # expo shapes the curve: 1.0 linear; 2-3 gives a slow, fine region near
-    # centre with full speed still available at the edge -- one knob for
+    # center with full speed still available at the edge -- one knob for
     # "gentle gain" and "fast gain" at once. Clamped BEFORE the exponent, so
     # over-range deflection cannot exceed full rate.
     proc stick_gain { f deadzone expo } {
@@ -5865,7 +5865,7 @@ namespace eval ess {
         # AddScript, not SetScript: this registers OUR handler and must not
         # clobber another subsystem's on the same datapoint. ::ess::dial
         # observes slider/position too, and with SetScript whichever
-        # initialised second silently deleted the first -- which is exactly
+        # initialized second silently deleted the first -- which is exactly
         # what happened to ricochet, where dial_init runs before slider_init.
         # append() dedupes, so calling slider_init twice still registers once.
         dservAddExactMatch slider/position

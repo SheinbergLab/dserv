@@ -299,7 +299,7 @@ proc extio_find_data_port {} {
         # this interpreter's thread, in a 67 ms block that stalls anything
         # queued behind it. Every path below needs a /dev/cu.usbmodem* to exist
         # (ioreg reports the tty.* twin of exactly those), so an empty glob
-        # means there is nothing to identify. Identity-first behaviour is
+        # means there is nothing to identify. Identity-first behavior is
         # unchanged whenever a device is actually present. Linux is already
         # cheap (a by-id glob, no exec) and needs no equivalent.
         set cand [lsort [glob -nocomplain /dev/cu.usbmodem*]]
@@ -1263,7 +1263,7 @@ proc extio_fw_check {box} {
     }
 
     # THE FIRST FIELD IS A CONTRACT. It is always one of exactly four phrases,
-    # and callers -- including extio-config.html, which colours the row by it --
+    # and callers -- including extio-config.html, which colors the row by it --
     # match on the text before the first " · ". A machine token bolted on with a
     # delimiter would read badly from dservctl; a phrase that is both the
     # verdict and the sentence reads correctly in both places, which is why the

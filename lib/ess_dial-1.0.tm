@@ -108,7 +108,7 @@ namespace eval ess {
     # think it is".
     #
     # It is also the version with the LEAST machinery. Reading only an
-    # angle put a singularity at the centre, and every mouse-specific
+    # angle put a singularity at the center, and every mouse-specific
     # workaround in the history of this file -- the start-radius acquire
     # gate, the acquired latch, holding the last angle through the dead
     # zone -- existed to paper over it. A dot that is simply where the
@@ -154,9 +154,9 @@ namespace eval ess {
     # Direct pointing with a thumbstick was tried first and was HARDER than
     # the trackpad, which is what started this whole line of work. The
     # reasons are structural, not tuning: a stick has ~1cm of travel, so
-    # atan2 of the deflection is twitchy near centre and only steady at
+    # atan2 of the deflection is twitchy near center and only steady at
     # full push -- precision depends on how hard you hold it -- and it
-    # self-centres, so releasing loses the direction and you can never park
+    # self-centers, so releasing loses the direction and you can never park
     # one and refine it.
     #
     # Integrating instead inverts all three: resolution comes from how LONG
@@ -170,7 +170,7 @@ namespace eval ess {
     variable dial_stick_deadzone 0.08    ;# fraction of full scale
     # Response curve: rate = full * f^expo, f being deflection past the
     # deadzone rescaled to 0..1. 1.0 is linear; 2-3 gives a slow, fine
-    # region near centre and full speed still available at the edge, which
+    # region near center and full speed still available at the edge, which
     # is what a single knob for "slow gain" and "fast gain" really wants.
     variable dial_stick_expo     2.0
     variable dial_stick_invert   0
@@ -190,9 +190,9 @@ namespace eval ess {
     variable dial_mouse_cy 0.0
 
     # Pixels-to-degrees for the mouse's declared extent. An angle is
-    # scale-free, so the old angle-only reading needed only the centre; a
+    # scale-free, so the old angle-only reading needed only the center; a
     # PLACED dot needs a scale, because now the dot's distance from the
-    # centre is a real quantity that has to agree with the arc the stim
+    # center is a real quantity that has to agree with the arc the stim
     # draws. Derived in dial_mouse_range from the extent and ::ess's screen
     # degrees, so a rig that declares its mouse extent correctly in
     # inputconf.tcl gets the mapping for free.
@@ -249,7 +249,7 @@ namespace eval ess {
     #   joystick   a settled deflection REPORTS its sector. Discrete, no
     #              cursor, nothing in between.
     #   dpad       holding a direction walks a cursor OUT along that spoke
-    #              from the centre; reaching the ring is the response.
+    #              from the center; reaching the ring is the response.
     #
     # Built for teaching an animal to use a joystick, where the discrete
     # version gives nothing to learn from: push, and either it counted or
@@ -330,12 +330,12 @@ namespace eval ess {
     # which is why the arc stays the full circle and this carries the
     # restriction instead.
     #
-    # A direction that is not live behaves exactly as CENTRED: the cursor
+    # A direction that is not live behaves exactly as CENTERED: the cursor
     # does not move. It is not rejected at the end of a reach, it simply
     # never sets out, so an animal on the reduced rungs of the ladder gets
     # no travel at all for a direction that was never on offer.
     variable dial_dpad_sectors   {}
-    # Walking back to the centre after a rejected reach. See dial_rearm:
+    # Walking back to the center after a rejected reach. See dial_rearm:
     # the cursor is never teleported, so the animal's own release is what
     # resets it.
     variable dial_dpad_homing    0
@@ -376,7 +376,7 @@ namespace eval ess {
     # grid rather than a ~60 Hz Tcl timer that drifts with scheduler load.
     #
     # Holding on release survives, which was the surprise: a spring stick
-    # returning to centre means velocity zero, so the cursor STOPS where it
+    # returning to center means velocity zero, so the cursor STOPS where it
     # got to rather than snapping home. Progress made in a short push is
     # kept, which is the property the dpad was built around for shaping.
     variable dial_astick_rate     8.0   ;# deg of travel per second, full push
@@ -481,7 +481,7 @@ namespace eval ess {
     }
 
     # Snap an angle into the arc, to the NEARER endpoint. Crossing the
-    # excluded wedge's centreline flips which end you snap to, which is fine:
+    # excluded wedge's centerline flips which end you snap to, which is fine:
     # the wedge is dead space and the subject is never shown a cursor in it.
     proc dial_clamp_arc { angle_rad } {
         variable dial_pi
@@ -530,9 +530,9 @@ namespace eval ess {
     #                  ?-radius R? ?-ring_tolerance T?
     #                  ?-cursor_dpoint NAME?
     #
-    # Does NOT initialise the underlying transport — the protocol still calls
+    # Does NOT initialize the underlying transport — the protocol still calls
     # ::ess::slider_init / ::ess::touch_init with the settings it wants (swipe
-    # threshold, release behaviour). The dial reads them; it does not own them.
+    # threshold, release behavior). The dial reads them; it does not own them.
     proc dial_init { args } {
         variable dial_active
         variable dial_sources
@@ -810,7 +810,7 @@ namespace eval ess {
     # Publish the dial's geometry so anything outside ess can DRAW it.
     #
     # The viz subprocess has no ess package -- it can only read datapoints
-    # and stimdg -- so a visualisation cannot ask the dial anything. Making
+    # and stimdg -- so a visualization cannot ask the dial anything. Making
     # the dial self-describing is what lets one shared viz serve every
     # system that uses a dial, instead of each hand-rolling the ring, the
     # arc and the cursor as ricochet, mp_pulsed and motionpatch each do now.
@@ -863,7 +863,7 @@ namespace eval ess {
     # the free pointer (mouse)
     # ---------------------------------------------------------------------
 
-    # Publish "x,y,show,in_band" -- degrees, y up, origin at the centre of
+    # Publish "x,y,show,in_band" -- degrees, y up, origin at the center of
     # the dial's circle, matching ess/dial/geometry and ess/touch_press_deg
     # so a stim can draw the dot in the same frame it drew the ring.
     proc dial_pointer_update { x y show in_band } {
@@ -957,7 +957,7 @@ namespace eval ess {
         variable dial_sources
         if { "joystick" in $dial_sources } { joystick_reset }
 
-        # Put the mouse's virtual cursor back at the ORIGIN -- the centre of
+        # Put the mouse's virtual cursor back at the ORIGIN -- the center of
         # the circle, which names no direction, not the ring point at
         # arc_center, which names one and would anchor every report toward
         # it.
@@ -965,7 +965,7 @@ namespace eval ess {
         # The mouse is the one source that can do this. It is a RELATIVE
         # device whose absolute position is a fiction the reader maintains
         # (input.c integrates counts into a virtual cursor and clamps it to
-        # a declared extent), so recentring desynchronises nothing -- there
+        # a declared extent), so recentering desynchronises nothing -- there
         # is no physical position for the dot to disagree with, the way a
         # finger disagrees with a touchscreen.
         #
@@ -976,7 +976,7 @@ namespace eval ess {
         #   the random walk into a corner where the extent clamps and whole
         #   directions stop being reportable
         #
-        #   every reportable direction is EQUIDISTANT -- from the centre of
+        #   every reportable direction is EQUIDISTANT -- from the center of
         #   a circle each arc angle is one radius away, so motor cost is
         #   flat across directions and cannot confound the thing being
         #   measured. Starting from the last answer varies both.
@@ -986,13 +986,13 @@ namespace eval ess {
         # set one when dial_init runs. By arm time all per-trial geometry is
         # in.
         #
-        # Both halves matter. A radius of 0 accepts a click at the centre; a
+        # Both halves matter. A radius of 0 accepts a click at the center; a
         # tolerance of 0 (the default) accepts nothing at all, which is the
         # worse failure because it looks like a subject who will not respond.
         # POINTER sources -- the ones that place a dot rather than report an
         # angle outright. They share the ring-band requirement and start the
         # window with the dot at the origin. Only the mouse also has a
-        # device cursor to recentre; the dpad's cursor is ours and simply
+        # device cursor to recenter; the dpad's cursor is ours and simply
         # starts at zero.
         variable dial_radius
         variable dial_ring_tolerance
@@ -1040,7 +1040,7 @@ namespace eval ess {
             variable dial_dpad_homing;   set dial_dpad_homing   0
             variable dial_dpad_deflected; set dial_dpad_deflected 0
             dial_dpad_stop
-            # Recentred means the dot IS at the origin, so publish it there
+            # Recentered means the dot IS at the origin, so publish it there
             # rather than leaving the previous trial's position on screen
             # until the first movement.
             variable dial_pointer_shown; set dial_pointer_shown 1
@@ -1078,15 +1078,15 @@ namespace eval ess {
     #
     # For the forgiving path: a reach that landed somewhere the protocol
     # will not accept should not be answered by teleporting the cursor back
-    # to the centre. That is a jump the subject did not cause, and with a
+    # to the center. That is a jump the subject did not cause, and with a
     # dpad it is worse than cosmetic -- the cursor would still be out in the
     # band, so the very next deflection would re-commit instantly from
     # wherever it sat.
     #
     # Instead the dpad enters HOMING: holding achieves nothing, and letting
-    # the stick centre walks the cursor back in at the travel rate. The
+    # the stick center walks the cursor back in at the travel rate. The
     # reset becomes something the animal performs rather than something
-    # done to it -- and returning to centre is a real joystick skill worth
+    # done to it -- and returning to center is a real joystick skill worth
     # training rather than papering over.
     #
     # dial_arm remains the right call at the START of a trial, where the
@@ -1307,7 +1307,7 @@ namespace eval ess {
         return $angle
     }
 
-    # Is this distance from the centre inside the ring band?
+    # Is this distance from the center inside the ring band?
     #
     # Shared by touch and mouse so the two cannot drift apart: a mouse is a
     # touch with a visible cursor, and "landed on the ring" has to mean the
@@ -1321,7 +1321,7 @@ namespace eval ess {
                       $dist <= $dial_radius + $dial_ring_tolerance}]
     }
 
-    # The extent's centre and scale, from mouse/event/range
+    # The extent's center and scale, from mouse/event/range
     # ([0 max_x 0 max_y]). Needed before any position can be computed, so a
     # sample arriving first is simply dropped rather than measured from
     # (0,0) at an unknown scale.
@@ -1475,7 +1475,7 @@ namespace eval ess {
     # THE place acceleration lives. Everything else -- the tick, the
     # commit, the display -- is written against "what is the rate at this
     # instant", so a different curve is a change here and nowhere else.
-    # Linear is the digital-clock behaviour; a staged or exponential ramp
+    # Linear is the digital-clock behavior; a staged or exponential ramp
     # would substitute cleanly.
     proc dial_dpad_rate_now { held_s } {
         variable dial_dpad_rate
@@ -1552,9 +1552,9 @@ namespace eval ess {
     }
 
     # ess/joystick/dir carries the SECTOR (0..7 clockwise from up) or -1 for
-    # centred, republished by joystick_ingest on every state change.
+    # centered, republished by joystick_ingest on every state change.
     #
-    # Deflection starts the timer; centring stops it and the cursor HOLDS
+    # Deflection starts the timer; centering stops it and the cursor HOLDS
     # where it got to. Holding rather than decaying is deliberate for
     # shaping: progress made in a short push is kept, so an animal can
     # reach the ring in several bursts instead of needing one sustained
@@ -1574,7 +1574,7 @@ namespace eval ess {
 
         variable dial_dpad_deflected
         variable dial_dpad_homing
-        # declared HERE, not beside its first use further down: the centred
+        # declared HERE, not beside its first use further down: the centered
         # branch below returns long before that point, and a `set` without
         # this line makes a LOCAL, leaving the namespace value untouched.
         # That is the third time this file has been bitten by it.
@@ -1591,11 +1591,11 @@ namespace eval ess {
             # -- and with acceleration on it did not creep, it ran to the ring
             # and COMMITTED a response nobody made.
             #
-            # With want cleared, any stray tick hits the centred guard and
+            # With want cleared, any stray tick hits the centered guard and
             # stops itself. The state says what should happen; the timer is
             # only how it happens.
             set dial_dpad_want -1
-            # Centred. Normally that HOLDS the cursor where it got to; while
+            # Centered. Normally that HOLDS the cursor where it got to; while
             # homing it is the opposite -- releasing is the thing that walks
             # it back, so the timer keeps running.
             if { $dial_dpad_homing } {
@@ -1611,7 +1611,7 @@ namespace eval ess {
 
         # Homing is judged on the RAW deflection, before the liveness gate:
         # while coming home, holding anything at all achieves nothing, and
-        # only letting the stick centre walks the cursor back.
+        # only letting the stick center walks the cursor back.
         if { $dial_dpad_homing } {
             set dial_dpad_deflected 1
             dial_dpad_stop
@@ -1619,7 +1619,7 @@ namespace eval ess {
         }
 
         # A direction that is not on offer this trial is treated exactly as
-        # centred: the cursor HOLDS where it is. Not a retraction -- an
+        # centered: the cursor HOLDS where it is. Not a retraction -- an
         # off-axis push is "not pushing", and should cost nothing rather
         # than undo travel already earned. Returning to a live direction
         # resumes from here, since neither the spoke nor the request moved.
@@ -1635,7 +1635,7 @@ namespace eval ess {
         # -- dial_dpad_tick decides how to get there, and the answer is never
         # "instantly".
         #
-        # A new direction is reached BY WAY OF THE CENTRE: the cursor
+        # A new direction is reached BY WAY OF THE CENTER: the cursor
         # retracts along the spoke it is on, and only once it reaches zero
         # does it set out along the new one. Re-aiming at the current radius
         # was the earlier rule and it swung the cursor around the circle --
@@ -1643,8 +1643,8 @@ namespace eval ess {
         # the subject's own doing.
         #
         # It also keeps a real contingency: changing your mind costs the
-        # travel you already spent, and passing through the centre is the
-        # same return-to-centre skill the joystick task is teaching.
+        # travel you already spent, and passing through the center is the
+        # same return-to-center skill the joystick task is teaching.
         #
         # The report still names one of the eight directions the device can
         # express, because the cursor is only ever ON a spoke. A free 2D
@@ -1749,7 +1749,7 @@ namespace eval ess {
                 [expr {(90.0 - 45.0*$dial_dpad_sector)*$dial_pi/180.0}]]
         }
 
-        # Centred with nothing to walk back: hold where we are. The dir
+        # Centered with nothing to walk back: hold where we are. The dir
         # handler stops the timer on release, so reaching here means an
         # ordering we did not expect -- holding is the safe reading, and
         # extending on a released stick would be the damaging one.
@@ -1790,7 +1790,7 @@ namespace eval ess {
         set dial_pointer_shown 1
         dial_pointer_update $px $py 1 $band
 
-        # Commit on reaching the RING RADIUS -- the target's centre -- not
+        # Commit on reaching the RING RADIUS -- the target's center -- not
         # the band's near edge. The band still drives in_band, so the
         # affordance lights as the cursor enters it and the cursor then
         # travels the last of the way and lands ON the target. Selecting
@@ -1959,7 +1959,7 @@ namespace eval ess {
             return
         }
 
-        # Commit on reaching the RING RADIUS -- the target's centre, not the
+        # Commit on reaching the RING RADIUS -- the target's center, not the
         # band's near edge -- so the cursor lands ON the thing it chose.
         # Arriving IS the response: no second action to learn, and the
         # subject has watched the cursor earn it the whole way.
@@ -2036,9 +2036,9 @@ namespace eval ess {
     # dial_pending. Nothing to poll.
     proc dial_poll_astick {} { return "" }
 
-    # Velocity steering from a self-centring stick.
+    # Velocity steering from a self-centering stick.
     #
-    # Reads slider/position, so it inherits sliderconf's centre, deadzone,
+    # Reads slider/position, so it inherits sliderconf's center, deadzone,
     # scale and invert calibration -- which is what makes integrating safe.
     # An uncalibrated stick never rests at exactly zero, and an integrator
     # turns that residue into a cursor that drifts with nobody touching it.
@@ -2082,8 +2082,8 @@ namespace eval ess {
         # deflections that are plausibly deliberate.
         #
         # Bootstrapping off ANY sample was wrong and produced a first-trial
-        # meander: a stick whose centre is not calibrated does not rest at
-        # zero (measured -0.39 on rpi500, whose sliderconf centre is the
+        # meander: a stick whose center is not calibrated does not rest at
+        # zero (measured -0.39 on rpi500, whose sliderconf center is the
         # generic 2048), so the very first sample made the RESTING OFFSET
         # the definition of full deflection -- f = 1.0, full-rate rotation,
         # from an untouched stick. It settled once a real push raised the
@@ -2110,7 +2110,7 @@ namespace eval ess {
         set f [expr {$f < 0 ? -$af : $af}]
         if { $dial_stick_invert } { set f [expr {-$f}] }
 
-        # First deflection of the trial starts the cursor at the arc centre
+        # First deflection of the trial starts the cursor at the arc center
         # -- the neutral choice -- and shows it. Until then there is nothing
         # on screen, so the ball is not competing with a report cursor.
         if { !$dial_stick_moved } {
@@ -2259,7 +2259,7 @@ namespace eval ess {
     proc dial_simulate { angle_rad } {
         variable dial_active
         variable dial_armed_time
-        if { !$dial_active } { error "::ess::dial_simulate: no dial initialised" }
+        if { !$dial_active } { error "::ess::dial_simulate: no dial initialized" }
         if { $dial_armed_time == 0 } { error "::ess::dial_simulate: dial not armed" }
         # Latch it and wake the state machine; dial_response consumes it on
         # the next update. Applying it here instead would set the report and

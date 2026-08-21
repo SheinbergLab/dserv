@@ -24,7 +24,7 @@ anything the dial owns.
 
 ## The layering, unchanged
 
-    roam owns       integration, arena geometry, edge behaviour, publishing
+    roam owns       integration, arena geometry, edge behavior, publishing
                     the agent's pose
     the protocol    what a patch IS, what being in one earns, when the trial
     owns            ends
@@ -49,7 +49,7 @@ studied rather than something the subject has to fight.
 Publish position as a **DSERV_FLOAT pair in degrees**, exactly like
 `eyetracking/position` and `slider/position`:
 
-    ess/roam/pos      "x y" as binary ff, degrees, origin at screen centre
+    ess/roam/pos      "x y" as binary ff, degrees, origin at screen center
 
 This is not a cosmetic choice — see the next section. If body-relative is
 added later, heading goes in a *separate* datapoint rather than widening this
@@ -84,7 +84,7 @@ It also answers the recurring "would a C coprocessor help here" question. For
 the dial: no — the arithmetic is smaller than the boundary crossing. For
 roaming: yes, and it is already written.
 
-## Why the SM discipline stops being an optimisation
+## Why the SM discipline stops being an optimization
 
 Every cursor source in `ess_dial` refuses to call `do_update` on motion; only
 a commit wakes the state machine. For a dial that is a nicety, since a reach
@@ -136,7 +136,7 @@ a roamed agent — same stimulus generation, same scoring, different effector.
 Concretely, the pieces that already exist:
 
 - targets are drawn from `stimdg` as circles at known positions
-- a patch is a `windows` region at each target's centre
+- a patch is a `windows` region at each target's center
 - "found it" becomes region-entered rather than touch-in-window
 - dwell-to-collect is a timer started on entry, which the region status
   transition gives for free
