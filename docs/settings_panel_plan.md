@@ -3,7 +3,9 @@
 Two ess_control panels that the settings/calibration backends now make
 possible: a **schema-driven settings gear**, and a **calibration wizard**.
 They share one prerequisite (§0) and one transport, but they are different
-UI shapes and should not be merged.
+UI shapes and should not be merged. §3 is not a panel — it is the class of
+knob that would break the gear if it were declared the obvious way, and the
+tenants worth feeding it.
 
 Facts below were verified on 2026-08-21, not recalled.
 
@@ -162,17 +164,106 @@ per input or one device's mapping is forced onto the other. The wizard should
 show which profile it is about to write and refuse to guess when
 `local/slider.tcl` names none.
 
+## 3. Rig facts SEVERAL interps read — and why main must declare them
+
+`joystick transport` and `juicer destination` are the easy shape: one
+subsystem owns the knob, declares it, validates it, applies it. The rig has
+another shape that looks identical and is not — a fact about the rig that
+three or four interps each need a copy of, distributed today by the process
+ENVIRONMENT, set in a `local/pre-*.tcl` before any subprocess starts.
+
+Three of them, verified 2026-08-21:
+
+| env var | set in | read by |
+|---|---|---|
+| `ESS_RMT_HOST` | `local/pre-remote.tcl` | `stimconf.tcl:38` (`stim_host`); `ess-2.0.tm:4736` (`::ess::rmt_host` → `ess/rmt_host`); `dsconf.tcl:211` in MAIN, to derive `ess/ipaddr` |
+| `ESS_REGISTRY_URL` | `local/pre-registry.tcl` | `essconf.tcl:62`; `ess_sync-1.0.tm:382`; `scriptsconf.tcl` (via the same) |
+| `ESS_WORKGROUP` | `local/pre-registry.tcl` | `essconf.tcl:65`; `ess_sync-1.0.tm:385`; `trialsyncconf.tcl:884` |
+
+**Why the environment, and why `declare` in the owning subsystem cannot
+replace it.** The environment is inherited, so it is ORDERING-FREE. `ess`
+starts at `dsconf.tcl:138` and `stim` at `dsconf.tcl:282` — ess boots FIRST,
+so if `stim` declared `stim host`, ess could never read it. Reaching across
+at boot is the exact hazard `dsconf.tcl:203` documents from experience: a
+datapoint read of another subprocess's value truncated the whole config.
+
+**So MAIN declares this class.** Main parses `local/rig.tcl` itself, like
+every interp does, before any child exists; it exports the effective value to
+`env(...)`; every downstream reader stays byte-identical to what it is today.
+`dsconf.tcl` already has `tcl::tm::add $dspath/lib` (line 15) and would gain
+`package require settings`. The `interp` field on those knobs then reads
+`dserv` — the "evaluate directly, `send` refuses it" case §0 made explicit,
+and the first real exercise of that path in the gear.
+
+**The apply hook has to FAN OUT, and must not block.** Setting the env var
+only affects the next boot; the live copies are in ess, stim, scripts,
+trialsync. So `-apply` pushes: `stimOpen`, `::ess::rmt_host`,
+`ess::registry::configure -url/-workgroup`. Use **`sendNoReply`**, not
+`send`: a `send` from main blocks on the child's reply queue, so one wedged
+subprocess would wedge MAIN — the request loop every page and every rig
+tool rides on — from a settings write. That is a much worse failure than a
+setting that did not reach one interp.
+
+**Some values need a RECONNECT, not a reassign.** `stimSend` opens a socket
+per message (`stimconf.tcl:5`), so stim switches hosts on the very next
+message for free. Ess does not: `configure_stim`/`rmtOpen`
+(`ess-2.0.tm:313`) holds a connection to the OLD host and has already
+fetched screen geometry from it. Either the apply hook reconnects, or the
+gear's "nothing to re-read after a write" promise is a lie for this knob.
+Decide per knob and say which in `-doc`; the panel should show it.
+
+**Registry/workgroup is worse than stim, and the reason to do it.** The same
+two values are written in THREE independent places on this box, with nothing
+keeping them in agreement:
+
+    local/pre-registry.tcl   ESS_REGISTRY_URL / ESS_WORKGROUP   (ess, scripts, sync, trialsync)
+    local/mesh.tcl           mesh_configure "https://dserv.net" "brown-sheinberg"
+    dserv-agent's flags      --registry https://dserv.net --workgroup brown-sheinberg
+
+One declaration with an apply that reaches mesh (`mesh_configure`) and the
+registry namespace collapses the first two. **It does not reach the third**:
+dserv-agent is a separate OS process with its own command line, started
+before dserv and deliberately kept from polling dserv (that separation is
+load-bearing — the agent must stay useful when dserv is down). A put cannot
+move a running agent. The setting can be the source of truth an
+updater/installer writes into the unit file, and the panel should say
+"agent restart required" rather than pretend. Do not wire the agent to read
+dserv's settings tree to close this gap.
+
+**What stays OUT of this section.** `ESS_IPADDR` is DERIVED, not declared —
+`dsconf.tcl:186-230` picks the route-toward address for a remote stim2 and
+loopback for a local one, which beats what a human will type. If an override
+is wanted it is a separate knob, `-default ""` meaning "derive", declared in
+main beside the derivation. Box identity likewise stays in `box.conf`: a
+rig's name is not a runtime setting.
+
+**One hard rule the panel depends on.** Never declare the same key in two
+interps. The module permits it, but `settings/<sub>/<key>/schema` would carry
+whichever declared LAST, and a put would update only that interp's runtime
+dict — a knob that looks written and half is. When several interps need the
+value, ONE declares and the apply hook pushes to the rest.
+
+Candidate order, easiest first: `stim host` (one clear owner-by-proxy, live
+switchable, retires `local/pre-remote.tcl`), then `registry url` +
+`registry workgroup` together (retires `pre-registry.tcl` and the mesh line,
+and the agent caveat above needs writing into the doc string). Both want a
+`-validate` that rejects an empty string and normalizes a bare hostname; the
+`values` list is a HINT list here (`<host>`, `https://<host>`), i.e. §1's
+free-text-with-hints path, not a dropdown.
+
 ## Sequencing
 
-1. ~~**§0 first, alone.**~~ **DONE** — one line in `TclServer.cpp`, two small
-   edits in `settings-1.0.tm`, a unit test. Both panels were blocked on it.
-   Still to do before any UI: confirm `settings/<sub>/<key>/schema` carries
-   the right `interp` on a booted rig (a dserv rebuild + restart, since the
-   name is set in C).
+1. ~~**§0 first, alone.**~~ **DONE and rig-verified** — one line in
+   `TclServer.cpp`, two small edits in `settings-1.0.tm`, a unit test. Both
+   panels were blocked on it. Every other rig needs the binary and
+   `lib/settings-1.0.tm` installed together before it trusts the field.
 2. **The gear**, against `joystick`/`button`/`dial` — knobs with real `values`
    lists, so the select path gets exercised first.
-3. **The wizard**, which is the larger piece and needs a rig with a stick.
-4. **Fold the juicer dialog into the gear** last, if at all: it works, and
+3. **§3's `stim host`**, once the gear renders — the first `interp dserv`
+   knob and the first free-text-with-hints knob, so it exercises both paths
+   the ess/juicer tenants do not. Registry/workgroup after it.
+4. **The wizard**, which is the larger piece and needs a rig with a stick.
+5. **Fold the juicer dialog into the gear** last, if at all: it works, and
    replacing working UI is the least valuable step.
 
 ## Risks
@@ -189,3 +280,11 @@ show which profile it is about to write and refuse to guess when
 - **Do not let the wizard write `local/slider.tcl`.** Measured values belong
   in the db; that separation is the whole point of the migration and a panel
   that "helpfully" edits the file would undo it.
+- **A §3 apply hook can wedge main.** It runs in the MAIN interp and fans out
+  to children; `send` blocks on the child's reply queue, so one stuck
+  subprocess would take the request loop down from a settings write. Use
+  `sendNoReply` in those hooks, always.
+- **A missing `interp` key means an old `lib/settings-1.0.tm`**, not a knob
+  without an owner: `::dserv_interp` comes from the binary and the stamp from
+  the module, so a half-installed rig has the field absent EVERYWHERE. Treat
+  missing as read-only; never `dict get` it bare.
