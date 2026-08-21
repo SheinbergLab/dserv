@@ -179,13 +179,45 @@ rm -f "$RESP"
 # Verify the shelf agrees with the local file, rather than trusting "ok": true.
 # The agent computes its own sha256 server-side, so a mismatch here means the
 # upload was corrupted in transit and the box would fail its own verify later.
+#
+# MATCH THE IMAGE BY BUILD KEY. A channel holds one entry PER BUILD, so
+# `grep binSha256 | head -1` -- what this did -- reads whichever image the agent
+# happens to list first and compares it against a local file from a different
+# board. That was correct only while exactly one board published here, and it
+# fired the moment a second did: publishing the mcxn947 was checked against the
+# teensy40's hash and reported "do NOT OTA this version" for an upload that was
+# in fact perfect (2026-08-21). A verifier that fails on healthy input is worse
+# than none -- it teaches you to ignore it.
+#
+# Parsed as JSON rather than shredded with tr/grep, for the same reason: picking
+# a field out of the right OBJECT is not a line-oriented problem. python3 is
+# already required above for IMGVER.
 REMOTE=$(curl -sS --max-time 20 "$SHELF/api/firmware/extio/$CHANNEL/$VERSION" 2>/dev/null \
-         | tr ',{}' '\n\n\n' | grep -A0 'binSha256' | head -1 | sed 's/.*: *"//;s/".*//')
+         | python3 -c '
+import json, sys
+key = sys.argv[1]
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)                      # unparseable -> treated as "no answer" below
+imgs = d.get("images") or (d.get("manifest") or {}).get("images") or []
+for im in imgs:
+    if im.get("build") == key:
+        print(im.get("binSha256", ""))
+        break
+else:
+    print("NO_SUCH_BUILD")
+' "$BUILD_KEY")
+if [ "$REMOTE" = "NO_SUCH_BUILD" ]; then
+  echo "!! shelf has no image for build '$BUILD_KEY' at $VERSION -- the upload
+   did not land where a box will look for it." >&2; exit 1
+fi
 if [ -n "$REMOTE" ]; then
   if [ "$REMOTE" = "$SUM" ]; then
-    echo ">> shelf sha256 MATCHES the local image"
+    echo ">> shelf sha256 MATCHES the local image ($BUILD_KEY)"
   else
-    echo "!! shelf sha256 $REMOTE != local $SUM -- do NOT OTA this version" >&2; exit 1
+    echo "!! shelf sha256 $REMOTE != local $SUM for build '$BUILD_KEY'
+   -- do NOT OTA this version" >&2; exit 1
   fi
 fi
 
