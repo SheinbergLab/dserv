@@ -509,7 +509,36 @@ namespace eval slider {
     # wrong input, days later, with no comment attached). Learned keys are the
     # ones a human should never be typing.
     variable cal_keys { chan_x chan_y center_x center_y invert_x invert_y }
+
+    # WHICH stored calibration this rig is using.
+    #
+    # settingsdb is keyed by (subsystem, PROFILE), and one profile is right
+    # for a rig with one analog input wired. It is wrong for a rig that
+    # SWITCHES between two -- a dev box with both a trackpad and a stick, say
+    # -- because the learned keys (chan_x/chan_y, centre, invert) describe a
+    # particular device, and a single stored set would be forced onto both.
+    # Flipping the input would then half-work: the file's mapping ignored,
+    # the other device's centre in force, and nothing saying so.
+    #
+    # So a rig with more than one input names a profile per input, beside the
+    # branch that selects it:
+    #
+    #     set slider::cal_profile stick        ;# in local/slider.tcl
+    #     slider::set_source extio
+    #
+    # cal_apply saves to whatever is named here and load_calibration reads
+    # the same, so the two devices keep separate measurements and neither
+    # overwrites the other.
     variable cal_profile default
+
+    proc set_cal_profile { p } {
+        variable cal_profile
+        if { [string trim $p] eq "" } {
+            error "slider::set_cal_profile: a profile needs a name"
+        }
+        set cal_profile $p
+        return $cal_profile
+    }
 
     proc save_calibration {} {
         variable settings; variable cal_keys; variable cal_profile
