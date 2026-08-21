@@ -68,7 +68,7 @@ Checked 101 vals."
 )
 
 #
-# ESS unit tests -- pure Tcl, dserv STUBBED.
+# Module unit tests -- pure Tcl, dserv STUBBED.
 #
 # Unlike the tests above these need no server, no rig and no hardware: they
 # source the .tm modules directly and drive them with fake datapoints and a
@@ -81,7 +81,7 @@ Checked 101 vals."
 #
 find_program(TCLSH_EXECUTABLE NAMES tclsh tclsh9.0 tclsh8.6)
 if(TCLSH_EXECUTABLE)
-  foreach(t ess_dial ess_dial_dpad ess_dial_sectors ess_binds ess_resolve ess_live_params ess_transports ess_joystick_labels)
+  foreach(t ess_dial ess_dial_dpad ess_dial_sectors ess_binds ess_resolve ess_live_params ess_transports ess_joystick_labels settings)
     add_test(
         NAME ${t}
         COMMAND ${TCLSH_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tests/test_${t}.tcl"
@@ -89,5 +89,5 @@ if(TCLSH_EXECUTABLE)
     set_property(TEST ${t} PROPERTY PASS_REGULAR_EXPRESSION "all checks passed")
   endforeach()
 else()
-  message(STATUS "tclsh not found -- skipping ESS unit tests")
+  message(STATUS "tclsh not found -- skipping module unit tests")
 endif()

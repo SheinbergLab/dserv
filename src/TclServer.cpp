@@ -3378,8 +3378,29 @@ static void add_tcl_commands(Tcl_Interp *interp, TclServer *tserv)
 static int Tcl_DservAppInit(Tcl_Interp *interp, TclServer *tserv)
 {
   if (Tcl_Init(interp) == TCL_ERROR) return TCL_ERROR;
-  
+
   add_tcl_commands(interp, tserv);
+
+  /*
+   * ::dserv_interp -- this interp's own name.
+   *
+   * An interp otherwise cannot discover it: the name lives out here, and
+   * nothing inside the child reflects it.  That matters for anything a
+   * PAGE has to route back: settings::put must run in the interp that
+   * declared the knob, so settings-1.0.tm stamps this name into every
+   * declaration and the schema datapoint carries it.
+   *
+   * The value is the REGISTRY name, i.e. exactly what `send <name> {...}`
+   * takes -- with two values that are not send targets and must be read as
+   * such: "dserv" is the main interp (send refuses it; evaluate directly),
+   * and "" is a nameless one-off interp, unregistered and unaddressable.
+   *
+   * Set here rather than injected by dsconf.tcl's subprocess wrapper so
+   * that it also covers -link children, interps spawned after boot
+   * (virtual_subject, virtual_extio), and main itself.
+   */
+  Tcl_SetVar2Ex(interp, "dserv_interp", NULL,
+                Tcl_NewStringObj(tserv->name.c_str(), -1), TCL_GLOBAL_ONLY);
 
   if (tserv->hasCommandCallback()) {
       tserv->callCommandCallback(interp);

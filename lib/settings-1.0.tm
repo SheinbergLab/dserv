@@ -44,6 +44,7 @@
 #                                        default); publishes value + source
 #   settings::source_of <sub> <key>      default | file | runtime -- for
 #                                        one-time migrations from older stores
+#   settings::interp_of <sub> <key>      name of the interp that declared it
 #   settings::put <sub> <key> <v> ?-persist?
 #       Validated runtime override. -persist writes the file line (surgical:
 #       comments and unrelated lines byte-preserved) and reclassifies the
@@ -63,6 +64,25 @@
 #                settings/<sub>/<key>/source   default | file | runtime
 #                settings/<sub>/<key>/schema   the declaration dict
 #                settings/parse_errors         list of breadcrumbs
+#
+# WHO OWNS A KNOB. Those datapoints are the shared view, so a page can READ
+# every knob on the rig from one tree; but it cannot write one without
+# knowing where to send the put -- `joystick transport` lives in ess,
+# `juicer destination` in juicer, and only the declaring interp has the
+# schema (_effective errors otherwise). So the schema dict carries an
+# `interp` field, stamped from ::dserv_interp (dserv sets it per interp;
+# see TclServer.cpp) at declare time. Reading it:
+#
+#     <name>   send <name> {settings::put <sub> <key> {<v>} -persist}
+#     dserv    the main interp -- `send` refuses it; evaluate directly
+#     (empty)  not addressable (a nameless one-off interp, or plain tclsh)
+#
+# Deliberately NOT an option of declare: a mistyped -interp at one call
+# site would route writes to a live interp where the knob is not declared,
+# and `send` to a live interp succeeds, so the setting would simply not
+# exist there. Nothing that enumerates knobs may ask an interp for the
+# list, either -- each knows only its own declarations. Walk the datapoint
+# tree.
 
 package provide settings 1.0
 
@@ -93,6 +113,14 @@ proc ::settings::_file {} {
     return [file join [pwd] local rig.tcl]
 }
 
+# This interp's own name, as `send` spells it. dserv sets ::dserv_interp
+# when it creates the interp; outside dserv (plain tclsh, tests) there is no
+# name and no route, and empty says exactly that.
+proc ::settings::_interp_name {} {
+    if { [info exists ::dserv_interp] } { return $::dserv_interp }
+    return ""
+}
+
 proc ::settings::declare {sub key args} {
     variable schema
     set d [dict create default "" values {} type "" doc "" validate "" apply ""]
@@ -103,6 +131,10 @@ proc ::settings::declare {sub key args} {
         }
         dict set d $name $val
     }
+    # Stamped, never passed: `interp` is absent from the template above, so
+    # -interp is an unknown option at every call site by construction (see
+    # WHO OWNS A KNOB in the header).
+    dict set d interp [_interp_name]
     dict set schema $sub $key $d
     _dp settings/$sub/$key/schema $d
     return
@@ -238,6 +270,16 @@ proc ::settings::get {sub key} {
 proc ::settings::source_of {sub key} {
     lassign [_effective $sub $key] v src
     return $src
+}
+
+# Where a put for this knob has to run. Same value the schema datapoint
+# carries; here for anyone driving settings from essctrl rather than a page.
+proc ::settings::interp_of {sub key} {
+    variable schema
+    if { ![dict exists $schema $sub $key] } {
+        error "settings::interp_of $sub $key: not declared in this interp"
+    }
+    return [dict get $schema $sub $key interp]
 }
 
 proc ::settings::put {sub key value args} {

@@ -30,21 +30,48 @@ So the whole gap is the missing word `${interp}`.
 **AN INTERP CANNOT LOOK UP ITS OWN NAME.** Verified: no `::dservInterpName`,
 no global matching `*name*`, no `argv0`. So it has to be told.
 
-**Fix, one line where the name is already known.** `dsconf.tcl`'s `subprocess`
-wrapper has `$who`; inject it into the child before its config is sourced:
-
-    set ::dserv_interp $who      ;# in the subprocess wrapper
-
-Then `settings::declare` records `[expr {[info exists ::dserv_interp] ?
-$::dserv_interp : "main"}]` in the declaration, and `_publish_declared` emits
-it in the schema. Every current declarer (`ess`, `juicer`, `extio`, and
-`slider` once calibration is exposed) is a subprocess, so the wrapper covers
-them all; `main` is the honest fallback.
-
 Do NOT pass the name to `declare` explicitly. It would be boilerplate at every
 call site and the one place someone typo'd it would route writes into the
 wrong interp — silently, since `send` to a live interp succeeds and the
 setting simply would not exist there.
+
+### DONE (2026-08-21) — and not where this plan first put it
+
+The plan above said to inject it from `dsconf.tcl`'s `subprocess` wrapper,
+which has `$who`. That wrapper is the wrong place: it early-returns once
+`::dsconf_booting` is gone, so every interp spawned after boot
+(`virtual_subject`, `virtual_extio`, `-link` sandbox children) would get no
+name, and main would have none either.
+
+Shipped instead as one `Tcl_SetVar2Ex` in `Tcl_DservAppInit`
+(`TclServer.cpp`), where `tserv->name` is already in hand and every interp
+without exception passes through:
+
+    set ::dserv_interp <registry name>
+
+`settings::declare` stamps `[_interp_name]` into the declaration after the
+option loop — so `-interp` stays an unknown option by construction — and the
+`settings/<sub>/<key>/schema` datapoint carries it. `settings::interp_of`
+returns it for anyone driving settings from `essctrl`.
+
+**The value is the REGISTRY name, and two of them are not send targets:**
+
+| value | what a page does |
+|---|---|
+| `ess`, `juicer`, `extio`, … | `send <name> {settings::put …}` |
+| `dserv` | the main interp — `send` REFUSES it ("cannot send directly to dserv"); evaluate directly |
+| empty | not addressable: a nameless one-off interp, or the module under plain tclsh. Render the knob read-only |
+
+`main` was the plan's fallback and would have been a lie — no interp answers
+to it. Verified running (`--cscript`): main reports `dserv`, a child reports
+its own name, and its schema datapoint reads
+`… apply {} interp probe`. Covered by `tests/test_settings.tcl` (`ctest -R
+settings`), which also pins the `-interp` rejection.
+
+Not yet verified on a rig with the real declarers — that is the §1 gate:
+`settings/joystick/transport/schema` must read `interp ess`, and
+`settings/juicer/destination/schema` `interp juicer`, on a booted rig before
+any UI is written.
 
 ## 1. The settings gear
 
@@ -131,10 +158,11 @@ show which profile it is about to write and refuse to guess when
 
 ## Sequencing
 
-1. **§0 first, alone.** It is a one-line wrapper change plus two small edits
-   in `settings-1.0.tm`, and both panels are blocked on it. Ship and verify
-   `settings/<sub>/<key>/schema` carries `interp` on a real rig before writing
-   any UI.
+1. ~~**§0 first, alone.**~~ **DONE** — one line in `TclServer.cpp`, two small
+   edits in `settings-1.0.tm`, a unit test. Both panels were blocked on it.
+   Still to do before any UI: confirm `settings/<sub>/<key>/schema` carries
+   the right `interp` on a booted rig (a dserv rebuild + restart, since the
+   name is set in C).
 2. **The gear**, against `joystick`/`button`/`dial` — knobs with real `values`
    lists, so the select path gets exercised first.
 3. **The wizard**, which is the larger piece and needs a rig with a stick.
