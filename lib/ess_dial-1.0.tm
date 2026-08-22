@@ -580,6 +580,13 @@ namespace eval ess {
 
     variable dial_valid_sources { swipe touch joystick mouse ring sectors rate }
 
+    # The steering set: every one of these drives the cursor from the SAME
+    # deflection, so two of them is one hand steering two ways. Named once
+    # because three places need it -- the file check, dial_init's check,
+    # and the enumerator that offers them -- and this file already carries
+    # two bugs that were exactly this kind of drift (see the header).
+    variable dial_steering_sources { swipe ring rate sectors }
+
     proc dial_source_norm { s } {
         variable dial_source_aliases
         return [expr {[info exists dial_source_aliases($s)]
@@ -603,7 +610,9 @@ namespace eval ess {
         # swipe/ring/rate all read slider/position, and on an analog rig
         # `sectors` is derived from that same stick, so any two of them
         # would drive one cursor two ways.
-        set steering [lsearch -all -inline -regexp $v {^(swipe|ring|rate|sectors)$}]
+        variable dial_steering_sources
+        set steering {}
+        foreach s $v { if { $s in $dial_steering_sources } { lappend steering $s } }
         if { [llength $steering] > 1 } {
             error "dial sources: {$steering} are alternative readings of the\
                    same device -- choose one"
@@ -615,8 +624,133 @@ namespace eval ess {
         return $v
     }
 
+    ########################################################################
+    # WHAT COULD ANSWER A DIAL ON THIS RIG, RIGHT NOW
+    #
+    # `dial sources` is the one knob whose legal values are a VOCABULARY
+    # rather than a route. The doc string can list the seven words, and a
+    # list of words cannot say whether this rig has the thing each word
+    # reads -- which is the only question anybody is actually asking while
+    # choosing one. Worse, three of the words are readings of one stick, so
+    # a rig with no stick wired offers three answers that all do nothing.
+    #
+    # So each entry names the DATAPOINT it reads and says when that
+    # datapoint last moved. "last moved 3 s ago" is evidence; "reads
+    # slider/position" is only a promise. Absence is reported with the
+    # reason and the knob that fixes it, because "unresolved" on its own
+    # sends people to the wrong place.
+    #
+    # Nothing here is a gate: every source stays selectable. A rig is
+    # allowed to declare a dial for hardware it is about to wire, and this
+    # module has no business refusing that -- it only has to stop the
+    # declaration being a guess.
+    ########################################################################
+
+    proc dial_dp_since { dp } {
+        if { ![dservExists $dp] } { return "" }
+        set ts 0
+        catch { set ts [dservTimestamp $dp] }
+        if { $ts <= 0 } { return "never moved" }
+        set sec [expr {([clock microseconds] - $ts) / 1000000.0}]
+        if { $sec < 2 }    { return "moving now" }
+        if { $sec < 90 }   { return "last moved [expr {int($sec)}] s ago" }
+        if { $sec < 5400 } { return "last moved [expr {int($sec/60)}] min ago" }
+        return "last moved [expr {int($sec/3600)}] h ago"
+    }
+
+    # Which analog groups the boxes are announcing. The message that says a
+    # stick is missing has to be able to name what IS there, or it reads as
+    # "no analog at all" on a rig whose one group is called something else.
+    proc dial_analog_groups {} {
+        set out {}
+        foreach k [dservKeys extio/*/state/ain/group/*/chans] {
+            lappend out [lindex [split $k /] 5]
+        }
+        return [lsort -unique $out]
+    }
+
+    proc dial_source_candidates {} {
+        variable dial_steering_sources
+
+        # what feeds slider/position here, for the three readings of it
+        set grp ""
+        catch { set grp [string trim [dservGet settings/slider/ain_group]] }
+        set groups [dial_analog_groups]
+        set stick_note ""
+        if { $grp ne "" && $grp ni $groups } {
+            set stick_note "no box announces the analog group '$grp'\
+                ([expr {[llength $groups] ?
+                        "boxes announce: [join $groups {, }]" :
+                        "no box announces any analog group"}]) --\
+                a trackpad or the virtual slider can still feed the slider"
+        }
+
+        set jt "none"
+        catch { set jt [string trim [dservGet settings/joystick/transport]] }
+        set jnote [expr {$jt eq "none" || $jt eq "" ?
+                         "`joystick transport` is none -- nothing publishes\
+                          directions" : "joystick transport is '$jt'"}]
+
+        # route  reads-this-datapoint  what the reading DOES  fix-hint-when-absent
+        set spec [list \
+            [list swipe   slider/position \
+                 "a flick of the slider throws the cursor" $stick_note] \
+            [list ring    slider/position \
+                 "deflection rotates a bearing; the cursor is pinned to the ring" \
+                 $stick_note] \
+            [list rate    slider/position \
+                 "deflection IS velocity; continuous and speed-graded" $stick_note] \
+            [list sectors ess/joystick/dir \
+                 "deflection quantized to 8; the cursor walks out a spoke" $jnote] \
+            [list joystick ess/joystick/dir \
+                 "the four switches themselves, read at commit" $jnote] \
+            [list touch   mtouch/touchvals \
+                 "a press on the ring, from the touchscreen" \
+                 "no touchscreen is publishing (the input subprocess owns it)"] \
+            [list mouse   mouse/event \
+                 "the cursor IS the mouse; a click commits" \
+                 "no mouse reader -- a dedicated mouse is opt-in BY NAME\
+                  (see the input settings)"]]
+
+        set out {}
+        foreach e $spec {
+            lassign $e route dp what hint
+            set since [dial_dp_since $dp]
+            if { $since eq "" } {
+                set status unresolved
+                set detail "$what -- nothing publishes $dp yet"
+                if { $hint ne "" } { append detail "; $hint" }
+            } else {
+                set status ok
+                set detail "$what -- $dp, $since"
+                # a live datapoint with a missing stick is still worth
+                # saying: the trackpad is feeding it, the stick is not
+                if { $hint ne "" && $dp eq "slider/position" } {
+                    append detail "; $hint"
+                }
+            }
+            # what this one cannot share a rig with, from the same lists the
+            # validators use -- so the picker and the door agree by
+            # construction rather than by someone remembering to edit both
+            set conflicts {}
+            if { $route in $dial_steering_sources } {
+                foreach o $dial_steering_sources {
+                    if { $o ne $route } { lappend conflicts $o }
+                }
+            }
+            if { $route eq "sectors" }  { lappend conflicts joystick }
+            if { $route eq "joystick" } { lappend conflicts sectors }
+
+            lappend out [dict create route $route label $route detail $detail \
+                             status $status durable 1 selectable 1 multi 1 \
+                             conflicts $conflicts address $dp]
+        }
+        return $out
+    }
+
     settings::declare dial sources -default "" \
         -validate ::ess::dial_sources_norm \
+        -candidates dial \
         -doc "which transports answer a dial: any combination of\
               swipe touch joystick mouse ring sectors rate, first to commit\
               wins. ring/sectors/rate are three READINGS of one analog stick\
@@ -786,8 +920,11 @@ namespace eval ess {
         # DERIVED from that same stick (::ess::joystick's stick transport),
         # so sectors+rate is one hand driving the cursor two ways at once --
         # which reads on screen as a cursor that will not track.
-        set steering [lsearch -all -inline -regexp $dial_sources \
-                          {^(swipe|ring|rate|sectors)$}]
+        variable dial_steering_sources
+        set steering {}
+        foreach s $dial_sources {
+            if { $s in $dial_steering_sources } { lappend steering $s }
+        }
         if { [llength $steering] > 1 } {
             error "::ess::dial_init: {$steering} are alternative readings of\
                    the same device -- choose one"

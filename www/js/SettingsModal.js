@@ -703,7 +703,27 @@ class SettingsModal {
         this._showPicker(k, cands);
     }
 
+    /*
+     * One picker, two shapes. A route knob takes ONE answer and the row is
+     * the answer: click it and it commits. `dial sources` takes a SET --
+     * "which transports may answer a dial, first to commit wins" -- so its
+     * rows are checkboxes and a second button commits the composition.
+     *
+     * Which shape is not the page's guess: the enumerator says `multi 1`,
+     * because whether a knob composes is a fact about the knob, and the
+     * interp that declares it is the one that knows.
+     *
+     * CONFLICTS COME FROM THE ENUMERATOR TOO. Four of the dial's seven
+     * sources are readings of the same deflection and only one may be
+     * live; ticking one here unticks the others rather than letting
+     * somebody compose a set the validator will refuse. The rule still
+     * lives in Tcl -- this only spares the round trip.
+     */
     _showPicker(k, cands) {
+        const multi = cands.some(c => c.multi === '1');
+        const chosen = new Set(
+            multi ? String(k.value || '').trim().split(/\s+/).filter(Boolean) : []);
+
         const sheet = document.createElement('div');
         sheet.className = 'ess-modal-overlay ess-pick-overlay';
         sheet.innerHTML = `
@@ -714,11 +734,16 @@ class SettingsModal {
                 </div>
                 <div class="ess-modal-body ess-pick-body">
                     ${cands.map((c, i) => `
-                        <div class="ess-pick-row${c.route === k.value ? ' current' : ''}${
+                        <div class="ess-pick-row${
+                            multi ? (chosen.has(c.route) ? ' current' : '')
+                                  : (c.route === k.value ? ' current' : '')}${
                             c.selectable === '0' ? ' unselectable' : ''}" data-i="${i}">
                             <div class="ess-pick-main">
+                                ${multi ? `<span class="ess-pick-check">${
+                                    chosen.has(c.route) ? '☑' : '☐'}</span>` : ''}
                                 <span class="ess-pick-label">${this._esc(c.label || c.route)}</span>
-                                <span class="ess-pick-route">${this._esc(c.route)}</span>
+                                ${c.label && c.label !== c.route
+                                    ? `<span class="ess-pick-route">${this._esc(c.route)}</span>` : ''}
                             </div>
                             <div class="ess-pick-meta">
                                 <span class="ess-pick-detail">${this._esc(c.detail || '')}</span>
@@ -732,8 +757,12 @@ class SettingsModal {
                         </div>`).join('')}
                 </div>
                 <div class="ess-modal-footer">
-                    <span class="ess-settings-note">${k.candidates === 'system' ? 'from ESS_SYSTEM_PATH — reopen to rescan' : 'from the boxes announcing now — reopen to rescan'}</span>
+                    <span class="ess-settings-note">${
+                        multi ? 'ticked ones answer, first to commit wins — none ticked leaves it to the protocol'
+                        : (k.candidates === 'system' ? 'from ESS_SYSTEM_PATH — reopen to rescan'
+                                                     : 'from the boxes announcing now — reopen to rescan')}</span>
                     <button class="ess-modal-btn cancel" type="button">Cancel</button>
+                    ${multi ? '<button class="ess-modal-btn primary use" type="button">Use these</button>' : ''}
                 </div>
             </div>`;
         const close = () => sheet.remove();
@@ -748,10 +777,35 @@ class SettingsModal {
             if (el.classList.contains('unselectable')) return;
             el.addEventListener('click', () => {
                 const c = cands[Number(el.dataset.i)];
-                close();
-                this._put(k, c.route);
+                if (!multi) { close(); this._put(k, c.route); return; }
+                if (chosen.has(c.route)) {
+                    chosen.delete(c.route);
+                } else {
+                    chosen.add(c.route);
+                    // drop whatever this one cannot share a rig with
+                    TclParser.parseList(c.conflicts || '')
+                        .forEach(o => chosen.delete(o));
+                }
+                sheet.querySelectorAll('.ess-pick-row').forEach(r => {
+                    const rc = cands[Number(r.dataset.i)];
+                    const on = chosen.has(rc.route);
+                    r.classList.toggle('current', on);
+                    const box = r.querySelector('.ess-pick-check');
+                    if (box) box.textContent = on ? '☑' : '☐';
+                });
             });
         });
+        const use = sheet.querySelector('.ess-modal-btn.use');
+        if (use) {
+            use.addEventListener('click', () => {
+                close();
+                // ordered as the enumerator listed them, so the same set
+                // always writes the same line into local/rig.tcl
+                const v = cands.map(c => c.route)
+                               .filter(r => chosen.has(r)).join(' ');
+                this._put(k, v);
+            });
+        }
         document.body.appendChild(sheet);
     }
 

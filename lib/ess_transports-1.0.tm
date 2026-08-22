@@ -1218,6 +1218,7 @@ namespace eval ess {
     proc candidates { kind } {
         switch -exact -- $kind {
             system  { return [system_candidates] }
+            dial    { return [dial_source_candidates] }
             default { return [input_candidates $kind] }
         }
     }

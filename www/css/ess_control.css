@@ -6292,6 +6292,15 @@ select.ess-param-select {
     font-weight: 500;
 }
 
+/* the tick in a composing picker (`dial sources`): a set, not a choice */
+.ess-pick-check {
+    font-size: 13px;
+    line-height: 1;
+    color: var(--ess-accent);
+    width: 14px;
+    flex: 0 0 14px;
+}
+
 .ess-pick-route {
     font-size: 11px;
     font-family: 'SF Mono', Monaco, Consolas, monospace;
