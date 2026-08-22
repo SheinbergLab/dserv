@@ -1,0 +1,160 @@
+/*
+ * extio-zephyr on the Nordic nRF54LM20 DK — SCOUT, written 2026-08-22 before the
+ * board arrived. Builds; nothing here has run on silicon.
+ *
+ * Box pin n IS EXPANSION-HEADER POSITION n. This board carries a
+ * `nordic,expansion-board-header` (22 positions, 0-21), NOT an Arduino header
+ * and NOT the XIAO's D0-D27 connector — so the identity that makes sense here
+ * is the one the board itself prints.
+ *
+ * CONSEQUENCE, STATED UP FRONT: a DI/ain group config does NOT transfer between
+ * this DK and a XIAO, nor between this DK and the MCXN947 rigs, even though the
+ * DK and the XIAO are the same silicon. Three boards, three connectors, three
+ * numbering origins. The silk column below is what makes each one legible; it is
+ * not a substitute for checking which board a saved config came from.
+ */
+
+#include <zephyr/dt-bindings/gpio/gpio.h>
+#include <zephyr/dt-bindings/adc/adc.h>
+#include <zephyr/dt-bindings/adc/nrf-saadc.h>
+
+/ {
+	zephyr,user {
+		/* 0-21  expansion header positions (from the board's own gpio-map)
+		 * 22-25 LED1-LED4  -- ACTIVE_HIGH on this board
+		 * 26-29 BTN1-BTN4  -- ACTIVE_LOW, board pull-ups
+		 * = 30 entries = BOX_NPINS exactly.
+		 *
+		 * NOTE THE LED POLARITY. The nRF52840 DK's LEDs are ACTIVE_LOW and its
+		 * map carries GPIO_ACTIVE_LOW so that 1 = lit; this board's are wired
+		 * ACTIVE_HIGH, so they take no flag and 1 = lit for the opposite
+		 * reason. The box's logical level means the same thing on both, which
+		 * is the entire point of putting polarity in the map rather than in
+		 * config -- but do not copy flags between the two boards by eye.
+		 *
+		 * Pads read out of boards/nordic/nrf54lm20dk/nrf54lm20dk_common.dtsi,
+		 * not from the silkscreen. */
+		box-gpios = <&gpio3  5 0>,   /*  0 = header P0  */
+			    <&gpio3  4 0>,   /*  1 = header P1  */
+			    <&gpio1  2 0>,   /*  2 = header P2  */
+			    <&gpio1  3 0>,   /*  3 = header P3  */
+			    <&gpio1  4 0>,   /*  4 = header P4  */
+			    <&gpio1 13 0>,   /*  5 = header P5  */
+			    <&gpio3  0 0>,   /*  6 = header P6  */
+			    <&gpio3  1 0>,   /*  7 = header P7  */
+			    <&gpio0  3 0>,   /*  8 = header P8  */
+			    <&gpio0  4 0>,   /*  9 = header P9  */
+			    <&gpio3  2 0>,   /* 10 = header P10 -- also expansion SPI CS */
+			    <&gpio3  3 0>,   /* 11 = header P11 */
+			    <&gpio1  7 0>,   /* 12 = header P12 */
+			    <&gpio1  6 0>,   /* 13 = header P13 */
+			    <&gpio1  5 0>,   /* 14 = header P14 */
+			    <&gpio3  6 0>,   /* 15 = header P15 */
+			    <&gpio2  0 0>,   /* 16 = header P16 */
+			    <&gpio2  1 0>,   /* 17 = header P17 */
+			    <&gpio2  2 0>,   /* 18 = header P18 */
+			    <&gpio2  3 0>,   /* 19 = header P19 */
+			    <&gpio2  4 0>,   /* 20 = header P20 */
+			    <&gpio2  5 0>,   /* 21 = header P21 */
+			    <&gpio1 22 0>,   /* 22 = LED1 (active HIGH) */
+			    <&gpio1 25 0>,   /* 23 = LED2 */
+			    <&gpio1 27 0>,   /* 24 = LED3 */
+			    <&gpio1 28 0>,   /* 25 = LED4 */
+			    <&gpio1 26 GPIO_ACTIVE_LOW>,   /* 26 = BTN1 */
+			    <&gpio1  9 GPIO_ACTIVE_LOW>,   /* 27 = BTN2 */
+			    <&gpio1  8 GPIO_ACTIVE_LOW>,   /* 28 = BTN3 */
+			    <&gpio0  5 GPIO_ACTIVE_LOW>;   /* 29 = BTN4 */
+
+		box-pin-silk = "P0","P1","P2","P3","P4","P5","P6","P7","P8","P9",
+			       "P10","P11","P12","P13","P14","P15","P16","P17",
+			       "P18","P19","P20","P21",
+			       "LED1","LED2","LED3","LED4",
+			       "BTN1","BTN2","BTN3","BTN4";
+
+		/* NO box-ain-pins, and no box-ain-silk, DELIBERATELY -- see the ADC
+		 * note below. Absent means box_adc.c treats every channel as a
+		 * dedicated always-active pad, which is the safe default; a WRONG
+		 * shared-pin claim would gate a channel on the mode of an unrelated
+		 * pin. Fill both in from the board doc at first bring-up. */
+	};
+};
+
+/* Nothing to disable. Unlike the nRF52840 DK -- where spi1/i2c0/pwm0 claimed
+ * three box pins including two analog channels -- and unlike the XIAO, which
+ * leaves gpio3 and the USB wrapper switched off, this board's defaults do not
+ * fight the header. VERIFY ANYWAY once it is on the bench: `pin N mode out`
+ * followed by a scope or an LED is the check, and the failure mode (two owners,
+ * last driver wins the mux, box reports a mode the hardware does not have) is
+ * silent by nature.
+ *
+ * One to watch: header position 10 is gpio3.2, which the board also names as
+ * `nordic_expansion_spi`'s chip select. spi22 is not enabled by default, so
+ * there is no conflict today -- but enabling it later silently takes box pin 10. */
+
+/* console FIRST, data SECOND -- instance order sets USB interface numbering and
+ * box_net_usb.c static-asserts it. zephyr_udc0 here is usbhs
+ * (nordic,nrf-usbhs-nrf54l / snps,dwc2) driven by udc_dwc2: HIGH-SPEED.
+ *
+ * The DK also has an on-board debugger VCOM on uart20/uart30, so unlike the
+ * XIAO this board has a console that does NOT depend on the box's own USB --
+ * which is exactly the nRF52840 DK's situation. See CMakeLists.txt: if this
+ * board's VCOM turns out to ride the same connector that powers it, it belongs
+ * in the BOX_DEFAULT_CONSOLE_MODE=UART gate alongside the MCXN947 and the
+ * nRF52840 DK. LEFT OUT UNTIL VERIFIED ON HARDWARE -- guessing that wrongly is
+ * how a healthy box looks dead. */
+&zephyr_udc0 {
+	cdc_acm_console: cdc_acm_uart0 {
+		compatible = "zephyr,cdc-acm-uart";
+	};
+	cdc_acm_data: cdc_acm_uart1 {
+		compatible = "zephyr,cdc-acm-uart";
+		rx-fifo-size = <8192>;
+		tx-fifo-size = <8192>;
+	};
+};
+
+/*
+ * ---- ANALOG: the nRF54L SAADC ----
+ *
+ * Same compatible as the nRF52840 and the XIAO (`nordic,nrf-saadc`), so
+ * box_adc.c's audited entry applies unchanged -- including the constraint that
+ * matters most: the driver refuses oversampling with -EINVAL for ANY
+ * multi-channel sequence, and our sweep is multi-channel, so the honest menu is
+ * 1x. That was derived by reading the driver and then confirmed on the nRF52840
+ * as `ERR ain oversample on this converter: 1`.
+ *
+ * FOUR CHANNELS, AND THE PAD MAP IS UNKNOWN. Neither the board DTS nor its doc
+ * states which AIN reaches which header position, and the DK's own devicetree
+ * declares no channels at all. These four exist so the sweep path compiles and
+ * so `ain group` has something to bind; WHICH PHYSICAL PIN each one lands on is
+ * a FIRST-BRING-UP TASK, from the board's user guide.
+ *
+ * Do not skip that step and assume A-strip ordering. The Teensy is the standing
+ * warning here: silkscreen A0 is ADC channel 7 on that part, and A1 cannot be
+ * reached by the box at all. Reference is 1.0 V internal on nRF54L (NOT the
+ * nRF52840's 0.6 V), so gain and full-scale must be re-derived rather than
+ * copied from the nrf52840dk overlay -- and `zephyr,vref-mv` below is
+ * ASSERTED, not measured. Measure it before trusting any converted voltage.
+ */
+box_adc: &adc {
+	status = "okay";
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	channel@0 { reg = <0>; zephyr,gain = "ADC_GAIN_1_4";
+		zephyr,reference = "ADC_REF_INTERNAL"; zephyr,vref-mv = <1000>;
+		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
+		zephyr,resolution = <12>; zephyr,input-positive = <NRF_SAADC_AIN0>; };
+	channel@1 { reg = <1>; zephyr,gain = "ADC_GAIN_1_4";
+		zephyr,reference = "ADC_REF_INTERNAL"; zephyr,vref-mv = <1000>;
+		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
+		zephyr,resolution = <12>; zephyr,input-positive = <NRF_SAADC_AIN1>; };
+	channel@2 { reg = <2>; zephyr,gain = "ADC_GAIN_1_4";
+		zephyr,reference = "ADC_REF_INTERNAL"; zephyr,vref-mv = <1000>;
+		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
+		zephyr,resolution = <12>; zephyr,input-positive = <NRF_SAADC_AIN2>; };
+	channel@3 { reg = <3>; zephyr,gain = "ADC_GAIN_1_4";
+		zephyr,reference = "ADC_REF_INTERNAL"; zephyr,vref-mv = <1000>;
+		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
+		zephyr,resolution = <12>; zephyr,input-positive = <NRF_SAADC_AIN3>; };
+};

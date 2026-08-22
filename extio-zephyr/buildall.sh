@@ -45,6 +45,7 @@ check rw612     -b frdm_rw612                   -d build-check-rw612     "$HERE"
 check mcxn947   -b frdm_mcxn947/mcxn947/cpu0    -d build-check-mcxn947   "$HERE" --sysbuild
 check nrf52840  -b nrf52840dk/nrf52840          -d build-check-nrf52840  "$HERE"
 check xiao54lm20 -b xiao_nrf54lm20a/nrf54lm20a/cpuapp -d build-check-xiao54lm20 "$HERE"
+check lm20dk    -b nrf54lm20dk/nrf54lm20a/cpuapp -d build-check-lm20dk "$HERE"
 
 # The teensy40 in its OTA form, which is a DIFFERENT BUILD, not a variant: it
 # pulls in MCUboot as a second image, relinks the app to slot0, and compiles in
@@ -67,6 +68,7 @@ check nrf52840-ota -b nrf52840dk/nrf52840 -d build-check-nrf52840-ota "$HERE" --
 # the source. Keeping the OTA target here is the whole point -- the app image
 # signing successfully is exactly what hid the bootloader failure the first time.
 check xiao54lm20-ota -b xiao_nrf54lm20a/nrf54lm20a/cpuapp -d build-check-xiao54lm20-ota "$HERE" --sysbuild
+check lm20dk-ota -b nrf54lm20dk/nrf54lm20a/cpuapp -d build-check-lm20dk-ota "$HERE" --sysbuild
 
 if [ -n "$FAILED" ]; then
   echo "!! broken targets:$FAILED" >&2
