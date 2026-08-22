@@ -82,14 +82,32 @@
 		box-ain-pins = [10 11 12 13 14 15];   /* box pins 16-21 */
 
 		/* ---- SILK: what is PRINTED on the board, per box pin ----
-		 * Nearly the identity, as on the MCXN947, and declared anyway for the
-		 * same reason: the extio page reads one property for every card, and
-		 * "the identity boards are the ones with no column" is an
-		 * inconsistency an experimenter should not have to hold in their head.
-		 * The LEDs and buttons are where this actually earns its keep. */
-		box-pin-silk = "D0","D1","D2","D3","D4","D5","D6","D7",
-			       "D8","D9","D10","D11","D12","D13","D14","D15",
-			       "A0","A1","A2","A3","A4","A5",
+		 *
+		 * NORDIC PORT NAMES, NOT ARDUINO NUMBERS, and that correction was
+		 * earned: this said "D0","D1",... for half a day. The DK's headers
+		 * are Arduino-SHAPED but silkscreened `P0.xx`/`P1.xx`, so a map
+		 * promising D0 sent someone to look for a label the board does not
+		 * carry. That is precisely the failure this property exists to
+		 * prevent -- PINMAP.md's "a wrong silk label is worse than none,
+		 * because it misdirects with confidence" -- and it was caught by
+		 * somebody holding the board, which is the only way it ever is.
+		 *
+		 * THE NUMBERING IS UNCHANGED AND STILL RIGHT. Box pin n IS Arduino Dn
+		 * here because that is what makes a config portable with the
+		 * MCXN947 rigs. What this board does NOT give is the MCXN947's second
+		 * property -- that the number you type is the number printed -- and
+		 * bridging exactly that gap is what the silk column is for. Same job
+		 * it does on the Teensy, where box pin 2 is Teensy pin 11.
+		 *
+		 * The Arduino position is kept in parentheses because a shield or a
+		 * screw-terminal board WILL be labelled that way even though the DK
+		 * underneath is not. */
+		box-pin-silk = "P1.01 (D0)","P1.02 (D1)","P1.03 (D2)","P1.04 (D3)",
+			       "P1.05 (D4)","P1.06 (D5)","P1.07 (D6)","P1.08 (D7)",
+			       "P1.10 (D8)","P1.11 (D9)","P1.12 (D10)","P1.13 (D11)",
+			       "P1.14 (D12)","P1.15 (D13)","P0.26 (D14)","P0.27 (D15)",
+			       "P0.03 (A0)","P0.04 (A1)","P0.28 (A2)","P0.29 (A3)",
+			       "P0.30 (A4)","P0.31 (A5)",
 			       "LED1","LED2","LED3","LED4",
 			       "BTN1","BTN2","BTN3","BTN4";
 
@@ -99,8 +117,9 @@
 		 * not bring to the header at all). Precisely the kind of off-by-one
 		 * that made the Teensy's "silkscreen A0 is channel 7" worth writing
 		 * down. */
-		box-ain-silk = "A0 (AIN1)","A1 (AIN2)","A2 (AIN4)",
-			       "A3 (AIN5)","A4 (AIN6)","A5 (AIN7)";
+		box-ain-silk = "P0.03 / AIN1 (A0)","P0.04 / AIN2 (A1)",
+			       "P0.28 / AIN4 (A2)","P0.29 / AIN5 (A3)",
+			       "P0.30 / AIN6 (A4)","P0.31 / AIN7 (A5)";
 	};
 };
 

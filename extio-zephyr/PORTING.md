@@ -6304,3 +6304,50 @@ That is the half that lets a box anchor its clock to the rig's obs edge instead
 of trusting frame arrival, and it is what would resolve the UNALIGNED state.
 On a DK it needs one jumper: `pin 0 mode out` wired to `sync pin 1` (D0->D1,
 adjacent, both free in this config), making `do 0 1` a synthetic obs edge.
+
+### Hardware sync input + a loopback that measures the clock — nRF52840 DK, 2026-08-22
+
+One jumper, **P1.01 -> P1.02** (box pins 0 -> 1). Note the silk: this DK prints
+Nordic port names on Arduino-shaped headers, and the board file said "D0","D1"
+for half a day before someone holding it noticed. Fixed to "P1.01 (D0)" etc.;
+PINMAP.md's rule earned again -- a wrong silk label misdirects with confidence,
+and only a person at the bench ever catches it.
+
+**`sync pin` WORKS: `state/sync/source` = `hw`, 6/6 edges.** The mechanism, worth
+stating because the test has to be built around it: anchoring happens when an
+`ess/in_obs` frame ARRIVES, and `anchor_box` is the frame's arrival time UNLESS
+`box_gpio_sync_edge_us()` has a latched edge of the right polarity newer than
+SYNC_EDGE_WINDOW_US (250 ms) -- then the TTL edge wins and `hw=1`. So a synthetic
+obs edge is a PAIR: drive the pin, then send `ess/in_obs` inside the window.
+Measured pin->in_obs gaps of 8.4-16.9 ms, comfortably inside.
+
+`now` then went from `UNALIGNED -- no anchor yet` to a real absolute
+`dserv 1787427059.229714 s`. That closes the last gap the scout had: this board
+can put its events on the rig's clock.
+
+**The loopback, and what it establishes.** With `sync off` and `pin 1 mode in`
+the same jumper becomes an output-to-input loop, so `do 0 pulse <us>` is a
+box-timed pulse measured by the box's own DI timestamps -- no host, no scope:
+
+| commanded | measured | err |
+|---|---|---|
+| 1000 us | 1068, 1068 | +68, +68 |
+| 5000 us | 5096, 5065 | +96, +65 |
+| 10000 us | 10100, 10101 | +100, +101 |
+| 50000 us | 50074, 50104 | +74, +104 |
+
+**THE ERROR IS CONSTANT ACROSS A 50x RANGE, NOT PROPORTIONAL TO IT**, and that
+distinction is the result. A clock running at the wrong RATE would show ~50x the
+1 ms error at 50 ms -- about +3400 us. It shows +74. So the crystal rate is
+sound and what remains is fixed overhead: ~+65..+104 us with ~+/-20 us scatter.
+
+That offset is what the arithmetic predicts rather than a mystery: 30.5 us of
+tick quantisation on EACH of the two edges (61 us of it right there) plus
+k_timer rounding the pulse up to the next tick. Systematic, therefore
+calibratable; the jitter is the part that cannot be subtracted, and ~+/-20 us
+sits inside the +/-50 us this tier needs.
+
+Same reasoning shape as the eye-coverage test: a CONSTANT deficit is
+quantisation, a PROPORTIONAL one is real loss. Worth reaching for whenever a
+timing number looks wrong -- sweeping the magnitude separates the two in one
+run, and neither a single measurement nor a repeat of the same magnitude can.
