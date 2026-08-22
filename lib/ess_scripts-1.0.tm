@@ -624,6 +624,11 @@ namespace eval scripts {
     }
 
     proc push_preview {system args} {
+        if {[_excluded $system]} {
+            error "'$system' ships with dserv (systems/$system/.nosync) --\
+                   it is not local work to push. Delete that file if this rig\
+                   has deliberately forked it."
+        }
         set version main
         set force 0
         foreach a $args {
@@ -1076,6 +1081,11 @@ namespace eval scripts {
     }
 
     proc push_file {system protocol type args} {
+        if {[_excluded $system]} {
+            error "'$system' ships with dserv (systems/$system/.nosync) --\
+                   it is not local work to push. Delete that file if this rig\
+                   has deliberately forked it."
+        }
         _require_registry
         set user ""
         set comment ""
@@ -1189,6 +1199,24 @@ namespace eval scripts {
         }
     }
 
+    #
+    # A system that SHIPS WITH DSERV is not local work.
+    #
+    # blinky is installed under systems/, so on a rig whose ESS_SYSTEM_PATH
+    # is that same tree it looks exactly like something someone wrote here
+    # and never pushed: the Sync badge lights, and pushing would put a copy
+    # of the bootstrap into the registry for every rig to pull back.
+    #
+    # A marker file in the system's own directory, rather than a name list
+    # in here: the exclusion travels with the thing excluded, works whatever
+    # the tree is called, and a rig that deliberately forks blinky can push
+    # its fork simply by deleting the file.
+    #
+    proc _excluded {system} {
+        set d [file join $::ess::system_path $::ess::current(project) $system]
+        return [file exists [file join $d .nosync]]
+    }
+
     proc dirty {} {
         set project $::ess::current(project)
         set root [file join $::ess::system_path $project]
@@ -1197,6 +1225,7 @@ namespace eval scripts {
         foreach d [glob -nocomplain -type d [file join $root *]] {
             set name [file tail $d]
             if {[string match .* $name] || $name eq "lib"} continue
+            if {[_excluded $name]} continue
             catch { _dirty_scan_system $name files }
         }
 

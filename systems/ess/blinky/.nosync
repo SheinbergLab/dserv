@@ -1,0 +1,12 @@
+This system ships with dserv, so it is not local work to push.
+
+config/essconf.tcl's boot ladder falls back to it when a rig has nothing
+synced yet, which means it is present in the installed systems tree on every
+box. On a rig whose ESS_SYSTEM_PATH IS that tree it would otherwise look
+like something written here and never pushed: the Sync badge lights, and a
+push would put a copy of the bootstrap in the registry for every rig to pull
+back.
+
+lib/ess_scripts-1.0.tm reads this file's existence, not its contents, in
+scripts::_excluded -- so if this rig has deliberately forked blinky and
+wants its version in the registry, delete this file.
