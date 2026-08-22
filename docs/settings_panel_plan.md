@@ -122,6 +122,46 @@ already normalises that, which is why the juicer path uses it.
 the effective value and `/source` re-publish themselves; the panel updates
 from the datapoint like everything else.
 
+### DONE (2026-08-21) — `www/js/SettingsModal.js`
+
+A ⚙ Settings button in the ess_control status bar, beside Sync Tasks. One
+`evalAsync` walks `dservKeys settings/*/schema` and returns value + source +
+schema per knob; the modal groups by subsystem and renders each control by
+the table above. `settings/*` is subscribed, so a write's effect arrives the
+same way every other value does.
+
+Browser-verified against the live rig on the dev Mac (`python3 -m http.server`
+in `www/` + `?host=localhost:2565&ssl=1` — no install needed):
+
+- 16 knobs, every one carrying its owner: `ess`, `extio`, `juicer`, `dserv`.
+- `joystick transport` renders the select (`none analog box_group`);
+  `stim host` renders free text with `accepts: localhost <host> <ip>`.
+- **The error path is the one that proves the design.** Typing
+  `http://192.168.88.50` into `stim host` returned "…is a URL — give the host
+  alone (stim2 listens on port 4612)" verbatim, the control snapped back to
+  the truth, and nothing was written. That message exists in
+  `config/rig_settings.tcl` and the panel never had to know about it.
+- Both routes exercised: `interp dserv` evaluated directly, `interp ess`
+  through `send`, both idempotent (`local/rig.tcl` byte-identical after).
+
+**Two backend defects the gear surfaced**, both fixed in `settings-1.0.tm`:
+
+1. `declare` published only the SCHEMA. A knob declared after the first
+   `load` had no value and no `/source` in the tree — present, unreadable,
+   unwritable. That is exactly how `joystick box_device` and `box_group`
+   looked in the first render. `declare` now publishes the effective value
+   too.
+2. Worse, and found by the fix: a file line for a not-yet-declared SUB is
+   stored raw, so whichever knob triggered the first `load` left every later
+   declaration's file value **unvalidated**. `declare` now judges a held line
+   when the knob becomes known. Order-dependent validation across modules is
+   not something anyone would ever have seen.
+
+Left for later: `juicer ms_per_ml`/`hand_ml` gained `-type int`/`-double` so
+they render as number inputs; the juicer's own dialog is untouched (step 5);
+and a rig needs the new module installed before `box_device`/`box_group` show
+a value.
+
 ## 2. The calibration wizard
 
 **Do not fold this into the gear.** A settings modal is a form: read, render,

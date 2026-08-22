@@ -122,7 +122,7 @@ proc ::settings::_interp_name {} {
 }
 
 proc ::settings::declare {sub key args} {
-    variable schema
+    variable schema; variable filevals; variable loaded; variable errlist
     set d [dict create default "" values {} type "" doc "" validate "" apply ""]
     foreach {opt val} $args {
         set name [string range $opt 1 end]
@@ -137,6 +137,34 @@ proc ::settings::declare {sub key args} {
     dict set d interp [_interp_name]
     dict set schema $sub $key $d
     _dp settings/$sub/$key/schema $d
+
+    # A file line read BEFORE this knob existed was stored raw -- nobody
+    # could judge it (_file_line's else branch). Judge it now, or validation
+    # would depend on which declaration happened to come first: whichever
+    # knob triggers the first load makes every later one's file value
+    # unchecked. Same outcome as parsing it late: breadcrumb, fall back to
+    # the default, never an error out of `declare`.
+    if { $loaded && [dict exists $filevals $sub $key] } {
+        if { [catch { _validate $sub $key [dict get $filevals $sub $key] } v] } {
+            dict unset filevals $sub $key
+            lappend errlist $v
+            _dp settings/parse_errors $errlist
+        } else {
+            dict set filevals $sub $key $v
+        }
+    }
+
+    # Publish the effective value too. _publish_declared only runs at load,
+    # so a knob declared AFTER the first load had a schema in the tree and no
+    # value and no source -- which is how joystick box_device and box_group
+    # looked to the settings panel: present, unreadable, unwritable. Wrapped
+    # because this is the first thing that can trigger a file read, and a
+    # declaration must not fail on one.
+    catch {
+        lassign [_effective $sub $key] v src
+        _dp settings/$sub/$key $v
+        _dp settings/$sub/$key/source $src
+    }
     return
 }
 

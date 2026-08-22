@@ -393,6 +393,7 @@ proc juicer_msml_norm {v} {
 }
 
 settings::declare juicer ms_per_ml -default 1667 \
+    -type int \
     -validate juicer_msml_norm \
     -doc "timed-output calibration: ms of valve-open per ml (extio and host-gpio routes)" \
     -apply {::juicer_ms_per_ml_apply}
@@ -420,6 +421,7 @@ proc juicer_handml_norm {v} {
 # amount). A rig declaration, not a per-browser-tab value: every page shows
 # and dispenses the same amount.
 settings::declare juicer hand_ml -default 0.5 \
+    -type double \
     -validate juicer_handml_norm \
     -doc "manual (Juice button) reward amount in ml" \
     -apply {::juicer_hand_ml_apply}

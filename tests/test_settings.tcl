@@ -60,6 +60,16 @@ check "declaration records empty interp" "" [settings::interp_of probe orphan]
 check "schema datapoint carries the field" 1 \
     [dict exists $::DP(settings/probe/orphan/schema) interp]
 
+# A declaration publishes its VALUE too, not just its schema. _publish_declared
+# runs at load, so a knob declared after the first load used to appear in the
+# tree with a schema and no value and no source -- present but unreadable to
+# anything enumerating settings/*, which is how a panel sees the rig.
+check "declare publishes the value" 1 [settings::get probe orphan]
+settings::get probe orphan          ;# force the load that _effective triggers
+settings::declare probe late -default 42 -type int
+check "a LATE declaration publishes too" 42 $::DP(settings/probe/late)
+check "and its source" default $::DP(settings/probe/late/source)
+
 #
 # 2. Named interp. The value is the REGISTRY name, i.e. what `send` takes.
 #
@@ -104,6 +114,23 @@ check "put -persist reclassifies" file \
 check "the file line was written" 1 [file exists $::RIGFILE]
 check "example still generates" 1 \
     [string match "*setting joystick transport none*" [settings::example joystick]]
+
+#
+# 5. A file line is judged when its knob BECOMES known, not only when the
+#    file is parsed. Otherwise whichever knob triggers the first load leaves
+#    every later declaration's file value unvalidated -- an order dependency
+#    nobody could see, since the declarations live in different modules.
+#
+set fd [open $::RIGFILE w]
+puts $fd "setting later knob bogus"
+close $fd
+settings::config -file $::RIGFILE       ;# resets loaded
+settings::load                          ;# ... with the sub `later` still UNKNOWN
+check "an unknown sub's line is held" 0 [llength [settings::errors]]
+settings::declare later knob -default a -values {a b}
+check "declaring it validates the held line" a [settings::get later knob]
+check "and leaves a breadcrumb" 1 \
+    [string match "*'bogus' not one of {a b}*" [lindex [settings::errors] 0]]
 
 file delete $::RIGFILE
 

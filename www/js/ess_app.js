@@ -913,6 +913,23 @@ function openNetStatusModal() {
     netStatusModal.open();
 }
 
+let settingsModal = null;
+
+/**
+ * Open the rig settings gear (every knob this rig DECLARES, rendered from
+ * its own schema — see SettingsModal.js)
+ */
+function openSettingsModal() {
+    if (!connection || !connection.connected) {
+        log('Cannot open settings: not connected to dserv', 'error');
+        return;
+    }
+    if (!settingsModal) {
+        settingsModal = new SettingsModal({ connection, dpManager, log });
+    }
+    settingsModal.open();
+}
+
 /**
  * Parse juicer juice_level string for low sensor state
  */
