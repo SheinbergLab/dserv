@@ -5627,7 +5627,87 @@ select.ess-param-select {
 /* ── Rig settings gear (SettingsModal.js) ─────────────────────────────── */
 
 .ess-settings-modal {
-    width: 520px;
+    width: 720px;
+}
+
+/* subsystem list + one subsystem's knobs; the BODY stops scrolling and the
+   pane scrolls instead, so the nav stays put however long a section is */
+.ess-settings-body {
+    overflow: hidden;
+    padding: 0;
+}
+
+.ess-settings-layout {
+    display: flex;
+    align-items: stretch;
+    height: 100%;
+    min-height: 260px;
+}
+
+.ess-settings-nav {
+    width: 168px;
+    flex: 0 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px;
+    border-right: 1px solid var(--ess-border);
+    overflow-y: auto;
+}
+
+.ess-settings-filter {
+    width: 100%;
+    padding: 5px 8px;
+    font-size: 11px;
+    background: var(--ess-bg-panel);
+    border: 1px solid var(--ess-border);
+    border-radius: 4px;
+    color: var(--ess-text-primary);
+}
+
+.ess-settings-nav-list {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+
+.ess-settings-nav-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    padding: 5px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    color: var(--ess-text-secondary, var(--ess-text-primary));
+    cursor: pointer;
+}
+
+.ess-settings-nav-item:hover {
+    background: var(--ess-bg-panel);
+}
+
+.ess-settings-nav-item.active {
+    background: var(--ess-bg-panel);
+    color: var(--ess-accent);
+    font-weight: 600;
+}
+
+.ess-settings-nav-item.empty {
+    opacity: 0.4;
+}
+
+.ess-settings-nav-count {
+    font-size: 10px;
+    color: var(--ess-text-muted);
+    font-family: 'SF Mono', Monaco, Consolas, monospace;
+}
+
+.ess-settings-pane {
+    flex: 1;
+    min-width: 0;
+    padding: 12px 16px;
+    overflow-y: auto;
 }
 
 .ess-settings-loading,

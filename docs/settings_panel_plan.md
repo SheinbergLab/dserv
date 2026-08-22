@@ -162,6 +162,28 @@ they render as number inputs; the juicer's own dialog is untouched (step 5);
 and a rig needs the new module installed before `box_device`/`box_group` show
 a value.
 
+**Layout, second pass.** Seven groups of one to four knobs is a long scroll
+for a question that is always about ONE subsystem, so the modal is now a
+subsystem list beside a single section's knobs. Two things fell out of it
+that are worth keeping in mind for any later panel:
+
+- **The sidebar cannot answer "where is the thing called X"**, because the
+  asker does not know which subsystem owns it — that is why they are asking.
+  So there is a filter over key, value and doc, and a query that matches
+  nothing in the current section but something elsewhere widens to All
+  rather than showing an empty pane beside a sidebar that says the match
+  exists.
+- **The nav counts declared/total** (`joystick 1/4`), which turns out to be
+  the fastest answer to "what has this rig actually decided?" — the question
+  `/source` exists for, asked at rig scale instead of per knob.
+- **No focus gates.** The first cut skipped updating a control while it held
+  focus; `www/CLAUDE.md` names that as a bug class (Chrome focuses every
+  control it is clicked on, Safari/macOS almost none, so the gate is
+  invisible on the dev Mac and freezes the panel on Windows). Replaced with
+  a dirty flag set on `input` — half-typed text survives a background
+  update, the `/source` badge updates regardless, and a put's own outcome
+  forces through.
+
 ## 2. The calibration wizard
 
 **Do not fold this into the gear.** A settings modal is a form: read, render,

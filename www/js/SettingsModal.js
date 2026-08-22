@@ -40,6 +40,8 @@ class SettingsModal {
         this._busy = null;             // "sub/key" of an in-flight put
         this._gen = 0;                 // stale-async guard
         this._unsub = null;
+        this._sel = 'all';             // selected subsystem, or 'all'
+        this._q = '';                  // filter text
     }
 
     /*
@@ -105,7 +107,7 @@ class SettingsModal {
                     <span class="ess-modal-title">Rig Settings</span>
                     <button class="ess-modal-close" type="button">×</button>
                 </div>
-                <div class="ess-modal-body" id="ess-settings-body">
+                <div class="ess-modal-body ess-settings-body" id="ess-settings-body">
                     <div class="ess-settings-loading">loading…</div>
                 </div>
                 <div class="ess-modal-footer">
@@ -179,23 +181,51 @@ class SettingsModal {
         }
     }
 
+    /*
+     * Subsystem list on the left, one subsystem's knobs on the right. Seven
+     * groups of one to four knobs is a long scroll for a question that is
+     * always about ONE subsystem ("what is the juicer set to?").
+     *
+     * The filter is not a nicety: it is the answer to the other question a
+     * settings panel gets, "where is the thing called <x>", which no
+     * sidebar can answer because the asker does not know which subsystem
+     * owns it. It searches key, value and doc across every section at once.
+     */
     _render() {
         const body = this._overlay.querySelector('#ess-settings-body');
         if (!this._knobs.length) {
             body.innerHTML = `<div class="ess-settings-loading">no settings declared on this rig</div>`;
             return;
         }
-
-        const subs = [...new Set(this._knobs.map(k => k.sub))];
-        body.innerHTML = subs.map(sub => `
-            <div class="ess-settings-group">
-                <div class="ess-settings-group-title">${this._esc(sub)}</div>
-                ${this._knobs.filter(k => k.sub === sub)
-                    .map(k => this._rowHtml(k)).join('')}
-            </div>
-        `).join('');
-
-        this._knobs.forEach(k => this._wireRow(k));
+        if (!body.querySelector('.ess-settings-layout')) {
+            body.innerHTML = `
+                <div class="ess-settings-layout">
+                    <div class="ess-settings-nav">
+                        <input type="text" class="ess-settings-filter" id="ess-settings-filter"
+                               placeholder="filter…" autocomplete="off">
+                        <div class="ess-settings-nav-list" id="ess-settings-nav-list"></div>
+                    </div>
+                    <div class="ess-settings-pane" id="ess-settings-pane"></div>
+                </div>
+            `;
+            const filter = body.querySelector('#ess-settings-filter');
+            filter.addEventListener('input', () => {
+                this._q = filter.value.trim().toLowerCase();
+                // Matching nothing HERE but something elsewhere is the normal
+                // case: someone types because they do NOT know which
+                // subsystem owns the thing. Widen to All rather than show an
+                // empty pane while the sidebar says the match exists.
+                if (this._q && this._sel !== 'all' &&
+                    !this._knobs.some(k => k.sub === this._sel && this._matches(k)) &&
+                    this._knobs.some(k => this._matches(k))) {
+                    this._sel = 'all';
+                }
+                this._renderNav();
+                this._renderPane();
+            });
+        }
+        this._renderNav();
+        this._renderPane();
 
         // One honest note rather than a broken control per row.
         const stale = this._knobs.filter(k => k.interp === null).length;
@@ -203,6 +233,63 @@ class SettingsModal {
         note.textContent = stale
             ? `${stale} knob${stale > 1 ? 's' : ''} read-only — this rig's lib/settings-1.0.tm predates the interp stamp`
             : '';
+    }
+
+    _subs() { return [...new Set(this._knobs.map(k => k.sub))]; }
+
+    /* A knob this rig has actually DECIDED — the reason to look at all. */
+    _declared(k) { return k.source === 'file' || k.source === 'runtime'; }
+
+    _matches(k) {
+        if (!this._q) return true;
+        return `${k.sub} ${k.key} ${k.value} ${k.schema.doc || ''}`
+            .toLowerCase().includes(this._q);
+    }
+
+    _renderNav() {
+        const nav = this._overlay.querySelector('#ess-settings-nav-list');
+        const hits = this._knobs.filter(k => this._matches(k));
+        const item = (id, label, list) => {
+            const n = list.length;
+            const dec = list.filter(k => this._declared(k)).length;
+            return `<div class="ess-settings-nav-item${this._sel === id ? ' active' : ''}${n ? '' : ' empty'}"
+                         data-sub="${this._escAttr(id)}">
+                <span class="ess-settings-nav-name">${this._esc(label)}</span>
+                <span class="ess-settings-nav-count"
+                      title="${dec} of ${n} declared by this rig">${dec ? `${dec}/${n}` : n}</span>
+            </div>`;
+        };
+        nav.innerHTML = item('all', 'All', hits) + this._subs()
+            .map(s => item(s, s, hits.filter(k => k.sub === s))).join('');
+        nav.querySelectorAll('.ess-settings-nav-item').forEach(el => {
+            el.addEventListener('click', () => {
+                this._sel = el.dataset.sub;
+                this._renderNav();
+                this._renderPane();
+            });
+        });
+    }
+
+    _renderPane() {
+        const pane = this._overlay.querySelector('#ess-settings-pane');
+        const shown = this._knobs.filter(k =>
+            this._matches(k) && (this._sel === 'all' || k.sub === this._sel));
+        if (!shown.length) {
+            pane.innerHTML = `<div class="ess-settings-loading">${
+                this._q ? 'nothing matches that' : 'nothing declared here'}</div>`;
+            return;
+        }
+        // Group headings stay when the pane spans subsystems (All, or a
+        // filter that crossed them); a single section does not need one.
+        const subs = [...new Set(shown.map(k => k.sub))];
+        pane.innerHTML = subs.map(sub => `
+            <div class="ess-settings-group">
+                ${subs.length > 1 ? `<div class="ess-settings-group-title">${this._esc(sub)}</div>` : ''}
+                ${shown.filter(k => k.sub === sub).map(k => this._rowHtml(k)).join('')}
+            </div>
+        `).join('');
+        pane.scrollTop = 0;
+        shown.forEach(k => this._wireRow(k));
     }
 
     _rowId(k) { return `ess-set-${k.sub}-${k.key}`.replace(/[^\w-]/g, '_'); }
@@ -303,6 +390,12 @@ class SettingsModal {
             input.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter') { e.preventDefault(); commit(); }
             });
+            // Half-typed text is protected by a DIRTY FLAG, never by
+            // document.activeElement: Chrome focuses every control it is
+            // clicked on and Safari/macOS focuses almost none, so a focus
+            // gate is invisible here and freezes the panel on Windows
+            // (www/CLAUDE.md — extio-config paid for this one).
+            input.addEventListener('input', () => { k._dirty = true; });
         }
     }
 
@@ -329,11 +422,12 @@ class SettingsModal {
             const script = (k.interp === 'dserv') ? put : `send ${k.interp} {${put}}`;
             await this.connection.evalAsync(script);
             this.log(`setting ${k.sub} ${k.key} → ${value === '' ? '(empty)' : value}`, 'info');
+            k._dirty = false;
             // No re-read: -persist re-publishes value and /source, and the
             // subscription above brings them back.
         } catch (e) {
             this._showErr(errEl, e.message);
-            this._refreshRow(k);        // put the control back to the truth
+            this._refreshRow(k, true);  // put the control back to the truth
         } finally {
             this._busy = null;
             row.classList.remove('busy');
@@ -346,10 +440,15 @@ class SettingsModal {
         el.hidden = !msg;
     }
 
-    /* Update one row in place, leaving whatever the operator is typing in. */
-    _refreshRow(k) {
+    /*
+     * Update one row in place. `force` is a put's own outcome landing — it
+     * overrides the dirty flag, because the value the rig actually took is
+     * more true than what is still sitting in the box.
+     */
+    _refreshRow(k, force = false) {
         const row = this._overlay && this._overlay.querySelector('#' + this._rowId(k));
-        if (!row) return;
+        if (!row) return;                       // not the visible section
+        if (force) k._dirty = false;
         const src = row.querySelector('.ess-settings-src');
         if (src) {
             src.className = `ess-settings-src ${k.source}`;
@@ -357,7 +456,7 @@ class SettingsModal {
             src.title = this._sourceTitle(k);
         }
         const input = row.querySelector('.ess-settings-input');
-        if (!input || document.activeElement === input) return;
+        if (!input || k._dirty) return;         // do not stomp half-typed text
         if (input.tagName === 'SELECT') {
             if (![...input.options].some(o => o.value === k.value)) {
                 input.add(new Option(k.value === '' ? '(empty)' : k.value, k.value));
