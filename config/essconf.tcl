@@ -390,6 +390,7 @@ foreach f [glob -nocomplain [file join $dspath local post-*.tcl]] {
 # looks like a much deeper failure than "the named system did not load".
 #
 settings::declare ess boot_system -default "" \
+    -candidates system \
     -doc "what to load at boot: a system name, or `system protocol variant`.
 EMPTY (the default) means follow the rig: whatever it last loaded
 cleanly, else the stock bootstrap system. Declare one to pin it --

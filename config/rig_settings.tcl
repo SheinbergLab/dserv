@@ -36,7 +36,20 @@
 
 package require settings
 
-namespace eval ::rig {}
+namespace eval ::rig {
+    # What the ENVIRONMENT already said before this file touched anything --
+    # a launchd plist, a shell, an older local/pre-systemdir.tcl. Captured
+    # once, because the applies below WRITE these variables: without it,
+    # clearing a declared path reads back the value the apply itself put
+    # there and the rig can never return to what it inherited.
+    variable inherited
+    array set inherited {}
+    foreach _v {ESS_SYSTEM_PATH ESS_DATA_DIR ESS_EXPORT_PATH ESS_RMT_HOST
+                ESS_REGISTRY_URL ESS_WORKGROUP} {
+        set inherited($_v) [expr {[info exists ::env($_v)] ? $::env($_v) : ""}]
+    }
+    unset -nocomplain _v
+}
 
 #
 # Push a change into a live child.
@@ -249,12 +262,50 @@ proc ::rig::_norm_path { v } {
     return [string trimright $v /]
 }
 
+#
+# The one path worth applying LIVE. Changing where systems come from is
+# something you do while setting a rig up, with the gear open, and being
+# told "12 systems here" or "that directory does not exist" at the moment
+# you type it is the difference between a setting and a guess. The env
+# export still governs the next boot; this makes the running ess agree with
+# it, and publishes what it found.
+#
+proc ::rig::_apply_system_path { v } {
+    variable inherited
+    # Empty means "not declared", NOT "use the built-in default": clearing
+    # the setting must return the rig to what it INHERITED, not drag it off
+    # a tree it was happily using. Reading $::env here would read this
+    # proc's own previous write.
+    if { $v ne "" } {
+        set p $v
+        set ::env(ESS_SYSTEM_PATH) $v
+    } elseif { $inherited(ESS_SYSTEM_PATH) ne "" } {
+        set p $inherited(ESS_SYSTEM_PATH)
+        set ::env(ESS_SYSTEM_PATH) $p
+    } else {
+        set p /usr/local/dserv/systems
+        catch { unset ::env(ESS_SYSTEM_PATH) }
+    }
+    push ess "set ::ess::system_path [list $p]
+              catch { dservSet ess/systems \
+                  [list [lsort [glob -nocomplain -tails \
+                      -directory [file join $p ess] -types d *]]] }"
+    catch { dservSet system/warning \
+        [expr {[file isdirectory [file join $p ess]] ? "" :
+               "ESS_SYSTEM_PATH '$p' has no ess/ subdirectory -- nothing will load"}] }
+    return
+}
+
 settings::declare ess system_path -default "" \
     -validate ::rig::_norm_path \
-    -doc "where ESS looks for systems (ESS_SYSTEM_PATH). Empty uses the
-built-in default, /usr/local/dserv/systems. This is the one path
-whose absence is loud: with no systems tree the boot system does
-not load and ESS comes up empty."
+    -apply ::rig::_apply_system_path \
+    -doc "where ESS looks for systems (ESS_SYSTEM_PATH), holding them as
+<path>/ess/<system>. Empty uses the built-in default,
+/usr/local/dserv/systems. Applied live, so `ess boot_system`'s
+picker lists what is actually there the moment you change it --
+which is also the fastest way to find out a path is wrong. This
+is the one path whose absence is loud: with no systems tree the
+boot system does not load and ESS comes up empty."
 
 settings::declare ess data_dir -default "" \
     -validate ::rig::_norm_path \

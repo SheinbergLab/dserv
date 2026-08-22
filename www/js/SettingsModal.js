@@ -658,7 +658,7 @@ class SettingsModal {
         let cands;
         try {
             const reply = await this.connection.evalAsync(
-                `send ess {::ess::input_candidates ${k.candidates}}`);
+                `send ess {::ess::candidates ${k.candidates}}`);
             cands = TclParser.parseList(reply).map(c => TclParser.parseDict(c));
         } catch (e) {
             this._showErr(errEl, e.message);
@@ -700,7 +700,7 @@ class SettingsModal {
                         </div>`).join('')}
                 </div>
                 <div class="ess-modal-footer">
-                    <span class="ess-settings-note">from the boxes announcing now — reopen to rescan</span>
+                    <span class="ess-settings-note">${k.candidates === 'system' ? 'from ESS_SYSTEM_PATH — reopen to rescan' : 'from the boxes announcing now — reopen to rescan'}</span>
                     <button class="ess-modal-btn cancel" type="button">Cancel</button>
                 </div>
             </div>`;

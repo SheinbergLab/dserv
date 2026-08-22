@@ -1210,6 +1210,52 @@ namespace eval ess {
         return $base
     }
 
+    #
+    # The gear asks for candidates by KIND, and not every kind is an input:
+    # `system` names what is in the systems tree. One dispatcher so a page
+    # has one call to make, and so a new kind does not need a page change.
+    #
+    proc candidates { kind } {
+        switch -exact -- $kind {
+            system  { return [system_candidates] }
+            default { return [input_candidates $kind] }
+        }
+    }
+
+    # Systems available in ESS_SYSTEM_PATH, as `<path>/ess/<system>`. The
+    # detail is the point: a path with nothing in it, or no ess/ directory
+    # at all, is the single most likely reason a rig comes up empty, and
+    # this is where somebody is already looking when they wonder.
+    proc system_candidates {} {
+        variable system_path
+        set root [file join $system_path ess]
+        set out {}
+        if { ![file isdirectory $root] } {
+            return [list [dict create route "" label "no systems here" \
+                              detail "$root is not a directory -- nothing will\
+                                      load; check `ess system_path`" \
+                              durable 0 status unresolved address $root]]
+        }
+        foreach d [lsort [glob -nocomplain -tails -directory $root -types d *]] {
+            if { $d eq "lib" } continue          ;# shared code, not a system
+            set sysfile [file join $root $d $d.tcl]
+            set ok [file exists $sysfile]
+            lappend out [dict create route $d label $d \
+                             detail [expr {$ok ? "$root/$d" :
+                                           "no $d.tcl -- not a loadable system"}] \
+                             durable 1 \
+                             status [expr {$ok ? "ok" : "unresolved"}] \
+                             address $sysfile]
+        }
+        if { ![llength $out] } {
+            lappend out [dict create route "" label "no systems here" \
+                             detail "$root is empty -- sync from the registry,\
+                                     or leave boot_system empty" \
+                             durable 0 status unresolved address $root]
+        }
+        return $out
+    }
+
     proc input_candidates { kind } {
         variable io_class
         set out {}
