@@ -5626,8 +5626,13 @@ select.ess-param-select {
 
 /* ── Rig settings gear (SettingsModal.js) ─────────────────────────────── */
 
+/* Fixed height, not content height. Sections hold between one and four
+   knobs, so sizing to content made the modal jump every time the nav was
+   clicked -- and the alert strip appearing would have moved it again. The
+   pane absorbs the difference by scrolling. */
 .ess-settings-modal {
     width: 720px;
+    height: min(70vh, 620px);
 }
 
 /* subsystem list + one subsystem's knobs; the BODY stops scrolling and the
@@ -5692,7 +5697,7 @@ select.ess-param-select {
     display: flex;
     align-items: stretch;
     flex: 1;
-    min-height: 260px;
+    min-height: 0;          /* or the scrolling children refuse to shrink */
     overflow: hidden;
 }
 
