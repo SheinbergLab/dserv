@@ -499,6 +499,52 @@ rate/deadzone. What would not: transport, box_device, box_group, registry,
 stim host — decisions, not adjustments, and a stray click should not
 repoint the rig.
 
+## 5. Routes are picked, not typed
+
+`box:*/response/btn_left` is a string someone types into a settings field,
+and every character of it is a chance to be wrong. Everything needed to
+OFFER it instead is already in the tree the boxes announce; what was missing
+is that the knowledge of what to prefer lives in Tcl and a page enumerating
+this itself would be a second copy of all of it.
+
+**`::ess::input_candidates <kind>`** (ess_transports) walks the live boxes
+and returns, per candidate: `route` (the exact string to write), `label`,
+`detail`, `durable`, and — the part that matters — `status`/`address` from
+resolving it NOW. extio.html's cards already reassure that a BOX is there;
+this says the ESS side reaches it, and those two questions look identical
+until one of them is false.
+
+Kinds: `button` (labelled group members first, wildcard device, then
+unlabelled input pins marked "by pin", then `none`), `group` (chord groups
+with direction members, for `joystick box_group`), `out` (output-capable
+pins, for a juicer destination).
+
+**`-candidates <kind>` on the declaration**, carried in the schema beside
+`interp`. The gear shows a **Pick…** button on exactly those knobs and stays
+ignorant of what a route is — the declaring subsystem says what kind of
+thing the value names. Free text remains authoritative underneath, so
+nothing the schema allows becomes unsayable.
+
+**The label form is offered FIRST and the pin form is flagged.**
+`box:*/response/btn_left` survives a box swap and `box:teensy/1` does not
+(rig1's pin-addressed buttons will not survive its mcxn947). A picker that
+merely listed what exists would spread the fragile form; this one teaches
+the durable one by making it the easy choice.
+
+Verified against the teensy on the dev Mac: two labelled members offered as
+`box:*/response/btn_left|btn_right`, each `ok`, each naming its pin; the
+`response` group offered for `box_group` with `teensy: left right`;
+selecting a row wrote the route and the badge went `file`; ↺ removed it and
+`local/rig.tcl` came back byte-identical.
+
+**Next, and the one that actually removes the errors:** capture. A "press it
+now" mode that watches the live DI events, catches the bit that fired, and
+fills in the durable route for the button under your finger. Enumeration
+still asks someone to recognise the right row; capture does not.
+`button_group_fan` already does the bit→label mapping at runtime, so the
+mechanism exists. Same trick for the analog groups: wiggle the axis, and the
+group that moved is the one you meant.
+
 ## Sequencing
 
 1. ~~**§0 first, alone.**~~ **DONE and rig-verified** — one line in

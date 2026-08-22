@@ -245,6 +245,7 @@ namespace eval ess {
         -apply {::ess::joystick_bind_from_settings}
 
     settings::declare joystick box_group -default joystick \
+        -candidates group \
         -doc "dpad transport: the chord group's label on the box, whose\
               members are labelled up/down/left/right" \
         -apply {::ess::joystick_bind_from_settings}
@@ -1052,6 +1053,7 @@ namespace eval ess {
                   labelled chord-group member, board-independent),\
                   box:<dev>/<pin>, gpio:<pin>, joystick:<bit>, or none.\
                   <dev> may be * to follow whichever box is present" \
+            -candidates button \
             -apply {::ess::button_bind_from_settings}
     }
     unset _c
@@ -1084,6 +1086,205 @@ namespace eval ess {
     # {label -> bit index} from a concrete group's announced pins + pin labels.
     # An empty result is NOT cached, so a bind that races ahead of the box's
     # manifest heals as soon as the labels are announced.
+    ########################################################################
+    # WHAT COULD THIS BE ROUTED TO -- enumerated from the live boxes
+    #
+    # A route is typed today: `box:*/response/btn_left`, by hand, into a
+    # settings field. Everything needed to offer it instead is already in
+    # the tree the boxes announce, and the knowledge of what to PREFER is
+    # already here in Tcl -- which form survives a box swap, what counts as
+    # a direction, which pins are outputs. A page that enumerated this
+    # itself would be a second copy of all of that, drifting.
+    #
+    # Returns a list of dicts: route (the exact string to write), label,
+    # detail, durable (0/1), plus status/address from resolving it NOW.
+    # That last part is the point of doing it here rather than in a page:
+    # extio.html can already reassure you the BOX is there; this says the
+    # ESS side resolves it.
+    ########################################################################
+
+    # every live box, by device name
+    proc input_boxes {} {
+        variable io_class
+        set devs {}
+        foreach k [dservKeys $io_class/*/state/pins/all] {
+            lappend devs [lindex [split $k /] 1]
+        }
+        return [lsort -unique $devs]
+    }
+
+    # comma-separated box list -> Tcl list ("" for absent/empty)
+    proc input_commalist { dp } {
+        if { ![dservExists $dp] } { return {} }
+        set v [string trim [joystick_denul [dservGet $dp]]]
+        if { $v eq "" } { return {} }
+        set out {}
+        foreach e [split $v ,] {
+            set e [string trim $e]
+            if { $e ne "" } { lappend out $e }
+        }
+        return $out
+    }
+
+    # A box's groups, discovered from the MANIFEST datapoints rather than
+    # from state/groups/all -- box01 (fw 0.4.0+87) announces its groups and
+    # their pins but not that summary key, so trusting it made a box with a
+    # perfectly good labelled group look like three bare pins, and the picker
+    # offered the fragile pin form for hardware that supports the durable
+    # one. state/group/<g>/pins is what the RESOLVER reads, so reading the
+    # same thing keeps the offer and the binding in agreement.
+    proc input_box_groups { dev } {
+        variable io_class
+        set gs {}
+        foreach k [dservKeys $io_class/$dev/state/group/*/pins] {
+            lappend gs [lindex [split $k /] end-1]
+        }
+        return [lsort -unique $gs]
+    }
+
+    proc input_pin_label { dev pin } {
+        variable io_class
+        set dp $io_class/$dev/state/label/$pin
+        if { ![dservExists $dp] } { return "" }
+        return [string trim [joystick_denul [dservGet $dp]]]
+    }
+
+    # Resolve a ROUTE STRING the way the settings value would be bound, so a
+    # candidate can be offered with "and it answers right now" attached.
+    # Same parse as button_bind_from_settings -- one grammar, not two.
+    proc input_route_resolve { kind route } {
+        if { $route eq "" || $route eq "none" } {
+            return [dict create status unbound address "" detail "nothing bound"]
+        }
+        set i [string first : $route]
+        if { $i < 0 } {
+            return [dict create status unresolved address "" detail "not a route"]
+        }
+        set what [string range $route 0 [expr {$i-1}]]
+        set rest [string range $route [expr {$i+1}] end]
+        switch -exact -- $what {
+            box      { return [input_resolve $kind {} [list box [split $rest /]]] }
+            gpio     { return [input_resolve $kind $rest {}] }
+            joystick { return [input_resolve $kind {} [list joystick $rest]] }
+        }
+        return [dict create status unresolved address "" \
+                    detail "unknown route kind '$what'"]
+    }
+
+    # Merge a resolve result into a candidate WITHOUT losing the candidate's
+    # own detail: dict merge would let the resolver's empty detail (what a
+    # successful resolve returns) overwrite the line that says which box and
+    # pin this is. A resolver detail only ever appears when it FAILED, and
+    # then it is the more useful of the two.
+    proc input_cand { base r } {
+        set d [dict get $r detail]
+        if { $d ne "" } { dict set base detail $d }
+        dict set base status  [dict get $r status]
+        dict set base address [dict get $r address]
+        return $base
+    }
+
+    proc input_candidates { kind } {
+        variable io_class
+        set out {}
+
+        switch -exact -- $kind {
+            button {
+                # LABELLED GROUP MEMBERS FIRST, and with a wildcard device.
+                # That is the form that survives swapping the box or moving
+                # the wire, and offering it first is the cheapest way to stop
+                # pin-addressed routes spreading (rig1 has them; they will
+                # not survive its mcxn947).
+                foreach dev [input_boxes] {
+                    foreach g [input_box_groups $dev] {
+                        set pins [input_commalist $io_class/$dev/state/group/$g/pins]
+                        foreach p $pins {
+                            set lab [input_pin_label $dev $p]
+                            if { $lab eq "" } continue
+                            set route "box:*/$g/$lab"
+                            lappend out [input_cand \
+                                [dict create route $route label "$g / $lab" \
+                                     detail "$dev pin $p" durable 1] \
+                                [input_route_resolve button $route]]
+                        }
+                    }
+                    # Unlabelled inputs can still be routed, by number, and
+                    # saying so beats leaving someone to guess the syntax --
+                    # but they are marked as what they are.
+                    set grouped {}
+                    foreach g [input_box_groups $dev] {
+                        foreach p [input_commalist $io_class/$dev/state/group/$g/pins] {
+                            if { [input_pin_label $dev $p] ne "" } { lappend grouped $p }
+                        }
+                    }
+                    foreach p [input_commalist $io_class/$dev/state/pins/in] {
+                        if { $p in $grouped } continue
+                        set route "box:$dev/$p"
+                        # A pin can be LABELLED without being in a group --
+                        # box01's `select` is. Show the box's own word for it:
+                        # the label is what makes a row recognisable, and
+                        # "pin 2" sends someone hunting for which one that is.
+                        set lab [input_pin_label $dev $p]
+                        if { $lab ne "" } {
+                            set name "$dev $lab"
+                            set why "\"$lab\", but not in a group -- routed by\
+                                     pin number, which does not survive a box swap"
+                        } else {
+                            set name "$dev pin $p"
+                            set why "unlabelled input -- a labelled group member\
+                                     survives a box swap; this does not"
+                        }
+                        lappend out [input_cand \
+                            [dict create route $route label "$name (pin $p)" \
+                                 detail $why durable 0] \
+                            [input_route_resolve button $route]]
+                    }
+                }
+                lappend out [dict create route none label none \
+                                 detail "nothing drives this channel" durable 1 \
+                                 status ok address "" ]
+            }
+            group {
+                # For `joystick box_group`: the value is the GROUP's label,
+                # and only a group with direction members can steer.
+                foreach dev [input_boxes] {
+                    foreach g [input_box_groups $dev] {
+                        set dirs {}
+                        foreach p [input_commalist $io_class/$dev/state/group/$g/pins] {
+                            set lab [input_pin_label $dev $p]
+                            if { $lab ne "" && [joystick_dir_canon $lab] ne "" } {
+                                lappend dirs [joystick_dir_canon $lab]
+                            }
+                        }
+                        if { ![llength $dirs] } continue
+                        lappend out [input_cand \
+                            [dict create route $g label $g \
+                                 detail "$dev: [join [lsort -unique $dirs] { }]" \
+                                 durable 1] \
+                            [input_resolve joystick {} [list box [list * $g]]]]
+                    }
+                }
+            }
+            out {
+                # Output-capable pins, for a juicer destination.
+                foreach dev [input_boxes] {
+                    foreach p [input_commalist $io_class/$dev/state/pins/out] {
+                        set lab [input_pin_label $dev $p]
+                        lappend out [dict create route "extio:$dev/$p" \
+                                         label "$dev pin $p" \
+                                         detail [expr {$lab ne "" ? "\"$lab\"" : "unlabelled output"}] \
+                                         durable 1 status ok address ""]
+                    }
+                }
+            }
+            default {
+                error "input_candidates: unknown kind '$kind'\
+                       (want button | group | out)"
+            }
+        }
+        return $out
+    }
+
     proc button_group_map {dpoint} {
 	variable button_group_maps
 	if {[info exists button_group_maps($dpoint)]} { return $button_group_maps($dpoint) }

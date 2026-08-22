@@ -39,6 +39,13 @@
 #                 or errors. Runs BEFORE -values/-type (it is the
 #                 domain normalizer: e.g. autobind maps 1/on -> auto)
 #       -apply    script appended with the value; runs on put/reload change
+#       -candidates a KIND of live thing this value names, so a UI can OFFER
+#                 the real ones instead of asking someone to type a route
+#                 (::ess::input_candidates button|group|out). The schema says
+#                 the SHAPE; this says where the actual ones are enumerable.
+#                 Deliberately not a list: boxes come and go, so candidates
+#                 are asked for when a picker opens, never frozen into a
+#                 declaration.
 #
 #   settings::get <sub> <key>            effective value (runtime > file >
 #                                        default); publishes value + source
@@ -127,7 +134,8 @@ proc ::settings::_interp_name {} {
 
 proc ::settings::declare {sub key args} {
     variable schema; variable filevals; variable loaded; variable errlist
-    set d [dict create default "" values {} type "" doc "" validate "" apply ""]
+    set d [dict create default "" values {} type "" doc "" validate "" apply "" \
+               candidates ""]
     foreach {opt val} $args {
         set name [string range $opt 1 end]
         if { ![dict exists $d $name] } {

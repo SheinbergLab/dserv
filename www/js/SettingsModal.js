@@ -202,7 +202,8 @@ class SettingsModal {
                     value: f[2] ?? '', source: f[3] ?? '',
                     schema,
                     interp: schema.interp ?? null,
-                    values: TclParser.parseList(schema.values || '')
+                    values: TclParser.parseList(schema.values || ''),
+                    candidates: schema.candidates || ''
                 };
             });
             if (this._want) {
@@ -483,6 +484,15 @@ class SettingsModal {
                 <span>${on ? 'on' : 'off'}</span>
             </label>`;
         }
+        // A route is a live fact, not a schema one: which boxes are present,
+        // which groups they announce, which members carry labels. Offer them
+        // rather than asking for the string — but keep the text field
+        // authoritative, so nothing the schema allows becomes unsayable.
+        const pick = k.candidates
+            ? `<button class="ess-mini-btn ess-settings-picker" type="button"${dis}
+                       title="choose from what this rig's boxes are announcing now">Pick…</button>`
+            : '';
+
         const numeric = (type === 'int' || type === 'double');
         // step MUST be explicit for a double. A number input with no step
         // defaults to step=1, so 0.5 -- juicer hand_ml, joystick
@@ -494,6 +504,7 @@ class SettingsModal {
             <input type="${numeric ? 'number' : 'text'}" class="ess-modal-input ess-settings-input"
                    ${step}
                    value="${this._escAttr(k.value)}"${dis}>
+            ${pick}
             <button class="ess-mini-btn ess-settings-set" type="button"${dis}>Set</button>
         </div>`;
     }
@@ -542,6 +553,8 @@ class SettingsModal {
         if (clearBtn) clearBtn.addEventListener('click', () => this._clear(k));
         const pinBtn = row.querySelector('.ess-settings-pin');
         if (pinBtn) pinBtn.addEventListener('click', () => this._pin(k));
+        const pickBtn = row.querySelector('.ess-settings-picker');
+        if (pickBtn) pickBtn.addEventListener('click', () => this._pick(k));
         const input = row.querySelector('.ess-settings-input');
         const setBtn = row.querySelector('.ess-settings-set');
         if (!input || k.interp === null) return;
@@ -606,6 +619,92 @@ class SettingsModal {
         await this._run(k,
             `settings::put ${k.sub} ${k.key} ${TclParser.toTcl(k.value)} -persist`,
             `pinned ${k.sub} ${k.key} = ${k.value === '' ? '(empty)' : k.value}`);
+    }
+
+    /*
+     * Offer what the rig's boxes are announcing right now.
+     *
+     * ESS enumerates, not this page: which form survives a box swap, what
+     * counts as a direction label, which pins are outputs, and whether a
+     * route RESOLVES are all things ess_transports already knows, and a
+     * second copy here would drift from the resolvers that actually bind.
+     *
+     * The status column is the point. extio.html's cards already reassure
+     * that a box is there; this says the ESS side reaches it — the two
+     * questions look the same and are not.
+     */
+    async _pick(k) {
+        const row = this._overlay.querySelector('#' + this._rowId(k));
+        const errEl = row.querySelector('.ess-settings-err');
+        this._showErr(errEl, '');
+        let cands;
+        try {
+            const reply = await this.connection.evalAsync(
+                `send ess {::ess::input_candidates ${k.candidates}}`);
+            cands = TclParser.parseList(reply).map(c => TclParser.parseDict(c));
+        } catch (e) {
+            this._showErr(errEl, e.message);
+            return;
+        }
+        if (!cands.length) {
+            this._showErr(errEl,
+                'no boxes are announcing anything to route to — check the extio page');
+            return;
+        }
+        this._showPicker(k, cands);
+    }
+
+    _showPicker(k, cands) {
+        const sheet = document.createElement('div');
+        sheet.className = 'ess-modal-overlay ess-pick-overlay';
+        sheet.innerHTML = `
+            <div class="ess-modal ess-pick-modal">
+                <div class="ess-modal-header">
+                    <span class="ess-modal-title">${this._esc(k.sub)} ${this._esc(k.key)}</span>
+                    <button class="ess-modal-close" type="button">×</button>
+                </div>
+                <div class="ess-modal-body ess-pick-body">
+                    ${cands.map((c, i) => `
+                        <div class="ess-pick-row${c.route === k.value ? ' current' : ''}" data-i="${i}">
+                            <div class="ess-pick-main">
+                                <span class="ess-pick-label">${this._esc(c.label || c.route)}</span>
+                                <span class="ess-pick-route">${this._esc(c.route)}</span>
+                            </div>
+                            <div class="ess-pick-meta">
+                                <span class="ess-pick-detail">${this._esc(c.detail || '')}</span>
+                                <span class="ess-pick-status ${this._esc(c.status || '')}"
+                                      title="${this._escAttr(this._pickStatusTitle(c))}">${this._esc(c.status || '')}</span>
+                                ${c.durable === '0' ? `<span class="ess-pick-warn"
+                                      title="a labelled group member survives a box swap; a pin number does not">by pin</span>` : ''}
+                            </div>
+                        </div>`).join('')}
+                </div>
+                <div class="ess-modal-footer">
+                    <span class="ess-settings-note">from the boxes announcing now — reopen to rescan</span>
+                    <button class="ess-modal-btn cancel" type="button">Cancel</button>
+                </div>
+            </div>`;
+        const close = () => sheet.remove();
+        sheet.querySelector('.ess-modal-close').addEventListener('click', close);
+        sheet.querySelector('.ess-modal-btn.cancel').addEventListener('click', close);
+        sheet.addEventListener('click', (e) => { if (e.target === sheet) close(); });
+        sheet.querySelectorAll('.ess-pick-row').forEach(el => {
+            el.addEventListener('click', () => {
+                const c = cands[Number(el.dataset.i)];
+                close();
+                this._put(k, c.route);
+            });
+        });
+        document.body.appendChild(sheet);
+    }
+
+    _pickStatusTitle(c) {
+        switch (c.status) {
+            case 'ok':         return 'ESS resolves this route right now';
+            case 'unresolved': return c.detail || 'nothing answers this yet';
+            case 'unbound':    return 'nothing is bound';
+            default:           return '';
+        }
     }
 
     async _run(k, command, logMsg) {

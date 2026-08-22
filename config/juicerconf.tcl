@@ -376,6 +376,7 @@ proc juicer_dest_norm {v} {
 
 settings::declare juicer destination -default auto \
     -validate juicer_dest_norm \
+    -candidates out \
     -doc "reward route: auto (usb > extio *juice* out > gpio), usb, gpio, extio, extio:<box>, extio:<box>/<pin>" \
     -apply {::juicer_bind}
 
