@@ -706,6 +706,41 @@ juicer_hand_ml_apply [settings::get juicer hand_ml]
 juicer_watch_extio
 juicer_bind
 
+#
+# WHICH host GPIO pin the valve is on. `destination gpio` was declarable
+# without it, which is an incoherent pair: a rig could say "use the host's
+# GPIO" in the gear and still need a file to say which pin.
+#
+# -1 is the C module's own "not set", so an undeclared rig behaves exactly
+# as before. juicerSetPin is wrapped rather than left alongside, so a
+# local/juicer.tcl that still calls it lands as a RUNTIME override and shows
+# up in the gear instead of silently disagreeing with the settings tree --
+# the same treatment set_source got.
+#
+# Likely transitional: rigs are moving to the USB pump and to extio juice
+# pins, and this pin disappears with the last bare-GPIO rig.
+#
+rename juicerSetPin _juicerSetPin
+proc juicerSetPin { idx pin } {
+    if { $idx != 0 } { return [_juicerSetPin $idx $pin] }
+    return [::settings::put juicer gpio_pin $pin]
+}
+
+proc juicer_gpio_pin_apply { v } {
+    if { ![string is integer -strict $v] } { return }
+    if { $v < 0 } { return }
+    catch { _juicerSetPin 0 $v }
+    dservSet juicer/gpio_pin $v
+}
+
+settings::declare juicer gpio_pin -default -1 -type int \
+    -doc "host GPIO line the juice valve is wired to, for the `gpio`
+destination. -1 means none declared, which is what a rig using the
+USB pump or an extio juice pin wants." \
+    -apply {::juicer_gpio_pin_apply}
+
+juicer_gpio_pin_apply [settings::get juicer gpio_pin]
+
 # local system configuration in /usr/local/dserv/local/juicer.tcl
 if { [file exists $dspath/local/juicer.tcl] } {
     source $dspath/local/juicer.tcl

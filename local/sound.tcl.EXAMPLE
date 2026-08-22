@@ -1,3 +1,13 @@
+#
+# READ THIS FIRST: soundconf runs init_hardware + init_software when this
+# file is ABSENT. Creating it REPLACES that entirely -- a file that exists
+# and does not call an init leaves the rig silent with nothing saying so.
+#
+# Most rigs only wanted to name their output. That is declared now:
+#   setting sound device plughw:CARD=Device,DEV=0     (or `auto`, or `default`)
+# and the auto-pick stays in charge of the rest. Copy this file only if you
+# need to change the init SEQUENCE, not just the device.
+#
 # initialize localized sound options
 
 #

@@ -202,16 +202,25 @@ namespace eval slider {
     }
     proc set_chan_x     {c} { set_param chan_x     $c }
     proc set_chan_y     {c} { set_param chan_y     $c }
-    proc set_scale_x    {s} { set_param scale_x    $s }
-    proc set_scale_y    {s} { set_param scale_y    $s }
+    # The rig facts below go through settings, so local/slider.tcl's calls
+    # land as RUNTIME overrides that the gear can see, persist and revert --
+    # rather than mutating the dict behind the settings tree's back. The
+    # MEASURED keys (chan_x/y, centres, invert) stay direct: they belong to
+    # the calibration db, and cal_apply is their only author.
+    proc set_scale_x    {s} { ::settings::put slider scale_x $s }
+    proc set_scale_y    {s} { ::settings::put slider scale_y $s }
+    proc scale_x_apply  {v} { set_param scale_x $v }
+    proc scale_y_apply  {v} { set_param scale_y $v }
     proc set_center_x   {o} { set_param center_x   $o }
     proc set_center_y   {o} { set_param center_y   $o }
     proc set_deadzone_x {d} { set_param deadzone_x $d }
     proc set_deadzone_y {d} { set_param deadzone_y $d }
     proc set_invert_x   {o} { set_param invert_x   $o }
     proc set_invert_y   {o} { set_param invert_y   $o }
-    proc set_limit_x    {l} { set_param limit_x    $l }
-    proc set_limit_y    {l} { set_param limit_y    $l }
+    proc set_limit_x    {l} { ::settings::put slider limit_x $l }
+    proc set_limit_y    {l} { ::settings::put slider limit_y $l }
+    proc limit_x_apply  {v} { set_param limit_x $v }
+    proc limit_y_apply  {v} { set_param limit_y $v }
     proc set_swipe_threshold {t} { set_param swipe_threshold $t }
 
     # Set current raw position as center. Call this when the slider is
@@ -1180,6 +1189,23 @@ namespace eval slider {
         return
     }
 }
+
+# Rig facts about the pot/stick/trackpad wired to THIS rig: how counts become
+# output units, whether that output is clamped, and how far it must move to
+# count as engaged. NOT mode/release -- those are a loaded protocol's call
+# (::ess::slider_init), and declaring them would fight whichever system runs.
+foreach { _k _def _doc } {
+    scale_x 1.0 "counts -> output units, X. 0.00488 maps a 0..4095 span to about +/-10."
+    scale_y 1.0 "counts -> output units, Y."
+    limit_x -1.0 "clamp on X output units; negative disables. A symmetric clamp on an asymmetric throw ROTATES the angle a 2-D reading reports, so leave it off for a stick."
+    limit_y -1.0 "clamp on Y output units; negative disables."
+    swipe_threshold 1.0 "deflection, in output units, that reads as engaged."
+} {
+    ::settings::declare slider $_k -default $_def -type double \
+        -doc $_doc -apply [list ::slider::${_k}_apply]
+    catch { ::slider::${_k}_apply [::settings::get slider $_k] }
+}
+unset -nocomplain _k _def _doc
 
 ::settings::declare slider ain_group -default stick \
     -candidates analog \

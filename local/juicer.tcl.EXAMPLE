@@ -1,5 +1,8 @@
 # Host-gpio solenoid pin (only needed if this rig can reward via a timed
 # host pin; skip when juice is a USB pump or an extio *juice* digital out)
+# DECLARED NOW: `setting juicer gpio_pin 27` in local/rig.tcl, or the gear
+# (juicer -> gpio_pin). The call below still works and shows up as a
+# `runtime` value there, but it is the old way round.
 juicerSetPin 0 27
 
 # Reward ROUTING and the ml->ms calibration are settings (local/rig.tcl),

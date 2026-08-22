@@ -457,6 +457,34 @@ pcm.dserv_shared { type plug slave.pcm \"dserv_dmix\" }
     }
 }
 
+#
+# WHICH output, declared.
+#
+# Note what the file below does: it REPLACES this whole block, so a
+# local/sound.tcl that exists but never calls an init leaves the rig silent
+# with nothing saying so -- the inert-file trap. Most rigs only ever wanted
+# to name their output, so that is what this declares, and the auto-pick
+# stays in charge of everything else.
+#
+#   auto (default)  resolve_device picks a real PCM -- and deliberately not
+#                   ALSA `default`, which on a Pi is the HDMI driving the
+#                   stimulus display
+#   default         force ALSA's own default
+#   <pcm>           an explicit device, e.g. plughw:CARD=Device,DEV=0
+#
+# Applied at init only: re-opening fluidsynth under a live rig is not
+# something to do from a settings write, so a change lands at the next
+# restart and the doc says so.
+#
+package require settings
+settings::declare sound device -default auto \
+    -doc "which audio output the software synth opens. auto resolves a real
+playback PCM (never blindly ALSA `default`, which on a Pi is the
+HDMI driving the stimulus display); `default` forces ALSA's; or
+name a PCM, e.g. plughw:CARD=Device,DEV=0. `aplay -L` lists them.
+Takes effect at the next restart." \
+    -apply {apply {{v} { catch { dservSet sound/audio/declared $v } }}}
+
 # local system configuration in /usr/local/dserv/local/sound.tcl
 if { [file exists $dspath/local/sound.tcl] } {
     source $dspath/local/sound.tcl
@@ -466,7 +494,10 @@ if { [file exists $dspath/local/sound.tcl] } {
     # default lands on a vc4-hdmi (a DISPLAY), and on HDMI-only x86 boxes
     # it points at a device that does not exist (officepi/office-stim,
     # 2026-08-05). A rig with neither gets the old default behaviour.
-    sound::init_software
+    #
+    # `sound device` overrides that pick when a rig declares one; `auto` is
+    # the default and means exactly what init_software already did.
+    sound::init_software default [settings::get sound device]
 }
 
 puts "Sound initialized"

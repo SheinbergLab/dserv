@@ -1,4 +1,14 @@
 #
+# DECLARED NOW (gear, or `setting slider <key> <value>` in local/rig.tcl):
+#   source, ain_group          which input path, and which analog group
+#   scale_x/y, limit_x/y       counts -> output units, and the clamp
+#   swipe_threshold            deflection that reads as engaged
+# MEASURED (calibration db, via slider::cal_* or the Calibrate stick wizard):
+#   chan_x/y, center_x/y, invert_x/y
+# The slider::set_* calls below still work and land as `runtime` overrides,
+# visible in the gear -- but a rig should declare, not source.
+#
+#
 # Per-rig overrides for the slider subprocess.
 #
 # Sourced from config/sliderconf.tcl at the end of its startup, so the
