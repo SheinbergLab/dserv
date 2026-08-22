@@ -917,9 +917,10 @@ let settingsModal = null;
 
 /**
  * Open the rig settings gear (every knob this rig DECLARES, rendered from
- * its own schema — see SettingsModal.js)
+ * its own schema — see SettingsModal.js). `section` opens straight at one
+ * subsystem, so a panel with its own dialog can hand off here for the rest.
  */
-function openSettingsModal() {
+function openSettingsModal(section = null) {
     if (!connection || !connection.connected) {
         log('Cannot open settings: not connected to dserv', 'error');
         return;
@@ -927,7 +928,7 @@ function openSettingsModal() {
     if (!settingsModal) {
         settingsModal = new SettingsModal({ connection, dpManager, log });
     }
-    settingsModal.open();
+    settingsModal.open(section);
 }
 
 /**

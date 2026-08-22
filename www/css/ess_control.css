@@ -5717,6 +5717,29 @@ select.ess-param-select {
     color: var(--ess-text-primary);
 }
 
+/* a footer button that reads as a hand-off, not an action */
+.ess-modal-btn.ess-modal-link {
+    background: none;
+    border: none;
+    padding: 8px 4px;
+    color: var(--ess-text-muted);
+}
+
+.ess-modal-btn.ess-modal-link:hover {
+    color: var(--ess-accent);
+    background: none;
+}
+
+.ess-settings-only {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    color: var(--ess-text-muted);
+    cursor: pointer;
+    user-select: none;
+}
+
 .ess-settings-nav-list {
     display: flex;
     flex-direction: column;

@@ -43,6 +43,8 @@ class SettingsModal {
         this._sel = 'all';             // selected subsystem, or 'all'
         this._q = '';                  // filter text
         this._errors = [];             // rejected local/rig.tcl lines, per interp
+        this._declaredOnly = false;    // show only what this rig has decided
+        this._want = null;             // subsystem to open at, once loaded
     }
 
     /*
@@ -73,11 +75,19 @@ class SettingsModal {
         ].join('\n');
     }
 
-    open() {
+    /*
+     * `section` opens straight at one subsystem, so another panel can hand
+     * off to this one ("everything else about the juicer is here") instead
+     * of duplicating a control. Applied after the load, and only if that
+     * subsystem actually declares something — a rig that never started the
+     * juicer would otherwise open on an empty pane.
+     */
+    open(section = null) {
         if (!this.connection || !this.connection.connected) {
             this.log('Cannot open settings: not connected to dserv', 'error');
             return;
         }
+        this._want = section;
         this._buildModal();
         document.body.appendChild(this._overlay);
         this._onKeyDown = (e) => {
@@ -156,8 +166,20 @@ class SettingsModal {
             const knob = this._knobs.find(
                 k => k.sub === parts[1] && k.key === parts[2]);
             if (!knob) return;
+            const before = this._visibleSig();
             knob[field] = value;
-            this._refreshRow(knob);
+            // Values flow into the standing DOM; the DOM is REBUILT only
+            // when the set of visible rows changes — clearing a knob under
+            // "declared only" makes its row go away, and nothing else does.
+            // (extio-config's structure/values split, for the same reason:
+            // a rebuild loses half-typed text.)
+            if (this._visibleSig() !== before) {
+                this._renderNav();
+                this._renderPane();
+            } else {
+                if (field === 'source') this._renderNav();   // the n/N counts
+                this._refreshRow(knob);
+            }
         });
     }
 
@@ -183,6 +205,14 @@ class SettingsModal {
                     values: TclParser.parseList(schema.values || '')
                 };
             });
+            if (this._want) {
+                if (this._knobs.some(k => k.sub === this._want)) {
+                    this._sel = this._want;
+                } else {
+                    this.log(`settings: nothing declared for '${this._want}'`, 'warn');
+                }
+                this._want = null;
+            }
             this._render();
         } catch (e) {
             if (gen !== this._gen || !this._overlay) return;
@@ -217,23 +247,28 @@ class SettingsModal {
                     <div class="ess-settings-nav">
                         <input type="text" class="ess-settings-filter" id="ess-settings-filter"
                                placeholder="filter…" autocomplete="off">
+                        <label class="ess-settings-only"
+                               title="only knobs this rig has decided — declared in local/rig.tcl or overridden live">
+                            <input type="checkbox" id="ess-settings-only">
+                            <span>declared only</span>
+                        </label>
                         <div class="ess-settings-nav-list" id="ess-settings-nav-list"></div>
                     </div>
                     <div class="ess-settings-pane" id="ess-settings-pane"></div>
                 </div>
             `;
+            const only = body.querySelector('#ess-settings-only');
+            only.checked = this._declaredOnly;
+            only.addEventListener('change', () => {
+                this._declaredOnly = only.checked;
+                this._widenIfEmpty();
+                this._renderNav();
+                this._renderPane();
+            });
             const filter = body.querySelector('#ess-settings-filter');
             filter.addEventListener('input', () => {
                 this._q = filter.value.trim().toLowerCase();
-                // Matching nothing HERE but something elsewhere is the normal
-                // case: someone types because they do NOT know which
-                // subsystem owns the thing. Widen to All rather than show an
-                // empty pane while the sidebar says the match exists.
-                if (this._q && this._sel !== 'all' &&
-                    !this._knobs.some(k => k.sub === this._sel && this._matches(k)) &&
-                    this._knobs.some(k => this._matches(k))) {
-                    this._sel = 'all';
-                }
+                this._widenIfEmpty();
                 this._renderNav();
                 this._renderPane();
             });
@@ -280,9 +315,23 @@ class SettingsModal {
     _declared(k) { return k.source === 'file' || k.source === 'runtime'; }
 
     _matches(k) {
+        if (this._declaredOnly && !this._declared(k)) return false;
         if (!this._q) return true;
         return `${k.sub} ${k.key} ${k.value} ${k.schema.doc || ''}`
             .toLowerCase().includes(this._q);
+    }
+
+    /*
+     * Narrowing to nothing HERE while something matches elsewhere is the
+     * normal case for both controls — someone filters because they do not
+     * know which subsystem owns the thing, and "declared only" is asked at
+     * rig scale, not section scale. Widen rather than show an empty pane
+     * beside a sidebar that says the matches exist.
+     */
+    _widenIfEmpty() {
+        if (this._sel === 'all') return;
+        if (this._knobs.some(k => k.sub === this._sel && this._matches(k))) return;
+        if (this._knobs.some(k => this._matches(k))) this._sel = 'all';
     }
 
     _renderNav() {
@@ -309,10 +358,18 @@ class SettingsModal {
         });
     }
 
+    _shown() {
+        return this._knobs.filter(k =>
+            this._matches(k) && (this._sel === 'all' || k.sub === this._sel));
+    }
+
+    _visibleSig() {
+        return this._shown().map(k => `${k.sub}/${k.key}`).join(',');
+    }
+
     _renderPane() {
         const pane = this._overlay.querySelector('#ess-settings-pane');
-        const shown = this._knobs.filter(k =>
-            this._matches(k) && (this._sel === 'all' || k.sub === this._sel));
+        const shown = this._shown();
         if (!shown.length) {
             pane.innerHTML = `<div class="ess-settings-loading">${
                 this._q ? 'nothing matches that' : 'nothing declared here'}</div>`;

@@ -215,6 +215,26 @@ then produced the strip — "1 line in local/rig.tcl rejected — the default is
 in force for this", attributed to `dserv` — and clearing it emptied the
 strip again.
 
+**Open-at-section, and "declared only".**
+
+- `openSettingsModal('juicer')` opens straight at one subsystem, applied
+  after the load and only if that subsystem declares anything (a rig that
+  never started the juicer would otherwise open on an empty pane). Its first
+  caller is the juicer's own dialog, which now carries a **⚙ All juicer
+  settings** hand-off in its footer — the useful half of step 5 without
+  replacing UI that works: that dialog knows about pumps and pins, the gear
+  knows every juicer knob and where each value came from.
+- **"declared only"** filters to `file`/`runtime`, i.e. everything this rig
+  has DECIDED — 5 of 16 here, on one screen, which is the form the question
+  takes when comparing two rigs. It shares the filter's widen-to-All rule:
+  narrowing a section to nothing while matches exist elsewhere shows those
+  instead of an empty pane.
+- Clearing a knob under "declared only" has to make its row LEAVE, so the
+  pane rebuilds when the visible SET changes and updates in place otherwise
+  — extio-config's structure/values split, for the same reason (a rebuild
+  loses half-typed text). Verified: ↺ on the throwaway knob dropped its row
+  and took its nav count 1/1 → 0, leaving the other five alone.
+
 ## 2. The calibration wizard
 
 **Do not fold this into the gear.** A settings modal is a form: read, render,

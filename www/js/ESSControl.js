@@ -2056,6 +2056,9 @@ updateConfigRunButtons() {
                     <div class="ess-juicer-modal-error" id="ess-juicer-modal-error" hidden></div>
                 </div>
                 <div class="ess-modal-footer">
+                    <button class="ess-modal-btn ess-modal-link" id="ess-juicer-all-settings"
+                            type="button" title="every juicer knob this rig declares, with its provenance">⚙ All juicer settings</button>
+                    <div class="ess-modal-footer-spacer"></div>
                     <button class="ess-modal-btn" id="ess-juicer-rescan" type="button">Rescan</button>
                     <button class="ess-modal-btn cancel" type="button">Close</button>
                 </div>
@@ -2237,6 +2240,15 @@ updateConfigRunButtons() {
             if (e.target === modal) closeModal();
         });
         rescanBtn.addEventListener('click', () => refresh('juicer_rescan'));
+        // Hand off rather than duplicate: this dialog knows about pumps and
+        // pins, the gear knows about every juicer knob and where each value
+        // came from. Guarded because ESSControl.js is also loaded by pages
+        // that do not ship the gear.
+        modal.querySelector('#ess-juicer-all-settings').addEventListener('click', () => {
+            if (typeof openSettingsModal !== 'function') return;
+            closeModal();
+            openSettingsModal('juicer');
+        });
         handmlSetBtn.addEventListener('click', () => setHandMl());
         handmlInput.addEventListener('keydown', (e) => {
             if (e.key === 'Enter') {
