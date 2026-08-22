@@ -537,13 +537,41 @@ Verified against the teensy on the dev Mac: two labelled members offered as
 selecting a row wrote the route and the badge went `file`; ↺ removed it and
 `local/rig.tcl` came back byte-identical.
 
-**Next, and the one that actually removes the errors:** capture. A "press it
-now" mode that watches the live DI events, catches the bit that fired, and
-fills in the durable route for the button under your finger. Enumeration
-still asks someone to recognise the right row; capture does not.
-`button_group_fan` already does the bit→label mapping at runtime, so the
-mechanism exists. Same trick for the analog groups: wiggle the axis, and the
-group that moved is the one you meant.
+### Capture — DONE (2026-08-22)
+
+Enumeration still asks someone to recognise the right row, and the rows are
+`btn_left`, `btn_right` and `select` on a box whose lid is closed. Pressing
+the button cannot be misrecognised.
+
+`::ess::input_capture_arm button ?ms?` snapshots every box's DI and group
+state, subscribes to both, and publishes `ess/inputs/capture` —
+`state armed|captured|timeout|cancelled`, and on a hit the same fields a
+candidate carries. The gear's **Press…** button arms it, waits, and writes
+what fired.
+
+Two decisions worth keeping:
+
+- **Polarity-agnostic.** A press reads 1 or 0 depending on `pins/active_low`
+  and what the firmware normalises, so capture takes the first CHANGE from
+  the state at arm time rather than a rising edge. Nothing has to know which
+  way round a particular switch is wired. Snapshotting at arm is what stops
+  an already-held button from capturing the instant it is armed.
+- **`dpointAddScript`, not `SetScript`.** Those group datapoints may already
+  carry a live button's or the joystick's dispatcher, and taking them over
+  for the duration would unbind a running rig in order to configure it.
+
+A capture always resolves to the DURABLE form when the pin is a labelled
+group member — press the button, get `box:*/response/btn_left`, not
+`box:box01/0`.
+
+Verified on box01 (raspberrypi), four times: armed from Tcl and from the
+gear, pressing left and right, each returning the correct labelled route
+with `status ok`; the browser path filled the field and the badge went
+`file`; the timeout path rendered its guidance and reset the button. Driven
+against a throwaway knob, and `local/rig.tcl` was left as found.
+
+**Still worth doing:** the same trick for analog groups — wiggle the axis,
+and the group that moved is the one you meant.
 
 ## Sequencing
 

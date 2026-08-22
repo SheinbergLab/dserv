@@ -6334,3 +6334,19 @@ select.ess-param-select {
     color: var(--ess-warning);
     white-space: nowrap;
 }
+
+/* "Press…" — learn a route by pressing the button on the box */
+.ess-settings-learn {
+    white-space: nowrap;
+}
+
+.ess-settings-learn.waiting {
+    color: var(--ess-warning);
+    border-color: var(--ess-warning);
+    animation: ess-learn-pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes ess-learn-pulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.45; }
+}

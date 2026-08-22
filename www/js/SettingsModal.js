@@ -492,6 +492,12 @@ class SettingsModal {
             ? `<button class="ess-mini-btn ess-settings-picker" type="button"${dis}
                        title="choose from what this rig's boxes are announcing now">Pick…</button>`
             : '';
+        // Only `button` routes can be captured: pressing names one input.
+        // A group or an output is not something you can press.
+        const learn = k.candidates === 'button'
+            ? `<button class="ess-mini-btn ess-settings-learn" type="button"${dis}
+                       title="press the button on the box and it names itself">Press…</button>`
+            : '';
 
         const numeric = (type === 'int' || type === 'double');
         // step MUST be explicit for a double. A number input with no step
@@ -504,6 +510,7 @@ class SettingsModal {
             <input type="${numeric ? 'number' : 'text'}" class="ess-modal-input ess-settings-input"
                    ${step}
                    value="${this._escAttr(k.value)}"${dis}>
+            ${learn}
             ${pick}
             <button class="ess-mini-btn ess-settings-set" type="button"${dis}>Set</button>
         </div>`;
@@ -555,6 +562,8 @@ class SettingsModal {
         if (pinBtn) pinBtn.addEventListener('click', () => this._pin(k));
         const pickBtn = row.querySelector('.ess-settings-picker');
         if (pickBtn) pickBtn.addEventListener('click', () => this._pick(k));
+        const learnBtn = row.querySelector('.ess-settings-learn');
+        if (learnBtn) learnBtn.addEventListener('click', () => this._learn(k, learnBtn));
         const input = row.querySelector('.ess-settings-input');
         const setBtn = row.querySelector('.ess-settings-set');
         if (!input || k.interp === null) return;
@@ -696,6 +705,50 @@ class SettingsModal {
             });
         });
         document.body.appendChild(sheet);
+    }
+
+    /*
+     * Learn a route by pressing the thing. ESS arms, watches every box's DI
+     * and group events, and publishes what fired — as the DURABLE route when
+     * the pin is a labelled group member, which is the whole reason to do
+     * this rather than read a number off the lid.
+     *
+     * The page only subscribes and waits: which datapoint counts as a press,
+     * and what a press means, are the box-and-binding knowledge that belongs
+     * on the ESS side.
+     */
+    async _learn(k, btn) {
+        const row = this._overlay.querySelector('#' + this._rowId(k));
+        const errEl = row.querySelector('.ess-settings-err');
+        this._showErr(errEl, '');
+        const was = btn.textContent;
+        btn.textContent = 'press it…';
+        btn.classList.add('waiting');
+
+        let unsub = null;
+        const done = () => {
+            if (unsub) { unsub(); unsub = null; }
+            btn.textContent = was;
+            btn.classList.remove('waiting');
+        };
+        unsub = this.dpManager.subscribe('ess/inputs/capture', (d) => {
+            const c = TclParser.parseDict(String(d.data ?? d.value ?? ''));
+            if (!c.state || c.state === 'armed') return;
+            done();
+            if (c.state === 'captured') {
+                this.log(`captured ${c.label} → ${c.route}`, 'info');
+                this._put(k, c.route);
+            } else if (c.state === 'timeout') {
+                this._showErr(errEl, c.detail || 'nothing was pressed');
+            }
+        });
+        try {
+            await this.connection.evalAsync(
+                'send ess {::ess::input_capture_arm button 30000}');
+        } catch (e) {
+            done();
+            this._showErr(errEl, e.message);
+        }
     }
 
     _pickStatusTitle(c) {

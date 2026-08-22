@@ -1285,6 +1285,159 @@ namespace eval ess {
         return $out
     }
 
+    ########################################################################
+    # CAPTURE -- name a route by PRESSING the thing
+    #
+    # Enumerating still asks someone to recognise the right row, and the rows
+    # are `btn_left` and `btn_right` and `select` on a box whose lid is
+    # closed. Pressing the button cannot be misrecognised: whatever fired is
+    # what the subject will press.
+    #
+    # Polarity-agnostic by design. A press might read 1 or 0 depending on
+    # pins/active_low and what the firmware normalises, so this captures the
+    # first CHANGE from the state at arm time rather than a rising edge --
+    # nothing here has to know which way round a particular switch is wired.
+    # Snapshotting at arm is what stops a button that is already held (or a
+    # mask already set) from capturing the instant it is armed.
+    #
+    # Publishes ess/inputs/capture: state armed|captured|timeout|cancelled,
+    # and on a hit the same fields a candidate carries, so a page can treat
+    # the two identically.
+    ########################################################################
+    variable capture
+    array set capture { active 0 kind "" after "" pats {} }
+    variable capture_pre
+    array set capture_pre {}
+
+    proc input_capture_publish { args } {
+        catch { dservSet ess/inputs/capture $args }
+    }
+
+    proc input_capture_arm { {kind button} {timeout_ms 20000} } {
+        variable capture; variable capture_pre; variable io_class
+        input_capture_cancel quiet          ;# never two armed at once
+        array unset capture_pre
+        foreach k [dservKeys $io_class/*/state/di/*] {
+            catch { set capture_pre($k) [dservGet $k] }
+        }
+        foreach dev [input_boxes] {
+            foreach g [input_box_groups $dev] {
+                set dp $io_class/$dev/state/group/$g
+                catch { set capture_pre($dp) [dservGet $dp] }
+            }
+        }
+        set capture(active) 1
+        set capture(kind)   $kind
+        set capture(pats)   {}
+        # dpointAddScript, not SetScript: the same group datapoints may
+        # already carry the joystick's or a button's dispatcher, and taking
+        # those over for the duration would unbind a live rig to configure it.
+        foreach pat [list $io_class/*/state/di/* $io_class/*/state/group/*] {
+            dservAddMatch $pat
+            dpointAddScript $pat ::ess::input_capture_event
+            lappend capture(pats) $pat
+        }
+        set capture(after) [dservAfter $timeout_ms ::ess::input_capture_timeout]
+        input_capture_publish state armed kind $kind
+        return armed
+    }
+
+    proc input_capture_disarm {} {
+        variable capture
+        if { !$capture(active) } return
+        foreach pat $capture(pats) {
+            catch { dpointRemoveScript $pat ::ess::input_capture_event }
+            catch { dservRemoveMatch $pat }
+        }
+        if { $capture(after) ne "" } { catch { dservAfterCancel $capture(after) } }
+        set capture(active) 0
+        set capture(after)  ""
+        set capture(pats)   {}
+        return
+    }
+
+    proc input_capture_cancel { {how loud} } {
+        variable capture
+        if { !$capture(active) } { return "not capturing" }
+        input_capture_disarm
+        if { $how ne "quiet" } { input_capture_publish state cancelled }
+        return cancelled
+    }
+
+    proc input_capture_timeout { args } {
+        variable capture
+        if { !$capture(active) } return
+        input_capture_disarm
+        input_capture_publish state timeout \
+            detail "nothing was pressed -- arm it again and press the button"
+        return
+    }
+
+    proc input_capture_event { dpoint data } {
+        variable capture; variable capture_pre
+        if { !$capture(active) } return
+        set parts [split $dpoint /]
+        # <io>/<dev>/state/di/<pin> or <io>/<dev>/state/group/<label>; the
+        # group's CONFIG leaves (pins, idx, quiet, settle_ms) are longer and
+        # are not events
+        if { [llength $parts] != 5 } return
+        set dev  [lindex $parts 1]
+        set what [lindex $parts 3]
+        set leaf [lindex $parts 4]
+        if { $what ni {di group} } return
+
+        set prev [expr {[info exists capture_pre($dpoint)] ? $capture_pre($dpoint) : ""}]
+        set capture_pre($dpoint) $data
+        if { $prev eq "" || $data eq $prev } return     ;# no change: not a press
+
+        if { $what eq "di" } {
+            input_capture_hit $dev $leaf
+            return
+        }
+        # A group event is a MASK: the bit that changed names the member,
+        # and the member's position in the group's pin list names the pin.
+        if { ![string is integer -strict $data] ||
+             ![string is integer -strict $prev] } return
+        set diff [expr {int($data) ^ int($prev)}]
+        if { $diff == 0 } return
+        set bit 0
+        while { !($diff & 1) } { set diff [expr {$diff >> 1}]; incr bit }
+        set pins [input_commalist [lindex $parts 0]/$dev/state/group/$leaf/pins]
+        if { $bit >= [llength $pins] } return
+        input_capture_hit $dev [lindex $pins $bit] $leaf
+        return
+    }
+
+    # Turn "this pin on this box moved" into the route someone should keep:
+    # the labelled group member if there is one -- the form that survives a
+    # box swap -- and only otherwise the pin number.
+    proc input_capture_hit { dev pin {grp ""} } {
+        set route ""; set label ""; set detail ""
+        if { $grp eq "" } {
+            foreach g [input_box_groups $dev] {
+                set pins [input_commalist [set ::ess::io_class]/$dev/state/group/$g/pins]
+                if { $pin in $pins } { set grp $g; break }
+            }
+        }
+        set lab [expr {$grp ne "" ? [input_pin_label $dev $pin] : ""}]
+        if { $grp ne "" && $lab ne "" } {
+            set route "box:*/$grp/$lab"
+            set label "$grp / $lab"
+            set detail "$dev pin $pin"
+        } else {
+            set route "box:$dev/$pin"
+            set plab [input_pin_label $dev $pin]
+            set label [expr {$plab ne "" ? "$dev $plab (pin $pin)" : "$dev pin $pin"}]
+            set detail "routed by pin number, which does not survive a box swap"
+        }
+        input_capture_disarm
+        set r [input_route_resolve button $route]
+        input_capture_publish state captured route $route label $label \
+            detail $detail status [dict get $r status] durable \
+            [expr {[string match "box:\\*/*" $route] ? 1 : 0}]
+        return $route
+    }
+
     proc button_group_map {dpoint} {
 	variable button_group_maps
 	if {[info exists button_group_maps($dpoint)]} { return $button_group_maps($dpoint) }
