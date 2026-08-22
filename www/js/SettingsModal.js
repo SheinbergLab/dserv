@@ -385,6 +385,11 @@ class SettingsModal {
      */
     static get SECTION_ACTIONS() {
         return {
+            sound: [{
+                label: '♪ Test sound…',
+                title: 'play a few notes and show which output actually opened',
+                run: (self) => self._showSoundTest()
+            }],
             joystick: [{
                 label: '⟲ Calibrate stick…',
                 title: 'measure this stick — rest, axes, throw — into the calibration db',
@@ -657,8 +662,15 @@ class SettingsModal {
         this._showErr(errEl, '');
         let cands;
         try {
+            // A kind may name the interp that knows it: `sound:device`.
+            // Bare kinds are ess's, which is where the box routes live.
+            // Each subsystem enumerating its own beats one interp reaching
+            // across to ask the others.
+            const [who, kind] = k.candidates.includes(':')
+                ? k.candidates.split(':') : ['ess', k.candidates];
+            const ns = who === 'ess' ? '::ess' : `::${who}`;
             const reply = await this.connection.evalAsync(
-                `send ess {::ess::candidates ${k.candidates}}`);
+                `send ${who} {${ns}::candidates ${kind}}`);
             cands = TclParser.parseList(reply).map(c => TclParser.parseDict(c));
         } catch (e) {
             this._showErr(errEl, e.message);
@@ -851,6 +863,97 @@ class SettingsModal {
         });
         document.body.appendChild(sheet);
         grid();
+    }
+
+    /*
+     * Play something, and say which output it went to.
+     *
+     * Sound fails SILENTLY here in two ways that look identical from a GUI:
+     * a local/sound.tcl that exists but never calls an init leaves the synth
+     * unstarted, and ALSA `default` on a Pi is the HDMI feeding the stimulus
+     * display. Both present as "no sound" with nothing logged. So the test
+     * reports three things the datapoints already carry -- what the rig
+     * DECLARED, what was actually opened, and what class of device that is --
+     * and then makes a noise.
+     */
+    _showSoundTest() {
+        const sheet = document.createElement('div');
+        sheet.className = 'ess-modal-overlay ess-pick-overlay';
+        sheet.innerHTML = `
+            <div class="ess-modal ess-pick-modal">
+                <div class="ess-modal-header">
+                    <span class="ess-modal-title">Test sound</span>
+                    <button class="ess-modal-close" type="button">×</button>
+                </div>
+                <div class="ess-modal-body ess-pick-body">
+                    <div class="ess-cal-kvs" id="ess-snd-kv"></div>
+                    <div class="ess-settings-note" id="ess-snd-note"></div>
+                    <div class="ess-settings-err" id="ess-snd-err" hidden></div>
+                </div>
+                <div class="ess-modal-footer">
+                    <span class="ess-settings-note">changing the output takes effect at the next restart</span>
+                    <button class="ess-modal-btn primary" id="ess-snd-play" type="button">Play</button>
+                    <button class="ess-modal-btn cancel" type="button">Close</button>
+                </div>
+            </div>`;
+        const close = () => sheet.remove();
+        sheet.querySelector('.ess-modal-close').addEventListener('click', close);
+        sheet.querySelector('.ess-modal-btn.cancel').addEventListener('click', close);
+        sheet.addEventListener('click', (e) => { if (e.target === sheet) close(); });
+
+        const render = async () => {
+            const get = async (dp) => {
+                try {
+                    return (await this.connection.evalAsync(
+                        `if {[dservExists ${dp}]} { dservGet ${dp} } else { list "" }`)).trim();
+                } catch (e) { return ''; }
+            };
+            const declared = (this._knobs.find(k => k.sub === 'sound' && k.key === 'device') || {}).value || '';
+            const requested = await get('sound/audio/requested');
+            const klass = await get('sound/audio/class');
+            const rows = [
+                ['declared', declared || 'auto'],
+                ['opened', requested || '(none)'],
+                ['class', klass || '(none)']
+            ];
+            sheet.querySelector('#ess-snd-kv').innerHTML = rows.map(([k2, v]) =>
+                `<div class="ess-cal-kv"><span>${k2}</span><b>${this._esc(v)}</b></div>`).join('');
+            const note = sheet.querySelector('#ess-snd-note');
+            if (!requested || klass === 'failed') {
+                note.textContent = 'The synth never started — nothing will be audible. '
+                    + 'A local/sound.tcl that exists but does not call an init does this, '
+                    + 'and it logs nothing.';
+            } else if (klass === 'hdmi') {
+                note.textContent = 'This output is HDMI — on a rig that is usually the '
+                    + 'stimulus display, not a speaker.';
+            } else if (declared && declared !== 'auto' && declared !== requested) {
+                note.textContent = `Declared "${declared}" but "${requested}" is what opened `
+                    + '— the declaration takes effect at the next restart.';
+            } else {
+                note.textContent = '';
+            }
+        };
+
+        sheet.querySelector('#ess-snd-play').addEventListener('click', async () => {
+            const err = sheet.querySelector('#ess-snd-err');
+            err.hidden = true;
+            try {
+                // three ascending notes: one is ambiguous with a click or a
+                // pop, three in a row is unmistakably the synth
+                for (const p of [60, 64, 67]) {
+                    await this.connection.evalAsync(`send sound {soundPlay 1 ${p} 200}`);
+                    await new Promise(r => setTimeout(r, 220));
+                }
+                this.log('sound test: played 3 notes', 'info');
+            } catch (e) {
+                err.textContent = e.message;
+                err.hidden = false;
+            }
+            render();
+        });
+
+        document.body.appendChild(sheet);
+        render();
     }
 
     _pickStatusTitle(c) {

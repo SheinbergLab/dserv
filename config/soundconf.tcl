@@ -477,7 +477,39 @@ pcm.dserv_shared { type plug slave.pcm \"dserv_dmix\" }
 # restart and the doc says so.
 #
 package require settings
+
+#
+# What outputs this host actually has, for the settings picker and the test.
+# The same shape the box-route candidates use, so one picker renders both.
+#
+# /proc/asound is the source, which means a Linux rig enumerates and a Mac
+# comes back with just auto/default -- correct, since coreaudio has no PCM
+# list here and `auto` is what resolve_device does with it.
+#
+proc ::sound::candidates { kind } {
+    if { $kind ne "device" } { error "sound candidates: unknown kind '$kind'" }
+    set out {}
+    lappend out [dict create route auto label auto \
+                     detail "resolve a real output -- prefers a USB card over\
+                             the system default, which on a Pi is the HDMI\
+                             feeding the stimulus display" \
+                     durable 1 selectable 1 status ok address ""]
+    lappend out [dict create route default label default \
+                     detail "ALSA's own default, whatever that is on this box" \
+                     durable 1 selectable 1 status ok address ""]
+    foreach p [::sound::list_playback_pcms] {
+        set dev "plughw:CARD=[dict get $p id],DEV=[dict get $p dev]"
+        set class [::sound::classify_pcm $p]
+        lappend out [dict create route $dev label $dev \
+                         detail "$class -- [dict get $p name]" \
+                         durable 1 selectable 1 status ok \
+                         address [dict get $p drv]]
+    }
+    return $out
+}
+
 settings::declare sound device -default auto \
+    -candidates sound:device \
     -doc "which audio output the software synth opens. auto resolves a real
 playback PCM (never blindly ALSA `default`, which on a Pi is the
 HDMI driving the stimulus display); `default` forces ALSA's; or
