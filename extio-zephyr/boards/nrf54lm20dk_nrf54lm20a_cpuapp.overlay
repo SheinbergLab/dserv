@@ -2,10 +2,19 @@
  * extio-zephyr on the Nordic nRF54LM20 DK — SCOUT, written 2026-08-22 before the
  * board arrived. Builds; nothing here has run on silicon.
  *
- * Box pin n IS EXPANSION-HEADER POSITION n. This board carries a
- * `nordic,expansion-board-header` (22 positions, 0-21), NOT an Arduino header
- * and NOT the XIAO's D0-D27 connector — so the identity that makes sense here
- * is the one the board itself prints.
+ * Box pin n IS EXPANSION-HEADER POSITION n (P17, silk 00-21). This board
+ * carries a `nordic,expansion-board-header`, NOT an Arduino header and NOT the
+ * XIAO's D0-D27 connector.
+ *
+ * WHY NUMBER FROM THE EXPANSION HEADER when the DK is otherwise a raw-port
+ * board (P1 = PORT0, P2/P3 = PORT1, P4 = PORT2, P5 = PORT3): because BOX_NPINS
+ * is 30 and this part has ~70 port pins, so SOMETHING has to choose 30 of them,
+ * and P17 is the one contiguous connector the board itself models with a
+ * gpio-map. Numbering from the ports would mean inventing a selection and a
+ * numbering, which is how you get a map nobody can predict.
+ *
+ * The cost is that box-pin numbers are not port numbers here, and the silk
+ * column below is what pays it -- port.pin first, expansion position second.
  *
  * CONSEQUENCE, STATED UP FRONT: a DI/ain group config does NOT transfer between
  * this DK and a XIAO, nor between this DK and the MCXN947 rigs, even though the
@@ -65,11 +74,43 @@
 			    <&gpio1  8 GPIO_ACTIVE_LOW>,   /* 28 = BTN3 */
 			    <&gpio0  5 GPIO_ACTIVE_LOW>;   /* 29 = BTN4 */
 
-		box-pin-silk = "P0","P1","P2","P3","P4","P5","P6","P7","P8","P9",
-			       "P10","P11","P12","P13","P14","P15","P16","P17",
-			       "P18","P19","P20","P21",
-			       "LED1","LED2","LED3","LED4",
-			       "BTN1","BTN2","BTN3","BTN4";
+		/* ---- SILK: PORT.PIN FIRST, expansion position second ----
+		 *
+		 * Corrected 2026-08-22 from the board artwork, before the board even
+		 * arrived, and for the same reason the nRF52840 DK's map was wrong:
+		 * this is a NORDIC board and it speaks Nordic port names. Five of its
+		 * six headers are raw ports -- P1 = PORT0 00-09, P2 = PORT1 00-15,
+		 * P3 = PORT1 16-31, P4 = PORT2 00-10, P5 = PORT3 00-12 -- and only
+		 * P17 is the Expansion connector this map is numbered from.
+		 *
+		 * So the port.pin comes FIRST: it is globally unique, it is what
+		 * Nordic's docs use, and it is what is printed at the OTHER place the
+		 * same electrical pin is reachable. The expansion position follows in
+		 * parentheses because that is the hole on P17.
+		 *
+		 * The naive "P0".."P21" this replaced was wrong twice over: it is not
+		 * printed anywhere, and it collides head-on with PORT0's own 00-09.
+		 *
+		 * EVERY PIN HERE IS REACHABLE FROM TWO PLACES, which is the thing to
+		 * carry to the bench: box pin 0 is P17 position 00 AND P5 pin 05, the
+		 * same wire either way. That is convenient and it is also how two
+		 * jumpers end up on one net. */
+		box-pin-silk = "P3.05 (EXP00)","P3.04 (EXP01)","P1.02 (EXP02)",
+			       "P1.03 (EXP03)","P1.04 (EXP04)","P1.13 (EXP05)",
+			       "P3.00 (EXP06)","P3.01 (EXP07)","P0.03 (EXP08)",
+			       "P0.04 (EXP09)","P3.02 (EXP10)","P3.03 (EXP11)",
+			       "P1.07 (EXP12)","P1.06 (EXP13)","P1.05 (EXP14)",
+			       "P3.06 (EXP15)","P2.00 (EXP16)","P2.01 (EXP17)",
+			       "P2.02 (EXP18)","P2.03 (EXP19)","P2.04 (EXP20)",
+			       "P2.05 (EXP21)",
+			       /* LEDs and buttons are NOT off-header here -- unlike the
+				* nRF52840 DK, where they cost no field pin. Every one of
+				* these also appears on the PORT1/PORT0 headers, so driving
+				* box pin 22 drives P1.22 on header P3 as well. Anyone
+				* wiring to those holes is fighting an LED or a button. */
+			       "LED1 (P1.22)","LED2 (P1.25)","LED3 (P1.27)",
+			       "LED4 (P1.28)","BTN1 (P1.26)","BTN2 (P1.09)",
+			       "BTN3 (P1.08)","BTN4 (P0.05)";
 
 		/* NO box-ain-pins, and no box-ain-silk, DELIBERATELY -- see the ADC
 		 * note below. Absent means box_adc.c treats every channel as a
