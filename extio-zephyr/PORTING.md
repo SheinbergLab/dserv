@@ -6276,3 +6276,31 @@ Result: MCUboot 39,820 B (62% of the 62 KB boot partition), app 141,084 B (15%
 of the 920 KB slot0), all three OTA Kconfigs present in the app image.
 `xiao54lm20-ota` is back in `buildall.sh`, and **A/B OTA is now established on
 this board** — which was the one blocker against standardising on it.
+
+### Obs mirror — VALIDATED on the nRF52840 DK, 2026-08-22
+
+`obs pin 23` (LED2; LED1 stays the boot heartbeat, same reasoning as the
+MCXN947 keeping obs off its heartbeat LED — a boot flash and "the rig is in an
+observation period" must never be the same light).
+
+Driving `ess/in_obs` from dserv toggled the box's own `state/in_obs` 3/3 cycles,
+and **the LED was observed flashing** — so the whole chain is confirmed, host to
+photons: dserv forwards `ess/in_obs` (extioconf's `dservAddMatch ->
+usbio_forward`), the box drives box pin 23 through `box_gpio_obs_mirror()`, and
+it publishes its OWN live copy back. That last hop is the one worth having: it
+updates only when THIS box received the edge, so agreement between `ess/in_obs`
+and `extio/box/state/in_obs` is evidence of propagation rather than dserv
+reading back its own belief.
+
+WHAT THIS DOES NOT MEASURE, since the two keys agree by construction: the box
+stamps its echo with `m->timestamp` — the INBOUND frame's time. So this proves
+faithful propagation of the obs epoch (which is what the `at`/`at_abs` schedule
+classes anchor on) and says nothing about latency. A round-trip number needs the
+box's own clock in the loop, i.e. the sync anchor that is still open above.
+
+NOT YET TESTED on this board: `sync pin N`, the hardware obs-sync INPUT latched
+in the DI ISR (`sync_edge[]`) rather than published through the normal DI path.
+That is the half that lets a box anchor its clock to the rig's obs edge instead
+of trusting frame arrival, and it is what would resolve the UNALIGNED state.
+On a DK it needs one jumper: `pin 0 mode out` wired to `sync pin 1` (D0->D1,
+adjacent, both free in this config), making `do 0 1` a synthetic obs edge.
