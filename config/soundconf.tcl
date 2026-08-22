@@ -476,6 +476,14 @@ pcm.dserv_shared { type plug slave.pcm \"dserv_dmix\" }
 # something to do from a settings write, so a change lands at the next
 # restart and the doc says so.
 #
+# EACH SUBPROCESS GETS ITS OWN INTERPRETER, so the module path dsconf sets
+# for the main interp is not inherited -- without this, `package require
+# settings` fails with "can't find package settings" and takes the REST of
+# this file with it: no init_hardware, no init_software, no local/sound.tcl,
+# and a rig with no audio at all. Which is exactly what it did to
+# raspberrypi. emconf.tcl and sliderconf.tcl carry the same line for the
+# same reason.
+tcl::tm::add $dspath/lib
 package require settings
 
 #
