@@ -222,9 +222,67 @@ proc ::rig::adopt_and_export {sub key envvar} {
     return $v
 }
 
-::rig::adopt_and_export stim     host      ESS_RMT_HOST
-::rig::adopt_and_export registry url       ESS_REGISTRY_URL
-::rig::adopt_and_export registry workgroup ESS_WORKGROUP
+#
+# ---- the ESS paths -------------------------------------------------------
+#
+# Where the systems live, where data is written, where exports go. Same
+# class as the two above: read by ess, scripts, configs and df, distributed
+# by the environment, and set until now in local/pre-systemdir.tcl and
+# local/pre-datafiles.tcl by hand.
+#
+# EMPTY is the default and means "do not export" -- ess-2.0.tm then uses its
+# own built-in default. A rig that has never declared these behaves exactly
+# as it did, and the gear shows `default` rather than a path someone might
+# think is in force.
+#
+# Not validated for EXISTENCE, deliberately: an installer may create the
+# directory after this runs, and refusing here would trade a legible warning
+# for an aborted boot. The check happens below, where it can say so.
+#
+proc ::rig::_norm_path { v } {
+    set v [string trim $v]
+    if { $v eq "" } { return "" }
+    if { [file pathtype $v] ne "absolute" } {
+        error "path '$v' must be absolute -- it is read by subprocesses whose\
+               working directory is not yours"
+    }
+    return [string trimright $v /]
+}
+
+settings::declare ess system_path -default "" \
+    -validate ::rig::_norm_path \
+    -doc "where ESS looks for systems (ESS_SYSTEM_PATH). Empty uses the
+built-in default, /usr/local/dserv/systems. This is the one path
+whose absence is loud: with no systems tree the boot system does
+not load and ESS comes up empty."
+
+settings::declare ess data_dir -default "" \
+    -validate ::rig::_norm_path \
+    -doc "where raw data files are written (ESS_DATA_DIR). Empty uses the
+built-in default."
+
+settings::declare ess export_path -default "" \
+    -validate ::rig::_norm_path \
+    -doc "where exports are written (ESS_EXPORT_PATH). Empty uses the
+built-in default."
+
+::rig::adopt_and_export stim     host        ESS_RMT_HOST
+::rig::adopt_and_export registry url         ESS_REGISTRY_URL
+::rig::adopt_and_export registry workgroup   ESS_WORKGROUP
+::rig::adopt_and_export ess      system_path ESS_SYSTEM_PATH
+::rig::adopt_and_export ess      data_dir    ESS_DATA_DIR
+::rig::adopt_and_export ess      export_path ESS_EXPORT_PATH
+
+# A declared systems path that is not there is worth one loud line at boot:
+# it is the difference between "ESS is empty because nothing is configured"
+# and "ESS is empty because it was pointed somewhere that does not exist",
+# and those look identical from a page.
+if { [info exists ::env(ESS_SYSTEM_PATH)] && ![file isdirectory $::env(ESS_SYSTEM_PATH)] } {
+    puts stderr "rig_settings: WARNING ESS_SYSTEM_PATH '$::env(ESS_SYSTEM_PATH)'\
+ is not a directory -- no system will load"
+    catch { dservSet system/warning \
+                "ESS_SYSTEM_PATH '$::env(ESS_SYSTEM_PATH)' is not a directory" }
+}
 
 # Name the files this replaced, once, at boot. They are still sourced (they
 # run before this file) and they are now overridden, so a rig that keeps them

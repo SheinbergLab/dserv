@@ -43,6 +43,7 @@ package require ess_registry
 package require ess_validation
 package require ess_sync
 package require settingsdb   ;# persist stable per-box settings across restarts
+package require settings     ;# `ess boot_system` is DECLARED (see the load below)
 
 ess::registry::init_from_dserv
 
@@ -373,8 +374,38 @@ foreach f [glob -nocomplain [file join $dspath local post-*.tcl]] {
     source $f
 }
 
-# and finally load a default system
-ess::load_system emcalib
+#
+# and finally load the rig's boot system.
+#
+# `emcalib` was hardcoded here, pointing into the systems tree that ships
+# with dserv -- so a rig whose ESS_SYSTEM_PATH holds something else, or
+# nothing yet, hit a load failure at boot. Declared instead, and empty is a
+# real answer: a fresh box with no systems yet should come up idle, not
+# broken.
+#
+# NON-FATAL, which is the point. load_system reports every failure path and
+# then RE-RAISES, and this file is a subprocess config -- so an unloadable
+# boot system used to abort the rest of essconf, taking refresh_subjects and
+# set_subject with it. The rig then had no system AND no subject, which
+# looks like a much deeper failure than "the named system did not load".
+#
+settings::declare ess boot_system -default emcalib \
+    -doc "system to load at boot, from ESS_SYSTEM_PATH. Empty loads none,
+which is what a fresh rig with no systems synced yet wants. A
+failure here is reported and survivable: ESS comes up idle rather
+than half-configured."
+
+set _boot [::settings::get ess boot_system]
+if { $_boot ne "" } {
+    if { [catch { ess::load_system $_boot } _err] } {
+        puts stderr "essconf: boot system '$_boot' did not load: $_err"
+        catch { dservSet ess/boot_error \
+                    "boot system '$_boot' did not load: $_err" }
+    } else {
+        catch { dservSet ess/boot_error "" }
+    }
+}
+unset -nocomplain _boot _err
 
 # Pull the workgroup's subject list from the registry. This OVERRIDES the
 # env/hardcoded default that ess-2.0.tm set during load (which stays the
