@@ -1236,14 +1236,23 @@ namespace eval ess {
                                       load; check `ess system_path`" \
                               durable 0 status unresolved address $root]]
         }
+        set project $::ess::current(project)
         foreach d [lsort [glob -nocomplain -tails -directory $root -types d *]] {
             if { $d eq "lib" } continue          ;# shared code, not a system
+            # A directory named after the PROJECT, inside the project
+            # directory, is a leftover of the older layout -- <path>/ess/ess.
+            # It is not a system and never was one.
+            if { $d eq $project } continue
             set sysfile [file join $root $d $d.tcl]
             set ok [file exists $sysfile]
+            # `selectable` rather than silence: a directory that looks like a
+            # system and cannot load is worth SEEING -- that is where someone
+            # whose system is missing will look first -- but it must not be
+            # offerable, because choosing it can only fail.
             lappend out [dict create route $d label $d \
                              detail [expr {$ok ? "$root/$d" :
                                            "no $d.tcl -- not a loadable system"}] \
-                             durable 1 \
+                             durable 1 selectable [expr {$ok ? 1 : 0}] \
                              status [expr {$ok ? "ok" : "unresolved"}] \
                              address $sysfile]
         }

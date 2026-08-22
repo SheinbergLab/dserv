@@ -286,10 +286,56 @@ proc ::rig::_apply_system_path { v } {
         set p /usr/local/dserv/systems
         catch { unset ::env(ESS_SYSTEM_PATH) }
     }
-    push ess "set ::ess::system_path [list $p]
-              catch { dservSet ess/systems \
-                  [list [lsort [glob -nocomplain -tails \
-                      -directory [file join $p ess] -types d *]]] }"
+    #
+    # Changing where systems come from has to be a RESET, not just a new
+    # string. Four things move with it:
+    #
+    #   the module path -- set_project re-adds <path>/<project>/lib, or the
+    #       old tree's lib keeps answering package requires;
+    #   the loaded system -- if the new tree does not contain it, the rig is
+    #       claiming to run something that is no longer there. Unload it and
+    #       say so: idle and honest beats loaded and unfindable. Nothing is
+    #       auto-loaded in its place, because silently starting a DIFFERENT
+    #       system on a path change would be the worse surprise;
+    #   ess/systems -- the System dropdown reads it, and ESS only republishes
+    #       it inside load_system, so without this the menu still offers the
+    #       old tree's systems (blinky, from the shipped tree) long after the
+    #       path moved;
+    #   the same judgement the picker uses -- a directory with no
+    #       <name>.tcl, or one named after the project, is not a system.
+    #
+    # Sent as a BRACED script: it runs in ess, where current(project) and
+    # system_path are, rather than being interpolated from here.
+    #
+    push ess "set ::ess::system_path [list $p]"
+    push ess {
+        catch { ::ess::set_project $::ess::current(project) }
+
+        set _sys $::ess::current(system)
+        set _root [file join $::ess::system_path $::ess::current(project)]
+        if { $_sys ne "" &&
+             ![file exists [file join $_root $_sys $_sys.tcl]] } {
+            catch { ::ess::unload_system }
+            # unload_system clears current() and publishes NOTHING: ess/system
+            # and friends are written by config/triggers.tcl from the event
+            # stream (ID/SYSTEM, type 18), which only a LOAD emits. So after a
+            # standalone unload every page still shows the system that is no
+            # longer there. Say the true thing here.
+            foreach _dp {ess/system ess/protocol ess/variant} {
+                catch { dservSet $_dp "" }
+            }
+            catch { dservSet system/warning \
+                        "'$_sys' is not in $::ess::system_path -- unloaded" }
+        }
+
+        set _l {}
+        foreach _d [lsort [glob -nocomplain -tails -directory $_root -types d *]] {
+            if { $_d eq "lib" || $_d eq $::ess::current(project) } continue
+            if { [file exists [file join $_root $_d $_d.tcl]] } { lappend _l $_d }
+        }
+        catch { dservSet ess/systems $_l }
+        unset -nocomplain _sys _root _l _d _dp
+    }
     catch { dservSet system/warning \
         [expr {[file isdirectory [file join $p ess]] ? "" :
                "ESS_SYSTEM_PATH '$p' has no ess/ subdirectory -- nothing will load"}] }

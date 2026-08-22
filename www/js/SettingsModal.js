@@ -683,7 +683,8 @@ class SettingsModal {
                 </div>
                 <div class="ess-modal-body ess-pick-body">
                     ${cands.map((c, i) => `
-                        <div class="ess-pick-row${c.route === k.value ? ' current' : ''}" data-i="${i}">
+                        <div class="ess-pick-row${c.route === k.value ? ' current' : ''}${
+                            c.selectable === '0' ? ' unselectable' : ''}" data-i="${i}">
                             <div class="ess-pick-main">
                                 <span class="ess-pick-label">${this._esc(c.label || c.route)}</span>
                                 <span class="ess-pick-route">${this._esc(c.route)}</span>
@@ -709,6 +710,11 @@ class SettingsModal {
         sheet.querySelector('.ess-modal-btn.cancel').addEventListener('click', close);
         sheet.addEventListener('click', (e) => { if (e.target === sheet) close(); });
         sheet.querySelectorAll('.ess-pick-row').forEach(el => {
+            // A candidate the enumerator marked unselectable is shown and
+            // not offered: choosing it could only fail, and hiding it would
+            // leave someone hunting for a system that IS there and is not
+            // loadable.
+            if (el.classList.contains('unselectable')) return;
             el.addEventListener('click', () => {
                 const c = cands[Number(el.dataset.i)];
                 close();

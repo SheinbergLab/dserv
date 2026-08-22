@@ -6350,3 +6350,15 @@ select.ess-param-select {
     0%, 100% { opacity: 1; }
     50%      { opacity: 0.45; }
 }
+
+/* a candidate that is shown but cannot be chosen (e.g. a directory with no
+   <system>.tcl in it) -- visible, because that is where someone whose
+   system is missing will look, but not offerable */
+.ess-pick-row.unselectable {
+    cursor: default;
+    opacity: 0.55;
+}
+
+.ess-pick-row.unselectable:hover {
+    background: none;
+}
