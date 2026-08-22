@@ -266,6 +266,9 @@ namespace eval slider {
     # since the last mark for that reason.
     variable cal_window 100
 
+    # publish slider/cal/live every Nth sample (200 Hz -> 20 Hz)
+    variable cal_live_every 10
+
     proc cal_reset_accum {} {
         variable cal
         set cal(n) 0
@@ -280,6 +283,7 @@ namespace eval slider {
     proc cal_feed { cols } {
         variable cal
         variable cal_window
+        variable cal_live_every
         if { !$cal(active) } return
         set i 0
         foreach v $cols {
@@ -299,6 +303,24 @@ namespace eval slider {
         }
         incr cal(n)
         set cal(ncol) $i
+
+        # A live view of the RAW COLUMNS while calibrating, for the wizard.
+        #
+        # slider/raw cannot serve: it carries chan_x/chan_y AFTER selection,
+        # and which columns those are is precisely what calibration decides
+        # -- so during it, the column that matters may be one slider/raw is
+        # not publishing. This is the whole vector.
+        #
+        # It is also the honest answer to "is the stick streaming at all?",
+        # the commonest failure here (an on-change ain group publishes
+        # NOTHING at rest, so a rest mark has nothing to average). A sample
+        # count that climbs says yes before any mark is attempted.
+        #
+        # Throttled 1-in-N: cal_feed is the 200 Hz+ path, and a datapoint per
+        # sample would be a publish storm for a readout no eye can follow.
+        if { $cal(n) % $cal_live_every == 0 } {
+            dservSet slider/cal/live [list n $cal(n) cols $cols]
+        }
     }
 
     proc cal_publish {} {

@@ -367,6 +367,35 @@ class SettingsModal {
         return this._shown().map(k => `${k.sub}/${k.key}`).join(',');
     }
 
+    /*
+     * Per-section actions: a knob is a value, but some subsystems also have
+     * a PROCEDURE, and the section someone opens to set `joystick transport`
+     * is where they will look for "calibrate the stick". A table rather than
+     * embedded logic, so the panel stays schema-driven and the next wizard
+     * is one line. Declared/measured stay separate — the action opens its
+     * own window, it does not write a setting.
+     */
+    static get SECTION_ACTIONS() {
+        return {
+            joystick: [{
+                label: '⟲ Calibrate stick…',
+                title: 'measure this stick — rest, axes, throw — into the calibration db',
+                available: () => typeof openSliderCalModal === 'function',
+                run: () => openSliderCalModal()
+            }]
+        };
+    }
+
+    _actionsHtml(sub) {
+        const acts = (SettingsModal.SECTION_ACTIONS[sub] || [])
+            .filter(a => !a.available || a.available());
+        if (!acts.length) return '';
+        return `<div class="ess-settings-actions">${acts.map((a, i) =>
+            `<button class="ess-modal-btn ess-modal-link" data-action="${sub}:${i}"
+                     type="button" title="${this._escAttr(a.title || '')}">${this._esc(a.label)}</button>`
+        ).join('')}</div>`;
+    }
+
     _renderPane() {
         const pane = this._overlay.querySelector('#ess-settings-pane');
         const shown = this._shown();
@@ -381,11 +410,18 @@ class SettingsModal {
         pane.innerHTML = subs.map(sub => `
             <div class="ess-settings-group">
                 ${subs.length > 1 ? `<div class="ess-settings-group-title">${this._esc(sub)}</div>` : ''}
+                ${this._actionsHtml(sub)}
                 ${shown.filter(k => k.sub === sub).map(k => this._rowHtml(k)).join('')}
             </div>
         `).join('');
         pane.scrollTop = 0;
         shown.forEach(k => this._wireRow(k));
+        pane.querySelectorAll('[data-action]').forEach(btn => {
+            const [sub, i] = btn.dataset.action.split(':');
+            const act = (SettingsModal.SECTION_ACTIONS[sub] || [])
+                .filter(a => !a.available || a.available())[Number(i)];
+            if (act) btn.addEventListener('click', () => act.run());
+        });
     }
 
     _rowId(k) { return `ess-set-${k.sub}-${k.key}`.replace(/[^\w-]/g, '_'); }

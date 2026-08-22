@@ -931,6 +931,24 @@ function openSettingsModal(section = null) {
     settingsModal.open(section);
 }
 
+let sliderCalModal = null;
+
+/**
+ * Open the stick calibration wizard (a SEQUENCE with the operator's hands
+ * in it — see SliderCalModal.js). Measured values land in the calibration
+ * db, never in local/slider.tcl.
+ */
+function openSliderCalModal() {
+    if (!connection || !connection.connected) {
+        log('Cannot calibrate: not connected to dserv', 'error');
+        return;
+    }
+    if (!sliderCalModal) {
+        sliderCalModal = new SliderCalModal({ connection, dpManager, log });
+    }
+    sliderCalModal.open();
+}
+
 /**
  * Parse juicer juice_level string for low sensor state
  */

@@ -5948,3 +5948,261 @@ select.ess-param-select {
     color: var(--ess-warning);
     align-self: center;
 }
+
+/* ── Stick calibration wizard (SliderCalModal.js) ─────────────────────── */
+
+.ess-cal-modal {
+    width: 560px;
+    height: min(72vh, 640px);
+}
+
+.ess-cal-body {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+/* the live readout: a dead one is the answer to the commonest failure, so
+   it sits above everything and is never hidden */
+.ess-cal-live {
+    border: 1px solid var(--ess-border);
+    border-radius: 4px;
+    padding: 8px 10px;
+    flex: 0 0 auto;
+}
+
+.ess-cal-live.ok {
+    border-color: var(--ess-success);
+}
+
+.ess-cal-live-head {
+    display: flex;
+    justify-content: space-between;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    color: var(--ess-text-muted);
+    margin-bottom: 6px;
+}
+
+.ess-cal-live.ok .ess-cal-live-head span:first-child {
+    color: var(--ess-success);
+}
+
+.ess-cal-cols {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    font-family: 'SF Mono', Monaco, Consolas, monospace;
+    font-size: 12px;
+    color: var(--ess-text-primary);
+    min-height: 16px;
+}
+
+.ess-cal-col b {
+    color: var(--ess-text-muted);
+    font-weight: 500;
+    margin-right: 3px;
+}
+
+.ess-cal-live-warn,
+.ess-cal-guidance {
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--ess-warning);
+    white-space: pre-wrap;
+    margin-top: 6px;
+}
+
+.ess-cal-guidance {
+    border-left: 2px solid var(--ess-warning);
+    padding-left: 8px;
+    margin: 0;
+}
+
+.ess-cal-intro p {
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--ess-text-muted);
+    margin: 0 0 10px 0;
+}
+
+.ess-cal-steps {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.ess-cal-step {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px;
+    border-radius: 4px;
+    opacity: 0.55;
+}
+
+.ess-cal-step.next {
+    background: var(--ess-bg-panel);
+    opacity: 1;
+}
+
+.ess-cal-step.done {
+    opacity: 1;
+}
+
+.ess-cal-step-mark {
+    width: 12px;
+    color: var(--ess-success);
+}
+
+.ess-cal-step.next .ess-cal-step-mark {
+    color: var(--ess-accent);
+}
+
+.ess-cal-step-body {
+    flex: 1;
+    min-width: 0;
+}
+
+.ess-cal-step-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--ess-text-primary);
+}
+
+.ess-cal-step-prompt {
+    font-size: 11px;
+    color: var(--ess-text-muted);
+}
+
+.ess-cal-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 4px;
+}
+
+.ess-modal-btn.primary {
+    color: var(--ess-accent);
+    border-color: var(--ess-accent);
+}
+
+.ess-cal-result-head {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--ess-success);
+    margin-bottom: 6px;
+}
+
+.ess-cal-kvs {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px 12px;
+}
+
+.ess-cal-kv {
+    display: flex;
+    justify-content: space-between;
+    font-size: 11px;
+    color: var(--ess-text-muted);
+}
+
+.ess-cal-kv b {
+    color: var(--ess-text-primary);
+    font-family: 'SF Mono', Monaco, Consolas, monospace;
+}
+
+/* the 8-direction check: derived is not confirmed */
+.ess-cal-confirm {
+    border-top: 1px solid var(--ess-border);
+    padding-top: 10px;
+    margin-top: 10px;
+}
+
+.ess-cal-confirm.idle {
+    font-size: 11px;
+    color: var(--ess-text-muted);
+    line-height: 1.5;
+}
+
+.ess-cal-confirm-head {
+    font-size: 12px;
+    color: var(--ess-text-primary);
+    margin-bottom: 8px;
+}
+
+.ess-cal-confirm-ok {
+    font-size: 12px;
+    color: var(--ess-success);
+    margin-top: 8px;
+}
+
+.ess-cal-dirs {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 4px;
+}
+
+.ess-cal-dir {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 5px 6px;
+    border: 1px solid var(--ess-border);
+    border-radius: 4px;
+    font-size: 10px;
+}
+
+.ess-cal-dir.want {
+    border-color: var(--ess-accent);
+}
+
+.ess-cal-dir.ok {
+    border-color: var(--ess-success);
+}
+
+.ess-cal-dir.bad {
+    border-color: var(--ess-error);
+}
+
+.ess-cal-dir-name {
+    color: var(--ess-text-muted);
+}
+
+.ess-cal-dir-got {
+    font-family: 'SF Mono', Monaco, Consolas, monospace;
+    color: var(--ess-text-primary);
+}
+
+.ess-cal-dir.bad .ess-cal-dir-got {
+    color: var(--ess-error);
+}
+
+.ess-cal-profile {
+    flex: 1;
+    font-size: 11px;
+    color: var(--ess-text-muted);
+    align-self: center;
+}
+
+.ess-cal-profile.warn {
+    color: var(--ess-warning);
+}
+
+/* a section's PROCEDURE, beside its knobs */
+.ess-settings-actions {
+    margin-bottom: 6px;
+}
+
+.ess-cal-note {
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--ess-text-muted);
+    margin-top: 8px;
+}
+
+.ess-cal-note code {
+    font-family: 'SF Mono', Monaco, Consolas, monospace;
+    color: var(--ess-accent);
+}

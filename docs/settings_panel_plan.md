@@ -277,6 +277,56 @@ per input or one device's mapping is forced onto the other. The wizard should
 show which profile it is about to write and refuse to guess when
 `local/slider.tcl` names none.
 
+### DONE (2026-08-21) — `www/js/SliderCalModal.js`
+
+Reached from the gear's `joystick` section (**⟲ Calibrate stick…**), through
+a small `SECTION_ACTIONS` table so the gear stays schema-driven and the next
+wizard is one line. A subsystem has knobs AND sometimes a procedure; the
+section someone opens to set `joystick transport` is where they look for
+"calibrate the stick".
+
+**One backend addition: `slider/cal/live`** — the raw COLUMN VECTOR plus a
+sample count, published from `cal_feed`, throttled 1-in-10 (200 Hz → 20 Hz)
+and only while calibrating. `slider/raw` cannot serve this, and the plan was
+wrong to suggest it: raw carries `chan_x`/`chan_y` AFTER selection, and which
+columns those are is exactly what calibration decides — during it, the column
+that matters may be one `slider/raw` is not publishing.
+
+Verified end-to-end on the dev Mac by feeding synthetic samples into
+`cal_feed` (the same entry point the hardware path uses) against a throwaway
+`_wizardtest` profile:
+
+- **The dead-stick case first.** With nothing streaming: "NO SAMPLES" and the
+  on-change explanation, before any mark is attempted. Feeding samples flips
+  it to "streaming" with the columns and a climbing count.
+- **A refusal is guidance.** A deliberately wobbly `right` push returned "the
+  stick was still MOVING (sd 120.0/0.0 counts over the last 40 samples). Hold
+  it steady, then mark." — rendered verbatim, `rest`/`up` still marked, and
+  `right` still the next step. A bad mark cost a re-mark.
+- **Apply** derived `chan_x 1 / chan_y 0`, centers 2000/2000, no inversion,
+  throw 500 counts — exactly what the synthetic pushes implied.
+- **The 8-direction check** correctly refused to fake it with no system
+  loaded: it needs `joystick_init` for `ess/joystick/dir`, and says so rather
+  than showing an inert grid.
+- **Closing the window cancels.** Abandoning a half-finished calibration is
+  the likeliest exit, so it is the safe one: `slider/cal/status` came back
+  "cancelled; previous settings restored" and `slider/settings` was identical.
+
+**Two findings from doing it on a real rig:**
+
+- **`local/slider.tcl` on the dev Mac declares MEASURED values by hand** —
+  centers, channel swap, full_scale — and the `default` db profile was
+  EMPTY. So `cal_cancel`/`load_calibration` cannot restore them: there is
+  nothing stored to restore, and only a restart re-reads the file. Not a bug
+  (apply is meant to replace them) but worth stating in the panel, so the
+  result now says the db wins from here and those file lines have stopped
+  being in force.
+- **This rig is exactly the two-input case the profile warning exists for**
+  (trackpad + extio stick, switched by `set INPUT` in the file) and its
+  profile is still `default`. The wizard names the profile it will write and
+  flags `default` in amber rather than refusing: it cannot detect a second
+  input, but it can refuse to be silent about where the measurement lands.
+
 ## 3. Rig facts SEVERAL interps read — and why main must declare them
 
 `joystick transport` and `juicer destination` are the easy shape: one
