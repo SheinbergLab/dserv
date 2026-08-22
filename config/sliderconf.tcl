@@ -222,6 +222,11 @@ namespace eval slider {
     proc limit_x_apply  {v} { set_param limit_x $v }
     proc limit_y_apply  {v} { set_param limit_y $v }
     proc set_swipe_threshold {t} { set_param swipe_threshold $t }
+    # The settings end of it. Missing until 2026-08-22, and invisible in both
+    # directions: the boot-time apply below is wrapped in a catch, so a rig
+    # that DECLARED swipe_threshold silently never got it, and a put from the
+    # gear wrote the file line and then failed on the apply.
+    proc swipe_threshold_apply {v} { set_param swipe_threshold $v }
 
     # Set current raw position as center. Call this when the slider is
     # physically parked at the experimentally-neutral position.
@@ -1203,9 +1208,15 @@ foreach { _k _def _doc } {
 } {
     ::settings::declare slider $_k -default $_def -type double \
         -doc $_doc -apply [list ::slider::${_k}_apply]
-    catch { ::slider::${_k}_apply [::settings::get slider $_k] }
+    # Say so rather than swallowing it. A blanket catch here hid a declared
+    # knob whose apply proc did not exist for as long as the knob has been
+    # declared: the rig ran on the compiled default and the settings tree
+    # showed the declared value, which is the worst pair to be shown.
+    if { [catch { ::slider::${_k}_apply [::settings::get slider $_k] } _e] } {
+        puts stderr "slider: declaration of '$_k' could not be applied: $_e"
+    }
 }
-unset -nocomplain _k _def _doc
+unset -nocomplain _k _def _doc _e
 
 ::settings::declare slider ain_group -default stick \
     -candidates analog \
