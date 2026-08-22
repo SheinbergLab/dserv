@@ -156,7 +156,7 @@ hold_ms 5000
 check "reached the band and woke the SM" [expr {$::UPDATES > $before}] 1
 check "timer stopped at commit" $::TIMER ""
 approx "committed angle is the spoke (right = 0 rad)" [::ess::dial_response] 0.0 0.01
-check "source recorded" [::ess::dial_source] dpad
+check "source recorded" [::ess::dial_source] sectors
 approx "committed at the target centre, not the near edge" [ptr_r] 10.0 0.2
 
 puts "\nrejected reach: the return is required, never warped:"
@@ -293,4 +293,26 @@ check "both sources refused" \
     [catch { ::ess::dial_init -sources {joystick dpad} }] 1
 
 puts ""
-if { $FAIL } { puts "FAILED"; exit 1 } else { puts "all checks passed" }
+
+#
+# The old spellings are the ones every existing protocol says, so they have
+# to keep working -- forever, not for a release. `-sources dpad` above is
+# already that test (it drove all of the above); this pins the mapping
+# itself, in both directions, so a future edit cannot quietly drop it.
+#
+puts "\nold source spellings still resolve:"
+foreach { old new } { stick ring  dpad sectors  astick rate } {
+    check "$old -> $new" [::ess::dial_source_norm $old] $new
+}
+check "a new name passes through" sectors [::ess::dial_source_norm sectors]
+check "settings validator normalizes too" {touch sectors} \
+    [::ess::dial_sources_norm {touch dpad}]
+check "and still rejects nonsense" 1 \
+    [catch { ::ess::dial_sources_norm {swipe nope} }]
+# the exclusion rules must see through the alias, or `{astick dpad}` -- one
+# hand driving the cursor two ways -- would slip past as two unlike words
+check "exclusions see through aliases" 1 \
+    [catch { ::ess::dial_sources_norm {astick dpad} }]
+
+if { $FAIL } { puts "FAILURES"; exit 1 }
+puts "all checks passed"

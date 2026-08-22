@@ -128,5 +128,29 @@ foreach kind {button joystick} {
     }
 }
 
+#
+# The DEVICE words a rig types. `analog` and `box_group` said how a value
+# travels; `stick` and `dpad` say what is wired, which is what a rig is
+# actually choosing between (docs/input_layer.md). Every rig file and every
+# GUI written against the old words has to keep working, so the mapping is
+# pinned here rather than left to a comment.
+#
+# Extracted from the source like everything else in this file: a copy of the
+# proc would pass while the real one rotted.
+#
+puts "\ntransport spellings, old and new:"
+set got [extract_proc joystick_transport_norm]
+if { $got eq "" } {
+    fail "could not extract joystick_transport_norm"
+} else {
+    proc ::ess::joystick_transport_norm [lindex $got 1] [lindex $got 2]
+    foreach { old want } { analog stick  box_group dpad  box dpad
+                           stick stick   dpad dpad       none none } {
+        set have [::ess::joystick_transport_norm $old]
+        if { $have eq $want } { ok "$old -> $want" } \
+        else { fail "$old -> $have (want $want)" }
+    }
+}
+
 puts ""
 if { $FAIL } { puts "FAILED"; exit 1 } else { puts "all checks passed" }

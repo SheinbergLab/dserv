@@ -11,11 +11,21 @@
 # That is why it lives beside ess-2.0.tm rather than inside it — the next
 # response mode gets its own file rather than growing the framework's.
 #
-# Sources: swipe | touch | joystick | mouse | stick | dpad | astick.
-# Three of them read an analog stick and they are NOT interchangeable:
-#   stick   deflection rotates a bearing; cursor pinned to the ring. 1-D.
-#   dpad    deflection quantized to 8 sectors; cursor walks out a spoke.
-#   astick  deflection IS the cursor's velocity; continuous, speed-graded.
+# Sources: swipe | touch | joystick | mouse | ring | sectors | rate.
+#
+# A source is a READING STRATEGY, not a device. Three of these read one
+# analog stick and they are NOT interchangeable:
+#   ring     deflection rotates a bearing; cursor pinned to the ring. 1-D.
+#   sectors  deflection quantized to 8 sectors; cursor walks out a spoke.
+#   rate     deflection IS the cursor's velocity; continuous, speed-graded.
+#
+# They were `stick`, `dpad` and `astick`, which borrowed DEVICE words for
+# strategies -- `dpad` here never meant a d-pad. Both spellings are accepted
+# and normalized at every door; docs/input_vocabulary.md has the rule. The
+# internal state variables keep their old names (dial_dpad_angle,
+# dial_astick_rate, dial_stick_angle) because they are tunables a rig may
+# already set: dial_dpad_* serves `sectors`, dial_astick_* serves `rate`,
+# dial_stick_* serves `ring`.
 #
 # The division of labour, which matters:
 #
@@ -551,26 +561,56 @@ namespace eval ess {
     # later as an error from whichever system happened to load first. The
     # settings contract is that a wrong declared value is rejected where it
     # is written, with a message that teaches.
+    #
+    # A dial source names a READING STRATEGY, not a device -- and the old
+    # names hid that. `stick`, `dpad` and `astick` are three ways of reading
+    # ONE analog stick, so `dpad` here never meant a d-pad, and the validator
+    # below had to say so in prose. The strategy words say what they do:
+    #
+    #     ring     deflection rotates a bearing; cursor pinned to the ring
+    #     sectors  deflection quantized to 8; cursor walks out a spoke
+    #     rate     deflection IS velocity; continuous, speed-graded
+    #
+    # Old spellings are accepted forever and normalized on the way in, so
+    # every protocol that says `-sources {swipe dpad}` keeps working.
+    # docs/input_vocabulary.md carries the device / contract / strategy rule.
+    #
+    variable dial_source_aliases
+    array set dial_source_aliases { stick ring  dpad sectors  astick rate }
+
+    variable dial_valid_sources { swipe touch joystick mouse ring sectors rate }
+
+    proc dial_source_norm { s } {
+        variable dial_source_aliases
+        return [expr {[info exists dial_source_aliases($s)]
+                      ? $dial_source_aliases($s) : $s}]
+    }
+
     proc dial_sources_norm { v } {
+        variable dial_valid_sources
         set v [string trim $v]
         if { $v eq "" } { return "" }
-        set valid {swipe touch joystick mouse stick dpad astick}
+        set out {}
         foreach s $v {
-            if { $s ni $valid } {
-                error "dial sources: unknown source '$s' -- want any of: $valid"
+            set s [dial_source_norm $s]
+            if { $s ni $dial_valid_sources } {
+                error "dial sources: unknown source '$s' -- want any of:\
+                       $dial_valid_sources"
             }
+            lappend out $s
         }
-        # swipe/stick/astick all read slider/position, and on an analog rig
-        # dpad's sectors are derived from that same stick, so any two of them
+        set v $out
+        # swipe/ring/rate all read slider/position, and on an analog rig
+        # `sectors` is derived from that same stick, so any two of them
         # would drive one cursor two ways.
-        set steering [lsearch -all -inline -regexp $v {^(swipe|stick|astick|dpad)$}]
+        set steering [lsearch -all -inline -regexp $v {^(swipe|ring|rate|sectors)$}]
         if { [llength $steering] > 1 } {
             error "dial sources: {$steering} are alternative readings of the\
                    same device -- choose one"
         }
-        if { "joystick" in $v && "dpad" in $v } {
-            error "dial sources: joystick and dpad are alternative readings of\
-                   the same switches -- choose one"
+        if { "joystick" in $v && "sectors" in $v } {
+            error "dial sources: joystick and sectors are alternative readings\
+                   of the same switches -- choose one"
         }
         return $v
     }
@@ -578,8 +618,11 @@ namespace eval ess {
     settings::declare dial sources -default "" \
         -validate ::ess::dial_sources_norm \
         -doc "which transports answer a dial: any combination of\
-              swipe touch joystick mouse stick dpad astick, first to commit\
-              wins. Empty leaves it to the protocol and the module default\
+              swipe touch joystick mouse ring sectors rate, first to commit\
+              wins. ring/sectors/rate are three READINGS of one analog stick\
+              (bearing / eight sectors / velocity); stick, dpad and astick\
+              are their old names and still work. Empty leaves it to the\
+              protocol and the module default\
               {swipe touch}. A protocol's own -sources still wins over this\
               (the joystick task names its own, because there the transport\
               IS the experiment)" \
@@ -609,6 +652,7 @@ namespace eval ess {
     proc dial_init { args } {
         variable dial_active
         variable dial_sources
+        variable dial_valid_sources
         variable dial_deadband_deg
         variable dial_arc_center
         variable dial_arc_halfwidth
@@ -730,29 +774,35 @@ namespace eval ess {
             }
         }
 
-        # swipe, stick and astick are three readings of ONE slider/position,
-        # and any two of them would fight over the same cursor. dpad joins
-        # the exclusion because on an analog rig its sectors are DERIVED
-        # from that same stick (::ess::joystick's analog transport), so
-        # dpad+astick is one hand driving the cursor two ways at once --
+        # Normalize the old spellings here too, not just in the settings
+        # validator: a protocol passes -sources directly, and `-sources
+        # {swipe dpad}` in an existing script has to keep meaning what it
+        # meant. One normalizer, both doors.
+        set dial_sources [lmap s $dial_sources { dial_source_norm $s }]
+
+        # swipe, ring and rate are three readings of ONE slider/position,
+        # and any two of them would fight over the same cursor. `sectors`
+        # joins the exclusion because on an analog rig its eight sectors are
+        # DERIVED from that same stick (::ess::joystick's stick transport),
+        # so sectors+rate is one hand driving the cursor two ways at once --
         # which reads on screen as a cursor that will not track.
         set steering [lsearch -all -inline -regexp $dial_sources \
-                          {^(swipe|stick|astick|dpad)$}]
+                          {^(swipe|ring|rate|sectors)$}]
         if { [llength $steering] > 1 } {
             error "::ess::dial_init: {$steering} are alternative readings of\
                    the same device -- choose one"
         }
         # Both read the same four switches: one reports a settled sector,
         # the other walks a cursor out along it.
-        if { "joystick" in $dial_sources && "dpad" in $dial_sources } {
-            error "::ess::dial_init: joystick and dpad are alternative\
+        if { "joystick" in $dial_sources && "sectors" in $dial_sources } {
+            error "::ess::dial_init: joystick and sectors are alternative\
                    readings of the same switches -- choose one"
         }
 
         foreach s $dial_sources {
-            if { $s ni {swipe touch joystick mouse stick dpad astick} } {
+            if { $s ni $dial_valid_sources } {
                 error "::ess::dial_init: unknown source '$s'\
-                       (want swipe|touch|joystick|mouse|stick|dpad|astick)"
+                       (want [join $dial_valid_sources |])"
             }
         }
 
@@ -769,7 +819,7 @@ namespace eval ess {
             dservAddExactMatch slider/position
             dpointAddScript    slider/position ::ess::dial_slider_sample
         }
-        if { "stick" in $dial_sources } {
+        if { "ring" in $dial_sources } {
             variable dial_stick_scale
             set dial_stick_scale 0.0
             dservAddExactMatch slider/position
@@ -778,7 +828,7 @@ namespace eval ess {
             dpointAddScript    $dial_stick_commit_dp ::ess::dial_stick_commit
         }
 
-        if { "astick" in $dial_sources } {
+        if { "rate" in $dial_sources } {
             variable dial_astick_x;       set dial_astick_x       0.0
             variable dial_astick_y;       set dial_astick_y       0.0
             variable dial_astick_last_ts; set dial_astick_last_ts 0
@@ -790,7 +840,7 @@ namespace eval ess {
             dpointAddScript    slider/position ::ess::dial_astick_sample
         }
 
-        if { "dpad" in $dial_sources } {
+        if { "sectors" in $dial_sources } {
             variable dial_dpad_r;      set dial_dpad_r      0.0
             variable dial_dpad_angle;  set dial_dpad_angle  -1.0
             variable dial_dpad_sector; set dial_dpad_sector -1
@@ -1074,9 +1124,9 @@ namespace eval ess {
         # measure against it. Only the ones that accept BY the band need a
         # tolerance as well.
         set needs_ring [expr {[llength [lsearch -all -inline \
-            -regexp $dial_sources {^(swipe|stick|astick|mouse|dpad|touch)$}]] > 0}]
+            -regexp $dial_sources {^(swipe|ring|rate|mouse|sectors|touch)$}]] > 0}]
         set needs_band [expr {[llength [lsearch -all -inline \
-            -regexp $dial_sources {^(mouse|dpad|astick|touch)$}]] > 0}]
+            -regexp $dial_sources {^(mouse|sectors|rate|touch)$}]] > 0}]
         if { $needs_ring && $dial_radius <= 0 } {
             error "::ess::dial_arm: this dial needs a ring radius --\
                    call dial_set_radius (the cursor is placed on it)"
@@ -1091,7 +1141,7 @@ namespace eval ess {
         # cursor that never leaves the origin looks exactly like a subject
         # who will not respond, which is the failure this file already calls
         # the worse one.
-        if { "astick" in $dial_sources } {
+        if { "rate" in $dial_sources } {
             variable dial_astick_scale
             if { $dial_astick_scale <= 0 } {
                 error "::ess::dial_astick: no full-scale deflection --\
@@ -1099,8 +1149,8 @@ namespace eval ess {
                        units; measure it, do not assume 2048 counts of throw)"
             }
         }
-        if { ("mouse" in $dial_sources) || ("dpad" in $dial_sources) ||
-             ("astick" in $dial_sources) } {
+        if { ("mouse" in $dial_sources) || ("sectors" in $dial_sources) ||
+             ("rate" in $dial_sources) } {
             if { "mouse" in $dial_sources } {
                 catch { send input "inputRecenter mouse" }
             }
@@ -1180,7 +1230,7 @@ namespace eval ess {
         set dial_report_source ""
         set dial_pending       ""
 
-        if { "dpad" in $dial_sources } {
+        if { "sectors" in $dial_sources } {
             variable dial_dpad_r
             variable dial_dpad_homing
             # Already home? Then there is nothing to walk back and the next
@@ -1205,7 +1255,7 @@ namespace eval ess {
         # inside the band under the subject's own steering. Retrying costs a
         # real journey in and out again, which is the same contingency the
         # dpad's homing creates by different means.
-        if { "astick" in $dial_sources } {
+        if { "rate" in $dial_sources } {
             variable dial_astick_reapproach
             variable dial_astick_x
             variable dial_astick_y
@@ -1872,7 +1922,7 @@ namespace eval ess {
              $dial_dpad_commit eq "ring" } {
             # Arriving IS the response: no second action to learn, and the
             # animal has watched the cursor earn it the whole way.
-            set dial_pending [list $dial_dpad_angle dpad]
+            set dial_pending [list $dial_dpad_angle sectors]
             dial_dpad_stop
             do_update
             return
@@ -2054,7 +2104,7 @@ namespace eval ess {
             # job, and doing it here would consume the window before the
             # protocol had read the answer out of it.
             set dial_astick_committed 1
-            set dial_pending [list $a astick]
+            set dial_pending [list $a rate]
             do_update
         }
     }
@@ -2224,7 +2274,7 @@ namespace eval ess {
         if { ![string is entier -strict $data] || $data == 0 } return
         if { !$dial_stick_moved } return   ;# nothing steered yet: not a response
 
-        set dial_pending [list [dial_clamp_arc $dial_stick_angle] stick]
+        set dial_pending [list [dial_clamp_arc $dial_stick_angle] ring]
         do_update
     }
 

@@ -1,5 +1,10 @@
 # Input Layer — Design
 
+> Naming: `docs/input_vocabulary.md` carries the device / contract / strategy
+> rule (why `joystick` is a contract, `stick`/`dpad` are devices, and
+> `ring`/`sectors`/`rate` are readings), plus the old spellings still
+> accepted. Worth reading before naming anything new here.
+
 Reorganization proposal for dserv's handling of kernel input devices
 (touchscreens, trackpads, and, eventually, additional contact / HID devices).
 Scope here is **reframing and reorganization without breaking existing

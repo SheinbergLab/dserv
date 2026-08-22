@@ -166,6 +166,13 @@ namespace eval ess {
             catch { joystick_publish_status }
             return $joystick_binding
         }
+        # `stick`/`dpad` are the device words the settings API and the docs
+        # now use; `analog`/`box` are what the resolver registry is keyed by
+        # and what rig files already say. Accept either here and speak the
+        # registry's language downstream, so a rig can be typed either way.
+        set kind [lindex $args 0]
+        if { $kind eq "stick" } { set args [lreplace $args 0 0 analog] }
+        if { $kind eq "dpad" }  { set args [lreplace $args 0 0 box] }
         if { [lindex $args 0] in {box analog} } { set args [linsert $args 0 {}] }
         set joystick_binding $args
         catch { joystick_publish_status }
@@ -189,12 +196,36 @@ namespace eval ess {
     # did -- this adds a way to say it, it does not take the old one away.
     #
     # See config/juicerconf.tcl for the same shape on `juicer destination`.
+    # The transport names a DEVICE KIND, and there are two words for that in
+    # this codebase and no others: `stick` (2-axis analog) and `dpad` (four
+    # switches). `analog` and `box_group` said how the value TRAVELS, which
+    # is not what a rig is choosing between; both are still accepted and
+    # normalized, so no rig file or GUI has to change. See docs/input_vocabulary.md
+    # for the device / contract / strategy split this belongs to.
+    # analog/box_group/box are the pre-2026-08-22 spellings. NB: no `;#`
+    # inside the switch list -- a braced switch body is a LIST, not a
+    # script, so a comment there becomes another pattern and the whole
+    # switch either errors ("extra switch pattern with no body") or, with an
+    # even word count, silently matches on the comment's words.
+    proc joystick_transport_norm { v } {
+        set v [string trim $v]
+        switch -exact -- $v {
+            analog    { return stick }
+            box_group { return dpad }
+            box       { return dpad }
+        }
+        return $v
+    }
+
     settings::declare joystick transport -default none \
-        -values {none analog box_group} \
-        -doc "what answers joystick_dir: `analog` reads the calibrated stick\
-              (slider/position) and quantizes it to eight sectors;\
-              `box_group` reads four switches as an extio chord group;\
-              `none` leaves the choice to whatever a protocol asks for" \
+        -values {none stick dpad} \
+        -validate ::ess::joystick_transport_norm \
+        -doc "which DEVICE answers joystick_dir: `stick` reads the calibrated\
+              analog stick (slider/position) and quantizes it to eight\
+              sectors; `dpad` reads four switches as an extio chord group;\
+              `none` leaves the choice to whatever a protocol asks for.\
+              (`analog` and `box_group` are the old names for stick and dpad\
+              and still work.)" \
         -apply {::ess::joystick_bind_from_settings}
 
     # Engage at this fraction of the stick's MEASURED travel
@@ -204,17 +235,17 @@ namespace eval ess {
     # in one afternoon, and any of them written here would go stale the
     # moment that stick was recalibrated.
     settings::declare joystick threshold_frac -default 0.40 -type double \
-        -doc "analog transport: deflection past this fraction of measured\
+        -doc "stick transport: deflection past this fraction of measured\
               travel reads as deflected (release is 0.6 of it)" \
         -apply {::ess::joystick_bind_from_settings}
 
     settings::declare joystick box_device -default * \
-        -doc "box_group transport: which box, or * to follow whichever is\
+        -doc "dpad transport: which box, or * to follow whichever is\
               present (hot-swap transparent)" \
         -apply {::ess::joystick_bind_from_settings}
 
     settings::declare joystick box_group -default joystick \
-        -doc "box_group transport: the chord group's label on the box, whose\
+        -doc "dpad transport: the chord group's label on the box, whose\
               members are labelled up/down/left/right" \
         -apply {::ess::joystick_bind_from_settings}
 
@@ -223,14 +254,14 @@ namespace eval ess {
     # rebuilds the same way.
     proc joystick_bind_from_settings { args } {
         if { [catch { ::settings::get joystick transport } t] } { return }
-        switch -exact -- $t {
+        switch -exact -- [joystick_transport_norm $t] {
             none {
                 # Deliberately NOT joystick_bind {} -- that would CLEAR an
                 # imperative binding a rig may still be relying on. `none`
                 # means "this rig does not declare one", not "there is none".
                 return
             }
-            analog {
+            stick {
                 set cfg {}
                 catch {
                     set tf [::settings::get joystick threshold_frac]
@@ -238,7 +269,7 @@ namespace eval ess {
                 }
                 joystick_bind analog $cfg
             }
-            box_group {
+            dpad {
                 set dev * ; set grp joystick
                 catch { set dev [::settings::get joystick box_device] }
                 catch { set grp [::settings::get joystick box_group] }

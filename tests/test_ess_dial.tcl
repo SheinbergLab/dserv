@@ -201,7 +201,7 @@ check "rig binding wins over the default" [dservGet ess/dial/sources] "mouse tou
 check "origin: rig"                       [dservGet ess/dial/source_origin] "rig"
 
 ::ess::dial_init -sources dpad -ring_tolerance 2.0   ;# protocol overrides
-check "protocol wins over the rig"  [dservGet ess/dial/sources] "dpad"
+check "protocol wins over the rig"  [dservGet ess/dial/sources] "sectors"
 check "origin: protocol"            [dservGet ess/dial/source_origin] "protocol"
 check "and the rig binding is still visible beside it" \
     [dservGet ess/dial/bound] "mouse touch"
