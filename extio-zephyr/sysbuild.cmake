@@ -33,6 +33,26 @@ if(EXISTS ${APP_DIR}/boards/${BOARD}_partitions.dtsi)
       CACHE INTERNAL "${BOARD} flash layout, shared with the app image")
 endif()
 
+# ---- per-board MCUboot Kconfig ----
+#
+# Same EXISTS-not-board-name convention as the partitions block above: a board
+# that needs to say something to MCUboot puts it in
+# sysbuild/mcuboot_<board>.conf and finding the file is what opts it in. The
+# BOARD string carries qualifiers (`xiao_nrf54lm20a/nrf54lm20a/cpuapp`), so
+# match on the leading board name rather than the whole thing.
+#
+# This is NOT the same lever as boards/<board>.conf, and the difference is the
+# thing worth remembering: those reach the APPLICATION image only. MCUboot is a
+# separate Zephyr application and never sees them, so a board whose devicetree
+# turns a driver on by default turns it on for the BOOTLOADER too -- where
+# MULTITHREADING=n means half the kernel API that driver calls does not exist.
+# See sysbuild/mcuboot_xiao_nrf54lm20a.conf for the link failure that taught us.
+string(REGEX REPLACE "/.*" "" _board_base "${BOARD}")
+if(EXISTS ${APP_DIR}/sysbuild/mcuboot_${_board_base}.conf)
+  set(mcuboot_EXTRA_CONF_FILE ${APP_DIR}/sysbuild/mcuboot_${_board_base}.conf
+      CACHE INTERNAL "${_board_base} MCUboot Kconfig")
+endif()
+
 # ---- cpu1 image on dual-core boards ----
 #
 # MCXN947 only: the cpu1 heartbeat app builds as a sibling image and the main

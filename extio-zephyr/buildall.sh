@@ -61,14 +61,12 @@ check teensy41-ota -b teensy41 -d build-check-teensy41-ota "$HERE" --sysbuild
 # has no bench to notice it rotting -- which is what happened to both Teensys
 # before +98, and they at least had a box on a desk.
 check nrf52840-ota -b nrf52840dk/nrf52840 -d build-check-nrf52840-ota "$HERE" --sysbuild
-# xiao54lm20-ota is OUT, and the reason is upstream, not ours: our app image
-# builds and signs fine (141,072 B), but the MCUboot image for this board fails
-# to LINK -- it compiles drivers/mfd/mfd_npm13xx.c and drivers/regulator against
-# a bootloader that has no k_work_submit / z_impl_k_mutex_* / z_impl_k_usleep.
-# So the plain build above is the honest claim for this board; A/B OTA is not
-# established on it. Same convention as rt1186: a target stays out of this list
-# until it actually passes.
-# check xiao54lm20-ota -b xiao_nrf54lm20a/nrf54lm20a/cpuapp -d build-check-xiao54lm20-ota "$HERE" --sysbuild
+# Back IN as of 2026-08-22. It was out for half a day because the MCUboot image
+# for this board would not LINK (mfd_npm13xx + regulator against a bootloader
+# with no k_work_submit); sysbuild/mcuboot_xiao_nrf54lm20a.conf fixes that at
+# the source. Keeping the OTA target here is the whole point -- the app image
+# signing successfully is exactly what hid the bootloader failure the first time.
+check xiao54lm20-ota -b xiao_nrf54lm20a/nrf54lm20a/cpuapp -d build-check-xiao54lm20-ota "$HERE" --sysbuild
 
 if [ -n "$FAILED" ]; then
   echo "!! broken targets:$FAILED" >&2

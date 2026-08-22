@@ -1,0 +1,61 @@
+/*
+ * extio-zephyr devicetree overlay for the FRDM-iMXRT1186 (CM33 core).
+ *
+ * FIRST-LIGHT / BUILD-ONLY. This is the minimum needed to make the app COMPILE
+ * on this board; nothing here has been near silicon. It is deliberately narrow:
+ * USB-CDC transport + a GPIO port, no Ethernet, no ADC, no PTP. Those come
+ * after the box boots and talks.
+ *
+ * WHY USB HAS TO BE DECLARED HERE AT ALL. box_net_usb.c is compiled
+ * UNCONDITIONALLY by CMakeLists ("common to every board"), so a board with no
+ * `zephyr_udc0` fails the build in DEVICE_DT_GET, not in some optional path.
+ * The SoC has the controller (nxp_rt118x.dtsi: usb1: usbd@2c80000 + usbphy1),
+ * and the sibling MIMXRT1180-EVK wires it up -- but frdm_imxrt1186's own DTS
+ * does NOT, so this is a board-support gap we fill rather than silicon we lack.
+ * Pattern copied from mimxrt1180_evk_mimxrt1189_cm33.dts.
+ */
+
+#include <zephyr/dt-bindings/gpio/gpio.h>
+
+/ {
+	aliases {
+		/*
+		 * box pin n -> gpio3.n. gpio3 carries the board's RGB LED
+		 * (blue_led = gpio3 7 in frdm_imxrt1186.dtsi), so pin 7 gives a
+		 * visible first-light signal the way the LED pin does on the
+		 * other boards.
+		 */
+		box-gpio-port = &gpio3;
+	};
+};
+
+zephyr_udc0: &usb1 {
+	status = "okay";
+	phy-handle = <&usbphy1>;
+
+	/*
+	 * ORDER IS PART OF THE CONTRACT -- console FIRST, data SECOND. Instance
+	 * order sets USB interface numbering, and the dserv host module finds
+	 * the data pipe at if02 on Linux / the *3 tty on macOS.
+	 * box_net_usb.c static-asserts it.
+	 */
+	cdc_acm_console: cdc_acm_uart0 {
+		compatible = "zephyr,cdc-acm-uart";
+	};
+
+	cdc_acm_data: cdc_acm_uart1 {
+		compatible = "zephyr,cdc-acm-uart";
+		/* match the 8 KB app rings in box_net_usb.c -- the 1024 B
+		 * defaults were one of the two stages behind the ~8-frame
+		 * burst cliff on the other boards */
+		rx-fifo-size = <8192>;
+		tx-fifo-size = <8192>;
+	};
+};
+
+&usbphy1 {
+	status = "okay";
+	tx-d-cal = <7>;
+	tx-cal-45-dp-ohms = <6>;
+	tx-cal-45-dm-ohms = <6>;
+};

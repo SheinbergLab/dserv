@@ -6185,3 +6185,94 @@ or unavailable, is a different product from the one the two-tier plan assumes.
   being dropped), which the box's own counters then contradicted.
 * The analog block decodes correctly: `mask 0x03, nchan 2, batch 12, rate 1000`
   with 12 int16 pairs, arriving every ~11.5-12.8 ms = the predicted 1000/12.
+
+## 2026-08-22 (end) — the clock fix that fit the requirement, and the XIAO's OTA unblocked
+
+### now_us(): keyed on the capability, not the board
+
+The dead clock above is fixed, and smaller than the nRF-TIMER design the
+previous section proposed — because the requirement turned out to be looser than
+assumed. These boxes are destined for BLE peripherals and in-cage trainers on
+small LiPos, NOT coin cells, and **+/-50 us is acceptable there**. That kills the
+dedicated 1 MHz TIMER on its merits: it pins HFCLK on and costs milliamps, to
+buy precision this tier does not need.
+
+`box_gpio.c` — the ONE call site in the tree that used `k_cycle_get_64()`:
+
+    static inline uint64_t now_us(void)
+    {
+    #if defined(CONFIG_TIMER_HAS_64BIT_CYCLE_COUNTER)
+    	return k_cyc_to_us_floor64(k_cycle_get_64());
+    #else
+    	return k_ticks_to_us_floor64(k_uptime_ticks());
+    #endif
+    }
+
+**The #if is on the Kconfig, not on CONFIG_BOARD_*, and that is the point.** A
+board-name test would need hand-extending for every future part, and the next
+one lacking the counter would fail the same silent way this one did — which is
+the entire failure mode being fixed. The Kconfig IS the question.
+
+Resolution, measured per board rather than assumed:
+
+| board | source | granularity |
+|---|---|---|
+| MCXN947 | 64-bit cycle counter | as before |
+| Teensy 4.0/4.1 | 64-bit cycle counter | as before |
+| XIAO nRF54LM20A | 64-bit cycle counter (GRTC selects it) | **unaffected — never had the bug** |
+| nRF52840 DK | ticks, 32768 Hz | **30.5 us** |
+
+Only the nRF52840 takes the fallback. Everything else is bit-for-bit unchanged.
+
+A corroboration worth recording, because it was visible before anyone looked:
+`state/dbg/usb_send_us` on the nRF52840 read 183 and 366 — both exact multiples
+of 30.5. Every duration this board reports has always been tick-quantised
+(they use `k_cycle_get_32()`, which is the same RTC); only the absolute
+timestamp was actually broken.
+
+**ON SILICON.** `now` went from `box 0.000000 s` to 9.191711 -> 11.496002 ->
+13.805328 s, monotonic and matching the 2 s intervals it was polled at. And the
+symptom that mattered: **all four DK buttons now publish, 4 events each.** The
+debounced pair (5 ms, box pins 26/27) had been silent through two separate
+sessions of pressing; they came back the moment the clock advanced, which is the
+proof that the debounce silence and the constant timestamps were one bug.
+Press durations 190-300 ms, inter-button gaps 780-900 ms, clean press/release
+pairs, no spurious edges.
+
+STILL OPEN, and stated because it is easy to over-read the result above: the box
+was **UNALIGNED** for that capture (`no anchor yet`), so those are dserv ARRIVAL
+stamps carrying USB and scheduler jitter, not box-side edge times. The event
+path is proven; box-side edge precision on this board is NOT yet demonstrated.
+The box had not re-anchored since its reflash even though dserv was attached
+throughout — the sync happens on connect and the connection outlived the box's
+reboot, which is the suspect.
+
+### The XIAO's MCUboot: fixed, and it was the board being well equipped
+
+`sysbuild/mcuboot_xiao_nrf54lm20a.conf` = `CONFIG_REGULATOR=n` + `CONFIG_MFD=n`,
+applied by an EXISTS test in sysbuild.cmake (same convention as the partitions
+block: a board opts in by having the file).
+
+The XIAO nRF54LM20A carries an **nPM1300 PMIC** — charger plus regulators, which
+is precisely what makes it a good LiPo box — and a fixed `power_en` regulator,
+both enabled in its board DTS. Zephyr's REGULATOR and MFD are `default y` when
+their nodes are enabled, and **that default applies to every image built for the
+board, including MCUboot**, which builds `MULTITHREADING=n` and so has no
+`k_work_submit`, `k_mutex_*` or `k_usleep` for those drivers to call.
+
+Two things worth carrying forward:
+
+* **`boards/<board>.conf` reaches the APPLICATION image only.** MCUboot is a
+  separate Zephyr application and never sees it. That is why the app-side
+  `CONFIG_REGULATOR=y` this board genuinely needs (the USB-HS PHY's VBUS
+  regulator) neither caused this nor could have fixed it — they are different
+  images answering the same Kconfig question differently.
+* **The app image signing successfully is what hid it.** `zephyr.signed.bin`
+  appeared at the expected size while the bootloader had not linked; only the
+  log said otherwise. Any board whose OTA target is not in `buildall.sh` can
+  carry this for months.
+
+Result: MCUboot 39,820 B (62% of the 62 KB boot partition), app 141,084 B (15%
+of the 920 KB slot0), all three OTA Kconfigs present in the app image.
+`xiao54lm20-ota` is back in `buildall.sh`, and **A/B OTA is now established on
+this board** — which was the one blocker against standardising on it.

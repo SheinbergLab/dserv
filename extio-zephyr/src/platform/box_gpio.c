@@ -73,10 +73,55 @@ static inline int box_gpio_reserved(int n)
 	return 0;
 }
 
-/* ---- high-resolution timestamp (box clock) ---- */
+/* ---- the box clock: THE monotonic microsecond source for every event ----
+ *
+ * Everything the box timestamps comes through here -- DI edges (from the ISR),
+ * the sync-pin latch, scheduled-event arming, and box_clock_stamp()'s box_us
+ * input. If this returns a constant, every timestamp the box publishes is a
+ * constant, and nothing else in the firmware notices.
+ *
+ * WHICH IS EXACTLY WHAT HAPPENED (2026-08-22, nRF52840 DK). This was
+ * unconditionally k_cyc_to_us_floor64(k_cycle_get_64()), and k_cycle_get_64()
+ * is only implemented when the timer driver selects
+ * CONFIG_TIMER_HAS_64BIT_CYCLE_COUNTER. The mcux, systick and nRF GRTC drivers
+ * do; the nRF52840's NRF_RTC_TIMER does NOT. So on that board this returned 0
+ * forever: console `now` read `box 0.000000 s` on a box up for minutes, every
+ * DI event carried the sync offset as its timestamp (a constant that LOOKS like
+ * a real time -- worse than the honest 0 an unsynced box sends), and every pin
+ * with debounce > 0 went permanently silent, because box_gpio_poll_di() routes
+ * debounced pins to a settle window measured against this clock while
+ * debounce-0 pins ride the FIFO and publish directly. Four buttons, two of
+ * each, 90 s of pressing: 42 events from the FIFO pair, zero from the other.
+ * Full autopsy in PORTING.md.
+ *
+ * KEYED ON THE CAPABILITY, NOT ON THE BOARD. A #if on CONFIG_BOARD_* would have
+ * to be extended by hand for every future part, and the next one to lack the
+ * counter would fail the same silent way -- which is the whole failure mode
+ * this comment exists to prevent. The Kconfig IS the question being asked.
+ *
+ * The fallback's resolution is the tick rate, not the cycle rate:
+ *
+ *     nRF52840   32768 Hz  ->  30.5 us   (this path)
+ *     XIAO 54LM20A / MCXN947 / Teensy    -> 64-bit cycle counter, unchanged
+ *
+ * 30.5 us is a DELIBERATE ACCEPTANCE for the Nordic tier, not an oversight:
+ * those boxes are destined for BLE peripherals and in-cage trainers where
+ * +/-50 us is fine, and buying microseconds means a dedicated nRF TIMER at
+ * 1 MHz -- which pins HFCLK on and costs milliamps on a battery box, for
+ * precision that tier does not need. A rig box that DOES need microseconds
+ * should be on silicon that has the counter (every other board here). If a
+ * Nordic box ever needs it too, add the TIMER behind this same function; do
+ * not widen the fallback and hope.
+ *
+ * k_uptime_ticks() is 64-bit, monotonic, ISR-safe and always implemented, so
+ * the fallback needs no wrap handling of its own. */
 static inline uint64_t now_us(void)
 {
+#if defined(CONFIG_TIMER_HAS_64BIT_CYCLE_COUNTER)
 	return k_cyc_to_us_floor64(k_cycle_get_64());
+#else
+	return k_ticks_to_us_floor64(k_uptime_ticks());
+#endif
 }
 
 /* ---- DI edge capture + debounce ---- */
