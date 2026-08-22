@@ -128,6 +128,18 @@
 &i2c0 { status = "disabled"; };
 &pwm0 { status = "disabled"; };
 
+/* NOT ENABLED, AND THAT IS A RESULT, NOT AN OVERSIGHT:
+ *
+ *     &systick { status = "okay"; };
+ *
+ * nrf52840.dtsi disables this node with the comment "Use RTC for system clock,
+ * instead of SysTick", and enabling it (plus CONFIG_NRF_RTC_TIMER=n) is the
+ * obvious cure for this board's dead box clock -- it builds, it genuinely turns
+ * on the 64-bit cycle counter, and the box then never finishes booting. Tried
+ * on hardware 2026-08-22; the autopsy is in boards/nrf52840dk_nrf52840.conf and
+ * PORTING.md. Left off so the board boots and its clock stays visibly broken,
+ * which is the more honest of the two. */
+
 /* console FIRST, data SECOND -- instance order sets USB interface numbering,
  * and the dserv host module finds the data pipe at if02 / the *3 tty.
  * box_net_usb.c static-asserts it. Same arrangement on every board here. */

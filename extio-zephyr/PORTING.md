@@ -6072,3 +6072,116 @@ Three costs, all upstream rather than ours:
 Note also that this board treats Kconfig warnings as FATAL, which is how the
 stray `CONFIG_UDC_NXP_EVENT_COUNT` in the common prj.conf was finally caught
 (see that file). The NXP and RT boards had been carrying it silently for months.
+
+## 2026-08-22 (later) — the nRF52840 has no box clock, and the obvious fix does not work
+
+Found by pressing four buttons. The scout looked complete — it booted,
+configured, persisted, sampled and published — and every timestamp it produced
+was worthless.
+
+### Symptoms, in the order they appeared
+
+**1. Every DI event carried an IDENTICAL timestamp.** 42 events over 90 s, all
+`t=1787376307553430` — which is exactly `state/sync/dserv_us`. Meanwhile
+`state/sync/box_us` read **0**.
+
+**2. Pins with `debounce > 0` published NOTHING.** Four DK buttons, box pins
+26-29, two configured `debounce 5` and two `debounce 0`, all four pressed
+repeatedly: 42 events from the debounce-0 pair, **zero** from the debounced
+pair, twice, across two separate sessions.
+
+**3. `now` said the box had been up for zero seconds.** Read twice, minutes
+apart, on a box whose watchdog counter was in the hundreds:
+
+    box    0.000000 s  (local monotonic, since boot)
+
+### One cause
+
+`box_gpio.c`'s `now_us()` is `k_cyc_to_us_floor64(k_cycle_get_64())`, and
+`k_cycle_get_64()` is only implemented when `CONFIG_TIMER_HAS_64BIT_CYCLE_COUNTER`
+is set. That symbol is `y` on the MCXN947 and both Teensys because their timer
+drivers select it. **The nRF default system timer, `NRF_RTC_TIMER`, never does.**
+So `now_us()` returned 0 on every call, forever, and both event symptoms follow:
+
+* `box_clock_stamp()` is `box_us + off + corr`; with `box_us` pinned at 0 it
+  returns the sync offset every time — a constant. **This is worse than the
+  unsynced 0**, which honestly means "dserv, arrival-stamp this". A constant
+  looks like a real time. Another field reporting memory instead of reality.
+* `box_gpio_poll_di()` sets `di_use_fifo[i] = (c->debounce_ms[i] == 0)`.
+  Debounce-0 pins ride the FIFO and publish directly; debounced pins take the
+  timed path and wait for a settle window measured against a clock that never
+  advances. They wait forever.
+
+Worth dwelling on how well this hid. With no host attached the stamps are 0,
+which is CORRECT behaviour for an unsynced box, so nothing looks wrong. With a
+host attached they become a plausible-looking absolute microsecond time. And a
+box whose undebounced inputs work is not obviously a box with no clock.
+
+### The obvious fix builds, turns on the right symbol, and bricks the boot
+
+    &systick { status = "okay"; };        /* nrf52840.dtsi disables it */
+    CONFIG_NRF_RTC_TIMER=n
+    CONFIG_CORTEX_M_SYSTICK=y
+    CONFIG_SYS_CLOCK_HW_CYCLES_PER_SEC=64000000
+
+This is not a guess that failed to compile — it compiles, and `.config` really
+does come out with `CONFIG_TIMER_HAS_64BIT_CYCLE_COUNTER=y`. On hardware the box
+**never finishes booting**: Zephyr prints its banner, and not one line of app
+output ever follows, for 50 s+, on 100% of resets.
+
+The diagnosis needed the debugger, and the reading is counter-intuitive:
+
+    PC = 00012DDC -> arch_cpu_idle+0x12
+    LR = 000161DD -> idle+0x15
+    IPSR = 000 (NoException)
+
+**Identical to a healthy box.** The kernel is fine and scheduling; it is `main`
+that is blocked — in `box_uplink_init()`, which brings up USB and which runs
+BEFORE `box_console_init()`, so the failure is necessarily silent. On this part
+USB depends on the HFCLK path the RTC participates in: **the nRF RTC is not a
+swappable system timer, it is load-bearing platform infrastructure.**
+
+Two smaller traps inside that attempt, both producing a build that looks fixed:
+
+* enabling the systick DT node *without* `NRF_RTC_TIMER=n` changes nothing at
+  all — the RTC still wins;
+* `NRF_RTC_TIMER=n` *without* the DT node leaves no system timer whatsoever:
+  `undefined reference to sys_clock_cycle_get_32`, at link, from `main`;
+* and the board defconfig hardcodes `SYS_CLOCK_HW_CYCLES_PER_SEC=32768` with
+  nothing recomputing it when the timer changes. Leave it and you get a wrong
+  cycles->us conversion AND no 64-bit counter, because
+  `CORTEX_M_SYSTICK_64BIT_CYCLE_COUNTER` is `default y if ... > 60000000`.
+
+**Reverted.** The board files boot, and the clock stays visibly broken, which is
+the more honest of the two states. Nothing in the tree now claims this board can
+timestamp.
+
+### What this costs the BLE plan, which is the real finding
+
+The fix that remains is a free-running nRF TIMER at 1 MHz behind a
+board-specific `now_us()`, with the RTC left as system timer. That is real work
+rather than a Kconfig line — and it is also **the only option compatible with
+the coin-cell peripheral NORDIC.md wants this silicon for**, since SysTick stops
+in low-power idle and the RTC gives 30.5 us granularity (32768 Hz) even when
+made to work.
+
+So on this part **low power and timestamp resolution are in direct tension**.
+The RP2350 and MCXN boxes never had to choose: they have both. NORDIC.md's
+entire case for Nordic is uA-class sleep, and that is precisely the axis that
+costs the timestamps. Settle this before nRF is committed to anything that
+timestamps behaviour — a battery button whose press time is quantised to 30 us,
+or unavailable, is a different product from the one the two-tier plan assumes.
+
+### Also established on hardware, incidentally
+
+* dserv discovers this box with no configuration: extioconf's ioreg match on
+  USB product `"extio USB box"` + the `*3` tty finds it, and `dservGet
+  extio/box/state/uplink` answers `usb`.
+* **Do not run a raw pipe reader while dserv holds the box.** Two readers on one
+  CDC split the byte stream: `host/rawpipe.py` reported `junk=3200` and an
+  apparent 9/s against the box's own ~83 blocks/s, and one decoded analog block
+  contained the next frame's header. None of that was the box or macOS. It also
+  produced a wrong intermediate conclusion (that the debounced pins were merely
+  being dropped), which the box's own counters then contradicted.
+* The analog block decodes correctly: `mask 0x03, nchan 2, batch 12, rate 1000`
+  with 12 int16 pairs, arriving every ~11.5-12.8 ms = the predicted 1000/12.
