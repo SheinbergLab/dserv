@@ -1222,6 +1222,14 @@ namespace eval ess {
                            protocol $current(protocol) \
                            variant  $current(variant)]
         dservSet ess/last_good_system $last_good
+        # Persist it, so `ess boot_system` can default to "what this rig was
+        # doing" instead of a name someone has to declare after every change
+        # of task. LEARNED, so the db is its home (config/essconf.tcl reads
+        # it at boot). Guarded rather than required: this module also loads
+        # in bare interps and in the unit tests, where settingsdb is absent.
+        if { [llength [info commands ::settingsdb::save]] } {
+            catch { ::settingsdb::save ess [list last_good $last_good] default }
+        }
         return $last_good
     }
 

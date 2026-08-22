@@ -389,23 +389,71 @@ foreach f [glob -nocomplain [file join $dspath local post-*.tcl]] {
 # set_subject with it. The rig then had no system AND no subject, which
 # looks like a much deeper failure than "the named system did not load".
 #
-settings::declare ess boot_system -default emcalib \
-    -doc "system to load at boot, from ESS_SYSTEM_PATH. Empty loads none,
-which is what a fresh rig with no systems synced yet wants. A
-failure here is reported and survivable: ESS comes up idle rather
-than half-configured."
+settings::declare ess boot_system -default "" \
+    -doc "what to load at boot: a system name, or `system protocol variant`.
+EMPTY (the default) means follow the rig: whatever it last loaded
+cleanly, else the stock bootstrap system. Declare one to pin it --
+a rig that must always come up on the same task should say so
+rather than depend on what someone last opened."
 
-set _boot [::settings::get ess boot_system]
+#
+# WHAT THIS RIG LAST RAN is LEARNED, not declared, so it lives in the
+# calibration db beside the other learned things -- and it is why a rig that
+# adopts the real system tree does not have to be told twice. Load planko
+# once, cleanly, and the next boot comes up on planko.
+#
+# ess-2.0.tm keeps last_good in memory, publishes ess/last_good_system and --
+# guarded on settingsdb being present -- saves it. It is written there, at
+# the point the fact is produced, rather than watched from here: a datapoint
+# an interp sets itself does not come back to that interp as an event -- and
+# more decisively, ::ess::init clears this interp's datapoint scripts on
+# every system load, so a binding made once at config time is gone the first
+# time anyone loads anything. Verified: bind, load, and dpointScripts no
+# longer lists it.
+#
+# The ladder, most specific first. Each rung is checked for EXISTENCE, so a
+# system that has been removed (or a db remembering one from another rig's
+# tree) falls through instead of failing the boot.
+proc ess_boot_target {} {
+    set declared [string trim [::settings::get ess boot_system]]
+    if { $declared ne "" } { return [list $declared declared] }
+
+    set stored ""
+    catch { set stored [dict get [::settingsdb::load ess default] last_good] }
+    if { [dict exists $stored system] } {
+        set s [dict get $stored system]
+        if { [file isdirectory [file join $::ess::system_path ess $s]] } {
+            set t $s
+            foreach k {protocol variant} {
+                if { [dict exists $stored $k] && [dict get $stored $k] ne "" } {
+                    lappend t [dict get $stored $k]
+                }
+            }
+            return [list $t "last loaded cleanly here"]
+        }
+    }
+
+    if { [file isdirectory [file join $::ess::system_path ess blinky]] } {
+        return [list blinky "the stock bootstrap system"]
+    }
+    return [list "" "nothing to load"]
+}
+
+lassign [ess_boot_target] _boot _why
 if { $_boot ne "" } {
-    if { [catch { ess::load_system $_boot } _err] } {
+    puts "essconf: loading '$_boot' ($_why)"
+    if { [catch { ess::load_system {*}$_boot } _err] } {
         puts stderr "essconf: boot system '$_boot' did not load: $_err"
         catch { dservSet ess/boot_error \
-                    "boot system '$_boot' did not load: $_err" }
+                    "boot system '$_boot' ($_why) did not load: $_err" }
     } else {
         catch { dservSet ess/boot_error "" }
     }
+} else {
+    puts "essconf: no system loaded ($_why)"
+    catch { dservSet ess/boot_error "" }
 }
-unset -nocomplain _boot _err
+unset -nocomplain _boot _why _err
 
 # Pull the workgroup's subject list from the registry. This OVERRIDES the
 # env/hardcoded default that ess-2.0.tm set during load (which stays the
