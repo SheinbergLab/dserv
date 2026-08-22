@@ -1,0 +1,171 @@
+/*
+ * extio-zephyr on a Seeed XIAO nRF54LM20A -- SCOUT PORT (build-only, 2026-08-22).
+ *
+ * Box pin n IS XIAO Dn. The board ships a `seeed,xiao-gpio` connector map
+ * (seeed_xiao_connector.dtsi) that plays exactly the role the Arduino header
+ * plays on the MCXN947 and the nRF52840 DK, so the identity convention carries
+ * to a third vendor's header without argument. D0-D27 = box pins 0-27; the pad
+ * assignments below are copied from that map, not from the silkscreen.
+ *
+ * NOTE the connector declares 28 positions. Which of them are actually brought
+ * to pads on the physical module -- edge castellations vs. bottom pads -- is a
+ * MODULE question this file does not answer. Check the XIAO pinout card before
+ * wiring; box_gpio.c will happily drive a pin the module does not expose.
+ */
+
+#include <zephyr/dt-bindings/gpio/gpio.h>
+#include <zephyr/dt-bindings/adc/adc.h>
+#include <zephyr/dt-bindings/adc/nrf-saadc.h>
+
+/ {
+	zephyr,user {
+		box-gpios = <&gpio1  0 0>,   /*  0 = D0  */
+			    <&gpio1 31 0>,   /*  1 = D1  */
+			    <&gpio1 30 0>,   /*  2 = D2  */
+			    <&gpio1 29 0>,   /*  3 = D3  */
+			    <&gpio1  3 0>,   /*  4 = D4  */
+			    <&gpio1  7 0>,   /*  5 = D5  */
+			    <&gpio1  8 0>,   /*  6 = D6  */
+			    <&gpio1  9 0>,   /*  7 = D7  */
+			    <&gpio1  4 0>,   /*  8 = D8  */
+			    <&gpio1  5 0>,   /*  9 = D9  */
+			    <&gpio1  6 0>,   /* 10 = D10 */
+			    <&gpio3  0 0>,   /* 11 = D11 */
+			    <&gpio3  1 0>,   /* 12 = D12 */
+			    <&gpio3  2 0>,   /* 13 = D13 */
+			    <&gpio3  3 0>,   /* 14 = D14 */
+			    <&gpio3  4 0>,   /* 15 = D15 */
+			    <&gpio3  5 0>,   /* 16 = D16 */
+			    <&gpio3  6 0>,   /* 17 = D17 */
+			    <&gpio3  7 0>,   /* 18 = D18 */
+			    <&gpio0  0 0>,   /* 19 = D19 */
+			    <&gpio0  1 0>,   /* 20 = D20 */
+			    <&gpio0  2 0>,   /* 21 = D21 */
+			    <&gpio0  3 0>,   /* 22 = D22 */
+			    <&gpio0  4 0>,   /* 23 = D23 */
+			    <&gpio0  5 0>,   /* 24 = D24 */
+			    <&gpio3  9 0>,   /* 25 = D25 */
+			    <&gpio3 10 0>,   /* 26 = D26 */
+			    <&gpio3 11 0>,   /* 27 = D27 */
+			    /* The module's own LED and button, which are NOT on
+			     * the D connector -- so they cost no field pin, and
+			     * they give LED_PIN/BTN_PIN somewhere real to land.
+			     * Without them main.c's #else chain would put the
+			     * boot heartbeat on box pin 3 = D3, a signal pin
+			     * (see the note in main.c). Blue LED is ACTIVE_HIGH
+			     * on this module -- unlike every other board here,
+			     * where the on-board LEDs are active low. */
+			    <&gpio1 22 0>,                 /* 28 = LED (blue) */
+			    <&gpio0  9 GPIO_ACTIVE_LOW>;   /* 29 = BTN        */
+
+		box-pin-silk = "D0","D1","D2","D3","D4","D5","D6","D7","D8","D9",
+			       "D10","D11","D12","D13","D14","D15","D16","D17",
+			       "D18","D19","D20","D21","D22","D23","D24","D25",
+			       "D26","D27","LED","BTN";
+
+		/* NO box-ain-pins, DELIBERATELY. On the nRF52840 DK every SAADC
+		 * input is also a box pin, so the shared-pin path is declared and
+		 * exercised. Here the AIN -> pad mapping for this part has NOT been
+		 * read out of the datasheet, and a WRONG shared-pin claim is worse
+		 * than an absent one: box_adc.c's absent-pinmap path treats every
+		 * channel as a dedicated always-active input, which is a safe
+		 * default, whereas a wrong entry would gate a channel on the mode
+		 * of an unrelated pin. Fill this in from the datasheet at bring-up,
+		 * together with box-ain-silk. */
+	};
+};
+
+/* A SECOND UPSTREAM GAP: the board's own connector map routes D11-D18 and
+ * D25-D27 to `gpio3`, and the board leaves gpio3 DISABLED. Nothing complains at
+ * devicetree time -- the gpio-map is just data -- and the failure lands much
+ * later as a link-time
+ *
+ *     error: '__device_dts_ord_14' undeclared here (not in a function)
+ *
+ * from box_gpio.c, naming an ordinal rather than a port. gpio0/1/2 are okay;
+ * only gpio3 is not. Same class as the wrapper gap above: a board file that
+ * advertises pins it has not switched on. */
+&gpio3 { status = "okay"; };
+
+/* On-board peripherals that would fight the connector if the box claimed those
+ * pins. Left ALONE for now rather than disabled wholesale as on the nRF52840
+ * DK: this module carries a real IMU on i2c30 and a QSPI-ish flash on spi00,
+ * both of which a XIAO-based box might genuinely want, and neither has been
+ * checked against the D0-D27 map yet. THIS IS AN OPEN ITEM, not a decision --
+ * the spi1/i2c0/pwm0 collision on the DK is the precedent for what happens when
+ * two drivers own one pad. Check before wiring. */
+
+/* ---- AN UPSTREAM GAP IN THE XIAO BOARD FILES, not something this app wants ----
+ *
+ * The USB device on nRF54L is THREE nodes, not one: a VBUS regulator
+ * (`vregusb`), a wrapper (`usbhs_wrapper`, which carries `regulator =
+ * <&vregusb>`), and the controller itself (`usbhs`). Nordic's own nRF54LM20 DK
+ * enables all three. The Seeed XIAO board files enable ONLY `usbhs` -- so
+ * NRF_USBHS_WRAPPER's dependency `DT_HAS_NORDIC_NRF_USBHS_WRAPPER_ENABLED` is
+ * false while UDC_DWC2 y-selects it, and the build dies at Kconfig:
+ *
+ *   warning: NRF_USBHS_WRAPPER ... has direct dependencies
+ *            DT_HAS_NORDIC_NRF_USBHS_WRAPPER_ENABLED && REGULATOR with value n,
+ *            but is currently being y-selected by UDC_DWC2
+ *
+ * i.e. USB does not come up on this board as shipped by Zephyr, for any
+ * application, until someone enables these two. Fixed here so the scout builds;
+ * it belongs upstream in boards/seeed/xiao_nrf54lm20a/ instead, and should be
+ * sent there rather than carried in patches/ -- it is a missing board fact, not
+ * a driver defect.
+ */
+&vregusb       { status = "okay"; };
+&usbhs_wrapper { status = "okay"; };
+
+/* console FIRST, data SECOND -- interface numbering; box_net_usb.c asserts it.
+ * zephyr_udc0 here is `usbhs` (nordic,nrf-usbhs-nrf54l / snps,dwc2), driven by
+ * udc_dwc2 -- HIGH-SPEED, unlike the nRF52840's Full-Speed controller. */
+&zephyr_udc0 {
+	cdc_acm_console: cdc_acm_uart0 {
+		compatible = "zephyr,cdc-acm-uart";
+	};
+	cdc_acm_data: cdc_acm_uart1 {
+		compatible = "zephyr,cdc-acm-uart";
+		rx-fifo-size = <8192>;
+		tx-fifo-size = <8192>;
+	};
+};
+
+/*
+ * ---- ANALOG: the nRF54L SAADC ----
+ *
+ * Same compatible as the nRF52840 (`nordic,nrf-saadc`) and the same dt-bindings
+ * header, so `reg` is a logical index, `zephyr,input-positive` picks the pad,
+ * and the audited oversample menu in box_adc.c (1x only -- the driver refuses
+ * every non-zero value for a multi-channel sequence) applies unchanged.
+ *
+ * FOUR channels, and the number is a placeholder: which AIN lands on which XIAO
+ * pad has not been read out of the datasheet. The board's own DTS declares a
+ * single channel@0 on AIN0 with ADC_REF_INTERNAL; this overrides it and adds
+ * three more so the sweep path has something to compile against. Reference and
+ * gain are the board's own choice, kept rather than second-guessed -- the
+ * full-scale voltage this yields on nRF54L silicon is a bring-up measurement,
+ * NOT the 3300 mV the other boards declare. Do not copy a calibration here.
+ */
+box_adc: &adc {
+	status = "okay";
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	channel@0 { reg = <0>; zephyr,gain = "ADC_GAIN_1_4";
+		zephyr,reference = "ADC_REF_INTERNAL";
+		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
+		zephyr,resolution = <12>; zephyr,input-positive = <NRF_SAADC_AIN0>; };
+	channel@1 { reg = <1>; zephyr,gain = "ADC_GAIN_1_4";
+		zephyr,reference = "ADC_REF_INTERNAL";
+		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
+		zephyr,resolution = <12>; zephyr,input-positive = <NRF_SAADC_AIN1>; };
+	channel@2 { reg = <2>; zephyr,gain = "ADC_GAIN_1_4";
+		zephyr,reference = "ADC_REF_INTERNAL";
+		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
+		zephyr,resolution = <12>; zephyr,input-positive = <NRF_SAADC_AIN2>; };
+	channel@3 { reg = <3>; zephyr,gain = "ADC_GAIN_1_4";
+		zephyr,reference = "ADC_REF_INTERNAL";
+		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
+		zephyr,resolution = <12>; zephyr,input-positive = <NRF_SAADC_AIN3>; };
+};

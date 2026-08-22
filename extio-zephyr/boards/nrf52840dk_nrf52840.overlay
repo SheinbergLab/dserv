@@ -1,0 +1,206 @@
+/*
+ * extio-zephyr on a Nordic nRF52840 DK -- SCOUT PORT (build-only, 2026-08-22).
+ *
+ * USB-FS only: no Ethernet MAC on this part, and the USB device controller is
+ * Full-Speed (12 Mbps) rather than the High-Speed the RT1062/MCXN947/RW612 all
+ * run. That is a non-issue for this box's traffic -- a 128-byte frame at even
+ * 500/s is 0.5 Mbps -- and HS only ever bought us latency (~90 us median over
+ * Ethernet), not throughput. Stated here so nobody re-derives it.
+ *
+ * THIS BOARD IS ON THE PIN MAP, NOT THE LEGACY SCHEME. Box pin n IS Arduino Dn
+ * and ain channel k IS Arduino Ak, exactly as on the FRDM-MCXN947. The DK has a
+ * real UNO header with a devicetree gpio-map, so there was never a reason to
+ * inherit the Teensys' gpio-port-bit-index scheme -- and adopting the identity
+ * here means a DI/ain group config moves between this board and box01 unchanged.
+ * Getting this right costs nothing today and is unfixable later.
+ */
+
+#include <zephyr/dt-bindings/gpio/gpio.h>
+#include <zephyr/dt-bindings/adc/adc.h>
+#include <zephyr/dt-bindings/adc/nrf-saadc.h>
+
+/ {
+	zephyr,user {
+		/* ---- box pin -> gpio, 30 entries = BOX_NPINS exactly ----
+		 *
+		 * 0-15  Arduino D0-D15   (the field connector: a screw-terminal
+		 *                         shield reaches every one)
+		 * 16-21 Arduino A0-A5    (digital until `pin 16 mode ain`)
+		 * 22-25 LED1-LED4        (on-board, ACTIVE_LOW, off the header)
+		 * 26-29 BTN1-BTN4        (on-board, ACTIVE_LOW, off the header)
+		 *
+		 * The LEDs and buttons are box pins here because on this board they
+		 * are NOT on the Arduino header -- they cost no field pin, and they
+		 * give `obs pin 22` a running tell and a DI group four real sources
+		 * without wiring anything. (On the MCXN947 the LEDs ARE header pins,
+		 * D9/D10, which is why that board's map spends them differently.)
+		 *
+		 * Pad assignments read out of the board's own gpio-map
+		 * (boards/nordic/nrf52840dk/nrf52840dk_nrf52840.dts), NOT the
+		 * silkscreen. Note D0-D13 live on gpio1 and D14/D15 on gpio0 -- a
+		 * single-port alias could not have expressed this board at all.
+		 */
+		box-gpios = <&gpio1  1 0>,                 /*  0 = D0  (P1.01) */
+			    <&gpio1  2 0>,                 /*  1 = D1  (P1.02) */
+			    <&gpio1  3 0>,                 /*  2 = D2  (P1.03) */
+			    <&gpio1  4 0>,                 /*  3 = D3  (P1.04) */
+			    <&gpio1  5 0>,                 /*  4 = D4  (P1.05) */
+			    <&gpio1  6 0>,                 /*  5 = D5  (P1.06) */
+			    <&gpio1  7 0>,                 /*  6 = D6  (P1.07) */
+			    <&gpio1  8 0>,                 /*  7 = D7  (P1.08) */
+			    <&gpio1 10 0>,                 /*  8 = D8  (P1.10) */
+			    <&gpio1 11 0>,                 /*  9 = D9  (P1.11) */
+			    <&gpio1 12 0>,                 /* 10 = D10 (P1.12) */
+			    <&gpio1 13 0>,                 /* 11 = D11 (P1.13) */
+			    <&gpio1 14 0>,                 /* 12 = D12 (P1.14) */
+			    <&gpio1 15 0>,                 /* 13 = D13 (P1.15) */
+			    <&gpio0 26 0>,                 /* 14 = D14 (P0.26) */
+			    <&gpio0 27 0>,                 /* 15 = D15 (P0.27) */
+			    <&gpio0  3 0>,                 /* 16 = A0  (P0.03, AIN1) */
+			    <&gpio0  4 0>,                 /* 17 = A1  (P0.04, AIN2) */
+			    <&gpio0 28 0>,                 /* 18 = A2  (P0.28, AIN4) */
+			    <&gpio0 29 0>,                 /* 19 = A3  (P0.29, AIN5) */
+			    <&gpio0 30 0>,                 /* 20 = A4  (P0.30, AIN6) */
+			    <&gpio0 31 0>,                 /* 21 = A5  (P0.31, AIN7) */
+			    <&gpio0 13 GPIO_ACTIVE_LOW>,   /* 22 = LED1 */
+			    <&gpio0 14 GPIO_ACTIVE_LOW>,   /* 23 = LED2 */
+			    <&gpio0 15 GPIO_ACTIVE_LOW>,   /* 24 = LED3 */
+			    <&gpio0 16 GPIO_ACTIVE_LOW>,   /* 25 = LED4 */
+			    <&gpio0 11 GPIO_ACTIVE_LOW>,   /* 26 = BTN1 */
+			    <&gpio0 12 GPIO_ACTIVE_LOW>,   /* 27 = BTN2 */
+			    <&gpio0 24 GPIO_ACTIVE_LOW>,   /* 28 = BTN3 */
+			    <&gpio0 25 GPIO_ACTIVE_LOW>;   /* 29 = BTN4 */
+
+		/* Which box pin each ain channel shares. No 0xff entries: unlike the
+		 * MCXN947 (whose A0/A1 are dedicated analog-only package pads), every
+		 * SAADC input on this board is an ordinary P0 pin that is a box pin
+		 * too. So all six are digital until `pin 16 mode ain`, and the
+		 * shared-pin path in box_adc.c is exercised for every channel --
+		 * which is the interesting half to have under test anyway.
+		 *
+		 * Bytestring, not <>: see the note in the MCXN947 overlay. */
+		box-ain-pins = [10 11 12 13 14 15];   /* box pins 16-21 */
+
+		/* ---- SILK: what is PRINTED on the board, per box pin ----
+		 * Nearly the identity, as on the MCXN947, and declared anyway for the
+		 * same reason: the extio page reads one property for every card, and
+		 * "the identity boards are the ones with no column" is an
+		 * inconsistency an experimenter should not have to hold in their head.
+		 * The LEDs and buttons are where this actually earns its keep. */
+		box-pin-silk = "D0","D1","D2","D3","D4","D5","D6","D7",
+			       "D8","D9","D10","D11","D12","D13","D14","D15",
+			       "A0","A1","A2","A3","A4","A5",
+			       "LED1","LED2","LED3","LED4",
+			       "BTN1","BTN2","BTN3","BTN4";
+
+		/* ain channel k IS Ak. The honest column here is the AIN number,
+		 * because the pad the SAADC input sits on is what a scope probe
+		 * finds -- and A0 is AIN1, not AIN0 (AIN0 = P0.02, which the DK does
+		 * not bring to the header at all). Precisely the kind of off-by-one
+		 * that made the Teensy's "silkscreen A0 is channel 7" worth writing
+		 * down. */
+		box-ain-silk = "A0 (AIN1)","A1 (AIN2)","A2 (AIN4)",
+			       "A3 (AIN5)","A4 (AIN6)","A5 (AIN7)";
+	};
+};
+
+/* ---- THREE PERIPHERALS ON THIS BOARD CLAIM PADS THE BOX JUST CLAIMED ----
+ *
+ * All three are status="okay" in the DK's own DTS, and all three would have
+ * been the silent-wrong-answer failure the PINMAP keeps warning about: two
+ * owners for one pad, whichever initialises last wins the mux, and the box
+ * reports a mode the hardware does not have.
+ *
+ *   spi1  -> P0.31 (A5), P0.30 (A4), P1.08 (D7)   -- THREE box pins, two of
+ *            them analog channels
+ *   i2c0  -> P0.26 (D14), P0.27 (D15)             -- the arduino_i2c alias
+ *   pwm0  -> P0.13 (LED1 = box pin 22)
+ *
+ * The box owns the header on an extio board, so they go. Anyone who wants
+ * SPI/I2C on this board back has to say so explicitly and re-map the affected
+ * box pins, which is the correct amount of friction.
+ *
+ * Found by reading the pinctrl file while writing the map above, not on
+ * hardware -- which is the entire argument for writing the map from the
+ * devicetree rather than from the silkscreen.
+ */
+&spi1 { status = "disabled"; };
+&i2c0 { status = "disabled"; };
+&pwm0 { status = "disabled"; };
+
+/* console FIRST, data SECOND -- instance order sets USB interface numbering,
+ * and the dserv host module finds the data pipe at if02 / the *3 tty.
+ * box_net_usb.c static-asserts it. Same arrangement on every board here. */
+&zephyr_udc0 {
+	cdc_acm_console: cdc_acm_uart0 {
+		compatible = "zephyr,cdc-acm-uart";
+	};
+	cdc_acm_data: cdc_acm_uart1 {
+		compatible = "zephyr,cdc-acm-uart";
+		/* the frame pipe's class-level fifos, widened to match the app
+		 * rings in box_net_usb.c (8 KB) */
+		rx-fifo-size = <8192>;
+		tx-fifo-size = <8192>;
+	};
+};
+
+/*
+ * ---- ANALOG: the on-chip SAADC ----
+ *
+ * `reg` is a LOGICAL channel index and `zephyr,input-positive` picks the pad --
+ * the LPADC model. (adc_nrfx_saadc selects ADC_CONFIGURABLE_INPUTS, so
+ * box_adc_input_of() returns input_positive here, not channel_id.) That is what
+ * lets ain channel k be Ak: the indices are ours to choose, unlike the RT1062
+ * where reg IS the hardware input and the numbering is fixed by silicon.
+ *
+ * SIX channels, not eight: only six SAADC inputs reach the header (AIN0 = P0.02
+ * and AIN3 = P0.05 are not on it). box_adc_sweep() refuses a mask referencing a
+ * channel at or above nch, and nch is the number of channel@N children, so this
+ * caps ain groups at 0-5 -- correct, because there is no seventh input to bind.
+ *
+ * GAIN 1/4 WITH REFERENCE VDD/4 gives full scale = VDD = 3.3 V exactly, which
+ * matches every other board in this tree (3300 mV) and keeps host-side
+ * conversion constants portable. The tempting alternative -- internal 0.6 V
+ * reference with gain 1/6 -- gives 3.6 V full scale and would silently change
+ * what a raw count means across boards.
+ *
+ * ONE CONSEQUENCE TO SETTLE ON HARDWARE, flagged rather than papered over:
+ * box_adc_input_of() returns -1 for any channel whose gain is not ADC_GAIN_1
+ * ("gain is reported as not-plain by refusing, not by scaling"), and none of
+ * these channels can be ADC_GAIN_1 -- the SAADC has no unity-gain path to a
+ * 3.3 V full scale. So the announced physical-input number is unavailable on
+ * this board until box_adc learns the SAADC's gain model. Nothing in the sample
+ * path depends on it (it feeds the announce and the MCXN-only stream pipeline),
+ * but it is a real gap and belongs in the bring-up list, not in a comment that
+ * claims it is fine.
+ */
+box_adc: &adc {
+	status = "okay";
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	channel@0 { reg = <0>; zephyr,gain = "ADC_GAIN_1_4";
+		zephyr,reference = "ADC_REF_VDD_1_4"; zephyr,vref-mv = <3300>;
+		zephyr,acquisition-time = <ADC_ACQ_TIME(ADC_ACQ_TIME_MICROSECONDS, 10)>;
+		zephyr,resolution = <12>; zephyr,input-positive = <NRF_SAADC_AIN1>; };
+	channel@1 { reg = <1>; zephyr,gain = "ADC_GAIN_1_4";
+		zephyr,reference = "ADC_REF_VDD_1_4"; zephyr,vref-mv = <3300>;
+		zephyr,acquisition-time = <ADC_ACQ_TIME(ADC_ACQ_TIME_MICROSECONDS, 10)>;
+		zephyr,resolution = <12>; zephyr,input-positive = <NRF_SAADC_AIN2>; };
+	channel@2 { reg = <2>; zephyr,gain = "ADC_GAIN_1_4";
+		zephyr,reference = "ADC_REF_VDD_1_4"; zephyr,vref-mv = <3300>;
+		zephyr,acquisition-time = <ADC_ACQ_TIME(ADC_ACQ_TIME_MICROSECONDS, 10)>;
+		zephyr,resolution = <12>; zephyr,input-positive = <NRF_SAADC_AIN4>; };
+	channel@3 { reg = <3>; zephyr,gain = "ADC_GAIN_1_4";
+		zephyr,reference = "ADC_REF_VDD_1_4"; zephyr,vref-mv = <3300>;
+		zephyr,acquisition-time = <ADC_ACQ_TIME(ADC_ACQ_TIME_MICROSECONDS, 10)>;
+		zephyr,resolution = <12>; zephyr,input-positive = <NRF_SAADC_AIN5>; };
+	channel@4 { reg = <4>; zephyr,gain = "ADC_GAIN_1_4";
+		zephyr,reference = "ADC_REF_VDD_1_4"; zephyr,vref-mv = <3300>;
+		zephyr,acquisition-time = <ADC_ACQ_TIME(ADC_ACQ_TIME_MICROSECONDS, 10)>;
+		zephyr,resolution = <12>; zephyr,input-positive = <NRF_SAADC_AIN6>; };
+	channel@5 { reg = <5>; zephyr,gain = "ADC_GAIN_1_4";
+		zephyr,reference = "ADC_REF_VDD_1_4"; zephyr,vref-mv = <3300>;
+		zephyr,acquisition-time = <ADC_ACQ_TIME(ADC_ACQ_TIME_MICROSECONDS, 10)>;
+		zephyr,resolution = <12>; zephyr,input-positive = <NRF_SAADC_AIN7>; };
+};

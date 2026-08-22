@@ -5882,3 +5882,193 @@ Lessons with names on them:
   re-enumeration, and objdump for the arithmetic. The lpuart6 console would
   have named the victim thread in one boot; wiring one to the bench Teensy
   is still worth doing.
+
+## 2026-08-22 — nRF52840 scout port: build-only, and what reading drivers bought
+
+**Status: BUILDS, never flashed.** `boards/nrf52840dk_nrf52840.{conf,overlay}`,
+plain and `--sysbuild`, both in `buildall.sh` from day one. Motive is not power
+(see below) — it is that the nRF52840 is the intended **BLE peripheral** target
+(wiznet-io/NORDIC.md's two-tier decision), and a port priced before it is needed
+is a port priced honestly.
+
+### The numbers
+
+| build | flash | of region | RAM | of 256 KB |
+|---|---|---|---|---|
+| plain (USB-FS box) | 113,544 B | 10.8% of 1 MB | 129,784 B | 49.5% |
+| `--sysbuild` app (signed) | 124,228 B | **26% of the 472 KB slot0** | — | — |
+| `--sysbuild` MCUboot | 37,324 B | 76% of the 48 KB boot partition | — | — |
+| + `CONFIG_BT` central | 233,764 B | 50% of slot0 | 168,132 B | 64% |
+
+For scale, the same USB-only app on the teensy40 is 143,792 B — this part is
+*smaller* because there is no ITCM relocation and no HS controller.
+
+### What cost nothing
+
+* **No `_partitions.dtsi`.** `nrf52840_partition.dtsi` (pulled in by the board
+  DTS) already carves boot 48 KB / slot0 472 KB / slot1 472 KB / storage 32 KB,
+  so `sysbuild.cmake`'s EXISTS test correctly skips this board and MCUboot and
+  the app see one table. The convention held for a board nobody wrote it for.
+* **The OTA Kconfig triple** came from `sysbuild/extio-zephyr.conf` for free,
+  exactly as that file's note promises. `.config` confirms all three.
+* **The storage partition is 32 KB = eight sectors = `BOX_NVS_SECTORS`**, and it
+  sits at 0x0f8000, nowhere near the top of the part — so the erase-refusing
+  last sector that cost the teensy40 its persistence cannot recur here.
+* **`box_ble.c` compiles unmodified** on the open-source controller
+  (`BT_LL_SW_SPLIT`), object file and all. Written for the RW612, no `#ifdef`s
+  touched. That is the seam working as designed — but see the honest caveat.
+
+### THREE PADS HAD TWO OWNERS, and the overlay is where that was caught
+
+All three are `status = "okay"` in the DK's own DTS and all three claim pads
+this map hands to the box:
+
+    spi1 -> P0.31 (A5), P0.30 (A4), P1.08 (D7)    -- two of them ANALOG channels
+    i2c0 -> P0.26 (D14), P0.27 (D15)              -- the arduino_i2c alias
+    pwm0 -> P0.13 (LED1 = box pin 22)
+
+Disabled in the overlay; the box owns the header. This is the RW612's un-muxed
+digital pads and the MCXN947's `channel@N`-without-pinctrl in a third costume —
+a pad whose mux belongs to whichever driver initialised last, while the box
+reports a mode the hardware does not have. **Found by reading the pinctrl file
+while writing the map, not on a bench.** That is the whole argument for
+deriving the map from devicetree rather than from a silkscreen.
+
+### The analog audit, done before hardware
+
+Both results are now recorded in `box_adc.c` next to the oversample table:
+
+* **The SAADC selects `ADC_CONFIGURABLE_INPUTS`** — `reg` is a logical index and
+  `zephyr,input-positive` picks the pad, i.e. the LPADC model, not the RT1062's
+  "reg IS the hardware input". `box_adc_input_of()` already handles both. This
+  is what lets **ain channel k be Ak** on this board.
+* **Oversampling is refused with `-EINVAL` for any multi-channel sequence**
+  (`get_oversampling()`, adc_nrfx_saadc.c:385 — "supported for single channel
+  only"). Our sweep is multi-channel by construction, so the audited menu is
+  **1x**, and the entry says so explicitly rather than being left to the
+  unlisted-part default. A driver whose switch statement covers 1x–256x and
+  performs none of it for us is exactly the shape the RT1062's silent
+  `-ENOTSUP` had — caught this time by reading, at a cost of ten minutes.
+
+### Two things deliberately left open
+
+* **Gain.** The SAADC has no unity-gain path to a 3.3 V full scale, so these
+  channels run `ADC_GAIN_1_4` + `ADC_REF_VDD_1_4` (full scale = VDD = 3300 mV,
+  matching every other board). Consequence: `box_adc_input_of()` returns −1 for
+  every channel here, because it reports non-plain gain by refusing rather than
+  by scaling. Nothing in the sample path depends on it (it feeds the announce
+  and the MCXN-only stream pipeline), but the announced physical-input number is
+  unavailable on this board until `box_adc` learns the SAADC's gain model.
+  **Flagged, not papered over** — it belongs in bring-up, not in a comment
+  claiming it is fine.
+* **`CONFIG_BT` is NOT in the board conf.** It builds, which is the datum worth
+  having; it is not enabled, because `box_ble.c` is a BLE **central** — the hub
+  role, built for the RW612 — and this part is wanted as a **peripheral**. That
+  code does not exist yet. Shipping a hub on a chip we intend as a peripheral
+  would be worse than an honest gap.
+
+### One pre-existing wart this surfaced
+
+`prj.conf` carries `CONFIG_UDC_NXP_EVENT_COUNT=16`, which is defined only in
+`drivers/usb/udc/Kconfig.mcux`. On any non-NXP board it warns and is ignored:
+
+    warning: UDC_NXP_EVENT_COUNT (defined at drivers/usb/udc/Kconfig.mcux:27)
+             was assigned the value ...
+
+Harmless, but it is a board-specific symbol in the common file, and the comment
+above it documents an NXP driver's internal slab. Belongs in the MCXN947 and
+RW612 board confs. Not moved here — it would touch two shipping boards for a
+warning, and this port has no standing to do that.
+
+### ON SILICON — the nRF52840 DK actually ran, same day
+
+The scout stopped being build-only within the hour: flashed to a DK on the desk
+(J-Link probe `1050293718`, plain non-MCUboot build, `west flash -r jlink`).
+
+**Before the console worked**, the evidence that it booted at all came from
+halting the core and reading registers — worth recording as a technique, because
+it needs no console, no USB and no host:
+
+    PC = 0001317A -> arch_cpu_idle+0x12
+    LR = 0001657F -> idle+0x15
+    IPSR = 000 (NoException), CONTROL = 02 (PSP), CycleCnt advancing
+
+PC in the idle thread means main() reached its service loop and parked in
+`box_event_wait()`. A box with no host attached should look exactly like that,
+and a fault would have shown a non-zero IPSR instead.
+
+**What ran, all verified over the console:**
+
+* codec smoke test passes; `persist round-trip -> ok, 1212 bytes`
+* `analog: adc@40007000, 6 ch, 12-bit, 3300 mV fs` — the gain-1/4 +
+  reference-VDD/4 arrangement lands on the same 3300 mV full scale every other
+  board declares, as intended rather than as luck
+* **`ain oversample 4` -> `ERR ain oversample on this converter: 1`.** The menu
+  derived by reading adc_nrfx_saadc.c, enforced on silicon, refusing a value
+  that would otherwise have produced a live-looking box publishing nothing —
+  the RT1062's failure, prevented instead of repeated
+* pin map end to end: `pin 22 mode out` / `do 22 1` lights LED1, and the
+  ACTIVE_LOW in the map makes 1 = lit as on the MCXN947
+* **NVS: `save` (1212 bytes) -> `reboot` -> `persist store -> config LOADED from
+  flash`, `applied_count=8`**, four pin modes and an ain group all back. The
+  storage partition also survived a REFLASH, being outside the app region
+
+### TWO BOARD DEFAULTS THAT WERE WRONG UNTIL THE BOARD SAID SO
+
+Both were silent, both are the same shape — a new board falling into an #else
+written for a different one — and neither would have been found by building.
+
+1. **`BOX_DEFAULT_CONSOLE_MODE`.** The DK is the MCXN947's case, not the
+   Teensy's: its J-Link OB exposes a VCOM on uart0 over the SAME connector (J2)
+   that powers the board, while the box's CDC console is on the separate nRF USB
+   port (J3) and needs a second cable. With the CDC default the first boot
+   printed exactly one line — Zephyr's own banner — and nothing from the box, on
+   a board that was provably running. Added to the gate in CMakeLists.txt.
+   The XIAO deliberately does NOT join: that module has no debugger VCOM at all,
+   its single connector IS the USB device port, so CDC is already right. **A
+   second USB port is a DK luxury, not a board norm** — any real extio-mini
+   keeps the CDC console.
+
+2. **`LED_PIN` / `BTN_PIN`.** With no branch for it the board took the Teensy
+   `#else`, so LED_PIN was 3 — box pin 3 on this map is **D3, an ordinary header
+   pin** — and every boot fired three 120 ms pulses into it. That is verbatim
+   the defect the MCXN947 comment above this code describes, reproduced on a new
+   board because the trap is an `#else` and `#else` never warns. Banner before:
+   `board LED=pin 3, button=pin 1`; after: `board LED=pin 22, button=pin 26`,
+   the DK's real LED1/BTN1, neither of which costs a header pin. **Check this
+   on the next port before the first boot**, not after.
+
+### The XIAO nRF54LM20A, same day, build-only
+
+`boards/xiao_nrf54lm20a_nrf54lm20a_cpuapp.{conf,overlay}`. 128,932 B flash
+(6.2% of the 2036 KB RRAM) / 130.7 KB RAM; signed app 141,072 B = 15% of the
+920 KB slot0.
+
+Why it was cheap: **the SAADC is the same compatible as the nRF52840**, so the
+analog block and the audit entry carry over verbatim, and the board ships a
+`seeed,xiao-gpio` connector map that plays the Arduino header's role — so box
+pin n IS XIAO Dn without argument. Why it is interesting: its USB is
+`nordic,nrf-usbhs-nrf54l` + `snps,dwc2` — **High-Speed**, via udc_dwc2 — so this
+part is USB-HS *and* BLE *and* battery-class in a 21x17.5 mm module.
+
+Three costs, all upstream rather than ours:
+
+* **`vregusb` and `usbhs_wrapper` are left disabled** by the Seeed board files
+  while `usbhs` is enabled. USB therefore cannot come up on this board for ANY
+  application: UDC_DWC2 y-selects NRF_USBHS_WRAPPER against an unmet
+  `DT_HAS_NORDIC_NRF_USBHS_WRAPPER_ENABLED` and the build dies at Kconfig.
+  Enabled in our overlay; belongs upstream. `CONFIG_REGULATOR=y` is needed too.
+* **`gpio3` is disabled** although the board's own connector map routes D11-D18
+  and D25-D27 to it. Surfaces late and unhelpfully as
+  `error: '__device_dts_ord_14' undeclared`, naming an ordinal rather than a
+  port.
+* **MCUboot does not LINK for this board.** Our app image builds and signs; the
+  bootloader image compiles `drivers/mfd/mfd_npm13xx.c` and
+  `drivers/regulator/` against a build with no `k_work_submit` /
+  `z_impl_k_mutex_*` / `z_impl_k_usleep`. So **A/B OTA is not established on
+  this part** and `xiao54lm20-ota` stays commented out of buildall.sh — same
+  convention as rt1186. The plain build is the honest claim.
+
+Note also that this board treats Kconfig warnings as FATAL, which is how the
+stray `CONFIG_UDC_NXP_EVENT_COUNT` in the common prj.conf was finally caught
+(see that file). The NXP and RT boards had been carrying it silently for months.

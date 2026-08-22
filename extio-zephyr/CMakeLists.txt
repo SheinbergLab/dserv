@@ -75,7 +75,20 @@ endif()
 # Deliberately NOT global: on the Teensy the same setting means lpuart6 on pins
 # 0/1 and a soldered-on USB-serial adapter, where defaulting to uart would make
 # a healthy box look dead. Every other board keeps CDC.
-if(CONFIG_BOARD_FRDM_MCXN947)
+#
+# The nRF52840 DK is the MCXN947's case, not the Teensy's, and 2026-08-22 is
+# when that got established rather than assumed: its J-Link OB exposes a VCOM on
+# uart0 (P0.06/P0.08) over the SAME USB connector (J2) that powers the board,
+# while the box's CDC console lives on the separate nRF USB port (J3) and needs
+# a second cable. Flashed with the CDC default, the first boot printed exactly
+# one line -- Zephyr's own banner -- and nothing from the box, on a board that
+# was provably running (PC in arch_cpu_idle). A healthy box looking dead is the
+# failure this gate exists to prevent, so the DK joins it.
+#
+# The XIAO nRF54LM20A does NOT, and the distinction is the point: that module
+# has no debugger VCOM at all -- its single USB connector IS the nRF USB device
+# port -- so CDC is the only console it has and the default is already right.
+if(CONFIG_BOARD_FRDM_MCXN947 OR CONFIG_BOARD_NRF52840DK)
 	target_compile_definitions(app PRIVATE BOX_DEFAULT_CONSOLE_MODE=CONSOLE_MODE_UART)
 endif()
 

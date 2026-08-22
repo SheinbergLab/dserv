@@ -1008,6 +1008,31 @@ static void groups_resync(void)
  * worse than no default. */
 #define LED_PIN  9    /* D9  = P0_10, RED user LED (active low in DT)   */
 #define BTN_PIN  17   /* A5  = P0_23, also SW2                          */
+#elif defined(CONFIG_BOARD_NRF52840DK)
+/* Box pins 22-25 are LED1-LED4 and 26-29 are BTN1-BTN4 (see the overlay): on
+ * this board the LEDs and buttons are NOT on the Arduino header, so a heartbeat
+ * costs no field pin at all -- the cleanest case of the three.
+ *
+ * ADDED 2026-08-22 AFTER WATCHING IT HAPPEN. Without this branch the Teensy
+ * #else applied and LED_PIN was 3, which on this board's map is D3 -- an
+ * ordinary header pin, exactly the defect the MCXN947 comment above describes.
+ * The boot banner said "board LED=pin 3, button=pin 1" on a DK whose real LEDs
+ * are box pins 22-25, and every boot fired three 120 ms pulses into a signal
+ * pin. A board-specific default that lands on a signal pin is worse than no
+ * default, and a NEW BOARD FALLS INTO THE #else SILENTLY -- worth checking on
+ * the next port before the first boot rather than after.
+ *
+ * LED1 rather than LED2-4 for the heartbeat, leaving the others free; if this
+ * board ever mirrors obs, put it on LED2 so "is the rig in an observation
+ * period" is never ambiguous with the boot flash (the MCXN947's reasoning). */
+#define LED_PIN  22   /* LED1 = P0.13, GPIO_ACTIVE_LOW in the pin map   */
+#define BTN_PIN  26   /* BTN1 = P0.11, active low, board pull-up        */
+#elif defined(CONFIG_BOARD_XIAO_NRF54LM20A)
+/* Box pins 0-27 are XIAO D0-D27; 28/29 are the module's own blue LED and push
+ * button, mapped in the overlay for exactly this reason. Same #else trap as the
+ * nRF52840 DK above -- box pin 3 here is XIAO D3, a header pin. */
+#define LED_PIN  28   /* blue LED = P1.22, active HIGH on this module   */
+#define BTN_PIN  29   /* button0  = P0.09, active low, pull-up          */
 #else                 /* Teensy 4.x: board LED is gpio2.3 */
 /* box pin n = gpio2.n = pad GPIO_B0_n on this SoC (the legacy single-port
  * scheme -- box pin numbers here are GPIO2 bit indices, NOT the silkscreen).

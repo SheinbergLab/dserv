@@ -43,6 +43,8 @@ check teensy40  -b teensy40                     -d build-check-teensy40  "$HERE"
 check teensy41  -b teensy41                     -d build-check-teensy41  "$HERE"
 check rw612     -b frdm_rw612                   -d build-check-rw612     "$HERE"
 check mcxn947   -b frdm_mcxn947/mcxn947/cpu0    -d build-check-mcxn947   "$HERE" --sysbuild
+check nrf52840  -b nrf52840dk/nrf52840          -d build-check-nrf52840  "$HERE"
+check xiao54lm20 -b xiao_nrf54lm20a/nrf54lm20a/cpuapp -d build-check-xiao54lm20 "$HERE"
 
 # The teensy40 in its OTA form, which is a DIFFERENT BUILD, not a variant: it
 # pulls in MCUboot as a second image, relinks the app to slot0, and compiles in
@@ -53,6 +55,20 @@ check mcxn947   -b frdm_mcxn947/mcxn947/cpu0    -d build-check-mcxn947   "$HERE"
 # box with no bootloader, and the two must BOTH keep compiling.
 check teensy40-ota -b teensy40 -d build-check-teensy40-ota "$HERE" --sysbuild
 check teensy41-ota -b teensy41 -d build-check-teensy41-ota "$HERE" --sysbuild
+
+# The nrf52840dk is a SCOUT target (2026-08-22): board files exist, no hardware
+# has ever run them. It is in this list from its first day precisely because it
+# has no bench to notice it rotting -- which is what happened to both Teensys
+# before +98, and they at least had a box on a desk.
+check nrf52840-ota -b nrf52840dk/nrf52840 -d build-check-nrf52840-ota "$HERE" --sysbuild
+# xiao54lm20-ota is OUT, and the reason is upstream, not ours: our app image
+# builds and signs fine (141,072 B), but the MCUboot image for this board fails
+# to LINK -- it compiles drivers/mfd/mfd_npm13xx.c and drivers/regulator against
+# a bootloader that has no k_work_submit / z_impl_k_mutex_* / z_impl_k_usleep.
+# So the plain build above is the honest claim for this board; A/B OTA is not
+# established on it. Same convention as rt1186: a target stays out of this list
+# until it actually passes.
+# check xiao54lm20-ota -b xiao_nrf54lm20a/nrf54lm20a/cpuapp -d build-check-xiao54lm20-ota "$HERE" --sysbuild
 
 if [ -n "$FAILED" ]; then
   echo "!! broken targets:$FAILED" >&2

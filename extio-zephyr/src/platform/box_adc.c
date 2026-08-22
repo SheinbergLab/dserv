@@ -47,7 +47,15 @@ static uint8_t  ovs_exp;      /* hw-average exponent (0..7 -> 1x..128x); v24 */
  *     sampler skips silently, i.e. `ain oversample 64` = a live-looking box
  *     that never publishes a sample;
  *   * adc_mcp320x never reads the field at all -- any value "works" and the
- *     silicon averages nothing.
+ *     silicon averages nothing;
+ *   * adc_nrfx_saadc (nRF52840) implements the FULL 1x..256x grammar -- and
+ *     then refuses ALL of it with -EINVAL whenever more than one channel is
+ *     active in the sequence (get_oversampling(): "Oversampling is supported
+ *     for single channel only"). Our sweep is multi-channel by construction,
+ *     so the honest menu for this box is 1x, and a part that reads as fully
+ *     capable in its switch statement is capable of nothing here. Audited by
+ *     reading the driver during the 2026-08-22 scout port, before hardware --
+ *     which is the point of keeping this table.
  *
  * Audited per compatible, like ADC_DT_CHANNELS above; a part not listed here
  * claims only 1x until someone reads its driver, because refusing capability
@@ -57,6 +65,14 @@ static uint8_t  ovs_exp;      /* hw-average exponent (0..7 -> 1x..128x); v24 */
 #define ADC_OVS_MASK 0xFFu
 #elif DT_NODE_HAS_COMPAT(ADC_NODE, nxp_mcux_12b1msps_sar)
 #define ADC_OVS_MASK (BIT(0) | BIT(2) | BIT(3) | BIT(4) | BIT(5))
+#elif DT_NODE_HAS_COMPAT(ADC_NODE, nordic_nrf_saadc)
+/* 1x only -- NOT because the silicon lacks hardware averaging (it does 1x..256x)
+ * but because the driver refuses every non-zero value for a multi-channel
+ * sequence, which is the only kind this box issues. Listed explicitly rather
+ * than left to the default so the next reader learns the constraint instead of
+ * assuming the part is simply unaudited. If a single-channel sweep path ever
+ * exists, this becomes conditional on it -- not a wider constant. */
+#define ADC_OVS_MASK BIT(0)
 #else
 #define ADC_OVS_MASK BIT(0)
 #endif
