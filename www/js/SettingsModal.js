@@ -209,7 +209,14 @@ class SettingsModal {
                 if (this._knobs.some(k => k.sub === this._want)) {
                     this._sel = this._want;
                 } else {
-                    this.log(`settings: nothing declared for '${this._want}'`, 'warn');
+                    // Land on All, not on whatever was selected last time:
+                    // a jump that quietly opens a DIFFERENT subsystem reads
+                    // as the wrong thing having been clicked. (A rig whose
+                    // em/slider predates these declarations gets exactly
+                    // this case.)
+                    this._sel = 'all';
+                    this.log(`settings: nothing declared for '${this._want}'`
+                             + ' — showing everything', 'warn');
                 }
                 this._want = null;
             }
@@ -434,6 +441,8 @@ class SettingsModal {
                 <div class="ess-settings-row-head">
                     <span class="ess-settings-key">${this._esc(k.key)}</span>
                     <span class="ess-settings-tags">
+                        ${k.source === 'runtime' && k.interp !== null ? `<button class="ess-settings-pin"
+                              type="button" title="make this the rig's answer — writes it to local/rig.tcl">⤓</button>` : ''}
                         ${this._clearable(k) ? `<button class="ess-settings-clear" type="button"
                               title="${this._escAttr(this._clearTitle(k))}">↺</button>` : ''}
                         <span class="ess-settings-src ${this._esc(k.source)}"
@@ -531,6 +540,8 @@ class SettingsModal {
         if (!row) return;
         const clearBtn = row.querySelector('.ess-settings-clear');
         if (clearBtn) clearBtn.addEventListener('click', () => this._clear(k));
+        const pinBtn = row.querySelector('.ess-settings-pin');
+        if (pinBtn) pinBtn.addEventListener('click', () => this._pin(k));
         const input = row.querySelector('.ess-settings-input');
         const setBtn = row.querySelector('.ess-settings-set');
         if (!input || k.interp === null) return;
@@ -583,6 +594,20 @@ class SettingsModal {
             `cleared ${k.sub} ${k.key} (${k.source})`);
     }
 
+    /*
+     * Commit a live override. A panel that flips a knob writes a RUNTIME
+     * value — the eye source between virtual and real, twenty times an
+     * afternoon — and this is where one of those flips becomes the rig's
+     * answer. It needs its own button because re-choosing the value already
+     * shown fires no `change` event: the control cannot express "yes, that
+     * one, permanently".
+     */
+    async _pin(k) {
+        await this._run(k,
+            `settings::put ${k.sub} ${k.key} ${TclParser.toTcl(k.value)} -persist`,
+            `pinned ${k.sub} ${k.key} = ${k.value === '' ? '(empty)' : k.value}`);
+    }
+
     async _run(k, command, logMsg) {
         if (this._busy) return;
         const row = this._overlay.querySelector('#' + this._rowId(k));
@@ -632,9 +657,22 @@ class SettingsModal {
             src.textContent = k.source || '?';
             src.title = this._sourceTitle(k);
         }
-        // ↺ follows /source: clearing a declaration leaves nothing to clear,
-        // and a live override arriving from anywhere makes one appear.
+        // ⤓ and ↺ follow /source: clearing a declaration leaves nothing to
+        // clear, and a live override arriving from anywhere -- a panel flip,
+        // another browser -- makes both appear.
         const tags = row.querySelector('.ess-settings-tags');
+        let pinBtn = row.querySelector('.ess-settings-pin');
+        if (k.source === 'runtime' && k.interp !== null && !pinBtn && tags) {
+            pinBtn = document.createElement('button');
+            pinBtn.type = 'button';
+            pinBtn.className = 'ess-settings-pin';
+            pinBtn.textContent = '⤓';
+            pinBtn.title = "make this the rig's answer — writes it to local/rig.tcl";
+            pinBtn.addEventListener('click', () => this._pin(k));
+            tags.insertBefore(pinBtn, tags.firstChild);
+        } else if (k.source !== 'runtime' && pinBtn) {
+            pinBtn.remove();
+        }
         let clearBtn = row.querySelector('.ess-settings-clear');
         if (this._clearable(k) && !clearBtn && tags) {
             clearBtn = document.createElement('button');

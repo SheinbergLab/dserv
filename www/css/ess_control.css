@@ -6206,3 +6206,39 @@ select.ess-param-select {
     font-family: 'SF Mono', Monaco, Consolas, monospace;
     color: var(--ess-accent);
 }
+
+/* ⚙ beside an input panel's title: a jump into that subsystem's settings.
+   Deliberately small -- the flip an operator does twenty times an afternoon
+   stays inline; this is for provenance, persisting, and the knobs nobody
+   tunes against live data. */
+.ess-section-gear {
+    background: none;
+    border: none;
+    padding: 0 4px;
+    margin-left: 4px;
+    font-size: 11px;
+    line-height: 1;
+    color: var(--ess-text-muted);
+    cursor: pointer;
+    opacity: 0.6;
+}
+
+.ess-section-gear:hover {
+    color: var(--ess-accent);
+    opacity: 1;
+}
+
+/* ⤓ — commit a live override into local/rig.tcl */
+.ess-settings-pin {
+    background: none;
+    border: none;
+    padding: 0 2px;
+    font-size: 12px;
+    line-height: 1;
+    color: var(--ess-warning);
+    cursor: pointer;
+}
+
+.ess-settings-pin:hover {
+    color: var(--ess-accent);
+}

@@ -49,6 +49,7 @@ package require dlsh
 tcl::tm::add $dspath/lib
 package require extio   ;# decode extio state/ain blocks (thumbstick source)
 package require settingsdb  ;# persist the MEASURED stick calibration
+package require settings    ;# `slider source` is DECLARED, not learned
 
 # Same store em's eye calibration lives in: one small db for the stable
 # per-setup values a rig learns rather than declares.
@@ -177,7 +178,15 @@ namespace eval slider {
         update_settings
     }
 
-    proc set_source     {s} { set_param source     $s }
+    # Which input path is live is a rig DECLARATION -- the same shape as the
+    # eye's source, and for the same reason. cal_keys already refuses to let
+    # the calibration db carry it (see there); this gives it the place it was
+    # missing. set_source stays the mechanism and becomes a RUNTIME override,
+    # so flipping stick <-> trackpad while testing shows as `runtime` in the
+    # settings gear and is forgotten at restart, while the gear persists the
+    # rig's actual answer into local/rig.tcl.
+    proc set_source     {s} { ::settings::put slider source $s }
+    proc source_apply   {s} { set_param source $s }
     proc set_mode       {m} {
         if { $m ni {absolute continuous swipe} } {
             error "slider: invalid continuity_mode '$m'\
@@ -1111,6 +1120,22 @@ namespace eval slider {
     }
 
     update_settings
+
+    # Declared here, at the end of the namespace, so the procs it names
+    # exist. local/slider.tcl is sourced LATER and its `slider::set_source`
+    # now lands as a runtime override -- visible in the gear as `runtime`
+    # rather than invisibly disagreeing with what the settings tree says.
+    ::settings::declare slider source -default auto \
+        -values {auto ain trackpad extio virtual} \
+        -doc "which input path may publish slider/position. auto lets all of
+them (last writer wins, fine while one is live); naming one
+silences the rest. A rig with two analog inputs wired -- a
+trackpad and a stick, say -- must name one or they fight.
+Flipping this from the Slider panel is a session override;
+persist it here to make it the rig's answer." \
+        -apply {::slider::source_apply}
+
+    catch { source_apply [::settings::get slider source] }
 }
 
 # Subscribe to the ain feed (primary hardware path)

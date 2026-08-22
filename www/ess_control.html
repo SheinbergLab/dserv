@@ -118,7 +118,7 @@
                             </div>
                             <!-- Virtual D-Pad (shown when joystick_init is called) -->
                             <div id="virtual-joystick-section" class="ess-input-section" style="display: none;">
-                                <div class="ess-input-section-title">Joystick</div>
+                                <div class="ess-input-section-title">Joystick<button class="ess-section-gear" type="button" title="rig settings for the joystick input (transport, threshold, calibration)" onclick="openSettingsModal('joystick')">⚙</button></div>
                                 <div id="dpad-container" class="ess-dpad">
                                     <button class="ess-dpad-btn" data-dir="up_left" title="up_left">&#8598;</button>
                                     <button class="ess-dpad-btn" data-dir="up" title="up">&#8593;</button>
@@ -139,7 +139,7 @@
                             </div>
                             <!-- Dial (shown when dial_init is called) -->
                             <div id="virtual-dial-section" class="ess-input-section" style="display: none;">
-                                <div class="ess-input-section-title">Dial</div>
+                                <div class="ess-input-section-title">Dial<button class="ess-section-gear" type="button" title="rig settings for the dial (which readings answer it)" onclick="openSettingsModal('dial')">⚙</button></div>
                                 <canvas id="dial-canvas" width="150" height="150"
                                         style="display:block;margin:0 auto;cursor:crosshair"
                                         title="click to report an angle (dial_simulate)"></canvas>
@@ -156,7 +156,7 @@
                             </div>
                             <!-- Slider Controls (shown when slider_init is called) -->
                             <div id="virtual-slider-section" class="ess-input-section" style="display: none;">
-                                <div class="ess-input-section-title">Slider</div>
+                                <div class="ess-input-section-title">Slider<button class="ess-section-gear" type="button" title="rig settings for the slider input (source, and where each value came from)" onclick="openSettingsModal('slider')">⚙</button></div>
                                 <div class="ess-slider-track-container">
                                     <div id="slider-track" class="ess-slider-track">
                                         <div id="slider-thumb" class="ess-slider-thumb"></div>
@@ -203,7 +203,7 @@
                             </div>
                             <!-- Eye Tracker Settings -->
                             <div class="ess-input-section">
-                                <div class="ess-input-section-title">Eye Tracker</div>
+                                <div class="ess-input-section-title">Eye Tracker<button class="ess-section-gear" type="button" title="rig settings for the eye input (source, and where each value came from)" onclick="openSettingsModal('eye')">⚙</button></div>
                                 <div class="ess-input-row">
                                     <span class="ess-input-label">Center</span>
                                     <div class="ess-input-group">

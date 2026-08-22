@@ -437,6 +437,68 @@ exports exist to be adopted, and no child has inherited an environment yet.
 Not yet done on a rig: the adopt-and-delete pass. Every rig prints its own
 instructions at boot; `docs/rig_settings_migration.md` §6 is the runbook.
 
+## 4. Panels vs the gear — and what `runtime` is for
+
+Panels already carry settings of their own: the Eye panel sets source,
+centres and gains; the Slider panel picks a source. That is not a mistake to
+be tidied into the gear. The question that sorts them is **what the human is
+doing at the moment they touch the control**:
+
+| they are… | belongs | value lives in |
+|---|---|---|
+| watching live data and nudging (eye centre, gain) | **panel**, beside the data | `settingsdb` — LEARNED |
+| deciding how the rig is wired (source, transport, box group) | **gear** | `local/rig.tcl` — DECLARED |
+| running a procedure with their hands in it | **wizard** | db — MEASURED |
+
+`set_current_as_center` is the clearest case: it means "measure what I am
+looking at now", and it is meaningless anywhere but next to the eye trace.
+Those controls stay where they are.
+
+**The two layers connect through `runtime`.** `settings::put` WITHOUT
+`-persist` is a runtime override, which the gear shows as an amber badge,
+↺ drops, and a restart forgets. So:
+
+> a panel flip writes RUNTIME; the gear is where a flip becomes a
+> declaration.
+
+That is the ergonomics an actual rig wants. Flipping the eye between virtual
+and real twenty times an afternoon has to stay one click, inline — and each
+flip should evaporate at restart rather than pin the rig silently. Deciding
+that this rig reads the analog eye is a different act, done once, and it
+belongs in a file where a comment can sit beside it.
+
+**DONE (2026-08-22).** `eye source` and `slider source` are declared knobs:
+
+- `::em::set_source` and `::slider::set_source` now write a runtime put and
+  the `-apply` does the work, so `em/settings` and `settings/eye/source` can
+  never disagree, and `local/slider.tcl`'s imperative `set_source extio`
+  shows up as `runtime` instead of invisibly contradicting the tree.
+- **The eye source stops riding in the calibration db.** `set_param`
+  persisted the whole dict, and `emconf.tcl`'s own comment had been
+  explaining the consequence for months: a pinned source can make a rig read
+  the wrong eye, or no eye, for a reason someone set days ago with no comment
+  attached. That is the `obs_autobind` incident verbatim. `db_exclude` now
+  keeps it out, and an existing pinned source is carried over into
+  `local/rig.tcl` once, on first boot, exactly as autobind was.
+- **⤓ commits a live override** from the gear. It needs its own button
+  because re-choosing the value already shown fires no `change` event — the
+  control cannot express "yes, that one, permanently".
+- **A ⚙ beside each input panel's title** jumps to that subsystem's section
+  (`openSettingsModal('eye')`). Deliberately small: the frequent flip stays
+  inline, and this is for provenance, persisting, and the knobs nobody tunes
+  against live data. A rig whose modules predate the declarations lands on
+  All with a log line rather than on whichever section was open last.
+
+Verified against the live rig: a runtime override showed amber with both ⤓
+and ↺; ⤓ wrote it to `local/rig.tcl` and the badge went `file`; ↺ removed
+the line and the badge went `default`; `rig.tcl` came back byte-identical.
+
+**What would belong inline next**, by the same rule: `joystick
+threshold_frac` (push the stick, watch the sector light up) and the dial's
+rate/deadzone. What would not: transport, box_device, box_group, registry,
+stim host — decisions, not adjustments, and a stray click should not
+repoint the rig.
+
 ## Sequencing
 
 1. ~~**§0 first, alone.**~~ **DONE and rig-verified** — one line in
