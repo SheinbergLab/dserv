@@ -43,6 +43,7 @@ class SettingsModal {
         this._sel = 'all';             // selected subsystem, or 'all'
         this._q = '';                  // filter text
         this._errors = [];             // rejected local/rig.tcl lines, per interp
+        this._bootErrors = [];         // subprocesses whose config threw
         this._declaredOnly = false;    // show only what this rig has decided
         this._want = null;             // subsystem to open at, once loaded
     }
@@ -71,7 +72,13 @@ class SettingsModal {
             '    set _who [lindex [split $_k /] 2]',
             '    catch { foreach _e [dservGet $_k] { lappend _errs [list $_who $_e] } }',
             '}',
-            'list $_out $_errs'
+            // Subprocesses whose config script threw. dsconf publishes this
+            // at the end of the boot; a failed config keeps its subprocess
+            // alive but everything below the failing line never ran, so the
+            // rig is half-configured in a way no other panel shows.
+            'set _boot {}',
+            'catch { set _boot [dservGet system/init_errors] }',
+            'list $_out $_errs $_boot'
         ].join('\n');
     }
 
@@ -190,7 +197,10 @@ class SettingsModal {
         try {
             const reply = await this.connection.evalAsync(SettingsModal.SCAN_SCRIPT);
             if (gen !== this._gen || !this._overlay) return;
-            const [knobList, errList] = TclParser.parseList(reply);
+            const [knobList, errList, bootList] = TclParser.parseList(reply);
+            this._bootErrors = TclParser.parseList(bootList || '')
+                .map(e => TclParser.parseList(e))
+                .map(([who, msg]) => ({ who, msg }));
             this._errors = TclParser.parseList(errList || '')
                 .map(e => TclParser.parseList(e))
                 .map(([who, msg]) => ({ who, msg }));
@@ -304,17 +314,26 @@ class SettingsModal {
         const el = this._overlay.querySelector('#ess-settings-alert');
         if (!el) return;
         const errs = this._errors || [];
-        el.hidden = !errs.length;
-        if (!errs.length) return;
-        el.innerHTML = `
-            <div class="ess-settings-alert-head">${errs.length} line${
-                errs.length > 1 ? 's' : ''} in local/rig.tcl rejected — the
-                default is in force for ${errs.length > 1 ? 'these' : 'this'}</div>
-            ${errs.map(e => `<div class="ess-settings-alert-row">
+        const boot = this._bootErrors || [];
+        el.hidden = !(errs.length || boot.length);
+        if (el.hidden) return;
+        const row = (e) => `<div class="ess-settings-alert-row">
                 <span class="ess-settings-alert-who">${this._esc(e.who)}</span>
                 <span>${this._esc(e.msg)}</span>
-            </div>`).join('')}
-        `;
+            </div>`;
+        // Boot failures first: a subprocess that never configured is a bigger
+        // fact about this rig than a rejected line, and it explains missing
+        // knobs -- a config that throws takes the rest of its file with it,
+        // declarations included.
+        el.innerHTML =
+            (boot.length ? `<div class="ess-settings-alert-head">${boot.length}
+                subprocess${boot.length > 1 ? 'es' : ''} did not configure —
+                everything below the failing line never ran</div>
+                ${boot.map(row).join('')}` : '')
+            + (errs.length ? `<div class="ess-settings-alert-head">${errs.length} line${
+                errs.length > 1 ? 's' : ''} in local/rig.tcl rejected — the
+                default is in force for ${errs.length > 1 ? 'these' : 'this'}</div>
+                ${errs.map(row).join('')}` : '');
     }
 
     _subs() { return [...new Set(this._knobs.map(k => k.sub))]; }

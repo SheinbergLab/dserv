@@ -314,6 +314,39 @@ if { [file exists $dspath/modules/dserv_camera[info sharedlibextension]] } {
     subprocess camera "source [file join $dspath config/cameraconf.tcl]"
 }
 
+#
+# WHICH SUBPROCESSES DID NOT CONFIGURE.
+#
+# subprocess_command already keeps a child whose config script threw, logs
+# the errorInfo to the journal, and publishes <name>/init_error -- all of
+# which is right: one bad config must not abort the boot. What was missing
+# is anyone READING it. A subprocess config that throws takes the rest of
+# its own file with it, so the cost is rarely the line that failed: sound
+# lost init_hardware, init_software AND local/sound.tcl to one misplaced
+# `package require`, and the rig came up mute with nothing on screen to say
+# so (2026-08-22).
+#
+# So: one loud line per failure at the end of the boot, and system/init_errors
+# for anything that wants to show it. Cheap, because the datapoints are
+# already there -- this only looks.
+#
+set _failed {}
+foreach _k [lsort [dservKeys */init_error]] {
+    set _msg ""
+    catch { set _msg [dservGet $_k] }
+    if { [string trim $_msg] eq "" } continue
+    set _who [lindex [split $_k /] 0]
+    lappend _failed [list $_who $_msg]
+    puts stderr "dsconf: SUBPROCESS '$_who' DID NOT CONFIGURE -- everything\
+ below the failing line in its config never ran: $_msg"
+}
+dservSet system/init_errors $_failed
+if { [llength $_failed] } {
+    puts stderr "dsconf: [llength $_failed] subprocess(es) came up\
+ half-configured; see system/init_errors"
+}
+unset -nocomplain _failed _k _msg _who
+
 # dsconf.tcl ran to completion -- see the boot breadcrumb comment at the top.
 unset ::dsconf_booting
 dservSet system/boot_stage    done

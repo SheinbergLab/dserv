@@ -255,16 +255,38 @@ namespace eval em {
     # persisted the whole dict and paid for it.)
     variable db_exclude { source }
 
+    # NOTHING PERSISTS BEFORE THE DB HAS BEEN READ.
+    #
+    # set_param saves on every call (above), and the declaration at the
+    # bottom of this namespace ends with a boot-time `source_apply`, which
+    # goes through set_param. So for one commit (23b90904) every boot wrote
+    # the COMPILED DEFAULTS over this rig's stored calibration a few lines
+    # BEFORE load_calibration read it back -- and read back the defaults it
+    # had just written. Gains and centres measured against a subject were
+    # gone at the next restart, silently, because the save and the load both
+    # "worked". (2026-08-22)
+    #
+    # The guard, rather than a reordering: the declaration has to come after
+    # the procs it names, load_calibration has to come after the declaration
+    # (it can adopt an old db's pinned source into local/rig.tcl), and any
+    # future apply-at-boot would walk into the same hole. This makes the
+    # rule the code states: a save before the load is a save of things
+    # nobody measured.
+    variable cal_loaded 0
+
     proc save_calibration {} {
         variable settings; variable cal_profile; variable db_exclude
+        variable cal_loaded
+        if { !$cal_loaded } return
         set d $settings
         foreach k $db_exclude { catch { dict unset d $k } }
         catch { ::settingsdb::save eye $d $cal_profile }
     }
     proc load_calibration {} {
         variable settings; variable cal_profile; variable db_exclude
+        variable cal_loaded
         set stored [::settingsdb::load eye $cal_profile]
-        if { $stored eq "" } return
+        if { $stored eq "" } { set cal_loaded 1; return }
 
         # A source pinned in an OLDER db is carried over into local/rig.tcl,
         # once, and then ignored here forever. The rig keeps behaving the way
@@ -286,6 +308,7 @@ namespace eval em {
         }
 
         set settings [dict merge $settings $stored]
+        set cal_loaded 1
         update_settings
         puts "em: eye calibration restored (profile $cal_profile)"
 
