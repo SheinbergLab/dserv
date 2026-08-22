@@ -227,14 +227,27 @@ proc ::settings::_validate {sub key value} {
 proc ::settings::_file_line {sub key value} {
     variable filevals; variable rawlines; variable errlist; variable schema
     lappend rawlines [list $sub $key $value]
-    if { [dict exists $schema $sub] } {
+    # Judge it only if THIS KEY is already declared. Judging on the SUB was
+    # wrong and cost a rig its declared value: `juicer destination` is
+    # declared before `juicer hand_ml`, so a load triggered between the two
+    # -- which is every load now that declare publishes an effective value
+    # -- saw a known sub, an unknown key, and threw the line away. The rig
+    # then ran on the default with only a breadcrumb to say so.
+    #
+    # So an undeclared key is HELD, exactly like an undeclared sub, and
+    # declare validates what it finds held. Validity must not depend on
+    # which declaration happened to trigger the first read. A line nobody
+    # ever declares stays held and unused; settings::audit is what reports
+    # those, and a typo'd key is the case it exists for.
+    if { [dict exists $schema $sub $key] } {
         if { [catch { _validate $sub $key $value } v] } {
             lappend errlist $v
+            _publish_errors
             return
         }
         dict set filevals $sub $key $v
     } else {
-        dict set filevals $sub $key $value   ;# held for audit / other interps
+        dict set filevals $sub $key $value
     }
 }
 

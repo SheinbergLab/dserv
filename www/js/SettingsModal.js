@@ -475,9 +475,15 @@ class SettingsModal {
             </label>`;
         }
         const numeric = (type === 'int' || type === 'double');
+        // step MUST be explicit for a double. A number input with no step
+        // defaults to step=1, so 0.5 -- juicer hand_ml, joystick
+        // threshold_frac -- fails the browser's own validation and shows
+        // "the two nearest valid values are 0 and 1" over a value the rig
+        // declared and is happily running on.
+        const step = type === 'int' ? 'step="1"' : (numeric ? 'step="any"' : '');
         return `<div class="ess-settings-entry">
             <input type="${numeric ? 'number' : 'text'}" class="ess-modal-input ess-settings-input"
-                   ${numeric && type === 'int' ? 'step="1"' : ''}
+                   ${step}
                    value="${this._escAttr(k.value)}"${dis}>
             <button class="ess-mini-btn ess-settings-set" type="button"${dis}>Set</button>
         </div>`;

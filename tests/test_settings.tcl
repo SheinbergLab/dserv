@@ -121,6 +121,25 @@ check "example still generates" 1 \
 #    every later declaration's file value unvalidated -- an order dependency
 #    nobody could see, since the declarations live in different modules.
 #
+#
+# 5a. The case that cost raspberrypi its declared juice amount: a sub whose
+#     FIRST key is declared, a load triggered by that declaration, and a
+#     LATER key of the same sub sitting in the file. Judging the line on the
+#     sub threw it away ("unknown setting 'hand_ml' for 'juicer'") and the
+#     rig ran on the default. The key, not the sub, decides.
+#
+set fd [open $::RIGFILE w]
+puts $fd "setting jj first  1"
+puts $fd "setting jj second 0.6"
+close $fd
+settings::config -file $::RIGFILE
+settings::declare jj first -default 0 -type int      ;# this triggers the load
+settings::declare jj second -default 0.5 -type double
+check "the first key is in force" 1 [settings::get jj first]
+check "the LATER key survived the load" 0.6 [settings::get jj second]
+check "and reads as declared, not defaulted" file [settings::source_of jj second]
+check "no breadcrumb for a key declared later" 0 [llength [settings::errors]]
+
 set fd [open $::RIGFILE w]
 puts $fd "setting later knob bogus"
 close $fd
