@@ -43,9 +43,13 @@ namespace eval blinky::blink {
                 default { lassign {0.0 0.8 0.2} cr cg cb }
             }
             dl_set $g:blink_color [dl_repeat [dl_slist $color] $n_obs]
-            dl_set $g:blink_r [dl_repeat [dl_flist $cr] $n_obs]
-            dl_set $g:blink_g [dl_repeat [dl_flist $cg] $n_obs]
-            dl_set $g:blink_b [dl_repeat [dl_flist $cb] $n_obs]
+            # blink_cr/cg/cb, NOT blink_r/g/b: blink_r is the RADIUS, and
+            # naming red the same thing overwrote it -- green (red 0.0) drew
+            # a disc of size zero while amber (red 0.9) drew a small one, so
+            # it read as "green is broken" rather than "radius is gone".
+            dl_set $g:blink_cr [dl_repeat [dl_flist $cr] $n_obs]
+            dl_set $g:blink_cg [dl_repeat [dl_flist $cg] $n_obs]
+            dl_set $g:blink_cb [dl_repeat [dl_flist $cb] $n_obs]
             dl_set $g:remaining   [dl_ones $n_obs]
 
             return $g

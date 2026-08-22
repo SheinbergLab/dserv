@@ -21,9 +21,9 @@ proc nexttrial { id } {
 
     foreach p "blink_x blink_y blink_r" { set $p [dl_get stimdg:$p $id] }
     # rgb comes from stimdg; the loader owns the name -> rgb table
-    set color [list [dl_get stimdg:blink_r $id] \
-                    [dl_get stimdg:blink_g $id] \
-                    [dl_get stimdg:blink_b $id]]
+    set color [list [dl_get stimdg:blink_cr $id] \
+                    [dl_get stimdg:blink_cg $id] \
+                    [dl_get stimdg:blink_cb $id]]
 
     set mg [metagroup]
     set obj [polygon]

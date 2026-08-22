@@ -131,9 +131,9 @@ namespace eval blinky::blink {
                 # NAME here worked only for names dlsh happens to know:
                 # `green` drew, `amber` drew nothing at all.
                 if { [catch {
-                    set r [dl_get stimdg:blink_r $trial]
-                    set g [dl_get stimdg:blink_g $trial]
-                    set b [dl_get stimdg:blink_b $trial]
+                    set r [dl_get stimdg:blink_cr $trial]
+                    set g [dl_get stimdg:blink_cg $trial]
+                    set b [dl_get stimdg:blink_cb $trial]
                 } ] } { return green }
                 return [dlg_rgbcolor [expr {int(255*$r)}] \
                             [expr {int(255*$g)}] [expr {int(255*$b)}]]
