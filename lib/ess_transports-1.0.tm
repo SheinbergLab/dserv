@@ -1283,10 +1283,25 @@ namespace eval ess {
                             }
                         }
                         if { ![llength $dirs] } continue
+                        # A group that canonicalises TWO directions binds
+                        # fine, resolves ok, and can only ever report half a
+                        # d-pad -- box01's `response` (btn_left/btn_right) is
+                        # exactly that. Offering it identically to a complete
+                        # group is how someone discovers it mid-session.
+                        set have [lsort -unique $dirs]
+                        set missing {}
+                        foreach d {up down left right} {
+                            if { $d ni $have } { lappend missing $d }
+                        }
+                        set detail "$dev: [join $have { }]"
+                        if { [llength $missing] } {
+                            append detail " (no [join $missing { }])"
+                        }
                         lappend out [input_cand \
-                            [dict create route $g label $g \
-                                 detail "$dev: [join [lsort -unique $dirs] { }]" \
-                                 durable 1] \
+                            [dict create route $g label $g detail $detail \
+                                 durable 1 \
+                                 partial [expr {[llength $missing] ? 1 : 0}] \
+                                 have [llength $have]] \
                             [input_resolve joystick {} [list box [list * $g]]]]
                     }
                 }

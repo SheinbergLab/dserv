@@ -607,6 +607,38 @@ there, `status ok`, because the datapoint still existed. It now reads
 `extio/boxes` — the roster extioconf maintains from announces — and falls
 back to the key walk only when that datapoint is absent entirely.
 
+## 6. Confirming the d-pad, and half-a-d-pad
+
+The labelling itself is not the problem: rigs here label pins on the extio
+card, watching `di/<n>` flip as the button is pressed, with the box in hand.
+So a press-to-label wizard would automate typing that is already done
+correctly, in the place it is already done. Dropped.
+
+What that workflow cannot show is the half it does not touch. Between the
+pin flipping and a task reading `up` sit the group manifest, the label
+canon (`joystick_dir_canon` token-matches, so `btn_left` IS left), the
+bit→member index, and the resolver. The card proves the pin moved; nothing
+proved the chain.
+
+**✛ Check directions…** (gear → joystick, beside the calibration wizard)
+prompts up, down, left, right and shows what `ess/joystick/dir` reported —
+the same datapoint the d-pad panel and a task read. It writes nothing.
+Transport-agnostic, so switches and a quantised analog stick are both
+covered, and a direction that never arrives stays "—", which is the finding
+on a group that canonicalises only two.
+
+**A partial group is now flagged where it is offered.** box01's `response`
+(btn_left/btn_right) binds fine, resolves `ok`, and can report exactly half
+a d-pad; the picker used to present it identically to a complete group. It
+now reads `box01: left right (no up down)` with a `2 of 4` chip.
+
+Verified on raspberrypi (which has two buttons and an analog group, no
+4-way switches, so the chain was driven with `joystick_simulate`): four
+correct directions read "All four agree"; a deliberately swapped rig
+(right/left/up/down against the prompts) put all four cells in red and said
+so — "the group binds but its member labels do not mean what the task will
+read."
+
 ## Sequencing
 
 1. ~~**§0 first, alone.**~~ **DONE and rig-verified** — one line in

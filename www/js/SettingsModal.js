@@ -390,6 +390,10 @@ class SettingsModal {
                 title: 'measure this stick — rest, axes, throw — into the calibration db',
                 available: () => typeof openSliderCalModal === 'function',
                 run: () => openSliderCalModal()
+            }, {
+                label: '✛ Check directions…',
+                title: 'press each direction and confirm ESS names it the same one',
+                run: (self) => self._showDirCheck()
             }]
         };
     }
@@ -428,7 +432,7 @@ class SettingsModal {
             const [sub, i] = btn.dataset.action.split(':');
             const act = (SettingsModal.SECTION_ACTIONS[sub] || [])
                 .filter(a => !a.available || a.available())[Number(i)];
-            if (act) btn.addEventListener('click', () => act.run());
+            if (act) btn.addEventListener('click', () => act.run(this));
         });
     }
 
@@ -690,6 +694,8 @@ class SettingsModal {
                                       title="${this._escAttr(this._pickStatusTitle(c))}">${this._esc(c.status || '')}</span>
                                 ${c.durable === '0' ? `<span class="ess-pick-warn"
                                       title="a labelled group member survives a box swap; a pin number does not">by pin</span>` : ''}
+                                ${c.partial === '1' ? `<span class="ess-pick-warn"
+                                      title="only these directions canonicalise from the group's member labels — it will bind, and report nothing for the rest">${this._esc(c.have)} of 4</span>` : ''}
                             </div>
                         </div>`).join('')}
                 </div>
@@ -754,6 +760,91 @@ class SettingsModal {
             done();
             this._showErr(errEl, e.message);
         }
+    }
+
+    /*
+     * Press each direction; ESS says which one it thinks it was.
+     *
+     * The extio card already proves the PIN moved. What it cannot show is
+     * everything between that pin and `up`: the group manifest, the label
+     * canon, the bit→member index, the resolver. This reads
+     * `ess/joystick/dir` — the same datapoint the d-pad panel and a task
+     * read — so what it confirms is the contract, not the wiring.
+     *
+     * Transport-agnostic on purpose: switches and a quantised analog stick
+     * both land here, so the same check covers both. A direction that never
+     * arrives stays "—", which is the finding on a group that canonicalises
+     * only two of the four.
+     */
+    _showDirCheck() {
+        const DIRS = ['up', 'down', 'left', 'right'];
+        const seen = {};
+        let i = 0;
+
+        const sheet = document.createElement('div');
+        sheet.className = 'ess-modal-overlay ess-pick-overlay';
+        sheet.innerHTML = `
+            <div class="ess-modal ess-pick-modal">
+                <div class="ess-modal-header">
+                    <span class="ess-modal-title">Check directions</span>
+                    <button class="ess-modal-close" type="button">×</button>
+                </div>
+                <div class="ess-modal-body ess-pick-body">
+                    <div class="ess-cal-confirm-head" id="ess-dir-prompt"></div>
+                    <div class="ess-cal-dirs" id="ess-dir-grid"></div>
+                    <div class="ess-settings-note" id="ess-dir-note"></div>
+                </div>
+                <div class="ess-modal-footer">
+                    <span class="ess-settings-note">reads ess/joystick/dir — nothing is written</span>
+                    <button class="ess-modal-btn" id="ess-dir-again" type="button">Start over</button>
+                    <button class="ess-modal-btn cancel" type="button">Close</button>
+                </div>
+            </div>`;
+
+        const grid = () => {
+            sheet.querySelector('#ess-dir-grid').innerHTML = DIRS.map(d => {
+                const got = seen[d];
+                const state = got === undefined ? '' : (got === d ? 'ok' : 'bad');
+                return `<div class="ess-cal-dir ${state} ${d === DIRS[i] ? 'want' : ''}">
+                    <span class="ess-cal-dir-name">${d}</span>
+                    <span class="ess-cal-dir-got">${got === undefined ? '—' : this._esc(got)}</span>
+                </div>`;
+            }).join('');
+            const done = Object.keys(seen).length === DIRS.length;
+            const wrong = Object.entries(seen).filter(([d, g]) => d !== g);
+            sheet.querySelector('#ess-dir-prompt').innerHTML = done
+                ? (wrong.length ? 'Mismatch' : 'All four agree')
+                : `Press <b>${DIRS[i]}</b>`;
+            sheet.querySelector('#ess-dir-note').textContent = !done ? ''
+                : (wrong.length
+                    ? `${wrong.length} direction${wrong.length > 1 ? 's' : ''} came back as something else — `
+                      + 'the group binds but its member labels do not mean what the task will read. '
+                      + 'Relabel on the extio card, or pick a different group.'
+                    : 'the labels, the resolver and the task frame agree.');
+        };
+
+        const unsub = this.dpManager.subscribe('ess/joystick/dir', (d) => {
+            const v = parseInt(d.data ?? d.value);
+            if (isNaN(v) || v < 0) return;                  // centre/release
+            const got = SliderCalModal.DIRS[v] || String(v);
+            const want = DIRS[i];
+            if (seen[want] !== undefined) return;
+            seen[want] = got;
+            if (i < DIRS.length - 1) i++;
+            grid();
+        });
+
+        const close = () => { unsub(); sheet.remove(); };
+        sheet.querySelector('.ess-modal-close').addEventListener('click', close);
+        sheet.querySelector('.ess-modal-btn.cancel').addEventListener('click', close);
+        sheet.addEventListener('click', (e) => { if (e.target === sheet) close(); });
+        sheet.querySelector('#ess-dir-again').addEventListener('click', () => {
+            for (const k of Object.keys(seen)) delete seen[k];
+            i = 0;
+            grid();
+        });
+        document.body.appendChild(sheet);
+        grid();
     }
 
     _pickStatusTitle(c) {
