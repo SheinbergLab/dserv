@@ -42,6 +42,7 @@ class SettingsModal {
         this._unsub = null;
         this._sel = 'all';             // selected subsystem, or 'all'
         this._q = '';                  // filter text
+        this._errors = [];             // rejected local/rig.tcl lines, per interp
     }
 
     /*
@@ -60,7 +61,15 @@ class SettingsModal {
             '    set _s ""; catch { set _s [dservGet $_base/source] }',
             '    lappend _out [list [lindex $_p 1] [lindex $_p 2] $_v $_s [dservGet $_k]]',
             '}',
-            'set _out'
+            // Breadcrumbs are per interp: each one reads the whole rig file
+            // but judges only its own declarations, so the bad joystick line
+            // is a thing only `ess` can report.
+            'set _errs {}',
+            'foreach _k [lsort [dservKeys settings/parse_errors/*]] {',
+            '    set _who [lindex [split $_k /] 2]',
+            '    catch { foreach _e [dservGet $_k] { lappend _errs [list $_who $_e] } }',
+            '}',
+            'list $_out $_errs'
         ].join('\n');
     }
 
@@ -159,7 +168,11 @@ class SettingsModal {
         try {
             const reply = await this.connection.evalAsync(SettingsModal.SCAN_SCRIPT);
             if (gen !== this._gen || !this._overlay) return;
-            this._knobs = TclParser.parseList(reply).map(entry => {
+            const [knobList, errList] = TclParser.parseList(reply);
+            this._errors = TclParser.parseList(errList || '')
+                .map(e => TclParser.parseList(e))
+                .map(([who, msg]) => ({ who, msg }));
+            this._knobs = TclParser.parseList(knobList).map(entry => {
                 const f = TclParser.parseList(entry);
                 const schema = TclParser.parseDict(f[4] || '');
                 return {
@@ -199,6 +212,7 @@ class SettingsModal {
         }
         if (!body.querySelector('.ess-settings-layout')) {
             body.innerHTML = `
+                <div class="ess-settings-alert" id="ess-settings-alert" hidden></div>
                 <div class="ess-settings-layout">
                     <div class="ess-settings-nav">
                         <input type="text" class="ess-settings-filter" id="ess-settings-filter"
@@ -224,6 +238,7 @@ class SettingsModal {
                 this._renderPane();
             });
         }
+        this._renderAlert();
         this._renderNav();
         this._renderPane();
 
@@ -233,6 +248,30 @@ class SettingsModal {
         note.textContent = stale
             ? `${stale} knob${stale > 1 ? 's' : ''} read-only — this rig's lib/settings-1.0.tm predates the interp stamp`
             : '';
+    }
+
+    /*
+     * A line in local/rig.tcl that did not survive validation costs a
+     * breadcrumb and a fallback to the default — deliberately, so one bad
+     * line cannot abort a boot. But nothing ever SHOWED those breadcrumbs,
+     * which made "I set it in the file and the rig ignores me" unanswerable
+     * without an essctrl session. This is where they surface.
+     */
+    _renderAlert() {
+        const el = this._overlay.querySelector('#ess-settings-alert');
+        if (!el) return;
+        const errs = this._errors || [];
+        el.hidden = !errs.length;
+        if (!errs.length) return;
+        el.innerHTML = `
+            <div class="ess-settings-alert-head">${errs.length} line${
+                errs.length > 1 ? 's' : ''} in local/rig.tcl rejected — the
+                default is in force for ${errs.length > 1 ? 'these' : 'this'}</div>
+            ${errs.map(e => `<div class="ess-settings-alert-row">
+                <span class="ess-settings-alert-who">${this._esc(e.who)}</span>
+                <span>${this._esc(e.msg)}</span>
+            </div>`).join('')}
+        `;
     }
 
     _subs() { return [...new Set(this._knobs.map(k => k.sub))]; }
@@ -302,6 +341,8 @@ class SettingsModal {
                 <div class="ess-settings-row-head">
                     <span class="ess-settings-key">${this._esc(k.key)}</span>
                     <span class="ess-settings-tags">
+                        ${this._clearable(k) ? `<button class="ess-settings-clear" type="button"
+                              title="${this._escAttr(this._clearTitle(k))}">↺</button>` : ''}
                         <span class="ess-settings-src ${this._esc(k.source)}"
                               title="${this._esc(this._sourceTitle(k))}">${this._esc(k.source || '?')}</span>
                         <span class="ess-settings-interp"
@@ -364,6 +405,19 @@ class SettingsModal {
             k.values.map(v => `<code>${this._esc(v)}</code>`).join(' · ')}</div>`;
     }
 
+    /*
+     * Only a knob whose value came from somewhere can be sent back: a
+     * `default` has nothing to remove, and a knob with no route cannot be
+     * written at all.
+     */
+    _clearable(k) { return k.interp !== null && this._declared(k); }
+
+    _clearTitle(k) {
+        return k.source === 'runtime'
+            ? 'drop the live override (back to what the rig declares)'
+            : "remove this rig's declaration from local/rig.tcl (back to the default)";
+    }
+
     _sourceTitle(k) {
         switch (k.source) {
             case 'default': return 'nobody has declared this — the value is the declaration default';
@@ -376,6 +430,8 @@ class SettingsModal {
     _wireRow(k) {
         const row = this._overlay.querySelector('#' + this._rowId(k));
         if (!row) return;
+        const clearBtn = row.querySelector('.ess-settings-clear');
+        if (clearBtn) clearBtn.addEventListener('click', () => this._clear(k));
         const input = row.querySelector('.ess-settings-input');
         const setBtn = row.querySelector('.ess-settings-set');
         if (!input || k.interp === null) return;
@@ -400,9 +456,9 @@ class SettingsModal {
     }
 
     async _put(k, value) {
-        const id = `${k.sub}/${k.key}`;
         if (this._busy) return;
         const row = this._overlay.querySelector('#' + this._rowId(k));
+        if (!row) return;
         const errEl = row.querySelector('.ess-settings-err');
 
         // Tcl quoting stops at balanced braces, and this value is about to
@@ -412,18 +468,40 @@ class SettingsModal {
             return;
         }
 
-        this._busy = id;
+        await this._run(k,
+            `settings::put ${k.sub} ${k.key} ${TclParser.toTcl(value)} -persist`,
+            `setting ${k.sub} ${k.key} → ${value === '' ? '(empty)' : value}`);
+    }
+
+    /*
+     * Take the value back. `clear` removes the layer /source is reporting —
+     * the live override, else this rig's declaration — so what the badge
+     * says is exactly what the button undoes, and a knob carrying both takes
+     * two clicks with the badge changing in between.
+     */
+    async _clear(k) {
+        await this._run(k, `settings::clear ${k.sub} ${k.key}`,
+            `cleared ${k.sub} ${k.key} (${k.source})`);
+    }
+
+    async _run(k, command, logMsg) {
+        if (this._busy) return;
+        const row = this._overlay.querySelector('#' + this._rowId(k));
+        if (!row) return;
+        const errEl = row.querySelector('.ess-settings-err');
+
+        this._busy = `${k.sub}/${k.key}`;
         row.classList.add('busy');
         this._showErr(errEl, '');
         try {
-            const put = `settings::put ${k.sub} ${k.key} ${TclParser.toTcl(value)} -persist`;
             // `send` refuses main by name ("cannot send directly to dserv"),
             // so a knob main declared is evaluated where we already are.
-            const script = (k.interp === 'dserv') ? put : `send ${k.interp} {${put}}`;
+            const script = (k.interp === 'dserv')
+                ? command : `send ${k.interp} {${command}}`;
             await this.connection.evalAsync(script);
-            this.log(`setting ${k.sub} ${k.key} → ${value === '' ? '(empty)' : value}`, 'info');
+            this.log(logMsg, 'info');
             k._dirty = false;
-            // No re-read: -persist re-publishes value and /source, and the
+            // No re-read: put/clear re-publish value and /source, and the
             // subscription above brings them back.
         } catch (e) {
             this._showErr(errEl, e.message);
@@ -455,6 +533,22 @@ class SettingsModal {
             src.textContent = k.source || '?';
             src.title = this._sourceTitle(k);
         }
+        // ↺ follows /source: clearing a declaration leaves nothing to clear,
+        // and a live override arriving from anywhere makes one appear.
+        const tags = row.querySelector('.ess-settings-tags');
+        let clearBtn = row.querySelector('.ess-settings-clear');
+        if (this._clearable(k) && !clearBtn && tags) {
+            clearBtn = document.createElement('button');
+            clearBtn.type = 'button';
+            clearBtn.className = 'ess-settings-clear';
+            clearBtn.textContent = '↺';
+            clearBtn.addEventListener('click', () => this._clear(k));
+            tags.insertBefore(clearBtn, tags.firstChild);
+        } else if (!this._clearable(k) && clearBtn) {
+            clearBtn.remove();
+            clearBtn = null;
+        }
+        if (clearBtn) clearBtn.title = this._clearTitle(k);
         const input = row.querySelector('.ess-settings-input');
         if (!input || k._dirty) return;         // do not stomp half-typed text
         if (input.tagName === 'SELECT') {

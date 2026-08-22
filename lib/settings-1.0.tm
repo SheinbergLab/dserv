@@ -49,6 +49,10 @@
 #       Validated runtime override. -persist writes the file line (surgical:
 #       comments and unrelated lines byte-preserved) and reclassifies the
 #       value as file-declared.
+#   settings::clear <sub> <key> ?-all?
+#       The inverse. Removes the layer the effective value comes from -- the
+#       runtime override, else the file line -- so it undoes what /source
+#       reports; -all strips both. Fires -apply only if the value changed.
 #   settings::reload                     re-read file; -apply fires for keys
 #                                        whose effective value changed
 #   settings::example ?sub?              generated EXAMPLE text -- docs that
@@ -63,7 +67,7 @@
 # plain tclsh):  settings/<sub>/<key>          effective value
 #                settings/<sub>/<key>/source   default | file | runtime
 #                settings/<sub>/<key>/schema   the declaration dict
-#                settings/parse_errors         list of breadcrumbs
+#                settings/parse_errors/<interp>  breadcrumbs THAT interp saw
 #
 # WHO OWNS A KNOB. Those datapoints are the shared view, so a page can READ
 # every knob on the rig from one tree; but it cannot write one without
@@ -148,7 +152,7 @@ proc ::settings::declare {sub key args} {
         if { [catch { _validate $sub $key [dict get $filevals $sub $key] } v] } {
             dict unset filevals $sub $key
             lappend errlist $v
-            _dp settings/parse_errors $errlist
+            _publish_errors
         } else {
             dict set filevals $sub $key $v
         }
@@ -310,6 +314,93 @@ proc ::settings::interp_of {sub key} {
     return [dict get $schema $sub $key interp]
 }
 
+#
+# Take a value BACK. Every other verb here only ever adds: put writes a
+# runtime override or a file line, and nothing removed either, so a rig could
+# not return a knob to the state it shipped in without hand-editing the file
+# this module exists to stop people hand-editing.
+#
+# `clear` removes the layer the effective value COMES FROM -- the runtime
+# override if there is one, otherwise the file line -- so it undoes exactly
+# what /source is reporting, and a knob carrying both takes two calls with a
+# visible step in between. -all strips both at once.
+#
+# The -apply chain fires only if the effective value actually changed, the
+# same rule reload uses: clearing a runtime override that happened to match
+# the file value must not re-bind hardware for nothing.
+#
+proc ::settings::clear {sub key args} {
+    variable runtime; variable filevals; variable schema; variable loaded
+    if { !$loaded } { load }
+    set all 0
+    foreach opt $args {
+        switch -- $opt {
+            -all    { set all 1 }
+            default { error "settings::clear: unknown option '$opt'" }
+        }
+    }
+    if { ![dict exists $schema $sub $key] } {
+        error "settings::clear $sub $key: not declared in this interp"
+    }
+    set before [lindex [_effective $sub $key] 0]
+
+    set popped 0
+    if { [dict exists $runtime $sub $key] } {
+        dict unset runtime $sub $key
+        set popped 1
+    }
+    if { $all || !$popped } {
+        if { [dict exists $filevals $sub $key] } {
+            dict unset filevals $sub $key
+        }
+        _unpersist_line $sub $key
+    }
+
+    lassign [_effective $sub $key] v src
+    _dp settings/$sub/$key $v
+    _dp settings/$sub/$key/source $src
+    if { $v ne $before } {
+        set apply [dict get $schema $sub $key apply]
+        if { $apply ne "" } { uplevel #0 $apply [list $v] }
+    }
+    return $v
+}
+
+# The inverse of _persist_line: drop every active `setting sub key ..` line,
+# and the "# persisted ..." breadcrumb this module wrote directly above one
+# (never a human's comment -- only that exact generated prefix, and only
+# where it sits immediately above the line being removed). Everything else
+# is byte-preserved, atomic via tmp + rename, as on the way in.
+proc ::settings::_unpersist_line {sub key} {
+    set f [_file]
+    if { ![file exists $f] } return
+    set fd [open $f]; set lines [split [read $fd] \n]; close $fd
+    if { [lindex $lines end] eq "" } { set lines [lrange $lines 0 end-1] }
+
+    set out {}
+    foreach l $lines {
+        set t [string trim $l]
+        if { [string index $t 0] ne "#" && ![catch { llength $t } nw] && $nw >= 3
+             && [lindex $t 0] eq "setting" && [lindex $t 1] eq $sub
+             && [lindex $t 2] eq $key } {
+            if { [llength $out] &&
+                 [string match "# persisted *via settings::put" \
+                      [string trim [lindex $out end]]] } {
+                set out [lrange $out 0 end-1]
+            }
+            continue
+        }
+        lappend out $l
+    }
+    if { $out eq $lines } return                ;# nothing of ours in there
+
+    set tmp ${f}.tmp[pid]
+    set fd [open $tmp w]
+    puts -nonewline $fd [expr {[llength $out] ? "[join $out \n]\n" : ""}]
+    close $fd
+    file rename -force $tmp $f
+}
+
 proc ::settings::put {sub key value args} {
     variable runtime; variable filevals; variable schema; variable loaded
     if { !$loaded } { load }
@@ -466,8 +557,8 @@ proc ::settings::dump {} {
 }
 
 proc ::settings::_publish_declared {} {
-    variable schema; variable errlist
-    _dp settings/parse_errors $errlist
+    variable schema
+    _publish_errors
     dict for {sub keys} $schema {
         dict for {key d} $keys {
             lassign [_effective $sub $key] v src
@@ -475,6 +566,23 @@ proc ::settings::_publish_declared {} {
             _dp settings/$sub/$key/source $src
         }
     }
+}
+
+#
+# Breadcrumbs are PER INTERP, and the datapoint name has to say so.
+#
+# Every interp parses the whole rig file, but each judges only its own
+# declarations -- so `ess` sees the bad joystick line and `juicer` does not,
+# and both used to publish their list to one flat settings/parse_errors.
+# Whoever wrote last won, which for a page reading it meant the errors it
+# showed depended on boot order. One datapoint per interp instead; a reader
+# enumerates settings/parse_errors/* the way it enumerates everything else.
+#
+proc ::settings::_publish_errors {} {
+    variable errlist
+    set who [_interp_name]
+    if { $who eq "" } { set who unknown }
+    _dp settings/parse_errors/$who $errlist
 }
 
 proc ::settings::_dp {name value} {

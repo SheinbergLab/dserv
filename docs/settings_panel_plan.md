@@ -184,6 +184,37 @@ that are worth keeping in mind for any later panel:
   update, the `/source` badge updates regardless, and a put's own outcome
   forces through.
 
+**Taking a value BACK, and showing the rejected lines.** Two things the
+panel made obviously missing, both landed 2026-08-21:
+
+- **`settings::clear <sub> <key> ?-all?`.** Every other verb only added:
+  `put` wrote an override or a file line and nothing removed either, so a
+  rig could not return a knob to stock without hand-editing the file this
+  module exists to stop people hand-editing. `clear` removes the layer
+  `/source` is REPORTING — the runtime override if there is one, else the
+  file line — so the badge and the button agree, and a knob carrying both
+  takes two clicks with the badge changing in between. `-all` strips both.
+  `-apply` fires only when the effective value actually changed (clearing an
+  override that matched the file value must not re-bind hardware for
+  nothing). The generated `# persisted …` comment is removed with its line;
+  a human's comment on the line above is not.
+- **`settings/parse_errors` is now `settings/parse_errors/<interp>`.** A
+  rejected line costs a breadcrumb and a fallback — but nothing ever showed
+  the breadcrumb, which made "I set it in the file and the rig ignores me"
+  unanswerable without an essctrl session. Publishing per interp is not
+  cosmetic: every interp parses the whole file but judges only its own
+  declarations, so `ess` sees the bad joystick line and `juicer` does not,
+  and one flat datapoint meant last-writer-wins — the errors a page showed
+  depended on boot order. The gear renders them as a strip above everything.
+
+Verified on the live rig by hot-patching the new procs into main (the
+`www/CLAUDE.md` pattern) and driving a throwaway declared knob: ↺ removed
+the line, the badge went `file` → `default`, the button removed itself, and
+`local/rig.tcl` came back byte-identical by md5. A deliberately bad line
+then produced the strip — "1 line in local/rig.tcl rejected — the default is
+in force for this", attributed to `dserv` — and clearing it emptied the
+strip again.
+
 ## 2. The calibration wizard
 
 **Do not fold this into the gear.** A settings modal is a form: read, render,

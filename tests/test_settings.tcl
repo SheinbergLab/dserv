@@ -132,6 +132,74 @@ check "declaring it validates the held line" a [settings::get later knob]
 check "and leaves a breadcrumb" 1 \
     [string match "*'bogus' not one of {a b}*" [lindex [settings::errors] 0]]
 
+#
+# 6. clear -- the only verb that takes a value BACK. Without it the panel
+#    can only ever add lines to the file it exists to stop people editing.
+#
+set fd [open $::RIGFILE w]
+puts $fd "# a human's comment, and it must survive"
+puts $fd "setting keep mine 7"
+close $fd
+settings::config -file $::RIGFILE
+settings::declare keep mine -default 0 -type int
+settings::declare cl knob -default a -values {a b c}
+
+check "file value in force" 7 [settings::get keep mine]
+settings::put cl knob b -persist
+check "persisted" file [settings::source_of cl knob]
+settings::put cl knob c
+check "runtime on top" runtime [settings::source_of cl knob]
+
+# one layer at a time: the runtime override goes, the declaration stays --
+# so what /source reported is exactly what was undone
+check "clear pops the runtime layer" b [settings::clear cl knob]
+check "the file value is back" file [settings::source_of cl knob]
+check "clear again reaches the default" a [settings::clear cl knob]
+check "and the source says so" default [settings::source_of cl knob]
+
+set fd [open $::RIGFILE]; set txt [read $fd]; close $fd
+check "our line is gone" 0 [string match "*setting cl knob*" $txt]
+check "the generated comment went with it" 0 [string match "*# persisted*" $txt]
+check "the human's comment survived" 1 [string match "*human's comment*" $txt]
+check "an unrelated line survived" 1 [string match "*setting keep mine 7*" $txt]
+check "and its value still works" 7 [settings::get keep mine]
+
+# -all strips both layers in one call
+settings::put cl knob b -persist
+settings::put cl knob c
+check "-all goes straight to default" a [settings::clear cl knob -all]
+check "nothing left in the file" 0 \
+    [string match "*setting cl knob*" [read [set fd [open $::RIGFILE]]]][close $fd]
+
+# -apply fires on a real change, and NOT on a no-op: clearing an override
+# that matched the file value must not re-bind hardware for nothing
+set ::APPLIED {}
+settings::declare cl hooked -default a -values {a b} \
+    -apply {apply {{v} {lappend ::APPLIED $v}}}
+settings::put cl hooked b -persist
+settings::put cl hooked b                 ;# runtime override, same value
+set ::APPLIED {}                          ;# (put itself always applies)
+settings::clear cl hooked                 ;# pops it: effective unchanged
+check "no apply for a no-op clear" 0 [llength $::APPLIED]
+settings::clear cl hooked                 ;# now the file line goes
+check "apply fired on the real change" a [lindex $::APPLIED 0]
+
+#
+# 7. Parse-error breadcrumbs are PER INTERP. Every interp reads the whole
+#    file but judges only its own declarations, so one flat datapoint meant
+#    whichever interp published last decided what a page could see.
+#
+set fd [open $::RIGFILE w]
+puts $fd "setting cl knob nonsense"
+close $fd
+set ::dserv_interp juicer
+settings::reload
+check "published under this interp" 1 \
+    [info exists ::DP(settings/parse_errors/juicer)]
+check "and names the bad value" 1 \
+    [string match "*'nonsense' not one of*" $::DP(settings/parse_errors/juicer)]
+check "no flat datapoint any more" 0 [info exists ::DP(settings/parse_errors)]
+
 file delete $::RIGFILE
 
 if { $FAIL } {

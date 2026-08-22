@@ -5635,13 +5635,65 @@ select.ess-param-select {
 .ess-settings-body {
     overflow: hidden;
     padding: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+/* rejected local/rig.tcl lines. Full width above everything: a rig running
+   on defaults it was told not to run on is the first thing to say, not a
+   detail inside whichever section happens to be open */
+.ess-settings-alert {
+    padding: 8px 12px;
+    background: rgba(251, 191, 36, 0.08);
+    border-bottom: 1px solid var(--ess-warning);
+    max-height: 120px;
+    overflow-y: auto;
+    flex: 0 0 auto;
+}
+
+.ess-settings-alert-head {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--ess-warning);
+    margin-bottom: 4px;
+}
+
+.ess-settings-alert-row {
+    display: flex;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--ess-text-muted);
+    line-height: 1.4;
+}
+
+.ess-settings-alert-who {
+    flex: 0 0 auto;
+    font-family: 'SF Mono', Monaco, Consolas, monospace;
+    color: var(--ess-text-muted);
+    opacity: 0.8;
+}
+
+/* ↺ — the only control that takes a value back */
+.ess-settings-clear {
+    background: none;
+    border: none;
+    padding: 0 2px;
+    font-size: 12px;
+    line-height: 1;
+    color: var(--ess-text-muted);
+    cursor: pointer;
+}
+
+.ess-settings-clear:hover {
+    color: var(--ess-accent);
 }
 
 .ess-settings-layout {
     display: flex;
     align-items: stretch;
-    height: 100%;
+    flex: 1;
     min-height: 260px;
+    overflow: hidden;
 }
 
 .ess-settings-nav {
