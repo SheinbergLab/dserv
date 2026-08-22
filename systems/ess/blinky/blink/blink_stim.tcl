@@ -15,24 +15,15 @@
 #   reset
 #
 
-# name -> rgb, so a loader option is one word and stimdg reads plainly
-proc color_rgb { name } {
-    switch -exact -- $name {
-        green  { return {0.0 0.8 0.2} }
-        amber  { return {0.9 0.6 0.0} }
-        blue   { return {0.2 0.5 1.0} }
-        red    { return {0.9 0.2 0.2} }
-        white  { return {0.9 0.9 0.9} }
-    }
-    return {0.0 0.8 0.2}
-}
-
 proc nexttrial { id } {
     glistInit 1
     resetObjList
 
     foreach p "blink_x blink_y blink_r" { set $p [dl_get stimdg:$p $id] }
-    set color [color_rgb [dl_get stimdg:blink_color $id]]
+    # rgb comes from stimdg; the loader owns the name -> rgb table
+    set color [list [dl_get stimdg:blink_r $id] \
+                    [dl_get stimdg:blink_g $id] \
+                    [dl_get stimdg:blink_b $id]]
 
     set mg [metagroup]
     set obj [polygon]

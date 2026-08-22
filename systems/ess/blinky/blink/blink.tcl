@@ -82,7 +82,13 @@ namespace eval blinky::blink {
 
                 clearwin
                 setbackground [dlg_rgbcolor 25 25 25]
-                setwindow -10 -10 10 10
+                # 16x9, like every other viz in the tree (extio_test's
+                # loopback is the reference). The window sets the scale for
+                # everything below: a -size in user units means one thing in
+                # a 16-wide window and something quite different in a
+                # 20-wide one, which is how the spot ended up filling the
+                # panel while the text looked microscopic.
+                setwindow 0 0 16 9
                 draw_
             }
 
@@ -96,9 +102,10 @@ namespace eval blinky::blink {
                 # (docs/dlsh_idioms.md). fcircle filled / circle hollow.
                 set m [expr {$on ? "fcircle" : "circle"}]
                 set c [expr {$on ? [my_color] : "gray"}]
-                dlg_markers 0 0 -marker $m -size 8 -scaletype x -color $c
-                dlg_text 0 -8.5 "obs $trial   blinks $count" \
-                    -color white -size 10 -just 0
+                dlg_markers 8 5.2 -marker $m -size 3 -scaletype x -color $c
+                dlg_text 8 8.2 "blinky" -color white -size 14 -just 0
+                dlg_text 8 1.6 "obs $trial   blinks $count" \
+                    -color gray -size 12 -just 0
                 flushwin
             }
 
@@ -120,8 +127,16 @@ namespace eval blinky::blink {
             proc my_color {} {
                 variable trial
                 if { $trial < 0 } { return gray }
-                if { [catch { dl_get stimdg:blink_color $trial } c] } { return green }
-                return $c
+                # the same three numbers the stim draws with. Passing the
+                # NAME here worked only for names dlsh happens to know:
+                # `green` drew, `amber` drew nothing at all.
+                if { [catch {
+                    set r [dl_get stimdg:blink_r $trial]
+                    set g [dl_get stimdg:blink_g $trial]
+                    set b [dl_get stimdg:blink_b $trial]
+                } ] } { return green }
+                return [dlg_rgbcolor [expr {int(255*$r)}] \
+                            [expr {int(255*$g)}] [expr {int(255*$b)}]]
             }
 
             setup
