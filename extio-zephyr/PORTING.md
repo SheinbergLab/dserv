@@ -6351,3 +6351,82 @@ Same reasoning shape as the eye-coverage test: a CONSTANT deficit is
 quantisation, a PROPORTIONAL one is real loss. Worth reaching for whenever a
 timing number looks wrong -- sweeping the magnitude separates the two in one
 run, and neither a single measurement nor a repeat of the same magnitude can.
+
+## 2026-08-22 (end of day) — nRF54LM20 DK: board files written before the board
+
+The XIAO nRF54LM20A is out of stock, so the L-series bring-up target is Nordic's
+own DK. Board files written and building the same day the decision was made, so
+that arrival day is bring-up rather than board-file archaeology.
+
+    plain     120,876 B flash (5.8% of 2036 KB RRAM) / 133,280 B RAM (25% of 511 KB)
+    signed    132,740 B = 14% of the 920 KB slot0
+    MCUboot    39,704 B = 64% of the 62 KB boot partition
+
+Both targets are in `buildall.sh` from day one, which now stands at twelve.
+
+**It needs none of the XIAO's workarounds**, checked in the Zephyr board files
+and confirmed by the build. Worth listing because the two boards are the SAME
+SILICON and it would be reasonable to expect the same potholes:
+
+| | XIAO nRF54LM20A | nRF54LM20 DK |
+|---|---|---|
+| `gpio3` | **disabled**, though its own connector map uses it | all four ports enabled |
+| USB | `&usbhs` only — wrapper and `vregusb` off, so USB cannot come up | all three enabled |
+| `&adc` | enabled | enabled |
+| nPM1300 PMIC | yes → **MCUboot would not link** | none → links unaided |
+
+The SoC-level facts carry across unchanged: USB-HS via `snps,dwc2`, the SAADC
+compatible shared with the nRF52840 (so the audited 1x oversample menu applies),
+and GRTC selecting `TIMER_HAS_64BIT_CYCLE_COUNTER` — **the nRF52840's dead-clock
+bug cannot occur on this part.**
+
+### The pin map, and why it is numbered the way it is
+
+**Box pin n IS expansion-header position n** (P17, silk 00-21). The DK is
+otherwise a raw-port board — P1 = PORT0 00-09, P2 = PORT1 00-15, P3 = PORT1
+16-31, P4 = PORT2 00-10, P5 = PORT3 00-12 — and numbering from the ports would
+mean inventing both a selection and a numbering, because `BOX_NPINS` is 30
+against roughly seventy port pins. P17 is the one contiguous connector the board
+models with its own `gpio-map`.
+
+The cost is that box-pin numbers are not port numbers, and the silk column pays
+it: **port.pin first, expansion position second** (`P3.05 (EXP00)`). That
+correction came from the board artwork before the board existed here, and it is
+the same error the nRF52840 DK's map carried earlier the same day — a Nordic
+board silkscreens Nordic port names, and both times a convention had been
+written where a label belonged.
+
+Two consequences to carry to the bench:
+
+* **Every box pin is reachable from two places** — box pin 0 is P17 position 00
+  *and* P5 pin 05, the same net either way. Convenient, and also how two jumpers
+  end up on one wire.
+* **LEDs and buttons are NOT off-header here**, reversing the nRF52840 DK, where
+  they cost no field pin. All eight also appear on the PORT1/PORT0 headers, so
+  driving box pin 22 drives P1.22 on header P3 as well.
+
+### ARRIVAL CHECKLIST — do these in order, they are the only unknowns
+
+Everything else is a re-run of what the nRF52840 passed on 2026-08-22.
+
+1. **Flash the plain build, read the banner.** `west flash -d build-check-lm20dk`.
+   Expect the codec smoke test, `analog: ... 4 ch`, `no Ethernet on this board`.
+2. **Console default.** The board has a debugger VCOM on uart20/uart30. If it
+   rides the same connector that POWERS the board, this board belongs in
+   CMakeLists.txt's `BOX_DEFAULT_CONSOLE_MODE=UART` gate with the MCXN947 and
+   the nRF52840 DK. Deliberately left out until verified — guessing it wrong is
+   how a healthy box looks dead, which cost a round that morning.
+3. **The AIN -> pad map, from the board user guide.** Neither the DK's DTS nor
+   its doc states which AIN reaches which header position, and the DK declares
+   no channels of its own. The four in the overlay exist so the sweep path
+   compiles. Fill in `box-ain-pins` and `box-ain-silk` at the same time.
+   **Do not assume ordering** — the Teensy's silkscreen A0 is ADC channel 7.
+4. **Measure the reference.** `zephyr,vref-mv = <1000>` is ASSERTED at the
+   nRF54L's 1.0 V internal reference, not measured. Full scale follows from it.
+5. **Check the header for a second owner.** `spi22` (`nordic_expansion_spi`) is
+   not enabled by default but its CS is gpio3.2 = **box pin 10**. Nothing to fix
+   today; it silently takes that pin the day anyone enables it.
+6. Then the nRF52840 battery, in that order: NVS save/reboot/load, DI on the
+   four buttons (both debounced and raw), obs mirror on an LED, `sync pin` with
+   a jumper, the loopback pulse sweep, and finally **an actual OTA** — which no
+   Nordic board here has yet exercised, only built.
