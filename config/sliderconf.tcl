@@ -1146,11 +1146,51 @@ dpointSetScript    ain/vals slider::process_ain
 # box, plus its select button. Matching on the label rather than a configured
 # box name is what makes it self-activating -- define `stick` / `stick_select`
 # on any box on the rig and it works, the same way emconf picks up `eye`.
-dservAddMatch      extio/*/state/ain/stick
-dpointSetScript    extio/*/state/ain/stick slider::process_stick
+#
+# WHICH analog group is the stick is a rig declaration, not a constant --
+# same shape as emconf's `eye ain_group`, and pickable/wiggle-fillable for
+# the same reason. The select button's DI group follows the ain group's name
+# (`<group>_select`), because they are two halves of one device and letting
+# them drift apart is how a stick ends up with somebody else's button.
+#
+namespace eval slider {
+    variable ain_dp ""
+    variable sel_dp ""
 
-dservAddMatch      extio/*/state/group/stick_select
-dpointSetScript    extio/*/state/group/stick_select slider::process_stick_select
+    proc ain_group_apply { g } {
+        variable ain_dp; variable sel_dp
+        set g [string trim $g]
+        if { $g eq "" } { return }
+        set want     extio/*/state/ain/$g
+        set want_sel extio/*/state/group/${g}_select
+        if { $want eq $ain_dp } { return }
+        if { $ain_dp ne "" } {
+            catch { dpointRemoveScript $ain_dp slider::process_stick }
+            catch { dservRemoveMatch   $ain_dp }
+            catch { dpointRemoveScript $sel_dp slider::process_stick_select }
+            catch { dservRemoveMatch   $sel_dp }
+        }
+        set ain_dp $want
+        set sel_dp $want_sel
+        dservAddMatch      $ain_dp
+        dpointSetScript    $ain_dp slider::process_stick
+        dservAddMatch      $sel_dp
+        dpointSetScript    $sel_dp slider::process_stick_select
+        puts "slider: analog stick group = $g ($ain_dp, select $sel_dp)"
+        return
+    }
+}
+
+::settings::declare slider ain_group -default stick \
+    -candidates analog \
+    -doc "the extio analog group carrying the stick, by LABEL --
+extio/<any box>/state/ain/<this>, with its push-select read from
+the DI group <this>_select. Wildcard box on purpose: define the
+group on whichever box is present and it comes alive. Only
+consulted when the slider source is extio (or auto)." \
+    -apply {::slider::ain_group_apply}
+
+::slider::ain_group_apply [::settings::get slider ain_group]
 
 # Subscribe to the virtual path (browser / simulator)
 dservAddExactMatch slider/virtual

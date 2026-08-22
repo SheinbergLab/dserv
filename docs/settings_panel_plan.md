@@ -570,8 +570,42 @@ with `status ok`; the browser path filled the field and the badge went
 `file`; the timeout path rendered its guidance and reset the button. Driven
 against a throwaway knob, and `local/rig.tcl` was left as found.
 
-**Still worth doing:** the same trick for analog groups — wiggle the axis,
-and the group that moved is the one you meant.
+### Wiggle — DONE (2026-08-22)
+
+The same idea, a different signal. A continuous group publishes at 250 Hz
+whether or not anyone is touching it, so "it changed" says nothing; what
+names the group someone MEANT is a deflection far larger than the noise it
+sits in. `input_capture_arm analog` watches every announced stream, keeps
+each channel's min/max since arming, and takes the first group whose span
+crosses a threshold (150 ADC counts of a 0..4095 span — a deliberate push is
+hundreds, a resting channel wanders by a handful).
+
+`extio/ain/streams` IS the analog candidate list, already assembled by
+extioconf with box, group, dpoint, channels, labels, mode and rate. Walking
+the manifests again would have been a worse copy — and a stale one, since
+the registry only carries groups that are actually announced.
+
+**And the wiggle needed somewhere to write**, so the group LABEL is now
+declared too: `eye ain_group` (default `eye`) and `slider ain_group`
+(default `stick`, whose push-select follows as `<group>_select` — two halves
+of one device, and letting them drift apart is how a stick ends up with
+somebody else's button). Both were hardwired in their config files;
+changing the label now re-subscribes.
+
+Verified on box01 (raspberrypi): enumeration returned
+`eye (eye_h eye_v) — box01: 0, 1 @ 250Hz continuous`; wiggling captured
+`channel 1 moved 281 counts` from Tcl and `channel 0 moved 193 counts` from
+the gear's Wiggle… button, which then wrote the group. The re-subscribe was
+exercised on the LIVE eye path — pointed at a nonexistent group the eye
+stopped, pointed back it resumed — so the remove/add is clean in both
+directions.
+
+**A ghost bug this found.** `input_boxes` walked `state/pins/all` keys, and
+dserv never pushes deletions, so an unplugged box leaves its whole tree
+behind: on the dev Mac the picker offered routes into a teensy that is not
+there, `status ok`, because the datapoint still existed. It now reads
+`extio/boxes` — the roster extioconf maintains from announces — and falls
+back to the key walk only when that datapoint is absent entirely.
 
 ## Sequencing
 

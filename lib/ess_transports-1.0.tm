@@ -1103,9 +1103,25 @@ namespace eval ess {
     # ESS side resolves it.
     ########################################################################
 
-    # every live box, by device name
+    # Every LIVE box, by device name.
+    #
+    # extio/boxes is the roster extioconf maintains from announces; the
+    # state/ datapoints are not, and dserv never pushes deletions -- so a box
+    # that has been unplugged leaves its whole tree behind and a walk of the
+    # keys offers routes into a box that is not there, with input_resolve
+    # cheerfully reporting `ok` because the datapoint still exists. That is
+    # worse than offering nothing: the one thing this list is for is knowing
+    # the plumbing reaches something. Verified on the dev Mac, whose teensy
+    # tree is entirely ghosts (extio/boxes empty).
+    #
+    # Falls back to the key walk only when the roster datapoint does not
+    # exist at all, i.e. an extioconf too old to publish it.
     proc input_boxes {} {
         variable io_class
+        if { [dservExists $io_class/boxes] } {
+            set r [dservGet $io_class/boxes]
+            return [lsort -unique $r]
+        }
         set devs {}
         foreach k [dservKeys $io_class/*/state/pins/all] {
             lappend devs [lindex [split $k /] 1]
@@ -1140,6 +1156,16 @@ namespace eval ess {
             lappend gs [lindex [split $k /] end-1]
         }
         return [lsort -unique $gs]
+    }
+
+    # extio/ain/streams: <box>/<group> -> spec dict. Absent on a rig with no
+    # analog, and on an extioconf too old to publish it.
+    proc input_ain_streams {} {
+        variable io_class
+        if { ![dservExists $io_class/ain/streams] } { return {} }
+        set v [dservGet $io_class/ain/streams]
+        if { [catch { dict size $v }] } { return {} }
+        return $v
     }
 
     proc input_pin_label { dev pin } {
@@ -1265,6 +1291,30 @@ namespace eval ess {
                     }
                 }
             }
+            analog {
+                # extio/ain/streams IS this list, assembled by extioconf from
+                # what the boxes announce -- box, group, dpoint, channels,
+                # their labels, mode and rate. Walking the manifests again
+                # here would be a worse copy of it, and a stale one: the
+                # streams registry only carries groups that are actually
+                # announced, so a vanished box leaves no entry.
+                foreach { key spec } [input_ain_streams] {
+                    set dev  [dict get $spec box]
+                    set grp  [dict get $spec group]
+                    set labs [expr {[dict exists $spec labels] ? [dict get $spec labels] : {}}]
+                    set rate [expr {[dict exists $spec rate_hz] ? [dict get $spec rate_hz] : "?"}]
+                    set mode [expr {[dict exists $spec mode] ? [dict get $spec mode] : "?"}]
+                    set dp   [dict get $spec dpoint]
+                    lappend out [dict create route $grp \
+                                     label [expr {[llength $labs] ?
+                                                  "$grp ([join $labs { }])" : $grp}] \
+                                     detail "$dev: [join [dict get $spec chans] {, }]\
+                                             @ ${rate}Hz $mode" \
+                                     durable 1 \
+                                     status [expr {[dservExists $dp] ? "ok" : "unresolved"}] \
+                                     address $dp]
+                }
+            }
             out {
                 # Output-capable pins, for a juicer destination.
                 foreach dev [input_boxes] {
@@ -1313,8 +1363,98 @@ namespace eval ess {
         catch { dservSet ess/inputs/capture $args }
     }
 
+    #
+    # ANALOG capture is the same idea and a different signal. A continuous
+    # group publishes at 250 Hz whether or not anyone is touching it, so "it
+    # changed" says nothing; what names the group someone MEANT is a
+    # deflection far larger than the noise it sits in. So: watch every
+    # announced stream, keep each channel's min/max since arming, and take
+    # the first group whose span crosses the threshold.
+    #
+    # In ADC counts, against a 0..4095 span: a deliberate push of a stick is
+    # hundreds, a resting channel wanders by a handful.
+    #
+    variable capture_span
+    array set capture_span {}
+    variable capture_threshold 150
+
+    proc input_capture_arm_analog { {timeout_ms 20000} {threshold ""} } {
+        variable capture; variable capture_span; variable capture_threshold
+        if { [catch { package require extio } e] } {
+            error "analog capture needs the extio package to decode blocks: $e"
+        }
+        input_capture_cancel quiet
+        array unset capture_span
+        if { $threshold ne "" } { set capture_threshold $threshold }
+
+        set streams [input_ain_streams]
+        if { ![dict size $streams] } {
+            error "no analog streams are announced -- nothing to wiggle"
+        }
+        set capture(active) 1
+        set capture(kind)   analog
+        set capture(pats)   {}
+        foreach { key spec } $streams {
+            set dp [dict get $spec dpoint]
+            dservAddMatch $dp
+            dpointAddScript $dp ::ess::input_capture_analog_event
+            lappend capture(pats) $dp
+        }
+        set capture(after) [dservAfter $timeout_ms ::ess::input_capture_timeout]
+        input_capture_publish state armed kind analog \
+            detail "move the input you want -- [dict size $streams] stream(s) watched"
+        return armed
+    }
+
+    proc input_capture_analog_event { dpoint data } {
+        variable capture; variable capture_span; variable capture_threshold
+        if { !$capture(active) || $capture(kind) ne "analog" } return
+        if { [catch { ::extio::ain_decode $data } d] } return
+        set n [dict get $d nchan]
+        if { $n <= 0 } return
+        set i 0
+        set hit -1
+        set peak 0
+        foreach v [dict get $d samples] {
+            set ch [expr {$i % $n}]
+            set k $dpoint/$ch
+            if { ![info exists capture_span($k)] } {
+                set capture_span($k) [list $v $v]
+            } else {
+                lassign $capture_span($k) mn mx
+                if { $v < $mn } { set mn $v }
+                if { $v > $mx } { set mx $v }
+                set capture_span($k) [list $mn $mx]
+                set span [expr {$mx - $mn}]
+                if { $span > $peak } { set peak $span; set hit $ch }
+            }
+            incr i
+        }
+        if { $hit < 0 || $peak < $capture_threshold } return
+
+        # Name the stream this datapoint belongs to, so the answer is the
+        # GROUP someone wiggled rather than the datapoint it arrived on.
+        set label ""; set dev ""; set grp ""
+        foreach { key spec } [input_ain_streams] {
+            if { [dict get $spec dpoint] eq $dpoint } {
+                set dev [dict get $spec box]
+                set grp [dict get $spec group]
+                set labs [expr {[dict exists $spec labels] ? [dict get $spec labels] : {}}]
+                set label [expr {[llength $labs] ? "$grp ([join $labs { }])" : $grp}]
+                break
+            }
+        }
+        if { $grp eq "" } return
+        input_capture_disarm
+        input_capture_publish state captured route $grp label $label \
+            detail "$dev: channel $hit moved $peak counts" \
+            status ok durable 1
+        return
+    }
+
     proc input_capture_arm { {kind button} {timeout_ms 20000} } {
         variable capture; variable capture_pre; variable io_class
+        if { $kind eq "analog" } { return [input_capture_arm_analog $timeout_ms] }
         input_capture_cancel quiet          ;# never two armed at once
         array unset capture_pre
         foreach k [dservKeys $io_class/*/state/di/*] {

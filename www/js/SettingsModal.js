@@ -492,11 +492,16 @@ class SettingsModal {
             ? `<button class="ess-mini-btn ess-settings-picker" type="button"${dis}
                        title="choose from what this rig's boxes are announcing now">Pick…</button>`
             : '';
-        // Only `button` routes can be captured: pressing names one input.
-        // A group or an output is not something you can press.
-        const learn = k.candidates === 'button'
+        // Capture is for the kinds you can DO something to: press a button,
+        // move a stick. A group label or an output pin is not one of those.
+        const CAPTURE = {
+            button: { label: 'Press…',  title: 'press the button on the box and it names itself' },
+            analog: { label: 'Wiggle…', title: 'move the input on the box and it names itself' }
+        };
+        const cap = CAPTURE[k.candidates];
+        const learn = cap
             ? `<button class="ess-mini-btn ess-settings-learn" type="button"${dis}
-                       title="press the button on the box and it names itself">Press…</button>`
+                       title="${this._escAttr(cap.title)}">${this._esc(cap.label)}</button>`
             : '';
 
         const numeric = (type === 'int' || type === 'double');
@@ -722,7 +727,7 @@ class SettingsModal {
         const errEl = row.querySelector('.ess-settings-err');
         this._showErr(errEl, '');
         const was = btn.textContent;
-        btn.textContent = 'press it…';
+        btn.textContent = k.candidates === 'analog' ? 'move it…' : 'press it…';
         btn.classList.add('waiting');
 
         let unsub = null;
@@ -744,7 +749,7 @@ class SettingsModal {
         });
         try {
             await this.connection.evalAsync(
-                'send ess {::ess::input_capture_arm button 30000}');
+                `send ess {::ess::input_capture_arm ${k.candidates} 30000}`);
         } catch (e) {
             done();
             this._showErr(errEl, e.message);

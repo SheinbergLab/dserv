@@ -584,8 +584,48 @@ dpointSetScript    eyetracking/results em::process
 # em/settings source == auto (the default) they ALL publish and it is
 # last-writer-wins, which is fine while only one is live; ::em::set_source
 # video|analog|virtual pins one when they are not.
-set em_ain_dp extio/*/state/ain/eye
-dservAddMatch   $em_ain_dp
-dpointSetScript $em_ain_dp em::process_analog
+#
+# WHICH analog group is the eye is a rig declaration, not a constant. The
+# label was hardwired here, so a box whose group is called something else
+# (or a rig with two analog groups) had to have this file edited. It is the
+# same shape as `eye source`: declared, pickable, and -- because ess can
+# enumerate and CAPTURE analog streams -- fillable by wiggling the input
+# rather than by typing its name.
+#
+# The subscription is by LABEL with a wildcard box, which is what makes it
+# self-activating: define the group on any box and it comes alive with no
+# rig-side binding to keep in step. Changing the label re-subscribes.
+#
+namespace eval em {
+    variable ain_dp ""
+
+    proc ain_group_apply { g } {
+        variable ain_dp
+        set g [string trim $g]
+        if { $g eq "" } { return }
+        set want extio/*/state/ain/$g
+        if { $want eq $ain_dp } { return }
+        if { $ain_dp ne "" } {
+            catch { dpointRemoveScript $ain_dp em::process_analog }
+            catch { dservRemoveMatch   $ain_dp }
+        }
+        set ain_dp $want
+        dservAddMatch   $ain_dp
+        dpointSetScript $ain_dp em::process_analog
+        puts "em: analog eye group = $g ($ain_dp)"
+        return
+    }
+}
+
+::settings::declare eye ain_group -default eye \
+    -candidates analog \
+    -doc "the extio analog group carrying the eye signal, by LABEL --
+extio/<any box>/state/ain/<this>. Wildcard box on purpose: define
+the group on whichever box is present and it comes alive. Only
+consulted when the eye source is analog (or auto)." \
+    -apply {::em::ain_group_apply}
+
+::em::ain_group_apply [::settings::get eye ain_group]
+set em_ain_dp $::em::ain_dp    ;# compat: local/em.tcl on older rigs reads this
 
 puts "Eye movement subprocessor started"
