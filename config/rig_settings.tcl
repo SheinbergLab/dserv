@@ -442,10 +442,11 @@ if { [info exists ::env(ESS_SYSTEM_PATH)] && ![file isdirectory $::env(ESS_SYSTE
 # is not broken -- just misleading to the next person who edits one and sees
 # nothing change.
 foreach {f what} {
-    pre-remote.tcl    "stim host/dservhost"
-    pre-registry.tcl  "registry url/workgroup"
-    pre-systemdir.tcl "ess system_path/data_dir/export_path"
-    pre-datafiles.tcl "ess data_dir/export_path"
+    pre-remote.tcl          "stim host/dservhost"
+    pre-registry.tcl        "registry url/workgroup"
+    pre-systemdir.tcl       "ess system_path/data_dir/export_path"
+    pre-datafiles.tcl       "ess data_dir/export_path"
+    post-remotecompute.tcl  "ess compute_host"
 } {
     if { [file exists [file join $dspath local $f]] } {
         puts "rig_settings: local/$f is superseded by '$what' in\
@@ -475,7 +476,7 @@ foreach {f what} {
 foreach _f {
     ain.tcl post-openiris.tcl em.tcl docs.tcl ptp.tcl registry.tcl
     ain.tcl.EXAMPLE post-openiris.tcl.EXAMPLE registry.tcl.EXAMPLE
-    pre-docs.tcl.EXAMPLE
+    pre-docs.tcl.EXAMPLE post-remotecompute.tcl.EXAMPLE
 } {
     set _p [file join $dspath local $_f]
     if { ![file exists $_p] } continue

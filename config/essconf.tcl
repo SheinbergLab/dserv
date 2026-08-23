@@ -375,6 +375,75 @@ foreach f [glob -nocomplain [file join $dspath local post-*.tcl]] {
 }
 
 #
+# Rig-level remote compute host, DECLARED. Generalizes what
+# local/post-remotecompute.tcl did for planko alone: the host is a rig fact,
+# so it lives in local/rig.tcl beside the others, and the system package
+# reads it when it loads (planko-3.0.tm, bottom). Declared AFTER the post-*
+# sourcing above so a declaration wins over a legacy set_compute_host call,
+# and BEFORE the boot-system load below so the package's load-time read
+# finds it.
+#
+proc compute_host_norm {v} {
+    set v [string trim $v]
+    if { $v eq "" } { return "" }            ;# compute locally -- the default
+    if { [regexp {^[a-zA-Z][a-zA-Z0-9+.-]*://} $v] } {
+        error "ess compute_host: '$v' is a URL -- give the host alone\
+ (remoteEval talks to dserv on port 2560)"
+    }
+    if { [regexp {\s} $v] } {
+        error "ess compute_host: '$v' contains whitespace"
+    }
+    return $v
+}
+
+proc compute_host_apply {v} {
+    set v [string trim $v]
+    # Only a LOADED planko can be told -- an unloaded one reads the setting
+    # itself when its package loads. Prefer the probing setter so an
+    # unreachable host degrades to local compute with a journal line rather
+    # than erroring the next trial generation; plain set_compute_host is the
+    # fallback for a package version without the probe, and the way to say
+    # "" = back to local.
+    if { $v ne "" &&
+         [llength [info commands ::planko::set_compute_host_if_available]] } {
+        planko::set_compute_host_if_available $v
+    } elseif { [llength [info commands ::planko::set_compute_host]] } {
+        planko::set_compute_host $v
+    }
+}
+
+settings::declare ess compute_host -default "" \
+    -validate ::compute_host_norm \
+    -apply    ::compute_host_apply \
+    -doc "a remote dserv/ess box that compute-heavy systems offload
+generation to (planko board physics today; remoteEval against its
+port 2560). EMPTY -- the default -- computes locally. The system
+package reads it when it loads; a live change reaches a loaded
+planko immediately, probing reachability first, so an unreachable
+host falls back to local compute with a journal line. Replaces
+planko::set_compute_host in local/post-remotecompute.tcl."
+
+# One-time carryover: a rig whose local/post-remotecompute.tcl (sourced
+# just above) already pointed planko at a compute host gets that value
+# adopted into rig.tcl; after that the declaration is the single home and
+# the file is deletable (rig_settings warns while it remains). Already
+# declared? Then push it over whatever the legacy file just set.
+if { [settings::source_of ess compute_host] eq "default" } {
+    set _legacy ""
+    catch { set _legacy [string trim $::planko::compute_host] }
+    if { $_legacy ne "" } {
+        if { [catch { settings::put ess compute_host $_legacy -persist } _e] } {
+            puts stderr "ess: compute host not adopted into local/rig.tcl: $_e"
+        } else {
+            puts "ess: compute host adopted into local/rig.tcl ($_legacy)"
+        }
+    }
+} elseif { [catch { compute_host_apply [settings::get ess compute_host] } _e] } {
+    puts stderr "ess: compute_host declaration could not be applied: $_e"
+}
+unset -nocomplain _legacy _e
+
+#
 # and finally load the rig's boot system.
 #
 # `emcalib` was hardcoded here, pointing into the systems tree that ships
