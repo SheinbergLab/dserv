@@ -174,7 +174,9 @@ processLoad [file join \
     $path processors sampler[info sharedlibextension]] sampler
 processAttach sampler eyetracking/raw sampler
 
-# look for any .tcl configs in local/*.tcl
-foreach f [glob [file join $dspath local trigger-*.tcl]] {
+# look for any .tcl configs in local/trigger-*.tcl (none is the norm --
+# without -nocomplain a bare glob THROWS on zero matches, which made this
+# line error into the journal on every boot of every rig)
+foreach f [glob -nocomplain [file join $dspath local trigger-*.tcl]] {
     source $f
 }

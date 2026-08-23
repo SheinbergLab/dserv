@@ -4,8 +4,14 @@ pre-*.tcl will be sourced early in dsconf.tcl (before ess is initialized)
 
 post-*.tcl will be sourced at end of dsconf.tcl (after ess is initialized)
 
-<name>.tcl (ain, camera, extio, input, juicer, mesh, openephys, slider,
+<name>.tcl (camera, extio, input, juicer, mesh, openephys, slider,
 sound) is sourced by that subprocess's own config, near the end of it.
+
+rig.tcl is different: it is the settings module's file -- `setting <sub>
+<key> <value>` lines written by `settings::put -persist` and edited from
+the settings gear rather than by hand. It is parsed per-statement in a
+safe interp, so one bad line costs that one line (with a breadcrumb in
+settings/parse_errors/*), never the boot.
 
 offline (empty marker file) puts dserv in offline / air-gapped mode:
 all outbound network to non-loopback hosts is refused instantly and the
@@ -15,9 +21,11 @@ DSERV_OFFLINE=1. See docs/OFFLINE.md.
 
 WHAT AN ERROR IN ONE OF THESE FILES COSTS
 
-None of these are sourced inside a catch, and every one of them is
-hand-written per rig, which makes them the likeliest source of a boot that
-does not finish. What you lose depends on which file threw:
+Apart from input's two files (input.tcl and the machine-written
+input_devices.tcl, both catch-guarded), none of these are sourced inside a
+catch, and every one of them is hand-written per rig, which makes them the
+likeliest source of a boot that does not finish. What you lose depends on
+which file threw:
 
   pre-*.tcl    aborts dsconf.tcl at the very top. NO subprocesses start at
                all. This is the most expensive place to make a mistake.

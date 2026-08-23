@@ -20,10 +20,12 @@ errormon enable
 tcl::tm::add $::dspath/lib
 set ::docs_db_path "/usr/local/dserv/db/docs.db"
 
-# Check for authoring mode (set in /usr/local/dserv/local/docs.tcl if needed)
-if {![info exists ::docs_authoring_mode]} {
-    set ::docs_authoring_mode 0
-}
+# Authoring mode is OFF at boot; enable at runtime with
+# `send docs docs_enable_authoring`. (A local/docs.tcl was once mentioned
+# here, but nothing ever sourced one -- and a pre-docs.tcl could not work
+# either: it would set a main-interp global this subprocess cannot see,
+# since each subprocess starts a fresh interp.)
+set ::docs_authoring_mode 0
 
 # Load modules (assumes docsdb-1.0.tm and docsapi-1.0.tm are in auto_path)
 package require docsdb

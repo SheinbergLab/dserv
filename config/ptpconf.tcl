@@ -41,7 +41,14 @@
 # this subprocess possible: we anchor on the event rather than polling. The
 # periodic sweep below is a backstop for anything that announcement misses.
 #
-# Overridable in local/ptp.tcl -- set any of the ::ptp_* vars before this runs.
+# The ::ptp_* defaults below are fixed at boot. A comment here once said
+# "overridable in local/ptp.tcl" -- nothing ever sourced such a file, and a
+# subprocess interp starts fresh, so nothing could pre-set these vars either.
+# Per-rig PHC quirks so far were solved system-side (ethtool
+# --set-hwtimestamp-cfg for the dual-PHC NIC); if a rig ever genuinely needs
+# one of these per-rig, declare it through the settings module, not a file.
+# The `info exists` guards stay: re-sourcing this file into the running
+# interp (dservctl) preserves values set since boot.
 
 proc exit {args} { error "exit not available for this subprocess" }
 errormon enable

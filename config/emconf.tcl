@@ -602,7 +602,8 @@ dpointSetScript    eyetracking/results em::process
 
 # extio MCP3204 analog eye source: an eye tracker's analog out digitized by the
 # box, published as state/ain/<label>. Glob dev follows whatever box is present.
-# Label your box's analog group "eye" (ain group N label eye), or set em_ain_dp.
+# Label your box's analog group "eye" (ain group N label eye), or declare a
+# different label via `eye ain_group` (below).
 # NB: this writes eyetracking/position, same as the other sources. With
 # em/settings source == auto (the default) they ALL publish and it is
 # last-writer-wins, which is fine while only one is live; ::em::set_source
@@ -649,6 +650,5 @@ consulted when the eye source is analog (or auto)." \
     -apply {::em::ain_group_apply}
 
 ::em::ain_group_apply [::settings::get eye ain_group]
-set em_ain_dp $::em::ain_dp    ;# compat: local/em.tcl on older rigs reads this
 
 puts "Eye movement subprocessor started"
