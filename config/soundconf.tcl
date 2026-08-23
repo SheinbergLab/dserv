@@ -169,6 +169,11 @@ namespace eval sound {
     # ------------------------------------------------------------------
     variable output_shared 0
 
+    # Where SoundFonts live, in search order. One list shared by the synth
+    # init (resolving `default` and bare names) and the settings picker, so
+    # they can never disagree about what is on the box.
+    variable sf2_paths {/usr/local/dserv/soundfonts /usr/share/sounds/sf2}
+
     # Formats dmix can actually mix, best first. dmix sums linear PCM
     # samples, so this list is not cosmetic: a Pi's vc4-hdmi offers ONLY
     # IEC958_SUBFRAME_LE (S/PDIF framing, not summable) and dmix rejects it
@@ -308,6 +313,23 @@ pcm.dserv_shared { type plug slave.pcm \"dserv_dmix\" }
         variable output_class
         variable output_shared
         set shared $output_shared
+        set oclass $output_class
+        # The DECLARED rig facts win over the legacy variables (set in
+        # local/sound.tcl): rig.tcl is the durable statement, the variables
+        # remain the in-file/manual channel and the compiled defaults.
+        # source_of gates each override -- a declared 0/auto is a real
+        # answer and must beat a file-set 1/usb, while an UNdeclared knob
+        # must not stomp what the file just set.
+        catch {
+            if { [settings::source_of sound shared] ne "default" } {
+                set shared [settings::get sound shared]
+            }
+        }
+        catch {
+            if { [settings::source_of sound output_class] ne "default" } {
+                set oclass [settings::get sound output_class]
+            }
+        }
 
         # Non-Linux (macOS dev boxes): no /proc/asound to inspect, and no
         # HDMI-grabs-the-stimulus-display hazard either, so the system
@@ -319,14 +341,14 @@ pcm.dserv_shared { type plug slave.pcm \"dserv_dmix\" }
             return default
         }
 
-        if { $output_class eq "none" } {
+        if { $oclass eq "none" } {
             puts "sound: output class declared \"none\" -- audio disabled on this box"
             publish_choice "" none
             return ""
         }
 
-        set declared [expr {$output_class ne "auto"}]
-        set classes [expr {$declared ? [list $output_class] : $auto_rank}]
+        set declared [expr {$oclass ne "auto"}]
+        set classes [expr {$declared ? [list $oclass] : $auto_rank}]
 
         foreach class $classes {
             set found [find_outputs $class $root $usbid]
@@ -346,7 +368,7 @@ pcm.dserv_shared { type plug slave.pcm \"dserv_dmix\" }
             }
             if { !$declared && $class eq "analog" } {
                 puts "sound: NOTE analog outranked any HDMI sink here; if this box\
-                      should use its display, set sound::output_class hdmi"
+                      should use its display, declare `sound output_class hdmi`"
             }
             if { $class eq "usb" } {
                 # DO NOT auto-normalize the card's hardware mixer to 0 dB.
@@ -386,7 +408,7 @@ pcm.dserv_shared { type plug slave.pcm \"dserv_dmix\" }
         }
 
         if { $declared } {
-            puts "sound: DECLARED output class \"$output_class\" NOT FOUND -- no audio"
+            puts "sound: DECLARED output class \"$oclass\" NOT FOUND -- no audio"
             puts "sound: (a sleeping display advertises no sink; wake it and restart)"
         } else {
             puts "sound: no usable audio output (no USB, I2S, analog or HDMI sink)"
@@ -402,6 +424,17 @@ pcm.dserv_shared { type plug slave.pcm \"dserv_dmix\" }
     # and swapping dongle brands never needs a config edit. Pass an
     # explicit device string to override, or a usbid glob to pin hardware.
     proc init_software { {soundfont default} {device auto} {usbid *} } {
+        # The declared rig facts fill the defaults, so a legacy
+        # local/sound.tcl calling this with NO arguments still honors the
+        # gear (`sound soundfont` / `sound device`); an explicit argument
+        # stays an explicit override. catch: settings may be absent on a
+        # stripped install, and these defaults are then the old behavior.
+        if { $soundfont eq "default" } {
+            catch { set soundfont [settings::get sound soundfont] }
+        }
+        if { $device eq "auto" } {
+            catch { set device [settings::get sound device] }
+        }
         if { $device eq "auto" } { set device [resolve_device $usbid] }
         if { $device eq "" } {
             puts "sound: software synth not started (no audio output)"
@@ -412,14 +445,28 @@ pcm.dserv_shared { type plug slave.pcm \"dserv_dmix\" }
 
     proc init_fluidsynth { { soundfont {} } { device {} } } {
 
-	# use either default soundfont or allow user to specify
+	# Resolve the SoundFont. `default` (or empty) finds default-GM.sf2 on
+	# sf2_paths; an existing path is used as-is; anything else is treated
+	# as a bare NAME and searched for on the same paths -- so a declared
+	# `sound soundfont FluidR3_GM.sf2` is fleet-portable while an absolute
+	# path still pins an exact file.
+	variable sf2_paths
 	if { $soundfont != "" && $soundfont != "default" } {
-	    set sf $soundfont
+	    if { [file exists $soundfont] } {
+		set sf $soundfont
+	    } else {
+		set sf ""
+		foreach p $sf2_paths {
+		    if { [file exists [file join $p $soundfont]] } {
+			set sf [file join $p $soundfont]
+			break
+		    }
+		}
+	    }
 	} else {
-	    set paths "/usr/local/dserv/soundfonts /usr/share/sounds/sf2"
-	    set sfile "default-GM.sf2"
-	    foreach p $paths {
-		set sf [file join $p $sfile]
+	    set soundfont default-GM.sf2
+	    foreach p $sf2_paths {
+		set sf [file join $p $soundfont]
 		if { [file exists $sf] } {
 		    break
 		} else {
@@ -429,7 +476,7 @@ pcm.dserv_shared { type plug slave.pcm \"dserv_dmix\" }
 	}
 
 	if { $sf == "" } {
-	    puts "sound font file \"$sf\" not found"
+	    puts "sound: SoundFont \"$soundfont\" not found on $sf2_paths"
 	    return
 	}
 	
@@ -495,6 +542,27 @@ package require settings
 # list here and `auto` is what resolve_device does with it.
 #
 proc ::sound::candidates { kind } {
+    if { $kind eq "soundfont" } {
+        # What is actually installed, as bare names: a bare name is searched
+        # on sf2_paths at init, so the stored value stays fleet-portable
+        # even when boxes keep their fonts in different directories.
+        set out {}
+        lappend out [dict create route default label default \
+                         detail "default-GM.sf2 from the standard paths" \
+                         durable 1 selectable 1 status ok address ""]
+        set seen {}
+        foreach p $::sound::sf2_paths {
+            foreach f [lsort [glob -nocomplain -directory $p *.sf2 *.SF2]] {
+                set name [file tail $f]
+                if { [lsearch -exact $seen $name] >= 0 } { continue }
+                lappend seen $name
+                lappend out [dict create route $name label $name \
+                                 detail $p \
+                                 durable 1 selectable 1 status ok address $f]
+            }
+        }
+        return $out
+    }
     if { $kind ne "device" } { error "sound candidates: unknown kind '$kind'" }
     set out {}
     lappend out [dict create route auto label auto \
@@ -525,9 +593,66 @@ name a PCM, e.g. plughw:CARD=Device,DEV=0. `aplay -L` lists them.
 Takes effect at the next restart." \
     -apply {apply {{v} { catch { dservSet sound/audio/declared $v } }}}
 
+# The remaining rig facts local/sound.tcl used to carry, declared. Each
+# -apply only updates the namespace variable (or nothing): the synth and
+# the dmix config are wired once at init, so changes land at the next
+# restart, and each doc says so. resolve_device/init_software consult the
+# DECLARATIONS first (source_of-gated), so a declared value beats what a
+# legacy file sets -- and an undeclared knob never stomps the file.
+
+settings::declare sound shared -default 0 -type bool \
+    -doc "share the output with stim2 through ALSA dmix. The hardware PCM
+is an exclusive open and dserv never releases it, so without this
+stim2 cannot open the card at all. Generates the dmix config
+itself; degrading to exclusive is announced, never silent. NOTE a
+Pi HDMI output cannot be shared (IEC958-only, dmix cannot sum it).
+Takes effect at the next restart." \
+    -apply {apply {{v} { set ::sound::output_shared $v }}}
+
+settings::declare sound output_class -default auto \
+    -values {auto usb i2s analog hdmi none} \
+    -doc "what KIND of output this rig uses when the device is auto: an
+ASSERTION, not a search order -- if the declared class is absent
+the rig says so instead of quietly landing somewhere else. A class
+survives dongle swaps where an exact device string would not.
+`none` disables audio on purpose (a declared none is a working
+rig). Takes effect at the next restart." \
+    -apply {apply {{v} { set ::sound::output_class $v }}}
+
+settings::declare sound soundfont -default default \
+    -candidates sound:soundfont \
+    -doc "which SoundFont the software synth loads. `default` finds
+default-GM.sf2 on the standard paths (/usr/local/dserv/soundfonts,
+/usr/share/sounds/sf2); a bare name is searched on those same
+paths, so it is fleet-portable; an absolute path pins an exact
+file. Takes effect at the next restart."
+
 # local system configuration in /usr/local/dserv/local/sound.tcl
 if { [file exists $dspath/local/sound.tcl] } {
     source $dspath/local/sound.tcl
+
+    # One-time carryover: the variables a legacy file just set become
+    # declarations in rig.tcl, so the gear shows them and the file becomes
+    # deletable. Only while the knob is undeclared, and only for non-default
+    # values -- after this, the declaration is the single home and the
+    # use-time source_of gate above makes it win.
+    foreach {_k _var _def} {
+        shared       ::sound::output_shared 0
+        output_class ::sound::output_class  auto
+    } {
+        if { [settings::source_of sound $_k] ne "default" } continue
+        set _v [set $_var]
+        if { $_v eq $_def } continue
+        if { [catch { settings::put sound $_k $_v -persist } _e] } {
+            puts stderr "sound: $_k not adopted into local/rig.tcl: $_e"
+        } else {
+            puts "sound: $_k adopted into local/rig.tcl ($_v)"
+        }
+    }
+    unset -nocomplain _k _var _def _v _e
+    puts "sound: local/sound.tcl exists; device/shared/output_class/soundfont\
+ are all declared now -- if the file only sets those and runs the standard\
+ inits, it can be retired (see local/sound.tcl.EXAMPLE)"
 } else {
     sound::init_hardware
     # auto-select a USB sound card over the system default: on Pis the
@@ -535,9 +660,9 @@ if { [file exists $dspath/local/sound.tcl] } {
     # it points at a device that does not exist (officepi/office-stim,
     # 2026-08-05). A rig with neither gets the old default behaviour.
     #
-    # `sound device` overrides that pick when a rig declares one; `auto` is
-    # the default and means exactly what init_software already did.
-    sound::init_software default [settings::get sound device]
+    # No arguments: init_software pulls the declared soundfont and device
+    # itself, and resolve_device consults the declared shared/output_class.
+    sound::init_software
 }
 
 puts "Sound initialized"

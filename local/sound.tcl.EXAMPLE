@@ -1,34 +1,41 @@
 #
-# READ THIS FIRST: soundconf runs init_hardware + init_software when this
-# file is ABSENT. Creating it REPLACES that entirely -- a file that exists
-# and does not call an init leaves the rig silent with nothing saying so.
+# Per-rig sound init overrides -- copy to local/sound.tcl ONLY if this rig
+# needs a different init SEQUENCE. Creating this file REPLACES the default
+# init entirely: a file that exists and never calls an init leaves the rig
+# silent with nothing saying so.
 #
-# Most rigs only wanted to name their output. That is declared now:
-#   setting sound device plughw:CARD=Device,DEV=0     (or `auto`, or `default`)
-# and the auto-pick stays in charge of the rest. Copy this file only if you
-# need to change the init SEQUENCE, not just the device.
+# You do NOT need this file for the common rig facts -- those are declared
+# (settings gear -> local/rig.tcl):
 #
-# initialize localized sound options
-
+#   setting sound device       auto|default|plughw:CARD=Device,DEV=0
+#   setting sound output_class auto|usb|i2s|analog|hdmi|none
+#   setting sound shared       0|1    (dmix, so dserv AND stim2 can play)
+#   setting sound soundfont    default|<name.sf2>|/abs/path.sf2
 #
-# Open connection to serial port connected to hardware MIDI
-#  This will attempt to guess the serial port, but it can be passed
-# sound::init_hardware ?serial_port?
-
-# Opens connection to fluidsynth software synthesizer
-#  device_name can be found (for linux) either by
-#   aplay -L
-#   send sound soundListAlsaDevices
-
-# Raspberry Pi 5's don't have built in sound but USB sound dongles work well
-#  These can be accessed as below (assuming name is shortened to "Device")
+# A declaration wins over anything this file sets (soundconf consults the
+# declarations at use time), and legacy variables set here (output_shared,
+# output_class) are adopted into rig.tcl on first boot. With no file at
+# all, the standard init runs with the declared values.
+#
+# If you DO need this file, end it with the standard init calls -- they
+# pull the declared values themselves:
+#
+# sound::init_hardware        ;# hardware MIDI on a serial port, if present
+# sound::init_software        ;# fluidsynth on the resolved output
+#
+# Exotic examples of why this file might exist:
+#
+# Pin one of two identical USB dongles by usb id glob:
+# sound::init_software default auto "USB_Audio_Device*"
+#
+# Hand-built fluidsynth init -- exact font + exact device, no resolution:
 # sound::init_fluidsynth /usr/share/sounds/sf2/default-GM.sf2 plughw:CARD=Device,DEV=0
-
-# If the sound card is used by another process, try:
-#  sudo fuser -v /dev/snd/*
-# to see what process holds the device
 #
-# To deactivate pipewire, can do
-#    systemctl --user stop pipewire pipewire-pulse wireplumber
-#    systemctl --user disable pipewire pipewire-pulse wireplumber
-#    systemctl --user mask pipewire pipewire-pulse wireplumber
+# Hardware MIDI on a nonstandard serial port:
+# soundOpen /dev/ttyUSB1
+# soundReset
+#
+# Troubleshooting: if the card is held by another process, try
+#   sudo fuser -v /dev/snd/*
+# and on desktop boxes consider stopping pipewire:
+#   systemctl --user stop pipewire pipewire-pulse wireplumber
