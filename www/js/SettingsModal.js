@@ -757,10 +757,14 @@ class SettingsModal {
                         </div>`).join('')}
                 </div>
                 <div class="ess-modal-footer">
-                    <span class="ess-settings-note">${
-                        multi ? 'ticked ones answer, first to commit wins — none ticked leaves it to the protocol'
-                        : (k.candidates === 'system' ? 'from ESS_SYSTEM_PATH — reopen to rescan'
-                                                     : 'from the boxes announcing now — reopen to rescan')}</span>
+                    <span class="ess-settings-note">${this._esc(
+                        // Where a list came FROM is the enumerator's to say: the
+                        // boxes, the system path, the calibration db. Guessing it
+                        // from the kind was right until the third kind arrived.
+                        cands.find(c => c.note)?.note
+                        || (multi ? 'ticked ones answer, first to commit wins — none ticked leaves it to the protocol'
+                            : (k.candidates === 'system' ? 'from ESS_SYSTEM_PATH — reopen to rescan'
+                                                         : 'from the boxes announcing now — reopen to rescan')))}</span>
                     <button class="ess-modal-btn cancel" type="button">Cancel</button>
                     ${multi ? '<button class="ess-modal-btn primary use" type="button">Use these</button>' : ''}
                 </div>

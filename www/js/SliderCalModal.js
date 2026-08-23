@@ -406,11 +406,16 @@ class SliderCalModal {
         // the smallest honest version of that: it cannot detect a second
         // input, but it can refuse to be silent about where this lands.
         el.textContent = `saves to profile: ${this._profile}`;
+        // The profile is a DECLARATION now (`slider cal_profile`, in the
+        // settings gear), not a line in local/slider.tcl — that file is
+        // what the declarations replaced, and pointing at it here sent
+        // people to edit something the rig no longer reads.
         el.title = this._profile === 'default'
-            ? 'a rig with more than one analog input must name a profile per input '
-              + '(set slider::cal_profile in local/slider.tcl), or this measurement '
+            ? 'a rig with more than one analog input must name a profile per '
+              + 'input — Settings ▸ slider ▸ cal_profile — or this measurement '
               + 'is forced onto both'
-            : 'set by local/slider.tcl';
+            : 'declared as `slider cal_profile`; the gear lists what each '
+              + 'profile holds and when it was measured';
         el.classList.toggle('warn', this._profile === 'default');
     }
 

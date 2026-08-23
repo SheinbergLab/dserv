@@ -743,7 +743,9 @@ namespace eval ess {
 
             lappend out [dict create route $route label $route detail $detail \
                              status $status durable 1 selectable 1 multi 1 \
-                             conflicts $conflicts address $dp]
+                             conflicts $conflicts address $dp \
+                             note "ticked ones answer, first to commit wins --\
+                                   ages read just now"]
         }
         return $out
     }

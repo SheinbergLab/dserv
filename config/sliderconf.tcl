@@ -582,7 +582,82 @@ namespace eval slider {
             error "slider::set_cal_profile: a profile needs a name"
         }
         set cal_profile $p
+        dservSet slider/cal_profile $cal_profile
         return $cal_profile
+    }
+
+    # The declared end of it: naming a profile SWITCHES to that input's
+    # measurements, so it has to load them. Setting the variable alone left
+    # the previous input's centre and throw in force under the new name --
+    # half-switched, and nothing on screen to say which half.
+    #
+    # An EMPTY declaration is a no-op, exactly as `joystick transport none`
+    # is: it means "this rig does not declare one", not "use default". A rig
+    # whose local file still does `set slider::cal_profile stick` keeps that
+    # choice rather than having it reset out from under it at boot.
+    proc cal_profile_apply { p } {
+        variable cal_profile
+        set p [string trim $p]
+        if { $p eq "" } return
+        set cal_profile $p
+        dservSet slider/cal_profile $cal_profile
+        if { [::settingsdb::load slider $p] eq "" } {
+            # Not an error -- naming the profile you are ABOUT to measure into
+            # is how you start. But the numbers in force are still the last
+            # input's, and that has to be said out loud.
+            puts stderr "slider: calibration profile '$p' has nothing stored\
+ yet -- the values in force are still the previous profile's. Run the\
+ calibration wizard to measure this input."
+            return
+        }
+        load_calibration
+        return
+    }
+
+    # WHICH PROFILES EXIST, and what each one holds. A name alone cannot say
+    # whether `stick` is this stick or the one that was on the bench in
+    # April -- and a stale profile under an obvious name is worse than no
+    # profile, because switching to it half-works: plausible centre, wrong
+    # throw, angles quietly rotated. So each entry carries the numbers and
+    # the date they were measured.
+    proc candidates { kind } {
+        variable cal_profile
+        switch -exact -- $kind {
+            cal_profile {}
+            default {
+                error "slider::candidates: unknown kind '$kind' (want cal_profile)"
+            }
+        }
+        set out {}
+        ::settingsdb::db eval {
+            SELECT profile, value, updated_at FROM settings
+             WHERE subsystem='slider' ORDER BY profile
+        } r {
+            set v $r(value)
+            set d "nothing stored"
+            catch {
+                set d [format "chan %s/%s  centre %.1f,%.1f  invert %s,%s  throw %s" \
+                           [dict get $v chan_x] [dict get $v chan_y] \
+                           [dict get $v center_x] [dict get $v center_y] \
+                           [dict get $v invert_x] [dict get $v invert_y] \
+                           [expr {[dict exists $v full_scale] ?
+                                  [format %.2f [dict get $v full_scale]] : "?"}]]
+            }
+            append d " -- measured $r(updated_at) UTC"
+            if { $r(profile) eq $cal_profile } { append d "; in use now" }
+            lappend out [dict create route $r(profile) label $r(profile) \
+                             detail $d status ok durable 1 selectable 1 \
+                             note "from db/calibration.db -- the wizard writes here" \
+                             address "calibration.db"]
+        }
+        if { ![llength $out] } {
+            lappend out [dict create route $cal_profile label $cal_profile \
+                             detail "nothing measured yet -- run the calibration\
+                                     wizard and it saves here" \
+                             status unresolved durable 1 selectable 0 \
+                             address "calibration.db"]
+        }
+        return $out
     }
 
     proc save_calibration {} {
@@ -1261,6 +1336,28 @@ if { [file exists $dspath/local/slider.tcl] } {
 # which is the whole point of retiring them from the file. It announces itself
 # at boot, because a value that overrides the file someone is reading must be
 # visible somewhere. slider::forget_calibration drops back to the file.
+# DECLARED here and not with the others above, deliberately: the apply loads
+# the named profile, and it must run after any legacy local/slider.tcl has set
+# its own -- so that a declaration overrides the file, and the absence of one
+# leaves the file alone. Empty (the default) is the no-op.
+::settings::declare slider cal_profile -default "" \
+    -candidates slider:cal_profile \
+    -doc "which stored calibration this rig uses. A rig with ONE analog
+input never needs this. A rig that switches between two -- a
+trackpad and a stick, say -- names a profile per input, because
+the learned keys (channels, centre, orientation, throw) describe
+a particular device and one shared set would be forced onto
+both. The wizard measures into whichever is named here. Empty
+means this rig does not declare one." \
+    -apply {::slider::cal_profile_apply}
+
+catch { ::slider::cal_profile_apply [::settings::get slider cal_profile] }
+
 slider::load_calibration
+
+# Publish it even when nobody declared one: the calibration wizard shows
+# which profile it is about to write into, and "default" has to be readable
+# as a fact rather than as an absence.
+dservSet slider/cal_profile $slider::cal_profile
 
 puts "slider subprocessor started"
