@@ -6,7 +6,9 @@
 # when ESS datafiles are opened/closed.
 #
 # Configuration:
-#   Set openephys/ipaddr datapoint or use local/openephys.tcl
+#   DECLARED, in local/rig.tcl -- `setting openephys host <addr>` and the
+#   five knobs below it. See the settings gear; local/openephys.tcl still
+#   works and is what those declarations replace.
 #
 # Datapoints published:
 #   openephys/status      - IDLE, ACQUIRE, RECORD, or DISCONNECTED
@@ -47,6 +49,13 @@ package require dlsh
 package require yajltcl
 package require http
 
+# tcl::tm::add BEFORE the require, always. soundconf did it the other way
+# and `package require settings` threw, which took the REST of that config
+# with it -- no synth, no local/sound.tcl, a rig that came up mute with
+# nothing on screen to say why (2026-08-22, fixed in 8cee1665).
+tcl::tm::add $dspath/lib
+package require settings
+
 # Load timer module (gives us 8 timers: oeTimer/0 through oeTimer/7)
 load ${dspath}/modules/dserv_timer[info sharedlibextension]
 
@@ -80,6 +89,17 @@ set oe_current_datafile ""
 # Pending record flag: set when waiting for ACQUIRE to settle
 # before transitioning to RECORD via timer 1
 set oe_pending_record 0
+
+# Set at the very end of this file. Until then a declaration only STORES
+# its value: applying it would reach the network (oe_check_status, 3 s
+# timeout) once per knob while the tail of this file is about to check
+# once anyway -- six declarations, six connect attempts, on a rig whose
+# Open Ephys box is off. Same shape as ::dsconf_booting.
+set oe_ready 0
+
+# Whether the poll timer is actually running, so poll_ms can restart it
+# when it changes at runtime and leave it alone before it exists.
+set oe_polling 0
 
 #################################################################
 # HTTP helpers
@@ -416,7 +436,18 @@ proc oe_delayed_record_callback {dpoint data} {
 # IP address configuration handler
 #################################################################
 
+# The legacy runtime override. It now goes through the SAME door as the
+# declaration -- `settings::put` at runtime -- so `openephys/ipaddr` becomes
+# a session override with visible provenance (amber in the gear, dropped by
+# ↺, forgotten by a restart) instead of a second, invisible way to set the
+# host. Exactly what ::em::set_source became.
 proc process_oe_ipaddr {dpoint data} {
+    ::settings::put openephys host $data
+    return
+}
+
+# ...and what the override and the declaration both end up calling.
+proc oe_set_host {data} {
     global oe_ipaddr oe_auto_acquire
 
     if {$data eq ""} {
@@ -467,10 +498,12 @@ proc oe_start_polling {{interval_ms 0}} {
         set oe_poll_interval $interval_ms
     }
     timerTickInterval 0 $oe_poll_interval $oe_poll_interval
+    set ::oe_polling 1
     puts "openephys: Status polling started (${oe_poll_interval}ms)"
 }
 
 proc oe_stop_polling {} {
+    set ::oe_polling 0
     timerStop 0
     puts "openephys: Status polling stopped"
 }
@@ -563,6 +596,123 @@ if {[file exists $dspath/local/openephys.tcl]} {
     source $dspath/local/openephys.tcl
 }
 
+#################################################################
+# RIG DECLARATIONS
+#
+# Six values that were globals a human set by hand in
+# local/openephys.tcl. Declared here they live in local/rig.tcl beside
+# every other rig fact, with their provenance visible in the settings
+# gear and a doc string attached -- which is the whole argument of
+# docs/settings_panel_plan.md.
+#
+# AFTER the local file on purpose, so a declaration WINS over it and the
+# migration is one-directional: declare the value, watch the gear agree,
+# delete the file. A rig that never declares anything is untouched --
+# every default below is the value this file has always compiled in, so
+# an undeclared rig computes exactly what it did before.
+#
+# The applies do real work rather than only storing, because half of
+# these are live: a poll interval that needs the timer restarted, a host
+# that needs a connection check. The exception is boot, where oe_ready
+# is still 0 -- see there.
+#################################################################
+
+proc oe_host_apply {v} {
+    global oe_ipaddr oe_ready
+    set v [string trim $v]
+    if {!$oe_ready} { set oe_ipaddr $v; return }
+    oe_set_host $v
+}
+
+proc oe_port_apply {v} {
+    global oe_port oe_ipaddr oe_ready
+    set oe_port $v
+    if {!$oe_ready || $oe_ipaddr eq ""} return
+    # A port change points every subsequent request somewhere else, so the
+    # status on screen is about the OLD port until something re-asks.
+    catch { oe_check_status }
+}
+
+proc oe_poll_ms_apply {v} {
+    global oe_poll_interval oe_polling
+    set oe_poll_interval $v
+    if {!$oe_polling} return          ;# the timer does not exist yet
+    oe_start_polling $v
+}
+
+proc oe_settle_ms_apply   {v} { global oe_acquire_settle_ms; set oe_acquire_settle_ms $v }
+proc oe_auto_record_apply {v} { global oe_auto_record;       set oe_auto_record $v }
+
+proc oe_auto_acquire_apply {v} {
+    global oe_auto_acquire oe_status oe_ready
+    set oe_auto_acquire $v
+    # Turning it ON while sitting IDLE and connected should acquire NOW,
+    # not at the next reconnect. Off never stops an acquisition already
+    # running: this knob decides what happens on connect, and yanking a
+    # live acquisition out from under a session would be a surprise.
+    if {!$oe_ready || !$v} return
+    if {$oe_status eq "IDLE"} { catch { oe_set_mode "ACQUIRE" } }
+}
+
+::settings::declare openephys host -default "" \
+    -doc "the Open Ephys machine, by address or name. Empty means this rig
+has no Open Ephys and nothing is attempted. The openephys/ipaddr
+datapoint still works and is now a session override -- it shows
+as `runtime` in the gear and a restart forgets it." \
+    -apply {oe_host_apply}
+
+::settings::declare openephys port -default 37497 -type int \
+    -doc "Open Ephys HTTP API port. 37497 is the GUI's default and a rig
+only changes it if the GUI was told to." \
+    -apply {oe_port_apply}
+
+::settings::declare openephys poll_ms -default 5000 -type int \
+    -doc "how often to ask Open Ephys for its status, in ms. Each poll is
+an HTTP request with a 3 s timeout, so a short interval on an
+unreachable box costs a request that is still in flight when the
+next one starts." \
+    -apply {oe_poll_ms_apply}
+
+::settings::declare openephys settle_ms -default 500 -type int \
+    -doc "ms to wait between entering ACQUIRE and starting RECORD. Open
+Ephys refuses RECORD for a moment after ACQUIRE; this is that
+moment, and it is hardware- and chain-dependent." \
+    -apply {oe_settle_ms_apply}
+
+::settings::declare openephys auto_record -default 1 -type bool \
+    -doc "start and stop Open Ephys recording with the ESS datafile, and
+keep the filename prefix in step. Off records only when told." \
+    -apply {oe_auto_record_apply}
+
+::settings::declare openephys auto_acquire -default 1 -type bool \
+    -doc "enter ACQUIRE on connect when Open Ephys is IDLE, so a rig comes
+up streaming without anyone clicking. Turning it off never stops
+an acquisition that is already running." \
+    -apply {oe_auto_acquire_apply}
+
+# Apply what was actually DECLARED, once. Declaring does not apply (a
+# declaration is not a change), so without this a declared value would sit
+# in the tree, visible and not in force -- the worst pair to show.
+#
+# But only what was declared. Applying a knob whose value is still the
+# DEFAULT would push the compiled default over whatever local/openephys.tcl
+# had just set by hand: a rig with `set oe_ipaddr 192.168.1.9` in that file
+# and no declaration would come up with no host at all, and one with
+# auto_record 0 would come up recording. That is the hand_ml regression
+# exactly (a declare-time publish overwriting a rig's real value), and the
+# source_of check is what keeps this migration one-directional -- declare a
+# value and it wins; declare nothing and the file still rules.
+foreach {_k _proc} {host oe_host_apply  port oe_port_apply
+                    poll_ms oe_poll_ms_apply  settle_ms oe_settle_ms_apply
+                    auto_record oe_auto_record_apply
+                    auto_acquire oe_auto_acquire_apply} {
+    if {[::settings::source_of openephys $_k] eq "default"} continue
+    if {[catch { $_proc [::settings::get openephys $_k] } _e]} {
+        puts stderr "openephys: declaration of '$_k' could not be applied: $_e"
+    }
+}
+unset -nocomplain _k _proc _e
+
 # Try to get IP from datapoint if not set locally
 if {$oe_ipaddr eq ""} {
     catch {
@@ -582,6 +732,11 @@ oe_check_status
 
 # Touch datafile to pick up current state if ess is already running
 catch {dservTouch ess/datafile}
+
+# From here a declaration APPLIES rather than only storing: the boot's own
+# single status check has run, so a knob changed from the gear may reach
+# the network.
+set oe_ready 1
 
 puts "openephys: Open Ephys integration ready"
 puts "  IP: [expr {$oe_ipaddr ne {} ? $oe_ipaddr : {(not configured - set openephys/ipaddr)}}]"
