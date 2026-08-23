@@ -8,9 +8,11 @@
 #   - all paths converge on slider/position (binary float pair)
 #
 # Input sources:
-#   ain/vals         - MCP3204 packed uint16 samples produced by the ain
-#                      subprocess; channels selected via chan_x / chan_y
-#                      settings. Primary hardware path.
+#   ain/vals         - MCP3204 packed uint16 samples from a host-side ADC.
+#                      LEGACY: the ain subprocess that produced these is
+#                      retired (analog moved to the extio boxes); the
+#                      subscription stays as a passive input for anything
+#                      that still publishes the datapoint.
 #   mtouch/trackpad  - absolute trackpad coords from the input subprocess,
 #                      with mtouch/trackpad/range giving the device's own
 #                      axis extents. Normalized to the same 0..4095 space
@@ -814,7 +816,8 @@ namespace eval slider {
     # Process raw ain/vals data.
     #
     # ain/vals is a packed array of uint16 samples, one per active channel,
-    # produced by the ain subprocess via dserv_ain. dserv auto-decodes
+    # from a host-side dserv_ain ADC (the subprocess that produced these is
+    # retired -- kept as a passive legacy input). dserv auto-decodes
     # DSERV_SHORT multi-element buffers into a Tcl list of ints before
     # dispatch to script callbacks, so $data is already "{v0 v1 ...}".
     # We pick chan_x / chan_y by index, apply per-axis calibration, and

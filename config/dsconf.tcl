@@ -101,8 +101,12 @@ if { [catch { source [file join $dspath config/rig_settings.tcl] } err] } {
 # start an eye movement subprocess
 subprocess em "source [file join $dspath config/emconf.tcl]"
 
-# start the analog-input subprocess (owns the MCP320x SPI driver)
-subprocess ain "source [file join $dspath config/ainconf.tcl]"
+# The `ain` subprocess (host-side MCP320x SPI driver) is RETIRED (2026-08-23):
+# analog input moved to the extio boxes, which digitize and publish
+# state/ain/<group> themselves -- slider and em consume those directly.
+# slider's ain/vals subscription stays as a passive legacy input; nothing
+# produces it on current rigs. openiris (spawned from local/post-openiris.tcl,
+# never from here) retired the same day.
 
 # start the slider subprocess (calibrates ain channels into slider/position)
 subprocess slider "source [file join $dspath config/sliderconf.tcl]"

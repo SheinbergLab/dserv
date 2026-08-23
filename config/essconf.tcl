@@ -15,8 +15,8 @@ errormon enable
 proc exit {args} { error "exit not available for this subprocess" }
 
 # load extra modules
-# (The `ain` module is owned by the dedicated `ain` subprocess — see
-# config/ainconf.tcl. Touchscreen/trackpad reading is owned by the
+# (Host-side analog input is RETIRED -- the extio boxes digitize and publish
+# state/ain/<group> themselves. Touchscreen/trackpad reading is owned by the
 # dedicated `input` subprocess — see config/inputconf.tcl. State systems
 # subscribe to mtouch/event via ::ess::touch_win_set as before.)
 set ess_modules \
