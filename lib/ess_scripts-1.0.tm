@@ -175,14 +175,17 @@ namespace eval scripts {
         _registry_from_dserv
         if {![info exists ::ess::registry_url] || $::ess::registry_url eq ""} {
             ess::ess_info "scripts: no registry configured — skipping initial sync" "sync"
+            _health off "not configured -- no registry url/workgroup declared"
             return
         }
         if {[_offline_blocked $::ess::registry_url]} {
             ess::ess_info "scripts: offline mode — skipping initial sync" "sync"
+            _health off "offline mode -- rig runs on its on-disk scripts"
             return
         }
         if {[catch { pull_all } err]} {
             ess::ess_error "scripts: initial sync failed: $err" "sync"
+            _health error "initial sync failed: [string range $err 0 80]"
         }
     }
 
@@ -226,6 +229,14 @@ namespace eval scripts {
     proc status {} {
         variable state
         return [_set_state $state status]
+    }
+
+    # The green light (scripts/health -- see settings-1.0.tm).
+    # scripts/status above stays the page-facing JSON state machine; this
+    # is the gear's coarse verdict on "are this rig's scripts in step with
+    # the registry". Published at the sync RESULTS, not the state flaps.
+    proc _health {state {detail ""}} {
+        catch { dservSet scripts/health [string trim "$state $detail"] }
     }
 
     # ── Workgroup manifest cache ────────────────────────────────────
@@ -801,12 +812,20 @@ namespace eval scripts {
             _set_state idle pull_all
             _publish_result sync_result [dict create op pull_all \
                 pulled 0 unchanged 0 errors [list $err]]
+            _health error "sync failed: [string range $err 0 80]"
             error $err
         }
         _manifest_invalidate
         _set_state idle pull_all
         catch { dirty }
         catch { dservSet scripts/last_sync [clock seconds] }
+        set _herrs [dict get $result errors]
+        if {[llength $_herrs]} {
+            _health error "synced with [llength $_herrs] error(s) -- see scripts/sync_result"
+        } else {
+            _health ok "in step with the registry: [dict get $result pulled] pulled,\
+ [dict get $result unchanged] unchanged, [clock format [clock seconds] -format %H:%M:%S]"
+        }
         return [_publish_result sync_result [dict create op pull_all \
             pulled [dict get $result pulled] \
             unchanged [dict get $result unchanged] \

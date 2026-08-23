@@ -94,6 +94,20 @@ class SettingsModal {
             '    set _ie ""; catch { set _ie [dservGet $_s/init_error] }',
             '    if { $_v ne "" || $_ie ne "" } { lappend _st [list $_s $_v $_ie] }',
             '}',
+            // Health-only subsystems: a publisher with no declared knobs
+            // (scripts) still deserves its light. Two-segment keys only,
+            // and only subs the loops above did not already cover.
+            'foreach _k [lsort [dservKeys */health]] {',
+            '    set _p [split $_k /]',
+            '    if { [llength $_p] != 2 } continue',
+            '    set _s [lindex $_p 0]',
+            '    set _hit 0',
+            '    foreach _e $_st  { if { [lindex $_e 0] eq $_s } { set _hit 1; break } }',
+            '    foreach _e $_out { if { [lindex $_e 0] eq $_s } { set _hit 1; break } }',
+            '    if { $_hit } continue',
+            '    set _v ""; catch { set _v [dservGet $_k] }',
+            '    if { $_v ne "" } { lappend _st [list $_s $_v ""] }',
+            '}',
             'list $_out $_errs $_boot $_st'
         ].join('\n');
     }
@@ -404,7 +418,9 @@ class SettingsModal {
      */
     _subscribeStatuses() {
         if (!this.dpManager) return;
-        for (const sub of new Set(this._knobs.map(k => k.sub))) {
+        const subs = new Set(this._knobs.map(k => k.sub));
+        for (const sub of this._status.keys()) subs.add(sub);
+        for (const sub of subs) {
             if (this._statusUnsubs.has(sub)) continue;
             this._statusUnsubs.set(sub,
                 this.dpManager.subscribe(`${sub}/health`, (data) => {
@@ -432,7 +448,9 @@ class SettingsModal {
      */
     _refreshStatus(sub, structChanged) {
         this._renderNav();
-        if (!this._shown().some(k => k.sub === sub)) return;
+        // Selection-based, not knob-based: a health-only subsystem has no
+        // knobs but its pane line must still track.
+        if (this._sel !== 'all' && this._sel !== sub) return;
         const st = this._statusFor(sub);
         const el = this._overlay.querySelector(
             `[data-status-sub="${CSS.escape(sub)}"]`);
@@ -445,7 +463,12 @@ class SettingsModal {
             <span class="ess-settings-status-text">${this._esc(st.detail || st.state)}</span>`;
     }
 
-    _subs() { return [...new Set(this._knobs.map(k => k.sub))]; }
+    _subs() {
+        const s = new Set(this._knobs.map(k => k.sub));
+        // Health-only subsystems get a nav entry too -- just the light.
+        for (const sub of this._status.keys()) s.add(sub);
+        return [...s];
+    }
 
     /* A knob this rig has actually DECIDED — the reason to look at all. */
     _declared(k) { return k.source === 'file' || k.source === 'runtime'; }
@@ -555,7 +578,13 @@ class SettingsModal {
         const pane = this._overlay && this._overlay.querySelector('#ess-settings-pane');
         if (!pane) return;                 // layout not built yet
         const shown = this._shown();
-        if (!shown.length) {
+        // A health-only subsystem (scripts) renders as a section of just
+        // its light -- when selected, or in the All view. Not under a text
+        // filter, which searches knob rows.
+        const statusOnly = this._q ? [] : [...this._status.keys()].filter(s =>
+            !this._knobs.some(k => k.sub === s) &&
+            (this._sel === 'all' || this._sel === s));
+        if (!shown.length && !statusOnly.length) {
             pane.innerHTML = `<div class="ess-settings-loading">${
                 this._q ? 'nothing matches that' : 'nothing declared here'}</div>`;
             return;
@@ -563,12 +592,19 @@ class SettingsModal {
         // Group headings stay when the pane spans subsystems (All, or a
         // filter that crossed them); a single section does not need one.
         const subs = [...new Set(shown.map(k => k.sub))];
+        const many = subs.length + statusOnly.length > 1;
         pane.innerHTML = subs.map(sub => `
             <div class="ess-settings-group">
-                ${subs.length > 1 ? `<div class="ess-settings-group-title">${this._esc(sub)}</div>` : ''}
+                ${many ? `<div class="ess-settings-group-title">${this._esc(sub)}</div>` : ''}
                 ${this._statusHtml(sub)}
                 ${this._actionsHtml(sub)}
                 ${shown.filter(k => k.sub === sub).map(k => this._rowHtml(k)).join('')}
+            </div>
+        `).join('') + statusOnly.map(sub => `
+            <div class="ess-settings-group">
+                ${many ? `<div class="ess-settings-group-title">${this._esc(sub)}</div>` : ''}
+                ${this._statusHtml(sub)}
+                <div class="ess-settings-doc">nothing declared here — this subsystem only reports its health</div>
             </div>
         `).join('');
         pane.scrollTop = 0;

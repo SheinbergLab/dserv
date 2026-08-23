@@ -448,6 +448,7 @@ foreach {f what} {
     pre-datafiles.tcl       "ess data_dir/export_path"
     post-remotecompute.tcl  "ess compute_host"
     pre-remoteservers.tcl   "trialsync ingest_url"
+    post-pins.tcl           "ess obs_pin (+ button N gpio:<pin>, juicer gpio_pin)"
 } {
     if { [file exists [file join $dspath local $f]] } {
         puts "rig_settings: local/$f is superseded by '$what' in\
@@ -478,7 +479,7 @@ foreach _f {
     ain.tcl post-openiris.tcl em.tcl docs.tcl ptp.tcl registry.tcl
     ain.tcl.EXAMPLE post-openiris.tcl.EXAMPLE registry.tcl.EXAMPLE
     pre-docs.tcl.EXAMPLE post-remotecompute.tcl.EXAMPLE
-    pre-remoteservers.tcl.EXAMPLE
+    pre-remoteservers.tcl.EXAMPLE post-pins.tcl.EXAMPLE
 } {
     set _p [file join $dspath local $_f]
     if { ![file exists $_p] } continue

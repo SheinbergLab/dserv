@@ -237,8 +237,8 @@ proc detect_board_type {} {
 # expander -- that has USER_BTN1/USER_BTN2 on lines 5/6, but this rig gets its
 # buttons from extio boxes instead, so they're unused here). Confirmed
 # empirically with an LED HAT (no schematic was available) that gpiochip0
-# offset N drives 40-pin header net GPIO_IOn directly -- see
-# local/post-pins.tcl for the obs-sync line this is actually used for.
+# offset N drives 40-pin header net GPIO_IOn directly -- the obs-sync line
+# this is actually used for is the declared `ess obs_pin` (see below).
 #
 # imx95 (FRDM-IMX95) mirrors it: gpiochip0 is gpio@43810000, the bank whose
 # pads are named GPIO_IO00..37 (the 40-pin header nets); gpiochips 4/5 are
@@ -270,7 +270,12 @@ catch { gpioInputInit $gpiochip }
 
 ############################### GPIO ##############################
 ###
-### can put lines like these in local/pins.tcl, e.g.
+### Pin routing is DECLARED now (local/rig.tcl via the settings gear):
+###   setting ess obs_pin 26         obs sync output (claimed below)
+###   setting button 2 gpio:17       button lines (transport claims at
+###                                  activation -- ess_transports)
+###   setting juicer gpio_pin 27     juice valve
+### A legacy local/post-pins.tcl still works, e.g.
 ###   gpioLineRequestInput  24
 ###   gpioLineRequestInput  25
 ###   gpioLineRequestOutput 26
@@ -442,6 +447,57 @@ if { [settings::source_of ess compute_host] eq "default" } {
     puts stderr "ess: compute_host declaration could not be applied: $_e"
 }
 unset -nocomplain _legacy _e
+
+#
+# The obs sync OUTPUT pin, declared. This was the last unique job of
+# local/post-pins.tcl: gpio BUTTON lines are claimed by the button
+# transport at activation (`setting button 2 gpio:17`, ess_transports),
+# the juicer pin is `juicer gpio_pin`, so the board-cased pin file
+# reduces to this one fact.
+#
+# NO adoption from a legacy file, deliberately: ess-2.0.tm compiles in
+# obs_pin 26 (an rpi default), so a file's `set_obs_pin 26` is
+# indistinguishable from nobody having said anything -- and the rigs
+# that used host obs pins have mostly moved to extio-owned obs lines,
+# where adopting 26 would be adopting the WRONG thing. Declare to take
+# control; declared -1 is a positive statement -- "no host obs pin, the
+# box owns the line" -- which is what closes the dual-driven-obs gap.
+# Undeclared keeps the legacy behavior (compiled default + whatever a
+# local/post-pins.tcl still does) untouched.
+#
+settings::declare ess obs_pin -default -1 -type int \
+    -doc "host GPIO line driven as the obs sync output (claimed at boot,
+then ::ess::set_obs_pin). -1 -- the default and the norm -- means
+none: rigs with an extio box let the box own the obs line.
+Old board defaults from local/post-pins.tcl: rpi/rpi4/rpi5/
+beagley-ai 26, orangepi5 24 (bank gpio3), beagleplay/pocketbeagle
+46. Takes effect at the next restart (a claimed line cannot be
+re-claimed live)."
+
+if { [settings::source_of ess obs_pin] ne "default" } {
+    set _op   [settings::get ess obs_pin]
+    set _cur  -1
+    catch { set _cur [set ::ess::obs_pin] }
+    if { $_op >= 0 && $_op != $_cur } {
+        if { [catch { gpioLineRequestOutput $_op } _e] } {
+            puts stderr "ess: declared obs_pin $_op could not be claimed\
+ ($_e) -- if local/post-pins.tcl still claims a pin, delete the file"
+        } else {
+            ::ess::set_obs_pin $_op
+            puts "ess: obs sync output on GPIO $_op (declared)"
+        }
+    } elseif { $_op >= 0 } {
+        # Same pin a legacy file just claimed and set: nothing to redo.
+        puts "ess: obs sync output on GPIO $_op (declared; already in force)"
+    } else {
+        # Declared NONE: eventing must not drive a host pin even though
+        # ess-2.0.tm compiles in 26. A legacy file's claim (if any) is
+        # released only by restarting without the file.
+        ::ess::set_obs_pin -1
+        puts "ess: obs sync output declared none -- extio owns the obs line"
+    }
+    unset -nocomplain _op _cur _e
+}
 
 #
 # and finally load the rig's boot system.
