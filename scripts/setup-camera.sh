@@ -89,17 +89,19 @@ EOF
 install_camera_tcl() {
   mkdir -p "$DSERV_INSTALL/local"
 
-  # Prefer a rig-tuned config from the source clone; otherwise keep whatever
-  # the rig already has (rotation/exposure tuning lives there); otherwise
-  # start from the repo EXAMPLE (~1 snapshot/sec).
+  # config/cameraconf.tcl owns the command set and the declared knobs now
+  # (`camera enabled` / `camera rotation`, set from the settings gear or
+  # /camera.html) -- a rig needs NO local/camera.tcl at all. The file
+  # remains the tuning hook (camera_tune: exposure locks, white balance),
+  # so install one only when the source clone carries a rig-tuned copy,
+  # and keep whatever the rig already has.
   if [[ -f "$DSERV_SRC/local/camera.tcl" ]]; then
-    log "installing $CAMERA_TCL_DEST (from $DSERV_SRC/local/camera.tcl)"
+    log "installing $CAMERA_TCL_DEST (rig-tuned, from $DSERV_SRC/local/camera.tcl)"
     install -m 0644 "$DSERV_SRC/local/camera.tcl" "$CAMERA_TCL_DEST"
   elif [[ -f "$CAMERA_TCL_DEST" ]]; then
     log "keeping existing $CAMERA_TCL_DEST"
   else
-    log "installing $CAMERA_TCL_DEST (from repo EXAMPLE)"
-    install -m 0644 "$DSERV_SRC/local/camera.tcl.EXAMPLE" "$CAMERA_TCL_DEST"
+    log "no local/camera.tcl needed (cameraconf.tcl provides the commands; enable/rotation live in the settings gear)"
   fi
 }
 
