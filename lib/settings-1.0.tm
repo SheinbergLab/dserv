@@ -29,6 +29,18 @@
 # API (put, not set -- a proc named `set` inside this namespace would
 # shadow the builtin for every proc here):
 #
+#   THE GREEN LIGHT (optional, per subsystem, no API here): publish the
+#   plain datapoint `<sub>/status` -- first word ok | off | error, the
+#   remainder a one-line why -- and the settings gear shows a dot plus
+#   that line on the subsystem's section (SettingsModal.js). `off` renders
+#   GRAY, not red: a declared-off subsystem is a working rig. The light
+#   must report the subsystem's own RUNTIME view, never echo a knob value
+#   back -- its worth is exactly the case where config says on and reality
+#   says off (trialsync with a declared url and no secret; the reference
+#   publisher is config/trialsyncconf.tcl). Unknown first words are shown
+#   as nothing, so a subsystem with its own status vocabulary (camera's
+#   `continuous`) is untouched until it adopts this one.
+#
 #   settings::declare <sub> <key> ?-default v? ?-values {..}? ?-type t?
 #                     ?-doc str? ?-validate script? ?-apply script?
 #       Declare a knob. Call from the owning conf/module at load time.

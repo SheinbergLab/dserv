@@ -47,6 +47,7 @@ namespace eval trialsync {
     variable db_path ""
     variable outbox_opened 0
     variable last_send_end_ms 0
+    variable sent_total 0          ;# trials acked by the server since boot
     variable upload_in_progress 0
     variable deferred_flush 0
 
@@ -75,6 +76,17 @@ if {[info exists ::env(ESS_TRIAL_SYNC_DEBUG)]} {
         set trialsync::debug 1
     }
     unset _trial_sync_dbg
+}
+
+# The green light. The settings gear renders `<sub>/status` as a dot plus
+# a one-liner on that subsystem's section: first word ok | off | error,
+# the rest is the why (see SettingsModal.js, and the convention note in
+# lib/settings-1.0.tm). This subsystem is the reference publisher because
+# it is the one that used to be INVISIBLE: no datapoints at all, so a
+# configured-but-dead trialsync (missing secret, unreachable server) could
+# only be discovered in the journal.
+proc trialsync::status {state {detail ""}} {
+    catch { dservSet trialsync/status [string trim "$state $detail"] }
 }
 
 proc trialsync::_dbg {msg} {
@@ -777,6 +789,13 @@ proc trialsync::ingest_apply_result {batch_ids st code respBody {postedBody {}}}
             flush stderr
         }
         trialsync::note_ingest_success
+        variable sent_total
+        incr sent_total [llength $batch_ids]
+        trialsync::status ok "$sent_total trial[expr {$sent_total == 1 ? {} : {s}}]\
+ shipped, last [clock format [clock seconds] -format %H:%M:%S]"
+    } else {
+        # The why, compactly -- respBody can be a whole error page.
+        trialsync::status error "POST failed (status=$st code=$code) -- retrying with backoff"
     }
 
     trialsync::post_request_cleanup $ok_ack
@@ -1138,12 +1157,22 @@ if {[::settings::source_of trialsync ingest_url] eq "default"} {
 }
 
 if {[trialsync::_ingest_key] eq ""} {
+    # A URL is declared (or nothing is): with no secret the sync is OFF
+    # either way, but WHICH why matters -- "no secret beside a declared
+    # URL" is the misconfiguration, "neither" is just a rig that does not
+    # sync. The gear shows this line verbatim.
+    if {[trialsync::_ingest_base_url] ne ""} {
+        trialsync::status off "ingest url declared but no secret in /etc/dserv/trial_ingest_secret -- not syncing"
+    } else {
+        trialsync::status off "not configured"
+    }
     puts stderr "trialsync: ingest key not found — set the shared secret in /etc/dserv/trial_ingest_secret. Exiting."
     flush stderr
     return
 }
 
 if {[trialsync::_ingest_base_url] eq ""} {
+    trialsync::status off "not configured -- declare `trialsync ingest_url` to sync trials"
     puts stderr "trialsync: ingest server not configured — declare `trialsync ingest_url` (settings gear -> local/rig.tcl). Trial sync disabled."
     flush stderr
     return
@@ -1167,8 +1196,12 @@ trialsync::_dbg "init: subscribed ess/obs_active -> trialsync::on_obs_active"
 # trial is lost — the backlog just flushes slightly later, without stalling init.
 trialsync::arm_startup_drain
 if {[trialsync::offline_blocked]} {
+    # Gray, not red: offline is a declared state and trials are NOT lost --
+    # they queue in the outbox and drain when the rig comes back online.
+    trialsync::status off "offline mode -- trials queue to the outbox, no POSTs"
     puts stderr "trialsync started in OFFLINE mode: trials queue to the outbox; no POSTs until the offline flag is cleared."
 } else {
+    trialsync::status ok "waiting for trials"
     puts stderr "trialsync started. API key and target server loaded. Outbox drain deferred ~[expr {$trialsync::startup_drain_delay_ms / 1000}]s (non-blocking)."
 }
 flush stderr

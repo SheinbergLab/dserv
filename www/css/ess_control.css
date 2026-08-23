@@ -6219,6 +6219,44 @@ select.ess-param-select {
     margin-bottom: 6px;
 }
 
+/* The green light: `<sub>/status` rendered as a dot + one line, in the
+   nav and atop the section. `off` is GRAY -- a declared-off subsystem is
+   a working rig; red is reserved for configured-and-failing (and for a
+   config that threw at boot). */
+.ess-settings-status {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--ess-text-muted);
+    margin: 2px 0 8px;
+    line-height: 1.4;
+}
+
+.ess-settings-status.error {
+    color: var(--ess-error);
+}
+
+.ess-settings-dot {
+    flex: 0 0 auto;
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--ess-text-muted);
+}
+
+.ess-settings-dot.ok    { background: var(--ess-success); }
+.ess-settings-dot.off   { background: var(--ess-text-muted); opacity: 0.6; }
+.ess-settings-dot.error { background: var(--ess-error); }
+
+.ess-settings-nav-name .ess-settings-dot {
+    width: 7px;
+    height: 7px;
+    margin-right: 5px;
+    vertical-align: middle;
+}
+
 .ess-cal-note {
     font-size: 11px;
     line-height: 1.5;

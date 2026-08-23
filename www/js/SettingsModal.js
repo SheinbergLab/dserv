@@ -46,6 +46,8 @@ class SettingsModal {
         this._bootErrors = [];         // subprocesses whose config threw
         this._declaredOnly = false;    // show only what this rig has decided
         this._want = null;             // subsystem to open at, once loaded
+        this._status = new Map();      // sub -> {state?, detail?, initError} (the green light)
+        this._statusUnsubs = new Map();// sub -> unsubscribe fn for <sub>/status
     }
 
     /*
@@ -78,7 +80,20 @@ class SettingsModal {
             // rig is half-configured in a way no other panel shows.
             'set _boot {}',
             'catch { set _boot [dservGet system/init_errors] }',
-            'list $_out $_errs $_boot'
+            // The green light: a subsystem may publish <sub>/status --
+            // first word ok|off|error, remainder the why (settings-1.0.tm
+            // documents the convention; trialsync is the reference
+            // publisher). Collected here for the sections about to render;
+            // live changes arrive by per-sub subscription. <sub>/init_error
+            // rides along so a section whose config threw is marked where
+            // you are looking, not only in the banner.
+            'set _st {}',
+            'foreach _s [lsort -unique [lmap _e $_out { lindex $_e 0 }]] {',
+            '    set _v ""; catch { set _v [dservGet $_s/status] }',
+            '    set _ie ""; catch { set _ie [dservGet $_s/init_error] }',
+            '    if { $_v ne "" || $_ie ne "" } { lappend _st [list $_s $_v $_ie] }',
+            '}',
+            'list $_out $_errs $_boot $_st'
         ].join('\n');
     }
 
@@ -114,6 +129,10 @@ class SettingsModal {
             this._unsub();
             this._unsub = null;
         }
+        for (const u of this._statusUnsubs.values()) {
+            try { u(); } catch (e) { /* a dead ws teardown is fine */ }
+        }
+        this._statusUnsubs.clear();
         if (this._onKeyDown) {
             document.removeEventListener('keydown', this._onKeyDown);
             this._onKeyDown = null;
@@ -197,7 +216,15 @@ class SettingsModal {
         try {
             const reply = await this.connection.evalAsync(SettingsModal.SCAN_SCRIPT);
             if (gen !== this._gen || !this._overlay) return;
-            const [knobList, errList, bootList] = TclParser.parseList(reply);
+            const [knobList, errList, bootList, statusList] = TclParser.parseList(reply);
+            this._status = new Map();
+            TclParser.parseList(statusList || '').forEach(e => {
+                const [sub, raw, initError] = TclParser.parseList(e);
+                const st = this._parseStatus(raw);
+                if (st || initError) {
+                    this._status.set(sub, { ...(st || {}), initError: initError || '' });
+                }
+            });
             this._bootErrors = TclParser.parseList(bootList || '')
                 .map(e => TclParser.parseList(e))
                 .map(([who, msg]) => ({ who, msg }));
@@ -232,6 +259,10 @@ class SettingsModal {
                 this._want = null;
             }
             this._render();
+            // AFTER the layout exists: a status subscription can fire its
+            // callback immediately (the manager replays a cached value),
+            // and _refreshStatus renders into the nav/pane nodes.
+            this._subscribeStatuses();
         } catch (e) {
             if (gen !== this._gen || !this._overlay) return;
             const body = this._overlay.querySelector('#ess-settings-body');
@@ -336,6 +367,84 @@ class SettingsModal {
                 ${errs.map(row).join('')}` : '');
     }
 
+    /*
+     * `<sub>/status` -- first word ok | off | error, remainder the why. A
+     * trailing colon on the first word is tolerated so camera's legacy
+     * "error: ..." reads as red. Unknown first words return null: a
+     * subsystem with its own status vocabulary shows nothing until it
+     * adopts this one. `off` is GRAY, never red -- a declared-off
+     * subsystem is a working rig.
+     */
+    _parseStatus(raw) {
+        const s = String(raw ?? '').trim();
+        if (!s) return null;
+        const m = s.match(/^(\S+)\s*([\s\S]*)$/);
+        if (!m) return null;
+        const tok = m[1].toLowerCase().replace(/:$/, '');
+        const state = { ok: 'ok', off: 'off', disabled: 'off',
+                        error: 'error', failed: 'error' }[tok];
+        if (!state) return null;
+        return { state, detail: m[2].trim() };
+    }
+
+    _statusFor(sub) { return this._status.get(sub) || null; }
+
+    _statusTitle(st) {
+        if (!st) return '';
+        if (st.initError) return `did not configure: ${st.initError}`;
+        return st.detail || st.state || '';
+    }
+
+    /*
+     * One exact-key subscription per subsystem, made after the scan told
+     * us which sections exist. Exact keys, never a glob: a star-slash-status
+     * pattern would sweep in every box and page datapoint that happens to
+     * end that way. Initial values came from the scan; these are the live
+     * changes.
+     */
+    _subscribeStatuses() {
+        if (!this.dpManager) return;
+        for (const sub of new Set(this._knobs.map(k => k.sub))) {
+            if (this._statusUnsubs.has(sub)) continue;
+            this._statusUnsubs.set(sub,
+                this.dpManager.subscribe(`${sub}/status`, (data) => {
+                    if (!this._overlay) return;
+                    const st = this._parseStatus(data?.data ?? data?.value ?? '');
+                    const prev = this._status.get(sub) || null;
+                    const initError = prev ? prev.initError : '';
+                    if (st || initError) {
+                        this._status.set(sub, { ...(st || {}), initError });
+                    } else {
+                        this._status.delete(sub);
+                    }
+                    const structChanged = (!!prev) !== (!!(st || initError)) ||
+                        (!!(prev && prev.state)) !== (!!(st && st.state));
+                    this._refreshStatus(sub, structChanged);
+                }));
+        }
+    }
+
+    /*
+     * Nav dots always refresh (no inputs live there); the pane's status
+     * line updates IN PLACE unless the set of status rows changed --
+     * rebuilding the pane loses half-typed text, the same rule the knob
+     * rows follow.
+     */
+    _refreshStatus(sub, structChanged) {
+        this._renderNav();
+        if (!this._shown().some(k => k.sub === sub)) return;
+        const st = this._statusFor(sub);
+        const el = this._overlay.querySelector(
+            `[data-status-sub="${CSS.escape(sub)}"]`);
+        if (structChanged || !el || !st || !st.state) {
+            this._renderPane();
+            return;
+        }
+        el.className = `ess-settings-status ${st.state}`;
+        el.innerHTML = `<span class="ess-settings-dot ${st.state}"></span>
+            <span class="ess-settings-status-text">${this._esc(st.detail || st.state)}</span>`;
+    }
+
     _subs() { return [...new Set(this._knobs.map(k => k.sub))]; }
 
     /* A knob this rig has actually DECIDED — the reason to look at all. */
@@ -362,14 +471,24 @@ class SettingsModal {
     }
 
     _renderNav() {
-        const nav = this._overlay.querySelector('#ess-settings-nav-list');
+        const nav = this._overlay && this._overlay.querySelector('#ess-settings-nav-list');
+        if (!nav) return;                  // layout not built yet
         const hits = this._knobs.filter(k => this._matches(k));
         const item = (id, label, list) => {
             const n = list.length;
             const dec = list.filter(k => this._declared(k)).length;
+            // The green light, at a glance: a subsystem that reports its
+            // runtime state gets a dot beside its name. init_error wins --
+            // a config that threw is red whatever the status says.
+            const st = id === 'all' ? null : this._statusFor(id);
+            const dotState = st ? (st.initError ? 'error' : st.state) : null;
+            const dot = dotState
+                ? `<span class="ess-settings-dot ${dotState}"
+                         title="${this._escAttr(this._statusTitle(st))}"></span>`
+                : '';
             return `<div class="ess-settings-nav-item${this._sel === id ? ' active' : ''}${n ? '' : ' empty'}"
                          data-sub="${this._escAttr(id)}">
-                <span class="ess-settings-nav-name">${this._esc(label)}</span>
+                <span class="ess-settings-nav-name">${dot}${this._esc(label)}</span>
                 <span class="ess-settings-nav-count"
                       title="${dec} of ${n} declared by this rig">${dec ? `${dec}/${n}` : n}</span>
             </div>`;
@@ -433,7 +552,8 @@ class SettingsModal {
     }
 
     _renderPane() {
-        const pane = this._overlay.querySelector('#ess-settings-pane');
+        const pane = this._overlay && this._overlay.querySelector('#ess-settings-pane');
+        if (!pane) return;                 // layout not built yet
         const shown = this._shown();
         if (!shown.length) {
             pane.innerHTML = `<div class="ess-settings-loading">${
@@ -446,6 +566,7 @@ class SettingsModal {
         pane.innerHTML = subs.map(sub => `
             <div class="ess-settings-group">
                 ${subs.length > 1 ? `<div class="ess-settings-group-title">${this._esc(sub)}</div>` : ''}
+                ${this._statusHtml(sub)}
                 ${this._actionsHtml(sub)}
                 ${shown.filter(k => k.sub === sub).map(k => this._rowHtml(k)).join('')}
             </div>
@@ -458,6 +579,36 @@ class SettingsModal {
                 .filter(a => !a.available || a.available())[Number(i)];
             if (act) btn.addEventListener('click', () => act.run(this));
         });
+    }
+
+    /*
+     * The green light, where you are already looking: the section someone
+     * opens to configure a subsystem is where "is it actually working"
+     * belongs -- SECTION_ACTIONS' argument, in read-only form. Rendered
+     * only when the subsystem says something; silence stays silent. The
+     * light is the subsystem's own runtime view, never an echo of a knob:
+     * its worth is exactly the case where config says on and reality says
+     * off (a declared ingest url with no secret file).
+     */
+    _statusHtml(sub) {
+        const st = this._statusFor(sub);
+        if (!st) return '';
+        const rows = [];
+        if (st.state) {
+            rows.push(`<div class="ess-settings-status ${st.state}"
+                            data-status-sub="${this._escAttr(sub)}">
+                <span class="ess-settings-dot ${st.state}"></span>
+                <span class="ess-settings-status-text">${this._esc(st.detail || st.state)}</span>
+            </div>`);
+        }
+        if (st.initError) {
+            rows.push(`<div class="ess-settings-status error">
+                <span class="ess-settings-dot error"></span>
+                <span class="ess-settings-status-text">did not configure — everything
+                below the failing line never ran: ${this._esc(st.initError)}</span>
+            </div>`);
+        }
+        return rows.join('');
     }
 
     _rowId(k) { return `ess-set-${k.sub}-${k.key}`.replace(/[^\w-]/g, '_'); }
