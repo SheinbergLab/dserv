@@ -5,7 +5,7 @@
 # Obs window: ess/obs_active (triggers.tcl on evt:19 BEGINOBS / evt:20 ENDOBS) opens/closes; hold ess/trialinfo;
 # on obs close enqueue held trialinfo as-is.
 # On each ess/trialinfo, if ingest URL is unset or blank, no-op (no enqueue).
-# URL is resolved on every call via trialsync::_ingest_base_url (env first, then datapoint).
+# URL is resolved on every call via trialsync::_ingest_base_url (declared `trialsync ingest_url` first; legacy env var / datapoint as fallbacks, adopted into rig.tcl at init).
 # Base URL must be the full ingest script URL (e.g. …/ingest.php); trialsync::ingest_endpoint posts there as-is.
 # Flush sends schema_version 2 JSON including ingest_key from trialsync::_ingest_secret_path (trimmed file contents).
 # Remote ingest: reward_ml lives inside each trials[].payload JSON string (not a top-level POST field).
@@ -26,6 +26,14 @@ package require http
 if {![info exists ::dspath]} {
     set ::dspath [file dir [info nameofexecutable]]
 }
+
+# EACH SUBPROCESS GETS ITS OWN INTERPRETER, so the module path dsconf sets
+# for the main interp is not inherited -- and tm::add MUST precede the
+# require, or it throws and takes the whole config with it (soundconf's
+# lesson, 8cee1665). `trialsync ingest_url` is declared below, with the
+# other init gating.
+tcl::tm::add ${::dspath}/lib
+package require settings
 
 proc exit {args} { error "exit not available for this subprocess" }
 
@@ -79,6 +87,16 @@ proc trialsync::_dbg {msg} {
 }
 
 proc trialsync::_ingest_base_url {} {
+    # The declared home wins outright (settings gear -> `setting trialsync
+    # ingest_url ...` in local/rig.tcl). Declared EMPTY is a real answer --
+    # "this rig does not sync" -- so a declaration short-circuits the legacy
+    # fallbacks rather than falling through to them.
+    if {![catch { ::settings::source_of trialsync ingest_url } src] &&
+        $src ne "default"} {
+        return [string trim [::settings::get trialsync ingest_url]]
+    }
+    # Legacy fallbacks, adopted into rig.tcl at init (see the declaration
+    # at the bottom of this file).
     if {[info exists ::env(ESS_TRIAL_INGEST_BASE_URL)]} {
         set u [string trim $::env(ESS_TRIAL_INGEST_BASE_URL)]
         if {$u ne ""} {
@@ -1085,6 +1103,40 @@ proc trialsync::_on_trialinfo_body {dpoint data nbytes} {
     trialsync::_enqueue_trialinfo_from_data $data
 }
 
+#################################################################
+# RIG DECLARATION
+#
+# Where the trial stream goes is a rig fact, so it lives in local/rig.tcl
+# beside the others ("setting trialsync ingest_url https://..."). Empty --
+# the default -- means this rig does not sync trials and nothing below
+# subscribes: the openephys convention, unconfigured = not attempted, not
+# erroring. No -apply on purpose: the subscriptions and outbox below are
+# wired once at init, so a change from the gear lands at the next restart,
+# and the doc says so.
+#################################################################
+::settings::declare trialsync ingest_url -default "" \
+    -doc "URL of the trial ingest server (.../ingest.php) this rig posts
+trial data to. Empty means this rig does not sync trials and
+nothing is attempted. The shared secret stays in
+/etc/dserv/trial_ingest_secret. Takes effect at the next restart."
+
+# One-time carryover: a rig configured the old way -- ESS_TRIAL_INGEST_BASE_URL
+# in the environment, or the configs/trial_ingest_base_url datapoint from
+# local/pre-remoteservers.tcl -- gets that value adopted into rig.tcl, so the
+# gear shows it and the legacy line becomes deletable. Only while the
+# declaration is untouched: once rig.tcl speaks, it is the single home.
+if {[::settings::source_of trialsync ingest_url] eq "default"} {
+    set _legacy_url [trialsync::_ingest_base_url]
+    if {$_legacy_url ne ""} {
+        if {[catch { ::settings::put trialsync ingest_url $_legacy_url -persist } _e]} {
+            puts stderr "trialsync: could not adopt ingest url into local/rig.tcl: $_e"
+        } else {
+            puts "trialsync: ingest url adopted into local/rig.tcl ($_legacy_url)"
+        }
+    }
+    unset -nocomplain _legacy_url _e
+}
+
 if {[trialsync::_ingest_key] eq ""} {
     puts stderr "trialsync: ingest key not found — set the shared secret in /etc/dserv/trial_ingest_secret. Exiting."
     flush stderr
@@ -1092,7 +1144,7 @@ if {[trialsync::_ingest_key] eq ""} {
 }
 
 if {[trialsync::_ingest_base_url] eq ""} {
-    puts stderr "trialsync: ingest server not configured — set ESS_TRIAL_INGEST_BASE_URL in local/pre-remoteservers.tcl. Exiting."
+    puts stderr "trialsync: ingest server not configured — declare `trialsync ingest_url` (settings gear -> local/rig.tcl). Trial sync disabled."
     flush stderr
     return
 }
