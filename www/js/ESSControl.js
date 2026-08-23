@@ -2160,6 +2160,15 @@ updateConfigRunButtons() {
                 badge: status.gpio.available ? null : ['n/a on this host', 'warn'],
                 enabled: !!status.gpio.available
             });
+            // A rig with no reward hardware is an ordinary rig, not a rig
+            // that failed to find one -- every bench box is this. Offering it
+            // here is the difference between a state you can pick and a
+            // string you have to know to type into the settings gear.
+            rows.push({
+                id: 'none', label: 'No juicer',
+                desc: 'this rig has no reward hardware',
+                enabled: true
+            });
             // a hand-declared form with no row of its own (bare extio,
             // extio:<box>) still has to show as selected, not vanish
             if (!rows.some(r => r.id === status.destination)) {

@@ -1425,6 +1425,20 @@ namespace eval ess {
                                          durable 1 status ok address ""]
                     }
                 }
+                # The two answers that are not a pin. `auto` is the default
+                # and needs no help, but it is worth SEEING beside the pins so
+                # the list reads as the whole choice rather than a pin menu.
+                # `none` is the common one on a bench box and was reachable
+                # only by typing it, which is how a legitimate state ends up
+                # looking like an expert trick.
+                lappend out [dict create route auto label auto \
+                                 detail "USB pump, else an extio *juice* out,\
+                                         else host GPIO" \
+                                 durable 1 status ok address ""]
+                lappend out [dict create route none label none \
+                                 detail "this rig has no reward hardware --\
+                                         a declaration, not a failure" \
+                                 durable 1 status ok address ""]
             }
             default {
                 error "input_candidates: unknown kind '$kind'\

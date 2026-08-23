@@ -437,6 +437,35 @@ proc ess_boot_target {} {
     if { [file isdirectory [file join $::ess::system_path ess blinky]] } {
         return [list blinky "the stock bootstrap system"]
     }
+
+    # ANY system beats none.
+    #
+    # blinky only exists in dserv's own shipped systems/ dir, so on a rig
+    # whose ESS_SYSTEM_PATH points at its real tree that rung cannot fire --
+    # which is how rpi500 reached "nothing to load" on the first boot after
+    # an update (nothing declared, last_good not yet recorded, no blinky in
+    # /home/sheinb/systems). Coming up empty is worse than coming up on an
+    # arbitrary system: a loaded system is inspectable, its panels populate,
+    # and the rest of the ESS config -- subject, datafile hooks -- runs
+    # against something real.
+    #
+    # `system_candidates` rather than a fresh glob, so "what counts as a
+    # loadable system" has one definition: it already skips `lib` and the
+    # project-named leftover directory, and marks a directory with no
+    # <name>.tcl unselectable. First alphabetically, which is arbitrary but
+    # stable -- a rig that cares declares `ess boot_system`.
+    # The catch covers the ENUMERATION only. Wrapping the loop in it hid the
+    # `return` -- catch traps TCL_RETURN the same as an error, so the proc
+    # ran on to "nothing to load" and this rung silently never fired.
+    set cands {}
+    catch { set cands [::ess::system_candidates] }
+    foreach c $cands {
+        if { ![dict exists $c selectable] || ![dict get $c selectable] } continue
+        set s [dict get $c route]
+        if { $s eq "" } continue
+        return [list $s "first system in the tree -- nothing was declared and\
+ this rig has no last-good yet"]
+    }
     return [list "" "nothing to load"]
 }
 
