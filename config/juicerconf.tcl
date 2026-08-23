@@ -369,15 +369,21 @@ proc juicer_dest_norm {v} {
 	usb       { return usb }
 	gpio      { return gpio }
 	extio     { return extio }
+	none      { return none }
     }
     if { [regexp {^extio:([^:/[:space:]]+)(?:/([0-9]+))?$} $v] } { return $v }
-    error "juicer destination '$v': use auto, usb, gpio, extio, extio:<box> or extio:<box>/<pin>"
+    error "juicer destination '$v': use none, auto, usb, gpio, extio,\
+ extio:<box> or extio:<box>/<pin>"
 }
 
 settings::declare juicer destination -default auto \
     -validate juicer_dest_norm \
     -candidates out \
-    -doc "reward route: auto (usb > extio *juice* out > gpio), usb, gpio, extio, extio:<box>, extio:<box>/<pin>" \
+    -doc "reward route: auto (usb > extio *juice* out > gpio), usb, gpio,
+extio, extio:<box>, extio:<box>/<pin> -- or `none` for a rig with no
+reward hardware, which is a DECLARATION and not a failure: auto on
+such a rig can only report that it found nothing, every boot,
+forever." \
     -apply {::juicer_bind}
 
 proc juicer_msml_norm {v} {
@@ -447,6 +453,30 @@ proc juicer_hand_ml_apply {v} {
 # juicer/error breadcrumb, and reward drops loudly (the rpi500 lesson: the
 # silent version of this branch costs debugging sessions).
 #
+# IS THE HOST GPIO ROUTE ACTUALLY ARMED?
+#
+# The module's juice_pin starts at -1 and every pulse is gated on
+# `juice_pin >= 0` (modules/juicer/juicer.c), so the gpio backend with no
+# pin toggles NOTHING, signals its condvar and returns success. A reward is
+# then booked into the session table, flashes in the UI, and never reaches
+# the animal -- the exact failure the `default` branch of reward exists to
+# make loud, arrived at through the one route that skips it.
+#
+# raspberrypi has been in precisely that state (found 2026-08-22): no pump,
+# no *juice* extio out, so auto's floor took it, and there was no pin under
+# the floor. Nothing said so, because auto's floor is where a route goes
+# when nothing else answers and it had always been assumed to work.
+#
+# Not a refusal to bind: a rig may have armed the line itself from a local
+# file (_juicerSetPin), which the settings path never sees. So this reports
+# what it can see and reward drops loudly if the pulse would be a no-op.
+proc juicer_gpio_armed {} {
+    catch { if { [settings::get juicer gpio_pin] >= 0 } { return 1 } }
+    catch { if { [dservExists juicer/gpio_pin] &&
+                 [dservGet juicer/gpio_pin] >= 0 } { return 1 } }
+    return 0
+}
+
 proc juicer_bind {args} {
     if { ![info exists ::juicer] } { return }
     set decl [settings::get juicer destination]
@@ -461,7 +491,20 @@ proc juicer_bind {args} {
 		set err "usb pump not present (destination usb)"
 	    }
 	}
-	gpio { set kind gpio }
+	none {
+	    # Declared absence. Nothing binds, nothing errors, and a reward
+	    # still drops loudly through the default branch below -- a system
+	    # that asks for juice on a rig with none should say so, once, at
+	    # the moment it asks.
+	    set kind none
+	}
+	gpio {
+	    set kind gpio
+	    if { ![juicer_gpio_armed] } {
+		set err "destination gpio, but no gpio_pin is declared --\
+                         the line is unset, so a reward would toggle nothing"
+	    }
+	}
 	extio* {
 	    set spec [string range $decl 6 end]   ;# "extio" -> "", "extio:b/p" -> "b/p"
 	    set hit [juicer_resolve_extio $spec]
@@ -483,6 +526,12 @@ proc juicer_bind {args} {
 		set target $hit
 	    } else {
 		set kind gpio
+		if { ![juicer_gpio_armed] } {
+		    set err "NO REWARD ROUTE: no USB pump answered, no extio\
+                             digital out is labelled *juice*, and auto's gpio\
+                             floor has no gpio_pin declared. Reward would be\
+                             booked and never delivered."
+		}
 	    }
 	}
     }
@@ -490,6 +539,7 @@ proc juicer_bind {args} {
     # juice-pin box still live must move the target, not keep the dead one
     if { $kind ne [$::juicer backend] || $target ne [$::juicer extio_target] } {
 	$::juicer set_backend $kind $target
+	set ::juicer_drop_reported 0
 	set desc $kind
 	if { $target ne "" } { append desc " [join $target /]" }
 	puts "juicer: route $desc (destination $decl)"
@@ -590,6 +640,32 @@ proc init {} {
     set ::juicer_last_trial_ml 0
 }
 
+# A DROPPED REWARD IS NEVER BOOKED, AND IS REPORTED ONCE.
+#
+# Two different things were being conflated. Not booking juice the animal
+# never got is always right -- session_add_juice is a record, and a record of
+# undelivered reward is simply false. But TELLING somebody, on every reward,
+# is wrong on the rigs where this is the normal state: a bench box with no
+# pump runs whole sessions whose rewards go nowhere, and a stderr line and a
+# red badge per trial is how a warning becomes wallpaper.
+#
+# So: once per route. The latch clears in juicer_bind when the route actually
+# changes, so a rig that comes up misrouted says so at the first reward and
+# then stays quiet until something is fixed or unplugged -- and says it again
+# if it is.
+#
+# `none` says nothing at all. That rig DECLARED it has no juicer; reporting
+# it back is telling a human what they just told us.
+set ::juicer_drop_reported 0
+
+proc juicer_report_drop {why} {
+    if { [settings::get juicer destination] eq "none" } return
+    if { $::juicer_drop_reported } return
+    set ::juicer_drop_reported 1
+    dservSet juicer/error "reward dropped: $why"
+    puts stderr "juicer: reward dropped -- $why (silenced until the route changes)"
+}
+
 #
 # our "API" commands
 #
@@ -605,14 +681,21 @@ proc reward { {ml ""} } {
 	    if { $us > 0 } { juicer_extio_pulse $us }
 	}
 	gpio {
+	    # An unarmed line is an unavailable destination, so it takes the
+	    # same exit: drop loudly, book nothing. juicerJuiceAmount would
+	    # otherwise return success having pulsed no line at all.
+	    if { ![juicer_gpio_armed] } {
+		juicer_report_drop "destination gpio has no gpio_pin declared"
+		return
+	    }
 	    # currently assume only a single juicer is configured
 	    juicerJuiceAmount 0 $ml
 	}
 	default {
-	    # explicitly declared destination is unavailable: drop loudly,
-	    # and do NOT book juice the animal never got
-	    dservSet juicer/error "reward $ml dropped: destination [settings::get juicer destination] unavailable"
-	    puts stderr "juicer: reward $ml dropped -- destination unavailable"
+	    # the declared destination is unavailable: book nothing, and say
+	    # so once -- see juicer_report_drop
+	    juicer_report_drop "destination [settings::get juicer destination]\
+ unavailable"
 	    return
 	}
     }
