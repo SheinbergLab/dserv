@@ -1362,6 +1362,34 @@ namespace eval ess {
                     }
                 }
             }
+            press_group {
+                # ANY chord group whose PRESS can answer: a stick's
+                # push-select, a pair of response buttons, one foot switch.
+                #
+                # Deliberately not the `group` kind above. That one judges a
+                # group by whether it can STEER -- four canonical directions
+                # -- which is the wrong question for a commit and would hide
+                # the single-member push-select that `dial stick_commit`
+                # defaults to, because one member canonicalises to no
+                # direction at all and the row is skipped.
+                foreach dev [input_boxes] {
+                    foreach g [input_box_groups $dev] {
+                        set labs {}
+                        foreach p [input_commalist $io_class/$dev/state/group/$g/pins] {
+                            set lab [input_pin_label $dev $p]
+                            lappend labs [expr {$lab ne "" ? $lab : "pin $p"}]
+                        }
+                        set dp $io_class/$dev/state/group/$g
+                        lappend out [dict create route $g label $g \
+                             detail "$dev: [join $labs { }]" durable 1 \
+                             selectable 1 \
+                             status [expr {[dservExists $dp] ? "ok" : "unresolved"}] \
+                             note "chord groups the boxes announce -- any\
+                                   member's press commits" \
+                             address $dp]
+                    }
+                }
+            }
             analog {
                 # extio/ain/streams IS this list, assembled by extioconf from
                 # what the boxes announce -- box, group, dpoint, channels,

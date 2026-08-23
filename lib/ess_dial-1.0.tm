@@ -625,6 +625,68 @@ namespace eval ess {
     }
 
     ########################################################################
+    # WHICH PRESS COMMITS A RING BEARING
+    #
+    # `sectors` and `rate` commit by ARRIVING: the cursor walks or flies out
+    # and reaching the ring is the response. `ring` has no arrival -- the
+    # cursor is pinned to the ring the moment the stick leaves centre, which
+    # is the whole point of that reading -- so the commit has to be a press,
+    # and which press is a fact about the rig's hardware.
+    #
+    # The default is a stick with its own push-select. A rig whose stick has
+    # no button (the teensy box here: one `response` chord group and nothing
+    # else) declares its response buttons instead, and `ring` becomes usable
+    # rather than a cursor that tracks beautifully and can never answer.
+    #
+    # A LABEL, like `joystick box_group` and `slider ain_group`, so it follows
+    # whichever box is present. A full datapoint path still works, for a
+    # commit that is not an extio chord group at all.
+    ########################################################################
+
+    settings::declare dial stick_commit -default stick_select \
+        -candidates press_group \
+        -doc "the ring reading commits on a PRESS, not on arrival: name the\
+              extio chord group whose press answers. A stick with a\
+              push-select uses that group; a rig without one points this at\
+              its response buttons. Only consulted when `ring` is among the\
+              dial sources." \
+        -apply {::ess::dial_stick_commit_apply}
+
+    proc dial_stick_commit_route { {label ""} } {
+        if { $label eq "" } {
+            catch { set label [::settings::get dial stick_commit] }
+            if { $label eq "" } { set label stick_select }
+        }
+        set label [string trim $label]
+        if { [string match */* $label] } { return $label }  ;# already a datapoint
+        return "extio/*/state/group/$label"
+    }
+
+    proc dial_stick_commit_apply { label } {
+        variable dial_stick_commit_dp
+        variable dial_sources
+        variable dial_active
+        if { [string trim $label] eq "" } return
+        set want [dial_stick_commit_route $label]
+        if { $want eq $dial_stick_commit_dp } return
+        # An ARMED ring dial holds its subscription on the old datapoint.
+        # Moving the variable alone would look like the change took and then
+        # do nothing until the next system load -- the failure this whole
+        # settings layer exists to stop.
+        if { $dial_active && "ring" in $dial_sources } {
+            catch { dpointRemoveScript $dial_stick_commit_dp ::ess::dial_stick_commit }
+            catch { dservRemoveMatch   $dial_stick_commit_dp }
+            set dial_stick_commit_dp $want
+            dservAddMatch   $dial_stick_commit_dp
+            dpointAddScript $dial_stick_commit_dp ::ess::dial_stick_commit
+            puts "dial: ring commits on $want (moved live)"
+        } else {
+            set dial_stick_commit_dp $want
+        }
+        return
+    }
+
+    ########################################################################
     # WHAT COULD ANSWER A DIAL ON THIS RIG, RIGHT NOW
     #
     # `dial sources` is the one knob whose legal values are a VOCABULARY
@@ -860,12 +922,20 @@ namespace eval ess {
         set dial_astick_pub_ms    0
         set dial_astick_min_step  0.002
         set dial_stick_invert   0
-        set dial_stick_commit_dp "extio/*/state/group/stick_select"
+        set dial_stick_commit_dp [dial_stick_commit_route]
         set dial_pointer_dpoint ess/dial/pointer
 
         foreach { k v } $args {
             switch -- $k {
-                -sources        { set dial_sources $v
+                -sources        { # Normalized HERE too, not only in the
+                                  # settings validator. Every test below is
+                                  # written against the strategy words, so a
+                                  # protocol that says `-sources astick` --
+                                  # and several do, because the old names are
+                                  # promised to keep working -- fell straight
+                                  # through the valid-source check into an
+                                  # error. Same map, one call.
+                                  set dial_sources [dial_sources_norm $v]
                                   set dial_source_origin protocol }
                 -deadband_deg   { set dial_deadband_deg $v }
                 -arc_center     { set dial_arc_center $v }
@@ -2070,7 +2140,7 @@ namespace eval ess {
 
     # Commits arrive asynchronously via dial_dpad_tick latching dial_pending,
     # which dial_response consumes before it polls. Nothing to poll here.
-    proc dial_poll_dpad {} { return "" }
+    proc dial_poll_sectors {} { return "" }
 
     # ---------------------------------------------------------------------
     # astick: the deflection vector is the cursor's velocity
@@ -2296,7 +2366,7 @@ namespace eval ess {
 
     # Commits arrive asynchronously via dial_astick_sample latching
     # dial_pending. Nothing to poll.
-    proc dial_poll_astick {} { return "" }
+    proc dial_poll_rate {} { return "" }
 
     # Velocity steering from a self-centering stick.
     #
@@ -2417,7 +2487,7 @@ namespace eval ess {
         do_update
     }
 
-    proc dial_poll_stick {} { return "" }
+    proc dial_poll_ring {} { return "" }
 
     # Mouse commits arrive asynchronously via dial_mouse_sample latching
     # dial_pending, which dial_response consumes before it polls sources.
@@ -2532,4 +2602,25 @@ namespace eval ess {
         do_update
         return $a
     }
+    ########################################################################
+    # EVERY DECLARED SOURCE MUST HAVE A POLL
+    #
+    # dial_response dispatches `dial_poll_$src` on the NORMALIZED word, so a
+    # source in the valid list with no proc behind it is an invalid command
+    # name raised at the moment a subject answers -- the worst possible
+    # time, in the one code path nobody exercises while wiring a rig.
+    #
+    # That is exactly what the rename to strategy words left behind: the
+    # vocabulary, the validator and every `in $dial_sources` test moved to
+    # ring/sectors/rate while the three poll procs kept the device names.
+    # `dial sources ring` bound, armed, tracked the stick -- and threw on
+    # the response. Checked at load, where it costs nothing and fails loudly.
+    ########################################################################
+    foreach _s $dial_valid_sources {
+        if { [info procs [namespace current]::dial_poll_$_s] eq "" } {
+            error "ess_dial: source '$_s' is declared valid but has no\
+ dial_poll_$_s -- dial_response would fail on the first answer"
+        }
+    }
+    unset -nocomplain _s
 }
