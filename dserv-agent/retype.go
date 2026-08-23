@@ -1,9 +1,10 @@
 // retype.go - reprovision a box to a different profile, from the panel or curl.
 //
 // A retype IS the bootstrap: the agent fetches the registry's own
-// /setup?profile=X and runs it with --skip-scripts, so the panel button and
-// the curl a human would paste share one source of truth -- profile semantics
-// live only in the served script. The bootstrap skips components already at
+// /setup?profile=X and runs it flagless (script sync is opt-in there, so
+// local ESS scripts are kept), and the panel button and the curl a human
+// would paste share one source of truth -- profile semantics live only in
+// the served script. The bootstrap skips components already at
 // their target version, so a retype that only changes class (incage -> dev)
 // is a few seconds of convergence work, not a reinstall.
 //
@@ -80,7 +81,7 @@ func (a *Agent) fetchRegistryProfiles(registry string) ([]BootstrapProfile, erro
 func (a *Agent) startRetype(profile, timeRole string) error {
 	registry := a.registryBase()
 	if registry == "" {
-		return fmt.Errorf("no registry configured (-registry flag or %s) — retype from a shell instead: curl -sSL <registry>/setup?profile=%s | bash -s -- --skip-scripts", boxConfPath, profile)
+		return fmt.Errorf("no registry configured (-registry flag or %s) — retype from a shell instead: curl -sSL <registry>/setup?profile=%s | bash", boxConfPath, profile)
 	}
 	if !profileNameRe.MatchString(profile) {
 		return fmt.Errorf("invalid profile name %q", profile)
@@ -122,9 +123,11 @@ func (a *Agent) startRetype(profile, timeRole string) error {
 	// name stays taken until this reset.
 	exec.Command("sudo", "systemctl", "reset-failed", retypeUnit).Run()
 
-	// --skip-scripts always: a box being retyped is a box in service, and the
-	// script sync unzips the registry's copy OVER ~/systems/ess. Deliberately
-	// NOT --skip-agent -- converging the agent package is part of converging
+	// No --scripts, ever: a box being retyped is a box in service, and the
+	// script sync unzips the registry's copy OVER ~/systems/ess. Scripts are
+	// opt-in in the bootstrap now, so the flagless default IS the safe one
+	// (the old --skip-scripts is accepted but redundant). Deliberately NOT
+	// --skip-agent -- converging the agent package is part of converging
 	// the box. A box running a hand-built agent should retype from a shell
 	// with --skip-agent instead.
 	setupURL := registry + "/setup?profile=" + profile
@@ -140,8 +143,8 @@ case "$(head -c 2 "$d/setup.sh")" in
   '#!') ;;
   *) echo "retype: registry did not return a script"; exit 1 ;;
 esac
-echo "retype: running bootstrap (profile %s, --skip-scripts)"
-bash "$d/setup.sh" --skip-scripts
+echo "retype: running bootstrap (profile %s; local scripts kept)"
+bash "$d/setup.sh"
 echo "retype: complete"`,
 		setupURL, shellQuote(setupURL), profile)
 

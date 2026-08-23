@@ -453,10 +453,15 @@ Examples:
 Bootstrap (server mode):
   In --server mode, /setup serves a script to provision fresh systems:
 
-  curl -sSL https://yourserver/setup | bash                  # default profile
+  curl -sSL https://yourserver/setup | bash                  # default profile, stock scripts (blinky)
   curl -sSL https://yourserver/setup?profile=server | bash   # server only (no stim2)
   curl -sSL https://yourserver/setup | bash -s -- --dry-run  # preview changes
-  curl -sSL https://yourserver/setup | bash -s -- --workgroup mylab  # override workgroup
+  curl -sSL https://yourserver/setup | bash -s -- --scripts --workgroup mylab  # + that workgroup's ESS scripts
+
+  # Scripts alone, on a box provisioned earlier -- declare the registry
+  # pair and pull the workgroup's tree, touching nothing else (also how a
+  # box joins a NEW workgroup's scripts):
+  curl -sSL https://yourserver/setup | sudo bash -s -- --scripts-only --workgroup mylab --user labuser
 
   # Profile AND time role in one step -- quote it, an unquoted & backgrounds
   # the command and silently drops the role.
@@ -995,7 +1000,20 @@ func (a *Agent) handleLandingPage(w http.ResponseWriter, r *http.Request) {
               <code>curl -sSL __BASE__/setup | bash</code>
               <button class="copy" data-cmd="curl -sSL __BASE__/setup | bash">Copy</button>
             </div>
-            <p class="note">Preview first with <code>| bash -s -- --dry-run</code>, or set the workgroup with <code>--workgroup mylab</code>.</p>
+            <p class="note">Preview first with <code>| bash -s -- --dry-run</code>, or set the workgroup with <code>--workgroup mylab</code>. Ships with the stock systems tree (blinky) and <em>no</em> workgroup scripts &mdash; add <code>--scripts</code> to pull the workgroup&rsquo;s ESS systems too, or do it any time later with the card below.</p>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <h3>Pull a workgroup&rsquo;s scripts</h3>
+              <span class="platform">Linux · provisioned box</span>
+            </div>
+            <p class="card-desc">Scripts alone, on a box provisioned earlier: declares the registry pair on the box and syncs the workgroup&rsquo;s ESS systems into that user&rsquo;s <code>~/systems/ess</code>, touching nothing else &mdash; no agent, components or services. Also how a box joins a <em>new</em> workgroup&rsquo;s scripts.</p>
+            <div class="cmd">
+              <code>curl -sSL __BASE__/setup | sudo bash -s -- --scripts-only --workgroup mylab --user labuser</code>
+              <button class="copy" data-cmd="curl -sSL __BASE__/setup | sudo bash -s -- --scripts-only --workgroup mylab --user labuser">Copy</button>
+            </div>
+            <p class="note">The registry copy wins every collision, so push local edits first on a box with in-flight work. A running dserv adopts the declarations and sees the tree at its next restart or system load. <code>--user</code> defaults to whoever invoked sudo.</p>
           </div>
 
           <div class="card">

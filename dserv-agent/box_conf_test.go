@@ -13,7 +13,7 @@ import (
 func TestReadBoxIdentity(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "box.conf")
 	conf := `# Declared identity for this box -- written by the dserv bootstrap.
-# Retype: curl -sSL https://dserv.net/setup?profile=<name> | bash -s -- --skip-scripts
+# Retype: curl -sSL https://dserv.net/setup?profile=<name> | bash
 
 profile=dev
 stim_mode=windowed

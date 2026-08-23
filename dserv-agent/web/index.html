@@ -1184,7 +1184,7 @@ body.solo .agent-panel {
              const trLine = tr
 		   ? `\n• time role re-declared as "${tr}" and applied`
 		   : '\n• the declared time role is kept as-is';
-             if (!confirm(`Retype this box to profile "${p}"?\n\nThis re-runs the provisioner from ${this.retypeRegistry}:\n• services the profile excludes are disabled\n• missing components are installed, outdated ones updated${trLine}\n• the agent restarts (this panel reconnects on its own)\n\nLocal ESS scripts are kept (--skip-scripts).`)) {
+             if (!confirm(`Retype this box to profile "${p}"?\n\nThis re-runs the provisioner from ${this.retypeRegistry}:\n• services the profile excludes are disabled\n• missing components are installed, outdated ones updated${trLine}\n• the agent restarts (this panel reconnects on its own)\n\nLocal ESS scripts are kept (script sync is opt-in).`)) {
 		 this.renderPanel();
 		 return;
              }

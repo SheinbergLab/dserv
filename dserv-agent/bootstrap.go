@@ -298,9 +298,11 @@ ROLE=""
 # overrides, and "none" clears a declaration.
 TIME_ROLE="{{.TimeRole}}"
 WORKGROUP="${DEFAULT_WORKGROUP}"
+WORKGROUP_EXPLICIT=false
 DRY_RUN=false
 SKIP_AGENT=false
-SKIP_SCRIPTS=false
+SYNC_SCRIPTS=false
+SCRIPTS_ONLY=false
 REINSTALL=false
 ESS_USER_ARG=""
 
@@ -308,11 +310,19 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --role)        ROLE="$2"; shift 2 ;;
         --time-role)   TIME_ROLE="$2"; shift 2 ;;
-        --workgroup)   WORKGROUP="$2"; shift 2 ;;
+        --workgroup)   WORKGROUP="$2"; WORKGROUP_EXPLICIT=true; shift 2 ;;
         --user)        ESS_USER_ARG="$2"; shift 2 ;;
         --dry-run)     DRY_RUN=true; shift ;;
         --skip-agent)  SKIP_AGENT=true; shift ;;
-        --skip-scripts) SKIP_SCRIPTS=true; shift ;;
+        --scripts)     SYNC_SCRIPTS=true; shift ;;
+        --scripts-only) SCRIPTS_ONLY=true; SYNC_SCRIPTS=true; shift ;;
+        --skip-scripts)
+            # The old default synced a workgroup's scripts over ~/systems/ess
+            # unless this flag said not to. The default flipped: a fresh box
+            # runs the stock tree (blinky) and syncs nothing, so this flag is
+            # now redundant -- accepted so old runbooks keep working.
+            echo "note: --skip-scripts is the default now (use --scripts to sync)"
+            shift ;;
         --reinstall)   REINSTALL=true; shift ;;
         --help|-h)
             echo "dserv bootstrap - provision a data acquisition box"
@@ -325,15 +335,25 @@ while [[ $# -gt 0 ]]; do
             echo "                       \"grandmaster IFACE\" | \"client IFACE\" |"
             echo "                       \"ntp-client SERVER\" (quote role+arg together;"
             echo "                       re-runs preserve it; \"none\" clears it)"
-            echo "  --workgroup NAME     Workgroup name (default: ${DEFAULT_WORKGROUP})"
+            echo "  --workgroup NAME     Workgroup name (default: ${DEFAULT_WORKGROUP})."
+            echo "                       Given explicitly, it is DECLARED on the box"
+            echo "                       (local/rig.tcl), updating any earlier answer."
             echo "  --user USER          Local account owning the ESS systems tree"
             echo "                       (default: the user invoking sudo, else 'lab')"
             echo "  --dry-run            Show what would be done without making changes"
             echo "  --skip-agent         Skip dserv-agent install (components only)"
-            echo "  --skip-scripts       Do not sync ESS scripts from the registry."
-            echo "                       Use on any box with local work in"
-            echo "                       ~/systems/ess: the sync unzips OVER that"
-            echo "                       tree and the registry copy wins."
+            echo "  --scripts            Also sync the workgroup's ESS scripts into"
+            echo "                       ~/systems/ess. OFF by default: a fresh box"
+            echo "                       runs the stock systems tree (blinky) with no"
+            echo "                       workgroup scripts at all -- and the sync"
+            echo "                       unzips OVER that tree, registry copy wins,"
+            echo "                       so it must be asked for."
+            echo "  --scripts-only       ONLY the scripts step, on a box provisioned"
+            echo "                       earlier: declare the registry pair and pull"
+            echo "                       the workgroup's tree. With --workgroup NAME,"
+            echo "                       this is how a box joins a new workgroup's"
+            echo "                       scripts without re-provisioning anything."
+            echo "  --skip-scripts       (deprecated) the default now; accepted, inert"
             echo "  --reinstall          Reinstall components even when already at the"
             echo "                       target version (repairs a broken install)"
             echo "  --help               Show this help"
@@ -444,6 +464,32 @@ declare_setting() {
     ok "declared: setting ${sub} ${key} ${value} (local/rig.tcl)"
 }
 
+# The forced sibling: an EXPLICIT operator answer replaces whatever is
+# declared (all occurrences, the same rule as settings::put's own file
+# rewrite), appending when nothing is. Use only for a value a flag named
+# deliberately -- the guarded declare_setting above is for seeding.
+redeclare_setting() {
+    local sub="$1" key="$2" value="$3"
+    local rig="${DSERV_INSTALL_DIR}/local/rig.tcl"
+    if [[ -f "$rig" ]] && \
+       grep -qE "^setting[[:space:]]+${sub}[[:space:]]+${key}([[:space:]]|$)" "$rig"; then
+        local have
+        have=$(sed -nE "s|^setting[[:space:]]+${sub}[[:space:]]+${key}[[:space:]]+(.*)$|\1|p" "$rig" | tail -1)
+        if [[ "$have" == "$value" ]]; then
+            info "already declared: ${sub} ${key} = ${value}"
+            return 0
+        fi
+        if $DRY_RUN; then
+            info "[dry-run] redeclare: setting ${sub} ${key} ${value} (was ${have})"
+            return 0
+        fi
+        sed -i -E "s|^setting[[:space:]]+${sub}[[:space:]]+${key}([[:space:]].*)?$|setting ${sub} ${key} ${value}|" "$rig"
+        ok "redeclared: setting ${sub} ${key} ${value} (was ${have})"
+        return 0
+    fi
+    declare_setting "$sub" "$key" "$value"
+}
+
 # ---- Profile shape ----
 #
 # The profile is already resolved into COMPONENTS_JSON by the registry, so the
@@ -548,15 +594,21 @@ check_root() {
             local -a fwd=()
             [[ -n "$ROLE" ]]      && fwd+=(--role "$ROLE")
             [[ -n "$TIME_ROLE" ]] && fwd+=(--time-role "$TIME_ROLE")
-            [[ -n "$WORKGROUP" ]] && fwd+=(--workgroup "$WORKGROUP")
+            # Only when EXPLICIT: the variable always holds the template
+            # default, and forwarding that unconditionally would make the
+            # root re-run treat it as an operator declaration (which now
+            # rewrites the box's declared workgroup). The re-fetched script
+            # carries the same default, so not forwarding loses nothing.
+            $WORKGROUP_EXPLICIT   && fwd+=(--workgroup "$WORKGROUP")
             [[ -n "$ESS_USER_ARG" ]] && fwd+=(--user "$ESS_USER_ARG")
             $DRY_RUN              && fwd+=(--dry-run)
             $SKIP_AGENT           && fwd+=(--skip-agent)
             # Must be forwarded, like every other flag here: this branch
             # re-fetches and re-runs the script as root, so anything missed
-            # is silently dropped -- and the one being dropped here protects
-            # a tree of local work.
-            $SKIP_SCRIPTS         && fwd+=(--skip-scripts)
+            # is silently dropped -- and dropping these would silently NOT
+            # sync the scripts someone explicitly asked for.
+            $SCRIPTS_ONLY         && fwd+=(--scripts-only)
+            $SYNC_SCRIPTS && ! $SCRIPTS_ONLY && fwd+=(--scripts)
             $REINSTALL            && fwd+=(--reinstall)
 
             # Re-fetch into a variable and CHECK IT, rather than substituting
@@ -1112,8 +1164,15 @@ step_configure_dserv() {
     # dserv, not the agent; the same disease as role.conf below), and
     # existing copies are inert. Clean by hand:
     #   rm -f ${DSERV_INSTALL_DIR}/etc/mesh.conf
-    declare_setting registry url       "${REGISTRY_URL}"
-    declare_setting registry workgroup "${WORKGROUP}"
+    declare_setting registry url "${REGISTRY_URL}"
+    if $WORKGROUP_EXPLICIT; then
+        # An explicit --workgroup IS the operator declaring: it replaces an
+        # earlier answer (a box moving workgroups), and a running dserv
+        # adopts it at its next restart. The template default only SEEDS.
+        redeclare_setting registry workgroup "${WORKGROUP}"
+    else
+        declare_setting registry workgroup "${WORKGROUP}"
+    fi
 
     # No role.conf here. It was written whenever --role was given and read by
     # nothing -- not dserv, not the agent, not a Tcl script. The declaration
@@ -1133,11 +1192,22 @@ step_sync_scripts() {
     # registry copy wins every collision. That is right for a box being
     # provisioned and wrong for one already in service: the .sync_base.json
     # files in that tree exist because a 3-way conflict-detecting sync owns it,
-    # and this step knows nothing about them. --skip-scripts is what makes a
-    # bootstrap re-run safe on a box with local work.
+    # and this step knows nothing about them. That is why the whole step is
+    # OPT-IN (--scripts / --scripts-only): the default box runs the stock
+    # systems tree that ships with dserv (blinky) and syncs nothing -- which
+    # also means it declares NO ess system_path, so essconf's stock fallback
+    # stays in charge. Everything below, the declaration included, happens
+    # only when a sync was asked for.
     # ESS systems are run by dserv; a display box has nothing to run them with.
     if ! has_component dserv; then
         info "No dserv in profile ${PROFILE} — skipping ESS script sync"
+        return
+    fi
+
+    if ! $SYNC_SCRIPTS; then
+        info "ESS scripts not synced (the default): this box runs the stock"
+        info "systems tree (blinky). Pull a workgroup's scripts any time with:"
+        info "  curl -sSL ${REGISTRY_URL}/setup | sudo bash -s -- --scripts-only --workgroup NAME"
         return
     fi
 
@@ -1187,11 +1257,6 @@ step_sync_scripts() {
         info "legacy pre-systemdir.tcl present; dserv adopts it into rig.tcl at first boot"
     else
         declare_setting ess system_path "${user_home}/systems"
-    fi
-
-    if $SKIP_SCRIPTS; then
-        info "Skipping ESS script sync (--skip-scripts)"
-        return
     fi
 
     info "Syncing ESS scripts from registry..."
@@ -1424,8 +1489,8 @@ step_record_identity() {
     installed_components=$(echo "$COMPONENTS_JSON" | jq -r '[.components[].id] | join(",")')
     write_file /etc/dserv-agent/box.conf <<EOF
 # Declared identity for this box -- written by the dserv bootstrap.
-# Retype: curl -sSL ${REGISTRY_URL}/setup?profile=<name> | bash -s -- --skip-scripts
-# (--skip-scripts keeps local work in ~/systems/ess)
+# Retype: curl -sSL ${REGISTRY_URL}/setup?profile=<name> | bash
+# (script sync is opt-in, so local work in ~/systems/ess is kept)
 #
 # stim_mode "" = cage default (stim2.service fullscreen on its own X server);
 # "windowed" = development launcher, fullscreen unit disabled.
@@ -1558,6 +1623,20 @@ main() {
     $DRY_RUN && echo -e "  ${YELLOW}** DRY RUN **${NC}"
     echo ""
 
+    # Scripts-only: the registry pair + the workgroup tree, nothing else --
+    # how an already-provisioned box joins a (new) workgroup's scripts
+    # without touching agent, components or services.
+    if $SCRIPTS_ONLY; then
+        info "Log: ${LOG_FILE}"
+        echo ""
+        step_configure_dserv
+        step_sync_scripts
+        echo ""
+        ok "Done. A running dserv adopts the declarations and sees the tree"
+        ok "at its next restart or system load."
+        exit 0
+    fi
+
     detect_platform
 
     echo ""
@@ -1603,6 +1682,12 @@ main() {
     echo ""
     ok "Agent UI:  http://${ip_addr}/"
     ok "Mesh:      ${REGISTRY_URL}/w/${WORKGROUP}"
+    if $SYNC_SCRIPTS; then
+        ok "Scripts:   ~/systems/ess from workgroup ${WORKGROUP}"
+    else
+        ok "Scripts:   stock tree (blinky); join a workgroup any time:"
+        ok "           curl -sSL ${REGISTRY_URL}/setup | sudo bash -s -- --scripts-only --workgroup NAME"
+    fi
     ok "Log:       ${LOG_FILE}"
     echo ""
 }
