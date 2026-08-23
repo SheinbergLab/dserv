@@ -1622,7 +1622,16 @@ updateConfigRunButtons() {
             });
             
             select.selectedIndex = selectedIndex;
+            // The control is one column wide now, so a long value (a params
+            // set, a list of restitutions) shows what fits and the rest on
+            // hover. The popup still opens at full width.
+            const showFull = () => {
+                const opt = select.options[select.selectedIndex];
+                select.title = opt ? `${argName}: ${opt.textContent}` : argName;
+            };
+            showFull();
             select.addEventListener('change', (e) => {
+                showFull();
                 this.onVariantOptionChange(argName, e.target.value);
             });
 

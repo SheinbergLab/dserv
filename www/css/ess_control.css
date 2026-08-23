@@ -1644,22 +1644,43 @@ select.ess-param-select {
     margin-top: 8px;
 }
 
-.ess-option-row {
-    display: flex;
+/* One grid for the whole list, so a label, a select and a pencil in
+   different rows share a column and line up down the panel.
+   Per-row flex could not do that: each row was its own formatting context,
+   and a select whose longest option is wide (`params`, `restitutions`)
+   refused to shrink to the flex share -- min-width on a flex item defaults
+   to min-content -- so those two rows ran wider than the rest and pushed
+   their pencils out of line. Here every select fills the SAME 1fr column
+   and the pencils land on one edge.
+   The middle column keeps a floor so a long argument name cannot squeeze
+   the selects away, and the label column truncates instead. */
+.ess-options-container {
+    display: grid;
+    grid-template-columns: minmax(0, max-content) minmax(64px, 1fr) max-content;
     align-items: center;
-    margin-bottom: 6px;
-    gap: 8px;
+    column-gap: 8px;
+    row-gap: 6px;
+}
+
+/* the row is a DOM grouping, not a box: its three children become the
+   grid's cells directly. Every row has exactly those three (label, select,
+   pencil -- see ESSControl.renderVariantOptions), which is what makes this
+   safe; a row with a missing child would shift the columns under it. */
+.ess-option-row {
+    display: contents;
 }
 
 .ess-option-label {
     font-size: 11px;
     color: var(--ess-text-secondary);
-    width: 100px;
-    flex-shrink: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .ess-option-select {
-    flex: 1;
+    width: 100%;
+    min-width: 0;
     padding: 4px 6px;
     font-size: 11px;
     background: var(--ess-bg-panel);
@@ -1667,6 +1688,9 @@ select.ess-param-select {
     border-radius: 3px;
     color: var(--ess-text-primary);
     cursor: pointer;
+    /* the closed control shows what fits; the popup opens at full width,
+       and the title carries the whole value for a hover */
+    text-overflow: ellipsis;
 }
 
 /* Performance Panel */
