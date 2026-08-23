@@ -1,259 +1,46 @@
 #
-# Local camera commands — ~1 snapshot/sec published as JPEG datapoints
+# Per-rig camera tuning -- copy to local/camera.tcl and adjust.
 #
-# Copy to local/camera.tcl and adjust for the rig. Loaded by the camera
-# subprocess (config/cameraconf.tcl) when dserv starts.
+# You do NOT need this file to use the camera. The command set
+# (start/stop/set_interval/grab_full/...), the /camera.html page, and the
+# declared rig facts all live in config/cameraconf.tcl now:
 #
-# Datapoints published:
-#   camera/preview     JPEG snapshot, every snapshot_interval s (view at /camera.html)
-#   camera/full        full-resolution JPEG, on demand via grab_full
-#   camera/frame_info  human-readable line per snapshot
-#   camera/status      continuous | stopped | error: ...
-#   camera/interval    actual seconds between snapshots (skip-rate quantized)
+#   setting camera enabled  0|1          start streaming at boot (the gear
+#                                        flips it live)
+#   setting camera rotation 0|90|180|270 mounting rotation
 #
-# Available commands (send camera <cmd>):
-#  start ?camera_id?           - Start camera streaming
-#  stop                        - Stop camera streaming
-#  set_interval secs           - Seconds between snapshots (live, no restart)
-#  grab_full                   - Publish latest frame full-res to camera/full
-#  check_status                - Get camera status
-#  check_ring_buffer           - Get ring buffer status
-#  get_frame_ppm frame_id      - Get frame as PPM data
-#  get_frame_jpeg frame_id     - Get frame as JPEG data
-#  save_frame frame_id file    - Save frame (.ppm/.jpg)
-#  publish_frame frame_id datapoint ?format? - Publish frame
+# both editable from the settings gear (persisted in local/rig.tcl). This
+# file is only for tuning the conf does not declare. It is sourced by the
+# camera subprocess BEFORE the declarations, so a declared value always wins
+# over anything set here.
+#
 
-set last_frame_id -1
+# Publish cadence: stream at stream_fps, publish a snapshot every
+# snapshot_interval seconds (skip-rate quantized). These are the defaults;
+# uncomment to change.
+#
+# set stream_fps 30.0
+# set snapshot_interval 1.0
 
-# Stream runs at stream_fps; snapshots publish every snapshot_interval seconds
-# (rounded to a whole number of skipped frames). Changing snapshot_interval
-# while streaming takes effect immediately via set_interval.
-set stream_fps 30.0
-set snapshot_interval 1.0
+# Sensor tuning that must land between cameraConfigure and streaming --
+# define camera_tune and `start` calls it at the right moment. Uncomment
+# what the rig needs.
+#
+# proc camera_tune {} {
+#     # Lock exposure
+#     cameraSetAutoExposure 0
+#     cameraSetExposureTime 15000
+#     cameraSetAnalogGain 2.0
+#
+#     # Lock white balance for consistent color (green is always 1.0)
+#     cameraSetAutoWhiteBalance 0
+#     cameraSetRedGain 1.8
+#     cameraSetBlueGain 1.5
+#
+#     # Adjust sharpness
+#     cameraSetSharpness 1.3
+# }
 
-package require settings
-
-# Rotation is the RIG's mounting declaration -- enclosures mount cameras
-# sideways -- so it lives with the other declared rig facts in local/rig.tcl
-# ("setting camera rotation 90"), not in this file. set_rotation (the
-# /camera.html selector calls it) persists the new value there and cycles a
-# running camera; on a fresh start the declared value applies directly.
-# 90/270 rotate in software during JPEG encode (Pi hardware does 0/180 only);
-# at snapshot rates the cost is negligible.
-proc apply_rotation {deg} {
-    if {[catch {cameraStatus} st]} { return }
-    if {[dict get $st state] eq "streaming"} {
-        stop
-        start
-    }
-}
-
-settings::declare camera rotation -default 0 -values {0 90 180 270} -type int \
-    -doc "Camera mounting rotation, degrees clockwise" \
-    -apply {::apply_rotation}
-
-proc set_rotation {deg} {
-    settings::put camera rotation $deg -persist
-}
-
-# Compute the skip rate for the current interval, apply it, and publish the
-# actual (quantized) interval to camera/interval. Before the camera is
-# initialized the module call errors — the chosen interval still publishes
-# and start's own apply_interval picks it up. Any OTHER failure must
-# propagate: publishing an interval that did not apply is how a page ends
-# up trusting a rate the stream is not running at.
-proc apply_interval {} {
-    set skip [expr {max(1, round($::stream_fps * $::snapshot_interval))}]
-    if {[catch {cameraSetFrameSkipRate $skip} err]} {
-        if {![string match "*not initialized*" $err]} { error $err }
-    }
-    set actual [expr {$skip / $::stream_fps}]
-    dservSet camera/interval [format %.3g $actual]
-    return $actual
-}
-
-proc set_interval {secs} {
-    if {![string is double -strict $secs] || $secs <= 0 || $secs > 3600} {
-        error "set_interval: expected seconds in (0, 3600], got \"$secs\""
-    }
-    set ::snapshot_interval $secs
-    return [apply_interval]
-}
-
-# Called once per non-skipped frame (~1/sec with the rates set in start)
-proc my_frame_handler {frame_id timestamp_ms width height ppm_size ae_settled datapoint_prefix} {
-    set ::last_frame_id $frame_id
-
-    set timestamp_sec [expr $timestamp_ms / 1000]
-    set datetime [clock format $timestamp_sec -format "%Y-%m-%d %H:%M:%S"]
-    dservSet $datapoint_prefix/frame_info \
-	"Frame $frame_id at $datetime: ${width}x${height}, AE settled: $ae_settled"
-
-    # Preview-sized JPEG (dimensions set in cameraConfigure below)
-    cameraPublishPreviewFrame $frame_id $datapoint_prefix/preview
-}
-
-# start streaming
-proc start { { camera_id 0 } } {
-
-    # Initialize camera
-    if {[catch {cameraInit $camera_id} result]} {
-        puts "Error initializing camera: $result"
-        dservSet camera/status "error: $result"
-        return
-    }
-
-    # Declared mounting rotation (local/rig.tcl); must be set before
-    # cameraConfigure
-    cameraSetRotation [settings::get camera rotation]
-
-    # Native 1920x1080 @ stream_fps; preview 640x360 keeps the 16:9 aspect
-    if {[catch {cameraConfigure 1920 1080 $::stream_fps 640 360} result]} {
-        puts "Error configuring camera: $result"
-        dservSet camera/status "error: $result"
-        return
-    }
-
-    #############################
-    #      MANUAL SETTINGS      #
-    #############################
-
-    # Lock exposure
-    #cameraSetAutoExposure 0
-    #cameraSetExposureTime 15000
-    #cameraSetAnalogGain 2.0
-
-    # Lock white balance for consistent color
-    #cameraSetAutoWhiteBalance 0
-    # (green is always 1.0)
-    #cameraSetRedGain 1.8
-    #cameraSetBlueGain 1.5
-
-    # Adjust sharpness
-    #cameraSetSharpness 1.3
-
-    # Start streaming
-    if {[catch {cameraStartStreaming} result]} {
-        puts "Error starting streaming: $result"
-        dservSet camera/status "error: $result"
-        return
-    }
-
-    # Publish cadence: skip rate from snapshot_interval, callback on every
-    # processed frame
-    apply_interval
-
-    if {[catch {cameraStartContinuousCallback my_frame_handler "camera" 1} result]} {
-        puts "Error starting continuous callback: $result"
-        dservSet camera/status "error: $result"
-        return
-    }
-
-    dservSet camera/status continuous
-    puts "Camera started - JPEG every $::snapshot_interval s to camera/preview"
-}
-
-# stop streaming
-proc stop {} {
-    dservSet camera/status stopped
-    if {[catch {cameraStopContinuous} result]} {
-        puts "Error stopping continuous mode: $result"
-    }
-    if {[catch {cameraStopStreaming} result]} {
-        puts "Error stopping streaming: $result"
-    }
-    puts "Camera stopped"
-}
-
-# Publish the most recent snapshot at full sensor resolution to camera/full
-proc grab_full {} {
-    if { $::last_frame_id < 0 } {
-        error "no frame captured yet - is the camera started?"
-    }
-    if {[catch {cameraPublishJpegCallbackFrame $::last_frame_id camera/full} result]} {
-        error "Error publishing full frame: $result"
-    }
-    return $::last_frame_id
-}
-
-# Status check function
-proc check_status {} {
-    if {[catch {cameraStatus} status]} {
-        puts "Error getting status: $status"
-        return
-    }
-    return $status
-}
-
-proc check_ring_buffer {} {
-    if {[catch {cameraGetRingBufferStatus} ring_status]} {
-        puts "Error getting ring buffer status: $ring_status"
-        return
-    }
-    return $ring_status
-}
-
-# New helper functions for working with the ring buffer
-
-# Get a specific frame as PPM data
-proc get_frame_ppm {frame_id} {
-    if {[catch {cameraGetPpmCallbackFrame $frame_id} ppm_data]} {
-        puts "Error getting PPM frame $frame_id: $ppm_data"
-        return ""
-    }
-    return $ppm_data
-}
-
-# Get a specific frame as JPEG data (on-demand encoding)
-proc get_frame_jpeg {frame_id} {
-    if {[catch {cameraGetJpegCallbackFrame $frame_id} jpeg_data]} {
-        puts "Error getting JPEG frame $frame_id: $jpeg_data"
-        return ""
-    }
-    return $jpeg_data
-}
-
-# Save a specific frame from ring buffer
-proc save_frame {frame_id filename} {
-    # Determine format from filename extension
-    set ext [string tolower [file extension $filename]]
-
-    if {$ext eq ".ppm"} {
-        if {[catch {cameraSavePpmCallbackFrame $frame_id $filename} result]} {
-            puts "Error saving PPM frame: $result"
-            return 0
-        }
-    } elseif {$ext eq ".jpg" || $ext eq ".jpeg"} {
-        if {[catch {cameraSaveJpegCallbackFrame $frame_id $filename} result]} {
-            puts "Error saving JPEG frame: $result"
-            return 0
-        }
-    } else {
-        puts "Unsupported file extension: $ext (use .ppm, .jpg, or .jpeg)"
-        return 0
-    }
-
-    puts "Saved frame $frame_id to $filename"
-    return 1
-}
-
-# Publish a specific frame from ring buffer to a custom datapoint
-proc publish_frame {frame_id datapoint_name {format "ppm"}} {
-    if {$format eq "ppm"} {
-        if {[catch {cameraPublishPpmCallbackFrame $frame_id $datapoint_name} result]} {
-            puts "Error publishing PPM frame: $result"
-            return 0
-        }
-    } elseif {$format eq "jpeg"} {
-        if {[catch {cameraPublishJpegCallbackFrame $frame_id $datapoint_name} result]} {
-            puts "Error publishing JPEG frame: $result"
-            return 0
-        }
-    } else {
-        puts "Unsupported format: $format (use 'ppm' or 'jpeg')"
-        return 0
-    }
-
-    puts "Published frame $frame_id as $format to $datapoint_name"
-    return 1
-}
+# Anything more exotic (a different resolution, a second camera) can
+# redefine `start` wholesale here -- old full copies of this EXAMPLE did
+# exactly that and still work.
