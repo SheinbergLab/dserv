@@ -2581,6 +2581,22 @@ namespace eval ess {
     proc evt_put {type subtype time args} {
         variable current
         set ss $current(state_system)
+        # NO SYSTEM, NO EVENT STREAM.
+        #
+        # The event names live on the loaded system object, so with none
+        # loaded `${ss}::_evt_type_ids` reads `::_evt_type_ids` -- a global
+        # nobody ever set -- and every caller got "can't read
+        # ::_evt_type_ids" instead of anything about events. essconf.tcl's
+        # own `ess::set_subject human` is such a caller, and it runs at boot,
+        # so on a rig where the boot system did not load the ESS config died
+        # at that line and took the rest of the file with it: no subject, no
+        # datafile hooks, ess/system not even published (rpi500, 2026-08-23).
+        #
+        # Dropping is the honest answer, not an error: an event minted before
+        # any system exists has no stream to go into, and evtPut would have
+        # nowhere to put it either. Every other proc that touches
+        # current(state_system) already guards this way.
+        if {$ss eq {}} { return }
         # Hot path is a single dict lookup per field (same as a bare dict get);
         # the descriptive errors are only assembled on an actual miss. Subtype
         # ids are always integers, so {} is a safe "missing" sentinel (a real
@@ -2710,6 +2726,13 @@ namespace eval ess {
 
     proc evt_id {type {subtype {}}} {
         variable current
+        # Same shape as evt_put's guard, but these RETURN an id, so a
+        # caller cannot be handed silence -- it would land in a viz script
+        # as a mystery further downstream.
+        if {$current(state_system) eq {}} {
+            error "::ess::evt_id: no system is loaded, so event names\
+ cannot be resolved yet"
+        }
         if {[string is int $type]} {
             set type_id $type
         } else {
@@ -2729,6 +2752,13 @@ namespace eval ess {
     # New function specifically for JavaScript visualization scripts
     proc evt_id_array {type {subtype {}}} {
 	variable current
+        # Same shape as evt_put's guard, but these RETURN an id, so a
+        # caller cannot be handed silence -- it would land in a viz script
+        # as a mystery further downstream.
+        if {$current(state_system) eq {}} {
+            error "::ess::evt_id_array: no system is loaded, so event\
+ names cannot be resolved yet"
+        }
 	if {[string is int $type]} {
 	    set type_id $type
 	} else {
