@@ -13,6 +13,12 @@ the settings gear rather than by hand. It is parsed per-statement in a
 safe interp, so one bad line costs that one line (with a breadcrumb in
 settings/parse_errors/*), never the boot.
 
+A file here named <something>.retired-<date> was renamed at boot by
+config/rig_settings.tcl because NOTHING sources that name any more (its
+subsystem was retired, or the name never had a consumer). The content is
+untouched -- the suffix is the whole message. Delete them when convenient;
+re-creating the original name just gets it retired again at the next boot.
+
 offline (empty marker file) puts dserv in offline / air-gapped mode:
 all outbound network to non-loopback hosts is refused instantly and the
 registry/mesh/trial-ingest paths skip cleanly. Equivalent to exporting

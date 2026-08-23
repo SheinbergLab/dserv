@@ -198,8 +198,10 @@ proc set_hostinfo {} {
     # -- so stim2 knows where to send its datapoints BACK. Three cases, in
     # precedence order:
     #
-    #  1. $env(ESS_IPADDR) set (local/pre-remote.tcl): essconf.tcl already
-    #     seeded ess/ipaddr from it. Explicit rig declaration; never override.
+    #  1. $env(ESS_IPADDR) set -- exported by the declared `stim dservhost`
+    #     (config/rig_settings.tcl; adopted from a legacy local/pre-remote.tcl
+    #     export on first boot): essconf.tcl already seeded ess/ipaddr from
+    #     it. Explicit rig declaration; never override.
     #  2. $env(ESS_RMT_HOST) names another machine (config/stimconf.tcl uses
     #     the same variable to locate stim2): stim2 is REMOTE, so it must be
     #     handed our LAN address. Loopback here tells a remote stim2 to send

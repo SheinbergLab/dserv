@@ -110,7 +110,62 @@ Takes effect immediately for the stim proxy; ESS picks it up on the
 next system load. Replaces ESS_RMT_HOST in local/pre-remote.tcl.
 ess/ipaddr -- the address stim2 sends datapoints BACK to -- is
 DERIVED from this at boot, so changing it on a multi-homed rig
-wants a restart."
+wants a restart; `stim dservhost` pins it when the derivation
+cannot see the truth."
+
+# ------------------------------------------------------- stim dservhost
+
+# The reverse direction of `stim host`: the address stim2 sends its
+# datapoints BACK to -- ess hands it over at connect as
+#     rmtSend "set dservhost <this>"
+# EMPTY is the default and means DERIVED, which is almost always right:
+# loopback when stim2 runs on this box, else this box's address on the
+# route toward the stim host, multi-homed safe (set_hostinfo, dsconf.tcl).
+# Declare one only when the derivation cannot see the truth -- NAT or a
+# tunnel between stim2 and this box. Replaces ESS_IPADDR in
+# local/pre-remote.tcl (adopted below with the others).
+proc ::rig::_norm_dservhost {v} {
+    set v [string trim $v]
+    if { $v eq "" } { return "" }             ;# derive -- the normal case
+    if { [regexp {^[a-zA-Z][a-zA-Z0-9+.-]*://} $v] } {
+        error "stim dservhost: '$v' is a URL -- give the address alone,\
+ e.g. 192.168.88.40"
+    }
+    if { [regexp {\s} $v] } {
+        error "stim dservhost: '$v' contains whitespace"
+    }
+    return $v
+}
+
+proc ::rig::_apply_stim_dservhost {v} {
+    # ess/ipaddr is read at system-load time (rmtSend picks it up on the
+    # next connect), so updating the datapoint is enough; the live stim2
+    # connection keeps its current return address -- same bargain as
+    # _apply_stim_host above.
+    if { $v ne "" } {
+        set ::env(ESS_IPADDR) $v
+        dservSet ess/ipaddr $v
+    } else {
+        unset -nocomplain ::env(ESS_IPADDR)
+        dservSet ess/ipaddr ""
+        # Re-derive now that the pin is gone. set_hostinfo fills ess/ipaddr
+        # only when empty (it now is). It does not exist yet during the
+        # boot-time adoption pass -- dsconf defines and runs it later, so
+        # boot needs nothing from here.
+        if { [llength [info commands set_hostinfo]] } { set_hostinfo }
+    }
+}
+
+settings::declare stim dservhost -default "" \
+    -validate ::rig::_norm_dservhost \
+    -apply ::rig::_apply_stim_dservhost \
+    -doc "the address stim2 sends datapoints back to (handed over as
+`set dservhost ...` when ESS connects). EMPTY -- the default --
+derives it: loopback for a stim2 on this box, else this box's
+address on the route toward the stim host, which is right even
+multi-homed. Declare one only when the derivation cannot see the
+truth (NAT, a tunnel). Applies at the next system load. Replaces
+ESS_IPADDR in local/pre-remote.tcl."
 
 # ------------------------------------------------------------ registry url,
 # ------------------------------------------------------------ registry workgroup
@@ -364,6 +419,7 @@ settings::declare ess export_path -default "" \
 built-in default."
 
 ::rig::adopt_and_export stim     host        ESS_RMT_HOST
+::rig::adopt_and_export stim     dservhost   ESS_IPADDR
 ::rig::adopt_and_export registry url         ESS_REGISTRY_URL
 ::rig::adopt_and_export registry workgroup   ESS_WORKGROUP
 ::rig::adopt_and_export ess      system_path ESS_SYSTEM_PATH
@@ -386,7 +442,7 @@ if { [info exists ::env(ESS_SYSTEM_PATH)] && ![file isdirectory $::env(ESS_SYSTE
 # is not broken -- just misleading to the next person who edits one and sees
 # nothing change.
 foreach {f what} {
-    pre-remote.tcl    "stim host"
+    pre-remote.tcl    "stim host/dservhost"
     pre-registry.tcl  "registry url/workgroup"
     pre-systemdir.tcl "ess system_path/data_dir/export_path"
     pre-datafiles.tcl "ess data_dir/export_path"
@@ -396,6 +452,45 @@ foreach {f what} {
  local/rig.tcl -- edits to it no longer take effect; safe to delete"
     }
 }
+
+# ---------------------------------------------------------------------------
+# QUARANTINE: local files whose MECHANISM is gone.
+#
+# Nothing sources these names any more (ain + openiris retired 2026-08-23;
+# em/docs/ptp/registry never had a consumer), so renaming them cannot change
+# behavior -- but leaving them invites the next person to edit a file that
+# does nothing. local/post-openiris.tcl is worse than inert: essconf's
+# post-*.tcl glob still picks it up and the openirisconf.tcl it sources is
+# gone, so a leftover copy would abort essconf at boot. The rename IS the
+# backup: the bytes stay where they lived, and the suffix answers "why is
+# this here". The EXAMPLEs ride along because `make install` copies but
+# never deletes, so repo-removed EXAMPLEs would otherwise sit on every rig
+# forever.
+#
+# NAMES only -- content is never judged here. A file that is merely
+# SUPERSEDED (the pre-*.tcl family above, still sourced every boot) only
+# gets the warning: deciding whether its content is fully covered is a
+# human's call.
+#
+foreach _f {
+    ain.tcl post-openiris.tcl em.tcl docs.tcl ptp.tcl registry.tcl
+    ain.tcl.EXAMPLE post-openiris.tcl.EXAMPLE registry.tcl.EXAMPLE
+    pre-docs.tcl.EXAMPLE
+} {
+    set _p [file join $dspath local $_f]
+    if { ![file exists $_p] } continue
+    set _to $_p.retired-[clock format [clock seconds] -format %Y-%m-%d]
+    if { [catch { file rename $_p $_to } _e] } {
+        # A same-name file re-appearing after a same-day quarantine lands
+        # here (rename refuses to clobber the first backup). Say so and
+        # leave both.
+        puts stderr "rig_settings: could not retire local/$_f: $_e"
+    } else {
+        puts "rig_settings: local/$_f retired -> [file tail $_to]\
+ (nothing sources it any more; see local/README)"
+    }
+}
+unset -nocomplain _f _p _to _e
 
 if { [catch { settings::errors } errs] == 0 && [llength $errs] } {
     foreach e $errs { puts stderr "rig_settings: $e" }
