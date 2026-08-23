@@ -1022,6 +1022,10 @@ class ESSControl {
             this.state.juicerTarget = data.value || '';
             this.updateJuicerGear();
         });
+        this.dpManager.subscribe('settings/juicer/destination', (data) => {
+            this.state.juicerDestination = data.value || '';
+            this.updateJuicerGear();
+        });
         this.dpManager.subscribe('juicer/error', (data) => {
             this.state.juicerError = data.value || '';
             this.updateJuicerGear();
@@ -2000,13 +2004,23 @@ updateConfigRunButtons() {
         const backend = this.state.juicerBackend || '';
         const target = this.state.juicerTarget || '';
         const err = this.state.juicerError || '';
-        btn.classList.toggle('route-missing', backend === 'none' || err !== '');
+        // `none` is two different states wearing one word. A rig that WANTED a
+        // route and has none is broken and should say so in red; a rig that
+        // declared `juicer destination none` has no reward hardware on purpose
+        // and is working exactly as asked. Flagging the second one puts a
+        // permanent alarm on a correct rig, which is how people learn to stop
+        // reading alarms.
+        const declaredNone = (this.state.juicerDestination || '') === 'none';
+        btn.classList.toggle('route-missing',
+                             !declaredNone && (backend === 'none' || err !== ''));
         let tip = 'Juicer settings';
-        if (backend) {
+        if (declaredNone) {
+            tip += ' — no juicer on this rig (declared)';
+        } else if (backend) {
             tip += ` — ${backend}`;
             if (target && backend !== 'gpio') tip += ` ${target}`;
         }
-        if (err) tip += `\n${err}`;
+        if (err && !declaredNone) tip += `\n${err}`;
         btn.title = tip;
     }
 
@@ -2098,7 +2112,10 @@ updateConfigRunButtons() {
             if (!status) return;
             const bound = status.backend || 'none';
             const target = status.target || '';
-            if (bound === 'none') {
+            if (bound === 'none' && (status.destination || '') === 'none') {
+                // declared absence: a statement about this rig, not a fault
+                routeEl.innerHTML = `${badge('none', 'ok')} <span>no juicer on this rig (declared)</span>`;
+            } else if (bound === 'none') {
                 routeEl.innerHTML = `${badge('no route', 'err')} <span class="ess-juicer-route-err">${this.escapeHtml(status.error || '')}</span>`;
             } else {
                 const desc = bound === 'gpio' ? 'host GPIO (timed pin)'
