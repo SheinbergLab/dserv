@@ -652,6 +652,39 @@ namespace eval ess {
               dial sources." \
         -apply {::ess::dial_stick_commit_apply}
 
+    # WHICH WAY THE SWEEP GOES.
+    #
+    # The module's convention is "deflect right, advance clockwise", and
+    # whether that reads as the right answer depends on how the stick is
+    # MOUNTED and which way the task's ring runs -- both rig facts, and both
+    # invisible from inside this file. On the teensy bench rig with ricochet,
+    # left sent the catcher right.
+    #
+    # Rig-level, like the commit group: `-stick_invert` stays available for a
+    # protocol whose response mode genuinely requires one sense, and wins.
+    settings::declare dial stick_invert -default 0 -type bool \
+        -doc "flip the ring reading's sense of rotation. The default is\
+              deflect-right-advances-clockwise; set this when a rig's stick\
+              or a task's ring runs the other way and left moves the cursor\
+              right. Only consulted when `ring` is among the dial sources." \
+        -apply {::ess::dial_stick_invert_apply}
+
+    proc dial_stick_invert_default {} {
+        set v 0
+        catch { set v [::settings::get dial stick_invert] }
+        return [expr {$v ? 1 : 0}]
+    }
+
+    # Takes effect on the NEXT SAMPLE, not the next system load: the sampler
+    # reads this variable per sample, so a rig can flip it mid-session and
+    # feel the difference immediately -- which is the only sane way to settle
+    # a question whose answer is "no, the other way".
+    proc dial_stick_invert_apply { v } {
+        variable dial_stick_invert
+        set dial_stick_invert [expr {$v ? 1 : 0}]
+        return
+    }
+
     proc dial_stick_commit_route { {label ""} } {
         if { $label eq "" } {
             catch { set label [::settings::get dial stick_commit] }
@@ -921,7 +954,7 @@ namespace eval ess {
         # own comment for why a clock-based cap made the cursor judder.
         set dial_astick_pub_ms    0
         set dial_astick_min_step  0.002
-        set dial_stick_invert   0
+        set dial_stick_invert   [dial_stick_invert_default]
         set dial_stick_commit_dp [dial_stick_commit_route]
         set dial_pointer_dpoint ess/dial/pointer
 
