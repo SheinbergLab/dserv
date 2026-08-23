@@ -68,8 +68,11 @@ if {[info exists ::env(ESS_WORKGROUP)]} {
 }
 
 proc dpointGet { d } { return [dservGet $d] }
-proc rpioPinOn { pin } { gpioLineSetValue $pin 1 }
-proc rpioPinOff { pin } { gpioLineSetValue $pin 0 }
+# pin < 0 means "no host pin" -- the declared `ess obs_pin -1` norm on rigs
+# whose extio box owns the obs line. These sit on the BEGINOBS/ENDOBS path,
+# so they must be no-ops there, never errors.
+proc rpioPinOn { pin } { if {$pin < 0} return; gpioLineSetValue $pin 1 }
+proc rpioPinOff { pin } { if {$pin < 0} return; gpioLineSetValue $pin 0 }
 
 proc timerSetScript { id script } {
     set dpoint timer/$id

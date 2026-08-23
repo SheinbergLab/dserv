@@ -294,7 +294,7 @@ static int gpio_line_request_input_command(ClientData data,
   if (Tcl_GetIntFromObj(interp, objv[1], &offset) != TCL_OK) {
     return TCL_ERROR;
   }
-  if (offset >= info->nlines) {
+  if (offset < 0 || offset >= info->nlines) {
     Tcl_AppendResult(interp, "invalid line specified for input (",
 		     Tcl_GetString(objv[1]), ")",
 		     NULL);
@@ -444,7 +444,7 @@ static int gpio_line_release_input_command(ClientData data,
   if (Tcl_GetIntFromObj(interp, objv[1], &offset) != TCL_OK) {
     return TCL_ERROR;
   }
-  if (offset >= info->nlines) {
+  if (offset < 0 || offset >= info->nlines) {
     Tcl_AppendResult(interp, "invalid line specified (",
 		     Tcl_GetString(objv[1]), ")",
 		     NULL);

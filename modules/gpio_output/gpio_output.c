@@ -151,7 +151,7 @@ int gpio_line_request_output_command(ClientData data,
   if (Tcl_GetIntFromObj(interp, objv[1], &offset) != TCL_OK) {
     return TCL_ERROR;
   }
-  if (offset >= info->nlines) {
+  if (offset < 0 || offset >= info->nlines) {
     Tcl_AppendResult(interp, "invalid line specified for output (",
 		     Tcl_GetString(objv[1]), ")",
 		     NULL);
@@ -210,6 +210,20 @@ int gpio_line_set_value_command(ClientData data,
   }
   
   if (Tcl_GetIntFromObj(interp, objv[2], &value) != TCL_OK) {
+    return TCL_ERROR;
+  }
+
+  /* A negative offset is the declared "no pin" sentinel (`ess obs_pin -1`
+   * on rigs whose extio box owns the obs line): an explicit no-op, never
+   * an error -- this command sits on the BEGINOBS/ENDOBS hot path, and it
+   * used to index line_requests[-1] instead. Out-of-range HIGH stays an
+   * error: that is a real misconfiguration, and config-time requests keep
+   * rejecting negatives too. */
+  if (offset < 0) return TCL_OK;
+  if (offset >= info->nlines) {
+    Tcl_AppendResult(interp, "invalid line specified for output (",
+		     Tcl_GetString(objv[1]), ")",
+		     NULL);
     return TCL_ERROR;
   }
 
