@@ -78,15 +78,17 @@ if {[info exists ::env(ESS_TRIAL_SYNC_DEBUG)]} {
     unset _trial_sync_dbg
 }
 
-# The green light. The settings gear renders `<sub>/status` as a dot plus
+# The green light. The settings gear renders `<sub>/health` as a dot plus
 # a one-liner on that subsystem's section: first word ok | off | error,
 # the rest is the why (see SettingsModal.js, and the convention note in
-# lib/settings-1.0.tm). This subsystem is the reference publisher because
-# it is the one that used to be INVISIBLE: no datapoints at all, so a
-# configured-but-dead trialsync (missing secret, unreachable server) could
-# only be discovered in the journal.
-proc trialsync::status {state {detail ""}} {
-    catch { dservSet trialsync/status [string trim "$state $detail"] }
+# lib/settings-1.0.tm; `health`, not `status`, because several subsystems
+# already own a /status datapoint with a page-consumed vocabulary of its
+# own). This subsystem is the reference publisher because it is the one
+# that used to be INVISIBLE: no datapoints at all, so a configured-but-dead
+# trialsync (missing secret, unreachable server) could only be discovered
+# in the journal.
+proc trialsync::health {state {detail ""}} {
+    catch { dservSet trialsync/health [string trim "$state $detail"] }
 }
 
 proc trialsync::_dbg {msg} {
@@ -791,11 +793,11 @@ proc trialsync::ingest_apply_result {batch_ids st code respBody {postedBody {}}}
         trialsync::note_ingest_success
         variable sent_total
         incr sent_total [llength $batch_ids]
-        trialsync::status ok "$sent_total trial[expr {$sent_total == 1 ? {} : {s}}]\
+        trialsync::health ok "$sent_total trial[expr {$sent_total == 1 ? {} : {s}}]\
  shipped, last [clock format [clock seconds] -format %H:%M:%S]"
     } else {
         # The why, compactly -- respBody can be a whole error page.
-        trialsync::status error "POST failed (status=$st code=$code) -- retrying with backoff"
+        trialsync::health error "POST failed (status=$st code=$code) -- retrying with backoff"
     }
 
     trialsync::post_request_cleanup $ok_ack
@@ -1162,9 +1164,9 @@ if {[trialsync::_ingest_key] eq ""} {
     # URL" is the misconfiguration, "neither" is just a rig that does not
     # sync. The gear shows this line verbatim.
     if {[trialsync::_ingest_base_url] ne ""} {
-        trialsync::status off "ingest url declared but no secret in /etc/dserv/trial_ingest_secret -- not syncing"
+        trialsync::health off "ingest url declared but no secret in /etc/dserv/trial_ingest_secret -- not syncing"
     } else {
-        trialsync::status off "not configured"
+        trialsync::health off "not configured"
     }
     puts stderr "trialsync: ingest key not found — set the shared secret in /etc/dserv/trial_ingest_secret. Exiting."
     flush stderr
@@ -1172,7 +1174,7 @@ if {[trialsync::_ingest_key] eq ""} {
 }
 
 if {[trialsync::_ingest_base_url] eq ""} {
-    trialsync::status off "not configured -- declare `trialsync ingest_url` to sync trials"
+    trialsync::health off "not configured -- declare `trialsync ingest_url` to sync trials"
     puts stderr "trialsync: ingest server not configured — declare `trialsync ingest_url` (settings gear -> local/rig.tcl). Trial sync disabled."
     flush stderr
     return
@@ -1198,10 +1200,10 @@ trialsync::arm_startup_drain
 if {[trialsync::offline_blocked]} {
     # Gray, not red: offline is a declared state and trials are NOT lost --
     # they queue in the outbox and drain when the rig comes back online.
-    trialsync::status off "offline mode -- trials queue to the outbox, no POSTs"
+    trialsync::health off "offline mode -- trials queue to the outbox, no POSTs"
     puts stderr "trialsync started in OFFLINE mode: trials queue to the outbox; no POSTs until the offline flag is cleared."
 } else {
-    trialsync::status ok "waiting for trials"
+    trialsync::health ok "waiting for trials"
     puts stderr "trialsync started. API key and target server loaded. Outbox drain deferred ~[expr {$trialsync::startup_drain_delay_ms / 1000}]s (non-blocking)."
 }
 flush stderr

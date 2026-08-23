@@ -30,16 +30,25 @@
 # shadow the builtin for every proc here):
 #
 #   THE GREEN LIGHT (optional, per subsystem, no API here): publish the
-#   plain datapoint `<sub>/status` -- first word ok | off | error, the
+#   plain datapoint `<sub>/health` -- first word ok | off | error, the
 #   remainder a one-line why -- and the settings gear shows a dot plus
-#   that line on the subsystem's section (SettingsModal.js). `off` renders
-#   GRAY, not red: a declared-off subsystem is a working rig. The light
-#   must report the subsystem's own RUNTIME view, never echo a knob value
-#   back -- its worth is exactly the case where config says on and reality
-#   says off (trialsync with a declared url and no secret; the reference
-#   publisher is config/trialsyncconf.tcl). Unknown first words are shown
-#   as nothing, so a subsystem with its own status vocabulary (camera's
-#   `continuous`) is untouched until it adopts this one.
+#   that line on the subsystem's section (SettingsModal.js). `health`
+#   rather than `status` on purpose: several subsystems already own a
+#   /status datapoint whose vocabulary is a page contract (camera's
+#   continuous/stopped, openephys' IDLE/ACQUIRE/RECORD), and those keep
+#   meaning what they mean -- the light is the separate, deliberately
+#   coarse translation. `off` renders GRAY, not red: a declared-off
+#   subsystem is a working rig. The light must report the subsystem's own
+#   RUNTIME view, never echo a knob value back -- its worth is exactly the
+#   case where config says on and reality says off (trialsync with a
+#   declared url and no secret), and the translation needs judgment only
+#   the subsystem has (openephys' DISCONNECTED is red beside a declared
+#   host and gray beside none). Reference publishers:
+#   config/trialsyncconf.tcl, openephysconf.tcl, cameraconf.tcl, and
+#   meshconf.tcl -- which publishes under `registry` (its own name has no
+#   declared knobs, so no gear section; the heartbeat answers for the
+#   registry url/workgroup declarations). Unknown first words render
+#   nothing, so any other vocabulary is simply ignored here.
 #
 #   settings::declare <sub> <key> ?-default v? ?-values {..}? ?-type t?
 #                     ?-doc str? ?-validate script? ?-apply script?

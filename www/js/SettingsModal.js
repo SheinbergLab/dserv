@@ -80,16 +80,17 @@ class SettingsModal {
             // rig is half-configured in a way no other panel shows.
             'set _boot {}',
             'catch { set _boot [dservGet system/init_errors] }',
-            // The green light: a subsystem may publish <sub>/status --
+            // The green light: a subsystem may publish <sub>/health --
             // first word ok|off|error, remainder the why (settings-1.0.tm
-            // documents the convention; trialsync is the reference
-            // publisher). Collected here for the sections about to render;
-            // live changes arrive by per-sub subscription. <sub>/init_error
+            // documents the convention; `health` not `status`, since
+            // /status keys carry per-subsystem page vocabularies).
+            // Collected here for the sections about to render; live
+            // changes arrive by per-sub subscription. <sub>/init_error
             // rides along so a section whose config threw is marked where
             // you are looking, not only in the banner.
             'set _st {}',
             'foreach _s [lsort -unique [lmap _e $_out { lindex $_e 0 }]] {',
-            '    set _v ""; catch { set _v [dservGet $_s/status] }',
+            '    set _v ""; catch { set _v [dservGet $_s/health] }',
             '    set _ie ""; catch { set _ie [dservGet $_s/init_error] }',
             '    if { $_v ne "" || $_ie ne "" } { lappend _st [list $_s $_v $_ie] }',
             '}',
@@ -368,12 +369,10 @@ class SettingsModal {
     }
 
     /*
-     * `<sub>/status` -- first word ok | off | error, remainder the why. A
-     * trailing colon on the first word is tolerated so camera's legacy
-     * "error: ..." reads as red. Unknown first words return null: a
-     * subsystem with its own status vocabulary shows nothing until it
-     * adopts this one. `off` is GRAY, never red -- a declared-off
-     * subsystem is a working rig.
+     * `<sub>/health` -- first word ok | off | error, remainder the why
+     * (a trailing colon on the first word is tolerated). Unknown first
+     * words return null and render nothing. `off` is GRAY, never red --
+     * a declared-off subsystem is a working rig.
      */
     _parseStatus(raw) {
         const s = String(raw ?? '').trim();
@@ -397,17 +396,18 @@ class SettingsModal {
 
     /*
      * One exact-key subscription per subsystem, made after the scan told
-     * us which sections exist. Exact keys, never a glob: a star-slash-status
-     * pattern would sweep in every box and page datapoint that happens to
-     * end that way. Initial values came from the scan; these are the live
-     * changes.
+     * us which sections exist (and only after _render built the layout --
+     * the manager can replay a cached value into the callback
+     * immediately). Exact keys, never a glob: a star-slash-health pattern
+     * would sweep in unrelated datapoints that happen to end that way.
+     * Initial values came from the scan; these are the live changes.
      */
     _subscribeStatuses() {
         if (!this.dpManager) return;
         for (const sub of new Set(this._knobs.map(k => k.sub))) {
             if (this._statusUnsubs.has(sub)) continue;
             this._statusUnsubs.set(sub,
-                this.dpManager.subscribe(`${sub}/status`, (data) => {
+                this.dpManager.subscribe(`${sub}/health`, (data) => {
                     if (!this._overlay) return;
                     const st = this._parseStatus(data?.data ?? data?.value ?? '');
                     const prev = this._status.get(sub) || null;

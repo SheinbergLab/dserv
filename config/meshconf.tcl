@@ -209,11 +209,27 @@ proc mesh_build_heartbeat {} {
     return $result
 }
 
+# The green light, published under REGISTRY (registry/health -- see
+# settings-1.0.tm): mesh declares no knobs of its own, so it has no gear
+# section -- and the heartbeat is precisely the runtime answer for the
+# declared `registry url/workgroup` pair, which is where someone looking
+# will look. Change-guarded, because the 5s timer would otherwise
+# republish an identical line forever.
+set mesh_health_last ""
+proc mesh_health {state {detail ""}} {
+    global mesh_health_last
+    set h [string trim "$state $detail"]
+    if {$h eq $mesh_health_last} { return }
+    set mesh_health_last $h
+    catch { dservSet registry/health $h }
+}
+
 proc mesh_send_heartbeat {} {
     global mesh_registry mesh_workgroup
 
     # Skip if not configured
     if {$mesh_registry eq "" || $mesh_workgroup eq ""} {
+        mesh_health off "not configured -- no registry url/workgroup declared"
         return
     }
 
@@ -223,38 +239,48 @@ proc mesh_send_heartbeat {} {
     if {[info exists ::env(DSERV_OFFLINE)]
         && $::env(DSERV_OFFLINE) ne "" && $::env(DSERV_OFFLINE) ne "0"
         && ![regexp {^https?://(localhost|127\.[0-9.]+|\[::1\])(:|/|$)} $mesh_registry]} {
+        mesh_health off "offline mode -- no heartbeats"
         return
     }
 
     set url "${mesh_registry}/api/v1/heartbeat"
     set body [mesh_build_heartbeat]
-    
+
     # Send HTTP POST using tclhttps
     if {[catch {
         set response [https_post $url $body -timeout 5000]
         mesh_process_response $response
     } err]} {
         puts "Mesh heartbeat error: $err"
+        mesh_health error "registry unreachable: [string range $err 0 80]"
     }
 }
 
 proc mesh_process_response { response_json } {
+    global mesh_registry mesh_workgroup
+
     # Parse response using yajltcl
     if {[catch {
         set response [::yajl::json2dict $response_json]
     } err]} {
         puts "Mesh: invalid JSON response: $err"
+        mesh_health error "registry answered, but not with JSON: [string range $err 0 60]"
         return
     }
-    
+
     # Check ok field
     if {![dict exists $response ok] || ![dict get $response ok]} {
+        set _why "heartbeat rejected"
         if {[dict exists $response error]} {
             puts "Mesh registry error: [dict get $response error]"
+            set _why "heartbeat rejected: [dict get $response error]"
         }
+        mesh_health error $_why
         return
     }
-    
+
+    mesh_health ok "heartbeat acked at $mesh_registry ($mesh_workgroup)"
+
     # Extract mesh array and publish to dserv
     if {[dict exists $response mesh]} {
         set mesh_list [dict get $response mesh]

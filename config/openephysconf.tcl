@@ -316,6 +316,25 @@ proc set_oe_state {mode connected} {
 
     if {$changed_status}  { dservSet openephys/status    $mode }
     if {$changed_connect} { dservSet openephys/connected $connected }
+
+    # The green light (openephys/health -- see settings-1.0.tm). The
+    # translation needs judgment only this side has: DISCONNECTED beside a
+    # declared host is a failure, beside no host it is just a rig without
+    # an Open Ephys. openephys/status above keeps its own
+    # IDLE/ACQUIRE/RECORD vocabulary for the pages that read it.
+    # Change-guarded: the poll calls here every few seconds.
+    global oe_ipaddr oe_port oe_health_last
+    if {$oe_ipaddr eq ""} {
+        set _h "off not configured -- no Open Ephys host declared"
+    } elseif {$connected} {
+        set _h "ok $mode at $oe_ipaddr"
+    } else {
+        set _h "error cannot reach $oe_ipaddr:$oe_port"
+    }
+    if {![info exists oe_health_last] || $_h ne $oe_health_last} {
+        set oe_health_last $_h
+        catch { dservSet openephys/health $_h }
+    }
 }
 
 #################################################################

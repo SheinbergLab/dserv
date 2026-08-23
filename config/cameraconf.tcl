@@ -55,6 +55,16 @@ errormon enable
 # disable exit
 proc exit {args} { error "exit not available for this subprocess" }
 
+# The green light (camera/health -- see settings-1.0.tm). camera/status
+# keeps its continuous/stopped vocabulary for /camera.html; this is the
+# gear's coarse translation. NOTE a legacy full-copy local/camera.tcl
+# redefines start/stop WITHOUT these writes -- on such a rig the light
+# tracks gear flips (apply_enabled below stays ours) and boot, but not a
+# bare `send camera start`, until the file is retired.
+proc camera_health {state {detail ""}} {
+    catch { dservSet camera/health [string trim "$state $detail"] }
+}
+
 set last_frame_id -1
 
 # Stream runs at stream_fps; snapshots publish every snapshot_interval seconds
@@ -107,6 +117,7 @@ proc start { { camera_id 0 } } {
     if {[catch {cameraInit $camera_id} result]} {
         puts "Error initializing camera: $result"
         dservSet camera/status "error: $result"
+        camera_health error $result
         return
     }
 
@@ -118,6 +129,7 @@ proc start { { camera_id 0 } } {
     if {[catch {cameraConfigure 1920 1080 $::stream_fps 640 360} result]} {
         puts "Error configuring camera: $result"
         dservSet camera/status "error: $result"
+        camera_health error $result
         return
     }
 
@@ -136,6 +148,7 @@ proc start { { camera_id 0 } } {
     if {[catch {cameraStartStreaming} result]} {
         puts "Error starting streaming: $result"
         dservSet camera/status "error: $result"
+        camera_health error $result
         return
     }
 
@@ -146,16 +159,19 @@ proc start { { camera_id 0 } } {
     if {[catch {cameraStartContinuousCallback my_frame_handler "camera" 1} result]} {
         puts "Error starting continuous callback: $result"
         dservSet camera/status "error: $result"
+        camera_health error $result
         return
     }
 
     dservSet camera/status continuous
+    camera_health ok "streaming, ~1 JPEG/$::snapshot_interval s to camera/preview"
     puts "Camera started - JPEG every $::snapshot_interval s to camera/preview"
 }
 
 # stop streaming
 proc stop {} {
     dservSet camera/status stopped
+    camera_health off stopped
     if {[catch {cameraStopContinuous} result]} {
         puts "Error stopping continuous mode: $result"
     }
@@ -289,8 +305,18 @@ proc apply_enabled {v} {
     }
     if {$v && !$streaming} {
         start
+        # Our start reports its own health; a legacy local/camera.tcl start
+        # does not -- read the outcome back so a gear flip stays truthful
+        # on those rigs, without downgrading the richer line ours wrote.
+        set _cur ""; catch { set _cur [dservGet camera/health] }
+        if {![string match "ok *" $_cur] &&
+            ![catch {cameraStatus} st2] &&
+            [dict getdef $st2 state idle] eq "streaming"} {
+            camera_health ok streaming
+        }
     } elseif {!$v && $streaming} {
         stop
+        camera_health off stopped     ;# same idem line for a legacy stop
     }
 }
 
@@ -319,9 +345,14 @@ immediately." \
 # Boot-time start. `enabled` is new -- no legacy local/camera.tcl ever
 # auto-started -- so the value is used directly: only a declaration can make
 # it 1, and the default 0 means a rig that declares nothing boots exactly as
-# it always did (camera idle until someone says start).
+# it always did (camera idle until someone says start; the green light says
+# so rather than staying dark).
 if {[catch {
-    if { [settings::get camera enabled] } { start }
+    if { [settings::get camera enabled] } {
+        start
+    } else {
+        camera_health off "idle -- declare `camera enabled 1` to stream at boot"
+    }
 } _err]} {
     puts stderr "camera: boot-time start failed: $_err"
 }
