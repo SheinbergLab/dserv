@@ -402,6 +402,54 @@ run() {
     fi
 }
 
+# ---- Portability shims ----
+#
+# The full bootstrap provisions Debian boxes, but --scripts-only is a
+# reasonable thing to run on a dev Mac, and these three are where every
+# Linuxism in that path lives.
+
+# sed -i is two incompatible flags. GNU takes the backup suffix ATTACHED
+# (-i, -i.bak); BSD/macOS requires it as a SEPARATE argument -- so "sed -i -E"
+# there consumes -E as the suffix, leaving a rig.tcl-E turd behind and running
+# the expression as a BASIC regex, where (...) and + are literals. Every
+# in-place edit then matched nothing while the caller printed success:
+#   [ok] redeclared: setting registry workgroup jhu-monosov (was brown-sheinberg)
+# with the file still saying brown-sheinberg. Only GNU sed answers --version.
+if sed --version &>/dev/null; then SED_INPLACE=(sed -i); else SED_INPLACE=(sed -i ''); fi
+sed_inplace() {
+    local expr="$1" file="$2"
+    run "${SED_INPLACE[@]}" -E "$expr" "$file"
+}
+
+# A user's home directory. getent is glibc's and does not exist on macOS,
+# where the script died outright -- "getent: command not found", under
+# errexit, taking the whole run with it. Directory Services answers there;
+# ~user expansion is the last resort.
+user_home_dir() {
+    local u="$1" h=""
+    if command -v getent &>/dev/null; then
+        h=$(getent passwd "$u" 2>/dev/null | cut -d: -f6)
+    elif command -v dscl &>/dev/null; then
+        h=$(dscl . -read "/Users/${u}" NFSHomeDirectory 2>/dev/null | awk '{print $2}')
+    fi
+    if [[ -z "$h" ]]; then
+        h=$(eval echo "~${u}")
+        # Unexpanded means no such user.
+        if [[ "$h" == "~${u}" ]]; then h=""; fi
+    fi
+    echo "$h"
+}
+
+# Who owns the scripts tree: --user > whoever invoked sudo > the invoking
+# user when we did NOT escalate (see check_root) > the legacy default.
+resolve_ess_user() {
+    if [[ -n "$ESS_USER_ARG" ]];    then echo "$ESS_USER_ARG"; return; fi
+    if [[ -n "${SUDO_USER:-}" ]];   then echo "$SUDO_USER";    return; fi
+    local me; me=$(id -un)
+    if [[ "$me" != "root" ]];       then echo "$me";           return; fi
+    echo "lab"
+}
+
 # Run a step whose failure must not strand the box.
 #
 # Everything after the script sync is what makes a box a box: the recorded
@@ -504,7 +552,18 @@ redeclare_setting() {
             info "[dry-run] redeclare: setting ${sub} ${key} ${value} (was ${have})"
             return 0
         fi
-        sed -i -E "s|^setting[[:space:]]+${sub}[[:space:]]+${key}([[:space:]].*)?$|setting ${sub} ${key} ${value}|" "$rig"
+        # || true so the check below is what reports, not errexit: a sed that
+        # dies on a read-only rig.tcl should say which file and which knob.
+        sed_inplace "s|^setting[[:space:]]+${sub}[[:space:]]+${key}([[:space:]].*)?$|setting ${sub} ${key} ${value}|" "$rig" || true
+        # Verify rather than announce. This is the one write in the script
+        # that REPLACES an operator's earlier answer, and a silent no-op here
+        # aims the scripts sync at the old workgroup while the log says it
+        # moved.
+        local now
+        now=$(rig_setting_value "$sub" "$key")
+        if [[ "$now" != "$value" ]]; then
+            fail "could not redeclare ${sub} ${key} in ${rig} (still ${now:-unset}) — edit it by hand"
+        fi
         ok "redeclared: setting ${sub} ${key} ${value} (was ${have})"
         return 0
     fi
@@ -587,10 +646,10 @@ set_agent_flag() {
     have=$(agent_flag_value "$flag" "$f")
     [[ "$have" == "$want" ]] && return 0
     if [[ -z "$have" ]]; then
-        run sed -i "s|ExecStart=.*dserv-agent|& ${flag} ${want}|" "$f"
+        sed_inplace "s|ExecStart=.*dserv-agent|& ${flag} ${want}|" "$f"
         ok "  ${flag} ${want} (added)"
     else
-        run sed -i -E "s|([[:space:]]${flag}[[:space:]]+)[^[:space:]]+|\1${want}|" "$f"
+        sed_inplace "s|([[:space:]]${flag}[[:space:]]+)[^[:space:]]+|\1${want}|" "$f"
         ok "  ${flag}: ${have} -> ${want}"
     fi
 }
@@ -604,8 +663,30 @@ check_not_registry() {
     fi
 }
 
+# --scripts-only writes exactly two places: the declarations in
+# <install>/local/rig.tcl and the workgroup tree under the ess user's home,
+# which is the invoking user's own. No packages, no units, no /etc. Where the
+# operator can already write the declarations, root buys nothing -- and NOT
+# escalating is better than escalating, because the tree then belongs to the
+# person who ran the command rather than to root-then-chown. Boxes where
+# /usr/local/dserv is root-owned (every Debian install, and a Mac that
+# installed from the pkg) still ask for a password; that part is real.
+scripts_only_needs_root() {
+    local dir="${DSERV_INSTALL_DIR}/local" rig="${DSERV_INSTALL_DIR}/local/rig.tcl"
+    if [[ -f "$rig" && ! -w "$rig" ]]; then return 0; fi
+    if [[ -d "$dir" ]]; then
+        if [[ -w "$dir" ]]; then return 1; fi
+        return 0
+    fi
+    if [[ -d "$DSERV_INSTALL_DIR" && -w "$DSERV_INSTALL_DIR" ]]; then return 1; fi
+    return 0
+}
+
 check_root() {
     if [[ $EUID -ne 0 ]]; then
+        if $SCRIPTS_ONLY && ! scripts_only_needs_root; then
+            return 0
+        fi
         if command -v sudo &>/dev/null; then
             info "Re-running with sudo..."
             # An ARRAY, not a string: --time-role's value contains a space
@@ -658,7 +739,11 @@ check_root() {
             if [[ -z "$script" || "${script:0:2}" != '#!' ]]; then
                 fail "Could not re-fetch the installer from ${REGISTRY_URL} to run as root — re-run this command under sudo yourself"
             fi
-            exec sudo bash -c "$script" -- "${fwd[@]}"
+            # ${arr[@]+...} because a plain "${fwd[@]}" on an EMPTY array is an
+            # unbound-variable error under set -u in bash 3.2 -- which is
+            # /bin/bash on macOS, and exactly what "curl | bash" runs there.
+            # A flagless invocation died here instead of re-running.
+            exec sudo bash -c "$script" -- "${fwd[@]+"${fwd[@]}"}"
         else
             fail "This script must be run as root"
         fi
@@ -1234,13 +1319,13 @@ step_sync_scripts() {
     fi
 
     # Scripts live in <ess user>/systems/ess/, owned by that user. The user
-    # resolves --user flag > $SUDO_USER (whoever invoked sudo) > legacy 'lab',
-    # and the home dir comes from getent, never from a hardcoded /home path --
-    # the /home/lab hardcode silently skipped the sync on any box provisioned
-    # from a personal account.
-    local ess_user="${ESS_USER_ARG:-${SUDO_USER:-lab}}"
-    local user_home
-    user_home=$(getent passwd "$ess_user" | cut -d: -f6)
+    # resolves through resolve_ess_user, and the home dir through
+    # user_home_dir -- never from a hardcoded /home path; the /home/lab
+    # hardcode silently skipped the sync on any box provisioned from a
+    # personal account.
+    local ess_user user_home
+    ess_user=$(resolve_ess_user)
+    user_home=$(user_home_dir "$ess_user")
 
     if [[ -z "$user_home" || ! -d "$user_home" ]]; then
         warn "No home directory for user '${ess_user}' (--user to override), skipping script sync"
@@ -1387,8 +1472,16 @@ step_sync_scripts() {
         info "Quarantined ${n_quarantined} unknown script(s) to ${trash}"
     fi
 
-    # dserv runs as root but the ess user keeps ownership of their tree
-    run chown -R "${ess_user}:${ess_user}" "$dest" || true
+    # dserv runs as root but the ess user keeps ownership of their tree.
+    # The group is LOOKED UP, not assumed to match the user name: that is a
+    # Debian useradd convention, not a rule. On macOS the primary group is
+    # staff, so "sheinb:sheinb" fails -- and the || true made that silent,
+    # leaving a whole workgroup's tree root-owned inside someone's home.
+    local ess_group
+    ess_group=$(id -gn "$ess_user" 2>/dev/null || echo "$ess_user")
+    if ! run chown -R "${ess_user}:${ess_group}" "$dest"; then
+        warn "Could not chown ${dest} to ${ess_user}:${ess_group} — fix ownership by hand"
+    fi
 
     local file_count
     file_count=$(find "$dest" -type f \( -name "*.tcl" -o -name "*.tm" \) 2>/dev/null | wc -l)
@@ -1652,6 +1745,14 @@ step_verify() {
 # ============ Main ============
 
 main() {
+    # The full provision is apt, dpkg, systemd units and /etc drop-ins:
+    # Debian/Ubuntu only. --scripts-only is portable and runs anywhere.
+    # Checked FIRST so a Mac gets this sentence rather than a password
+    # prompt followed by a failure three steps into a component install.
+    if [[ "$(uname -s)" != "Linux" ]] && ! $SCRIPTS_ONLY; then
+        fail "The full bootstrap provisions Debian/Ubuntu boxes; on $(uname -s) only --scripts-only is supported"
+    fi
+
     check_not_registry
     check_root
 
@@ -1671,6 +1772,15 @@ main() {
     if $SCRIPTS_ONLY; then
         info "Log: ${LOG_FILE}"
         echo ""
+        # step_prerequisites is part of the full provision and does not run
+        # here, so this path has to check for itself rather than fail three
+        # steps in with something cryptic. unzip is checked where it is used
+        # (that one is a warn-and-skip).
+        local missing=()
+        for t in curl jq; do command -v "$t" &>/dev/null || missing+=("$t"); done
+        if [[ ${#missing[@]} -gt 0 ]]; then
+            fail "missing required tool(s): ${missing[*]} — install them and re-run"
+        fi
         # Without an explicit --workgroup, refresh the rig's own DECLARED
         # workgroup -- never the template default, which would silently
         # fetch some other workgroup's tree onto a rig that moved.
