@@ -70,6 +70,20 @@ class SliderCalModal {
             this.log('Cannot calibrate: not connected to dserv', 'error');
             return;
         }
+        // The modal is a cached singleton (ess_app.js), so every field of
+        // the LAST session is still here -- without this reset, one applied
+        // calibration left `_result` set forever and every reopen landed
+        // straight in the verify pane with no route back to marking (the
+        // "stuck in verify until the page reloads" bug). Fresh session,
+        // fresh state; the status/live subscriptions replay the backend's
+        // real cached values right after.
+        this._status = { active: 0, stage: '', samples: 0, msg: '' };
+        this._live = { n: 0, cols: [], at: 0 };
+        this._marked = {};
+        this._guidance = '';
+        this._result = null;
+        this._confirm = null;
+        this._busy = false;
         this._buildModal();
         document.body.appendChild(this._overlay);
         this._onKeyDown = (e) => { if (e.key === 'Escape') this._close(); };
@@ -352,6 +366,11 @@ class SliderCalModal {
                     in <code>local/slider.tcl</code> — those lines stay readable and stop
                     being in force. Retiring them is the point; leaving them is only
                     misleading.</div>
+                <div class="ess-cal-actions">
+                    <button class="ess-modal-btn" data-act="recal" type="button"
+                            title="back to the marking steps — begins a fresh measurement;
+what was just saved stays in force until the new one applies">↺ Re-calibrate…</button>
+                </div>
             </div>
             ${this._confirmHtml()}`;
     }
@@ -389,11 +408,13 @@ class SliderCalModal {
                 ${done ? (wrong.length
                     ? `<div class="ess-cal-guidance">${wrong.length} direction${
                         wrong.length > 1 ? 's' : ''} came back wrong — the stick is
-                        calibrated but not oriented the way the task reads it. Re-run
-                        with a cleaner 'up' and 'right', pushing straight along each
-                        axis.</div>`
+                        calibrated but not oriented the way the task reads it.
+                        Re-calibrate with a cleaner 'up' and 'right', pushing straight
+                        along each axis (the button above goes back to the marking
+                        steps).</div>`
                     : `<div class="ess-cal-confirm-ok">All eight agree.</div>`) : ''}
-                <button class="ess-modal-btn" data-act="reconfirm" type="button">Start over</button>
+                <button class="ess-modal-btn" data-act="reconfirm" type="button"
+                        title="clear the tally and push the eight directions again — does not re-measure">Re-check directions</button>
             </div>`;
     }
 
@@ -427,6 +448,15 @@ class SliderCalModal {
                     case 'mark':   this._mark(btn.dataset.stage); break;
                     case 'apply':  this._apply(); break;
                     case 'cancel': this._cancel(); break;
+                    // Back to the marking page for another measurement pass.
+                    // _begin() clears the marks and cal_begin resets the
+                    // backend; what cal_apply just saved stays in force
+                    // until (unless) a new apply replaces it.
+                    case 'recal':
+                        this._result = null;
+                        this._confirm = null;
+                        this._begin();
+                        break;
                     case 'reconfirm':
                         this._confirm = { i: 0, seen: {} };
                         this._render();
