@@ -275,6 +275,97 @@ namespace eval ess {
         return $m
     }
 
+    # ── The (workgroup, tree) pair ──────────────────────────────────
+    #
+    # A tree BELONGS to the workgroup whose sync wrote it, and says so in
+    # every .sync_base.json it carries. Nothing enforced the pair, and the
+    # read above degrades a mismatch to cold-start — which is right for one
+    # stale file and catastrophic for a whole foreign tree.
+    #
+    # The way in was pointing ESS_SYSTEM_PATH at a tree pulled for another
+    # workgroup — the obvious move when borrowing a colleague's scripts.
+    # dserv boots, scriptsconf arms initial_sync, and five seconds later
+    # sync_base acts on the disagreement in both directions at once: OUR
+    # systems are pulled into THEIR tree (they aren't in it, so nothing even
+    # looks like a conflict), and every file that IS shared has its manifest
+    # rejected as foreign, decides `cold`, and is displaced to
+    # .sync_displaced and overwritten. Recoverable, but the operator's first
+    # sign of it is a tree full of the wrong workgroup's systems.
+    #
+    # So: read what the tree claims, and refuse rather than reconcile. The
+    # pair is the unit — the fix for a mismatch is to move the path or the
+    # declaration, never to let a sync split the difference.
+
+    # The workgroup one base manifest names, or "" (absent/unreadable/
+    # silent). Deliberately does NOT go through _base_manifest_read, which
+    # is the proc that hides exactly this field on mismatch.
+    proc _manifest_workgroup {path} {
+        if {![file exists $path]} { return "" }
+        if {[catch {
+            set f [open $path r]
+            set raw [read $f]
+            close $f
+            set m [json_to_dict $raw]
+        }]} { return "" }
+        if {![dict exists $m workgroup]} { return "" }
+        return [dict get $m workgroup]
+    }
+
+    # Every distinct workgroup named anywhere under <system_path>/<project>.
+    # Normally one element, or none on a tree no sync has touched yet. The
+    # glob skips dot-dirs (.trash, .sync_displaced) for free.
+    proc _tree_workgroups {project} {
+        variable system_path
+        set root [file join $system_path $project]
+        set found [dict create]
+        set paths [list [file join $root lib .sync_base.json]]
+        foreach p [glob -nocomplain -directory $root */.sync_base.json] {
+            lappend paths $p
+        }
+        foreach p $paths {
+            set wg [_manifest_workgroup $p]
+            if {$wg ne ""} { dict set found $wg 1 }
+        }
+        return [lsort [dict keys $found]]
+    }
+
+    # Refuse when the tree names a workgroup this rig is not configured for.
+    # An unconfigured workgroup declares nothing and gates nothing; a tree
+    # with no manifests at all is a fresh provision and is fine.
+    proc _refuse_foreign_tree {op wgs {where ""}} {
+        variable registry_workgroup
+        variable system_path
+        variable current
+        if {$registry_workgroup eq ""} { return }
+        set foreign [list]
+        foreach wg $wgs {
+            if {$wg ne "" && $wg ne $registry_workgroup &&
+                [lsearch -exact $foreign $wg] < 0} {
+                lappend foreign $wg
+            }
+        }
+        if {![llength $foreign]} { return }
+        if {$where eq ""} { set where [file join $system_path $current(project)] }
+        error "$op refused: $where belongs to workgroup [join $foreign {, }],\
+ but this rig is configured for $registry_workgroup. Syncing across the pair\
+ would overwrite one workgroup's scripts with the other's. Point\
+ ESS_SYSTEM_PATH back at this workgroup's tree, or declare the workgroup\
+ that matches the tree."
+    }
+
+    # Tree-wide (every system + lib) — for operations that walk the tree.
+    proc _require_tree_workgroup {project op} {
+        _refuse_foreign_tree $op [_tree_workgroups $project]
+    }
+
+    # One system — for operations aimed at a single directory. Cheaper than
+    # the tree scan, and the tree-walking callers do both so a standalone
+    # pull is guarded the same way.
+    proc _require_system_workgroup {project system op} {
+        set path [_base_manifest_path $project $system]
+        _refuse_foreign_tree $op [list [_manifest_workgroup $path]] $path
+    }
+
     # Minimal JSON string escaping for manual serialization.
     proc _json_str {s} {
         return "\"[string map [list \\ \\\\ \" \\\" \n \\n \r \\r \t \\t] $s]\""
@@ -424,6 +515,10 @@ namespace eval ess {
         }
 
         set project $current(project)
+        # Before anything is read or written: this system's directory must
+        # not belong to someone else. See _refuse_foreign_tree.
+        _require_system_workgroup $project $system "sync $system"
+
         set pulled 0
         set unchanged 0
         set errors [list]
@@ -656,6 +751,10 @@ namespace eval ess {
 
         set project $current(project)
         set lib_dir [file join $system_path $project lib]
+        _refuse_foreign_tree "sync libs" \
+            [list [_manifest_workgroup [_base_lib_manifest_path $project]]] \
+            $lib_dir
+
         set pulled 0
         set unchanged 0
         set errors [list]
@@ -782,10 +881,18 @@ namespace eval ess {
     proc sync_base {{version "main"}} {
         variable registry_url
         variable registry_workgroup
+        variable current
 
         if {$registry_url eq ""} {
             error "Registry URL not configured"
         }
+
+        # The tree-wide check, and the one that matters most: this is what
+        # initial_sync calls at boot. A per-system guard alone would miss
+        # half the damage -- a system the borrowed tree does NOT contain has
+        # no manifest to disagree with, so our systems would still be
+        # written into their tree one clean "pull" at a time.
+        _require_tree_workgroup $current(project) "sync"
 
         set total_pulled 0
         set total_unchanged 0
@@ -891,6 +998,12 @@ namespace eval ess {
         }
 
         set project $current(project)
+        # Pushing has the same pair requirement as pulling, pointed the
+        # other way: a lib read out of a borrowed tree would be committed
+        # into THIS rig's workgroup under its own name.
+        _refuse_foreign_tree "commit $filename" \
+            [list [_manifest_workgroup [_base_lib_manifest_path $project]]] \
+            [file join $system_path $project lib]
 
         set base_file [file join $system_path $project lib $filename]
         if {![file exists $base_file]} {

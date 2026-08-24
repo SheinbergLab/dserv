@@ -76,6 +76,13 @@ type syncResult struct {
 func runSyncAll(cfg *Config, dir, version string, dryRun, force bool) int {
 	client := NewRegistryClient(cfg)
 
+	// The tree-wide pair check. A per-system one would miss half the
+	// damage: a system this tree does not contain has no manifest to
+	// disagree with, so it would be pulled in one clean write at a time.
+	if refuseForeignTree("sync --all", dir, treeWorkgroups(dir, cfg.Workgroup), cfg.Workgroup) {
+		return 1
+	}
+
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		PrintError("creating directory: %v", err)
 		return 1
@@ -262,6 +269,10 @@ func noteSyncSkip(decision, label string) {
 
 // syncOneSystem is the entry point for syncing a single system.
 func syncOneSystem(cfg *Config, system, dir, version string, dryRun, force bool) int {
+	if refuseForeignTree("sync "+system, dir,
+		filterForeign(foreignWorkgroup(dir, cfg.Workgroup)), cfg.Workgroup) {
+		return 1
+	}
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		PrintError("creating directory: %v", err)
 		return 1

@@ -906,6 +906,12 @@ namespace eval scripts {
             }
             if {$comment eq ""} { set comment "pushed from dserv" }
             if {$state ne "idle"} { error "scripts subprocess busy ($state)" }
+            # The (workgroup, tree) pair, pointed at the push direction:
+            # scripts read out of a borrowed tree would be committed into
+            # THIS rig's workgroup under their own names. Refused here so
+            # the refusal publishes push_result like every other one.
+            ess::_require_system_workgroup $::ess::current(project) $system \
+                "push $system"
         } err]} {
             _publish_result push_result [dict create op push system $system \
                 pushed 0 added 0 lib_pushed 0 errors [list $err]]
@@ -1240,6 +1246,35 @@ namespace eval scripts {
         set project $::ess::current(project)
         set root [file join $::ess::system_path $project]
         set files {}
+
+        # The periodic scan is the only thing that looks at the tree on its
+        # own schedule, so it is where a mismatched (workgroup, tree) pair
+        # becomes VISIBLE instead of waiting to be discovered by a refused
+        # sync. Without this the badge is worse than silent: every foreign
+        # file reads as unpushed, because a foreign base manifest is ignored
+        # and each file decides cold.
+        set foreign [list]
+        catch {
+            foreach wg [ess::_tree_workgroups $project] {
+                if {$wg ne $::ess::registry_workgroup} { lappend foreign $wg }
+            }
+        }
+        if {[llength $foreign]} {
+            _health warn "tree at $root belongs to [join $foreign {, }],\
+ not $::ess::registry_workgroup -- sync and push are refused"
+            set obj [yajl create #auto]
+            $obj map_open
+            $obj string count number 0
+            $obj string files
+            _str_array $obj {}
+            $obj string foreign_workgroup string [lindex $foreign 0]
+            $obj string ts number [clock seconds]
+            $obj map_close
+            set json [$obj get]
+            $obj delete
+            catch { dservSet scripts/dirty $json }
+            return $json
+        }
 
         foreach d [glob -nocomplain -type d [file join $root *]] {
             set name [file tail $d]

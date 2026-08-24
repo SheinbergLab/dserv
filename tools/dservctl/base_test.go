@@ -92,3 +92,52 @@ func readBaseManifestFromString(t *testing.T, s string) *BaseManifest {
 	os.WriteFile(filepath.Join(dir, baseManifestFile), []byte(s), 0644)
 	return readBaseManifest(dir, "brown-sheinberg")
 }
+
+// A tree belongs to the workgroup whose sync wrote it. readBaseManifest
+// degrades a mismatch to a cold start, which for `push` means an EMPTY
+// expectedChecksum on every PUT -- a blind overwrite of another lab's
+// registry with no conflict detection at all. These are the guards that
+// refuse instead. Mirrors tests/test_ess_workgroup_pair.tcl on the rig side.
+func TestForeignWorkgroupGuards(t *testing.T) {
+	root := t.TempDir()
+	write := func(dir, wg string) {
+		if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		body := `{"schemaVersion":1,"workgroup":"` + wg + `","defaultVersion":"main","entries":{}}`
+		if err := os.WriteFile(filepath.Join(root, dir, baseManifestFile), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("planko", "jhu-monosov")
+	write("lib", "jhu-monosov")
+	write("mine", "brown-sheinberg")
+	if err := os.MkdirAll(filepath.Join(root, "fresh"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		dir, workgroup, want string
+	}{
+		{"planko", "brown-sheinberg", "jhu-monosov"}, // the mismatch
+		{"planko", "jhu-monosov", ""},                // the legitimate borrow
+		{"mine", "brown-sheinberg", ""},              // our own tree
+		{"fresh", "brown-sheinberg", ""},             // never synced
+		{"planko", "", ""},                           // no workgroup gates nothing
+	}
+	for _, c := range cases {
+		if got := foreignWorkgroup(filepath.Join(root, c.dir), c.workgroup); got != c.want {
+			t.Errorf("foreignWorkgroup(%s, %q) = %q, want %q", c.dir, c.workgroup, got, c.want)
+		}
+	}
+
+	// Tree-wide, because a per-directory check misses the other half: a
+	// system the foreign tree does not contain has no manifest to disagree
+	// with, and would be pulled into it one clean write at a time.
+	if got := treeWorkgroups(root, "brown-sheinberg"); len(got) != 1 || got[0] != "jhu-monosov" {
+		t.Errorf("treeWorkgroups = %v, want [jhu-monosov]", got)
+	}
+	if got := treeWorkgroups(root, "jhu-monosov"); len(got) != 1 || got[0] != "brown-sheinberg" {
+		t.Errorf("treeWorkgroups (other way) = %v, want [brown-sheinberg]", got)
+	}
+}

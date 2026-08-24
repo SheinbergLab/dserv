@@ -142,6 +142,13 @@ func runLibsPush(cfg *Config, args []string) int {
 
 	_ = comment // used in request body below
 
+	// Same pair check as `push`: a lib read out of a borrowed tree would be
+	// committed into THIS workgroup under its own name.
+	if refuseForeignTree("libs push", dir,
+		filterForeign(foreignWorkgroup(dir, cfg.Workgroup)), cfg.Workgroup) {
+		return 1
+	}
+
 	client := NewRegistryClient(cfg)
 
 	// Get registry checksums

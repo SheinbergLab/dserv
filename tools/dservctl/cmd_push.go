@@ -74,6 +74,15 @@ func runPush(cfg *Config, args []string) int {
 		}
 	}
 
+	// Before the first request: this directory must not belong to another
+	// workgroup. Without the check, a foreign base manifest degrades to a
+	// cold start and every PUT below goes out with an empty
+	// expectedChecksum -- a blind overwrite of someone else's registry.
+	if refuseForeignTree("push", dir,
+		filterForeign(foreignWorkgroup(dir, cfg.Workgroup)), cfg.Workgroup) {
+		return 1
+	}
+
 	// Step 1: Fetch server manifest
 	client := NewRegistryClient(cfg)
 	manifest, err := client.GetManifest(cfg.Workgroup, system, version)

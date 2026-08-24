@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"time"
 )
 
@@ -86,6 +88,89 @@ func readBaseManifest(dir, workgroup string) *BaseManifest {
 		m.DefaultVersion = "main"
 	}
 	return &m
+}
+
+// ---- The (workgroup, tree) pair ----
+//
+// A tree belongs to the workgroup whose sync wrote it, and every
+// .sync_base.json says so. readBaseManifest above degrades a mismatch to a
+// cold start, which is right for one stale file and wrong for a whole
+// foreign tree: with no base, push sends an EMPTY expectedChecksum, and
+// every PUT becomes a blind overwrite of someone else's registry with no
+// conflict detection at all. Pull has the mirror problem — it writes one
+// workgroup's systems into another workgroup's checkout.
+//
+// So the destructive verbs check the pair first and refuse. Mirrors
+// ess_sync-1.0.tm's _refuse_foreign_tree, which does the same for the rig.
+
+// foreignWorkgroup returns the workgroup dir's base manifest names when it
+// is not the one being operated as, or "" when the pair is fine (no
+// manifest, unreadable, unstamped, or matching). Deliberately does not go
+// through readBaseManifest, which is the function that hides this field.
+func foreignWorkgroup(dir, workgroup string) string {
+	if workgroup == "" {
+		return ""
+	}
+	data, err := os.ReadFile(baseManifestPath(dir))
+	if err != nil {
+		return ""
+	}
+	var m BaseManifest
+	if err := json.Unmarshal(data, &m); err != nil {
+		return ""
+	}
+	if m.Workgroup == "" || m.Workgroup == workgroup {
+		return ""
+	}
+	return m.Workgroup
+}
+
+// treeWorkgroups reports every distinct foreign workgroup named under a
+// tree root — <root>/lib and <root>/<system> — for verbs that walk the
+// whole tree. A per-directory check alone would miss the other half of the
+// damage: a system the foreign tree does NOT contain has no manifest to
+// disagree with, so it would be written in one clean "pull" at a time.
+func treeWorkgroups(root, workgroup string) []string {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, e := range entries {
+		if !e.IsDir() || isHiddenFile(e.Name()) {
+			continue
+		}
+		if wg := foreignWorkgroup(filepath.Join(root, e.Name()), workgroup); wg != "" && !seen[wg] {
+			seen[wg] = true
+			out = append(out, wg)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// filterForeign lifts a single foreignWorkgroup result into the list shape
+// refuseForeignTree takes, dropping the "pair is fine" empty string.
+func filterForeign(wg string) []string {
+	if wg == "" {
+		return nil
+	}
+	return []string{wg}
+}
+
+// refuseForeignTree prints the refusal and reports whether the caller should
+// abort. `where` is what to name in the message.
+func refuseForeignTree(op, where string, foreign []string, workgroup string) bool {
+	if len(foreign) == 0 {
+		return false
+	}
+	PrintError("%s refused: %s belongs to workgroup %s, not %s.\n"+
+		"  Syncing or pushing across the pair would overwrite one workgroup's scripts\n"+
+		"  with the other's, and push would do it with no conflict detection at all.\n"+
+		"  Use -w %s, or point --dir at this workgroup's own tree.",
+		op, where, strings.Join(foreign, ", "), workgroup, foreign[0])
+	return true
 }
 
 // writeBaseManifest writes atomically (temp + rename). The temp name is
