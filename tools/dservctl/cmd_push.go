@@ -478,10 +478,20 @@ func findLocalOnlyScripts(dir string, serverScripts map[string]scriptInfo) []loc
 //	<proto>_variants.tcl  → "variants"
 //	<proto>_extract.tcl   → "extract"
 //	<proto>_<suffix>.tcl  → "<suffix>"
+// Both derivations mirror ess_scripts-1.0.tm's _derive_proto_type, which is
+// the reference implementation — the registry stores scripts by (protocol,
+// type) and rebuilds the filename from convention, so a type derived
+// differently here does not fail, it lands on the WRONG script.
 func deriveScriptType(protocol, filename string) string {
 	base := stripExtension(filename)
 	if base == protocol {
 		return "protocol"
+	}
+	// Before the prefix strip, matching the Tcl: a viewer is a viewer
+	// whatever it is named, and the strip would only reproduce that by
+	// luck of the file being called <proto>_viewer.js.
+	if strings.HasSuffix(base, "_viewer") {
+		return "viewer"
 	}
 	prefix := protocol + "_"
 	if strings.HasPrefix(base, prefix) {
@@ -497,8 +507,15 @@ func deriveScriptType(protocol, filename string) string {
 //	<system>.tcl          → "system"
 //	<system>_extract.tcl  → "extract"
 //	<system>_analyze.tcl  → "analyze"
+//	<system>_viewer.js    → "viewer"
 //
 // Since we don't know the system name here, we check for known suffixes.
+//
+// The _viewer case was missing, and "system" is the fallback: pushing a
+// system-level viewer with --add classified planko_viewer.js as (protocol
+// "", type "system"). The registry derives the filename from the type, so
+// that PUT lands on planko.tcl -- it overwrites the system script with
+// JavaScript. Caught staging a real cross-workgroup push of planko.
 func deriveSystemScriptType(filename string) string {
 	base := stripExtension(filename)
 	if strings.HasSuffix(base, "_extract") {
@@ -506,6 +523,9 @@ func deriveSystemScriptType(filename string) string {
 	}
 	if strings.HasSuffix(base, "_analyze") {
 		return "analyze"
+	}
+	if strings.HasSuffix(base, "_viewer") {
+		return "viewer"
 	}
 	return "system"
 }
