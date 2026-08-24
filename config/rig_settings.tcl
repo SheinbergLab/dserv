@@ -391,6 +391,27 @@ proc ::rig::_apply_system_path { v } {
         catch { dservSet ess/systems $_l }
         unset -nocomplain _sys _root _l _d _dp
     }
+    #
+    # ess is not the only interp that lives on this path. The scripts
+    # subprocess owns every registry-facing view of the tree -- the Sync
+    # modal's previews and diffs, the dirty badge, pull and push -- and it
+    # read ESS_SYSTEM_PATH exactly once, at boot. So a live path change
+    # moved ESS to the new tree and left the sync machinery previewing,
+    # diffing and PUSHING the old one, with nothing on screen to say the two
+    # disagreed. Its own env copy goes with it, so a subprocess restart
+    # lands in the same place a fresh boot would.
+    #
+    # dirty last, and after paths::configure: it rescans the new tree, which
+    # is also what surfaces a borrowed tree whose workgroup does not match
+    # this rig's (see scripts::dirty).
+    #
+    push scripts "set ::env(ESS_SYSTEM_PATH) [list $p]"
+    push scripts "set ::ess::system_path [list $p]"
+    push scripts {
+        catch { ess::paths::configure -system_path $::ess::system_path }
+        catch { scripts::dirty }
+    }
+
     catch { dservSet system/warning \
         [expr {[file isdirectory [file join $p ess]] ? "" :
                "ESS_SYSTEM_PATH '$p' has no ess/ subdirectory -- nothing will load"}] }
