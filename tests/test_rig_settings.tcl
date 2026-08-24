@@ -190,6 +190,20 @@ check "empty workgroup is legal" "" [$ip eval {settings::put registry workgroup 
 check "a workgroup with a slash is refused" 1 \
     [catch { $ip eval {settings::put registry workgroup brown/sheinberg} } e]
 check_match "and shows the shape" "*brown-sheinberg*" $e
+# Tcl 9 removed tilde expansion, so ~/systems is RELATIVE and normalizes to
+# a directory literally named ~ under the cwd. Refusing it is the easy part;
+# the point of these three is that the refusal explains the thing the
+# operator cannot see -- "must be absolute" reads as nonsense to someone who
+# just typed what looks to them like an absolute path.
+check "a tilde path is refused" 1 \
+    [catch { $ip eval {settings::put ess system_path ~/systems} } e]
+check_match "and blames the tilde, not absoluteness" "*~ is not expanded*" $e
+check_match "and offers the path they meant" "*probably /*systems*" $e
+check "a ~user path is refused too" 1 \
+    [catch { $ip eval {settings::put ess data_dir ~someone/data} } e]
+check_match "with no misleading guess" "*~ is not expanded*" $e
+check "an absolute path is still fine" /tmp/systems \
+    [$ip eval {settings::put ess system_path /tmp/systems}]
 interp delete $ip
 
 #

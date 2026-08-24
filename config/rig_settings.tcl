@@ -310,6 +310,21 @@ proc ::rig::adopt_and_export {sub key envvar} {
 proc ::rig::_norm_path { v } {
     set v [string trim $v]
     if { $v eq "" } { return "" }
+    # Tcl 9 removed tilde expansion. ~ is an ordinary character now, so
+    # "~/systems" is a RELATIVE path (file normalize makes it
+    # <cwd>/~/systems, a directory literally named ~) and would be refused
+    # below by a message that reads as nonsense to anyone who just typed
+    # what looks to them like an absolute path. Name the real reason, and
+    # where the shape allows it, name the path they meant. Caught because
+    # `file home` is itself a Tcl 9 addition.
+    if { [string index $v 0] eq "~" } {
+        set hint ""
+        if { [string range $v 0 1] eq "~/" } {
+            catch { set hint " (probably\
+ [file join [file home] [string range $v 2 end]])" }
+        }
+        error "path '$v': ~ is not expanded -- give the path in full$hint"
+    }
     if { [file pathtype $v] ne "absolute" } {
         error "path '$v' must be absolute -- it is read by subprocesses whose\
                working directory is not yours"
