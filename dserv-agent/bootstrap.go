@@ -299,6 +299,8 @@ ROLE=""
 TIME_ROLE="{{.TimeRole}}"
 WORKGROUP="${DEFAULT_WORKGROUP}"
 WORKGROUP_EXPLICIT=false
+SYSTEMS_PATH=""
+SYSTEMS_PATH_EXPLICIT=false
 DRY_RUN=false
 SKIP_AGENT=false
 SYNC_SCRIPTS=false
@@ -311,6 +313,7 @@ while [[ $# -gt 0 ]]; do
         --role)        ROLE="$2"; shift 2 ;;
         --time-role)   TIME_ROLE="$2"; shift 2 ;;
         --workgroup)   WORKGROUP="$2"; WORKGROUP_EXPLICIT=true; shift 2 ;;
+        --systems-path) SYSTEMS_PATH="$2"; SYSTEMS_PATH_EXPLICIT=true; shift 2 ;;
         --user)        ESS_USER_ARG="$2"; shift 2 ;;
         --dry-run)     DRY_RUN=true; shift ;;
         --skip-agent)  SKIP_AGENT=true; shift ;;
@@ -353,6 +356,15 @@ while [[ $# -gt 0 ]]; do
             echo "                       the workgroup's tree. With --workgroup NAME,"
             echo "                       this is how a box joins a new workgroup's"
             echo "                       scripts without re-provisioning anything."
+            echo "                       Without --workgroup, it refreshes the rig's"
+            echo "                       own DECLARED workgroup."
+            echo "  --systems-path DIR   Where the tree lives (default ~USER/systems)."
+            echo "                       Given explicitly it is DECLARED as the rig's"
+            echo "                       ess system_path -- workgroup and tree move"
+            echo "                       TOGETHER, so keeping one tree per workgroup"
+            echo "                       makes switching a re-run of the other pair:"
+            echo "                         --scripts-only --workgroup a --systems-path ~/systems-a"
+            echo "                         --scripts-only --workgroup b --systems-path ~/systems-b"
             echo "  --skip-scripts       (deprecated) the default now; accepted, inert"
             echo "  --reinstall          Reinstall components even when already at the"
             echo "                       target version (repairs a broken install)"
@@ -462,6 +474,15 @@ declare_setting() {
         echo "setting ${sub} ${key} ${value}"
     } >> "$rig"
     ok "declared: setting ${sub} ${key} ${value} (local/rig.tcl)"
+}
+
+# Read one declared value back out of rig.tcl (last occurrence wins, the
+# same rule the settings module's parser applies). Empty when the file or
+# the line is absent.
+rig_setting_value() {
+    local rig="${DSERV_INSTALL_DIR}/local/rig.tcl"
+    [[ -f "$rig" ]] || return 0
+    sed -nE "s|^setting[[:space:]]+$1[[:space:]]+$2[[:space:]]+(.*)$|\1|p" "$rig" | tail -1
 }
 
 # The forced sibling: an EXPLICIT operator answer replaces whatever is
@@ -600,6 +621,7 @@ check_root() {
             # rewrites the box's declared workgroup). The re-fetched script
             # carries the same default, so not forwarding loses nothing.
             $WORKGROUP_EXPLICIT   && fwd+=(--workgroup "$WORKGROUP")
+            $SYSTEMS_PATH_EXPLICIT && fwd+=(--systems-path "$SYSTEMS_PATH")
             [[ -n "$ESS_USER_ARG" ]] && fwd+=(--user "$ESS_USER_ARG")
             $DRY_RUN              && fwd+=(--dry-run)
             $SKIP_AGENT           && fwd+=(--skip-agent)
@@ -1225,41 +1247,61 @@ step_sync_scripts() {
         return
     fi
 
-    # Point ESS at the tree this step populates: "ess system_path",
-    # DECLARED (local/rig.tcl). Without it, essconf's fallback aims
-    # ESS_SYSTEM_PATH at the deb's own /usr/local/dserv/systems payload --
-    # a stale packaged tree -- and the registry sync below lands in a
+    # Where the tree lives, and pointing ESS at it: "ess system_path",
+    # DECLARED (local/rig.tcl). Without a declaration, essconf's fallback
+    # aims ESS_SYSTEM_PATH at the deb's own /usr/local/dserv/systems
+    # payload -- a stale packaged tree -- and the sync below lands in a
     # directory ESS never reads, while the sync badge reports the deb
     # tree's drift as pending changes. ESS_DATA_DIR stays a rig choice and
     # is deliberately not declared here.
     #
-    # Three cases, because this bootstrap USED to write
-    # local/pre-systemdir.tcl and rigs in the field carry every vintage:
-    local systemdir_conf="${DSERV_INSTALL_DIR}/local/pre-systemdir.tcl"
-    local rig_file="${DSERV_INSTALL_DIR}/local/rig.tcl"
-    if [[ -f "$rig_file" ]] && \
-       grep -qE '^setting[[:space:]]+ess[[:space:]]+system_path([[:space:]]|$)' "$rig_file"; then
-        # Declared already (the gear, an earlier run, or dserv's first-boot
-        # adoption of a legacy file). A leftover bootstrap-written
-        # pre-systemdir.tcl is superseded -- retire it, but only when it is
-        # purely ours: our marker and nothing but our one statement.
-        if [[ -f "$systemdir_conf" ]] && \
-           grep -q "written by dserv bootstrap" "$systemdir_conf" && \
-           [[ $(grep -cvE '^[[:space:]]*(#|$)' "$systemdir_conf") -eq 1 ]]; then
-            run mv "$systemdir_conf" "${systemdir_conf}.retired-$(date +%F)"
-            ok "retired bootstrap-written pre-systemdir.tcl (superseded by the declaration)"
-        fi
-    elif [[ -f "$systemdir_conf" ]]; then
-        # Legacy file, not yet adopted: dserv's first boot on a current
-        # build adopts its value into rig.tcl and flags the file as
-        # superseded. Leave both alone -- declaring a recomputed path here
-        # could disagree with a hand-tuned one.
-        info "legacy pre-systemdir.tcl present; dserv adopts it into rig.tcl at first boot"
+    # An EXPLICIT --systems-path both aims the sync and REDECLARES the
+    # path: the workgroup and the tree must move together, because the
+    # scripts subprocess's ongoing sync pulls the DECLARED workgroup into
+    # the DECLARED path -- a mismatched pair would pull one workgroup's
+    # scripts into another's tree. One tree per workgroup is the
+    # two-workgroup pattern, and switching is a re-run of the other pair
+    # (a near-no-op sync); a running dserv adopts the staged pair at its
+    # next restart.
+    local sys_root
+    if $SYSTEMS_PATH_EXPLICIT; then
+        sys_root="${SYSTEMS_PATH}"
+        redeclare_setting ess system_path "${sys_root}"
     else
-        declare_setting ess system_path "${user_home}/systems"
+        sys_root="${user_home}/systems"
+        # Three cases, because this bootstrap USED to write
+        # local/pre-systemdir.tcl and rigs in the field carry every vintage:
+        local systemdir_conf="${DSERV_INSTALL_DIR}/local/pre-systemdir.tcl"
+        local rig_file="${DSERV_INSTALL_DIR}/local/rig.tcl"
+        if [[ -f "$rig_file" ]] && \
+           grep -qE '^setting[[:space:]]+ess[[:space:]]+system_path([[:space:]]|$)' "$rig_file"; then
+            # Declared already (the gear, an earlier run, or dserv's
+            # first-boot adoption of a legacy file). Sync into the DECLARED
+            # tree, not the default: the declaration is the rig's answer.
+            local declared_root
+            declared_root=$(rig_setting_value ess system_path)
+            [[ -n "$declared_root" ]] && sys_root="$declared_root"
+            # A leftover bootstrap-written pre-systemdir.tcl is superseded
+            # -- retire it, but only when it is purely ours: our marker and
+            # nothing but our one statement.
+            if [[ -f "$systemdir_conf" ]] && \
+               grep -q "written by dserv bootstrap" "$systemdir_conf" && \
+               [[ $(grep -cvE '^[[:space:]]*(#|$)' "$systemdir_conf") -eq 1 ]]; then
+                run mv "$systemdir_conf" "${systemdir_conf}.retired-$(date +%F)"
+                ok "retired bootstrap-written pre-systemdir.tcl (superseded by the declaration)"
+            fi
+        elif [[ -f "$systemdir_conf" ]]; then
+            # Legacy file, not yet adopted: dserv's first boot on a current
+            # build adopts its value into rig.tcl and flags the file as
+            # superseded. Leave both alone -- declaring a recomputed path
+            # here could disagree with a hand-tuned one.
+            info "legacy pre-systemdir.tcl present; dserv adopts it into rig.tcl at first boot"
+        else
+            declare_setting ess system_path "${sys_root}"
+        fi
     fi
 
-    info "Syncing ESS scripts from registry..."
+    info "Syncing ESS scripts from registry (workgroup ${WORKGROUP} -> ${sys_root}/ess)..."
 
     # The export endpoint returns a zip of all systems + libs for the workgroup
     local export_url="${REGISTRY_URL}/api/v1/ess/export/${WORKGROUP}"
@@ -1281,7 +1323,7 @@ step_sync_scripts() {
         return
     fi
 
-    local dest="${user_home}/systems/ess"
+    local dest="${sys_root}/ess"
 
     # Say what is about to be replaced. unzip -o is silent about collisions, so
     # without this the log of a destructive step looks identical to a first
@@ -1298,7 +1340,7 @@ step_sync_scripts() {
         existing=$(find "$dest" -type f \( -name "*.tcl" -o -name "*.tm" \) 2>/dev/null | wc -l || echo 0)
     fi
     if [[ "$existing" -gt 0 ]]; then
-        warn "Overwriting ${existing} existing scripts in ${dest} (--skip-scripts to keep them)"
+        warn "Overwriting ${existing} existing scripts in ${dest} (the registry copy wins; push local work first)"
     fi
 
     run mkdir -p "$dest"
@@ -1629,6 +1671,17 @@ main() {
     if $SCRIPTS_ONLY; then
         info "Log: ${LOG_FILE}"
         echo ""
+        # Without an explicit --workgroup, refresh the rig's own DECLARED
+        # workgroup -- never the template default, which would silently
+        # fetch some other workgroup's tree onto a rig that moved.
+        if ! $WORKGROUP_EXPLICIT; then
+            local declared_wg
+            declared_wg=$(rig_setting_value registry workgroup)
+            if [[ -n "$declared_wg" ]]; then
+                WORKGROUP="$declared_wg"
+                info "workgroup: ${WORKGROUP} (the rig's declaration)"
+            fi
+        fi
         step_configure_dserv
         step_sync_scripts
         echo ""

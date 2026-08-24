@@ -460,8 +460,15 @@ Bootstrap (server mode):
 
   # Scripts alone, on a box provisioned earlier -- declare the registry
   # pair and pull the workgroup's tree, touching nothing else (also how a
-  # box joins a NEW workgroup's scripts):
+  # box joins a NEW workgroup's scripts). Flagless --scripts-only
+  # refreshes the rig's own declared workgroup:
   curl -sSL https://yourserver/setup | sudo bash -s -- --scripts-only --workgroup mylab --user labuser
+
+  # Two workgroups on one box: one tree each, switch by re-running the
+  # other pair (workgroup and tree are declared TOGETHER; a running dserv
+  # adopts the pair at its next restart):
+  curl -sSL https://yourserver/setup | sudo bash -s -- --scripts-only --workgroup lab-a --systems-path /home/labuser/systems-a
+  curl -sSL https://yourserver/setup | sudo bash -s -- --scripts-only --workgroup lab-b --systems-path /home/labuser/systems-b
 
   # Profile AND time role in one step -- quote it, an unquoted & backgrounds
   # the command and silently drops the role.
@@ -1013,7 +1020,7 @@ func (a *Agent) handleLandingPage(w http.ResponseWriter, r *http.Request) {
               <code>curl -sSL __BASE__/setup | sudo bash -s -- --scripts-only --workgroup mylab --user labuser</code>
               <button class="copy" data-cmd="curl -sSL __BASE__/setup | sudo bash -s -- --scripts-only --workgroup mylab --user labuser">Copy</button>
             </div>
-            <p class="note">The registry copy wins every collision, so push local edits first on a box with in-flight work. A running dserv adopts the declarations and sees the tree at its next restart or system load. <code>--user</code> defaults to whoever invoked sudo.</p>
+            <p class="note">The registry copy wins every collision, so push local edits first on a box with in-flight work. A running dserv adopts the declarations and sees the tree at its next restart or system load. <code>--user</code> defaults to whoever invoked sudo. Keeping a <em>second</em> workgroup&rsquo;s scripts around? Give each its own tree with <code>--systems-path ~/systems-mylab</code> &mdash; the flag declares that tree as the rig&rsquo;s <code>ess system_path</code>, workgroup and tree switch together, and switching back is a re-run of the other pair.</p>
           </div>
 
           <div class="card">
