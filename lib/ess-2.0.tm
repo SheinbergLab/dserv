@@ -1004,9 +1004,16 @@ namespace eval ess {
     variable subject_id {}
     variable subject_ids {}
 
-    # for tracking begin/end obs and sync'ing with external systems
+    # for tracking begin/end obs and sync'ing with external systems.
+    # obs_pin -1 = no host obs line, THE NORM: rigs with an extio box let
+    # the box own the line, and rpioPinOn/Off no-op on -1. The old compiled
+    # default of 26 (an rpi-ism) made every rig without a gpio claim THROW
+    # "line not set" out of end_obs -- before ENDOBS was emitted or in_obs
+    # cleared, so removing a rig's local/post-pins.tcl hung it at end-obs
+    # (rpi500, 2026-08-24). A rig that wants a host obs pin declares it:
+    # `setting ess obs_pin 26` (essconf claims the line and sets this).
     variable in_obs 0
-    variable obs_pin 26
+    variable obs_pin -1
 
     variable em_active 0
     variable touch_active 0
