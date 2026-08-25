@@ -482,6 +482,317 @@ namespace eval df {
         
         return $meta
     }
+
+    #
+    # Raw-log helpers
+    #
+    # dslog::readESS drops JPEG/private payloads and strips timestamps from
+    # <ds> columns. scan_dpoints_in_obs walks the same .ess with
+    # dslog::open/next so extractors can keep those points, windowed on obs.
+    #
+
+    # Decode a scalar datapoint to an integer. dslog::next may already have
+    # turned STRING/INT payloads into Tcl values; fall back to binary scan.
+    proc dpoint_int {type data} {
+        if {[string is wideinteger -strict $data]} {
+            return $data
+        }
+        set dtype [expr {$type & 0xff}]
+        switch -exact -- $dtype {
+            0 {
+                if {[binary scan $data c v] == 1} { return $v }
+            }
+            1 {
+                set s [string trim $data]
+                if {[string is wideinteger -strict $s]} { return $s }
+            }
+            4 {
+                if {[binary scan $data s v] == 1} { return $v }
+            }
+            5 {
+                if {[binary scan $data i v] == 1} { return $v }
+            }
+            16 {
+                if {[binary scan $data w v] == 1} { return $v }
+            }
+        }
+        return ""
+    }
+
+    # Event type from the on-disk 4-byte union
+    # (dtype | e_type<<8 | e_subtype<<16 | puttype<<24). DSERV_EVT = 9.
+    proc log_evt_type {type} {
+        if {($type & 0xff) == 9} {
+            return [expr {($type >> 8) & 0xff}]
+        }
+        return -1
+    }
+
+    # Build nested dynlists into dest (a persistent name, e.g. $predg:col).
+    # Returning dl_llist/dl_create names from a helper is unsafe — they are
+    # locals and vanish when the proc returns.
+    proc fill_nested_ilist {dest lists} {
+        dl_local outer [dl_llist]
+        foreach inner $lists {
+            if {[llength $inner]} {
+                dl_append $outer [dl_ilist {*}$inner]
+            } else {
+                dl_append $outer [dl_ilist]
+            }
+        }
+        dl_set $dest $outer
+    }
+
+    proc fill_nested_slist {dest lists} {
+        # Append one string at a time. {*} expansion re-parses the
+        # payload as Tcl and dies on JPEG bytes that look like braces.
+        dl_local outer [dl_llist]
+        foreach inner $lists {
+            dl_local s [dl_create string]
+            foreach item $inner {
+                dl_append $s $item
+            }
+            dl_append $outer $s
+        }
+        dl_set $dest $outer
+    }
+
+    # Nested byte payloads as DF_CHAR (one char-list per point).
+    # DF_STRING goes through Tcl modified UTF-8 in the dgz; Python dgread
+    # then calls Py_BuildValue("s") and dies on overlong NUL (C0 80).
+    # DF_CHAR is a raw byte vector: dgread returns numpy int8, MATLAB a
+    # char/int8 array. Recover JPEG with e.g. arr.astype("uint8").tobytes().
+    proc fill_nested_clist {dest lists} {
+        dl_local outer [dl_llist]
+        foreach inner $lists {
+            dl_local frames [dl_llist]
+            foreach payload $inner {
+                if {$payload eq ""} {
+                    dl_append $frames [dl_clist]
+                } else {
+                    binary scan $payload c* bytes
+                    dl_append $frames [dl_clist {*}$bytes]
+                }
+            }
+            dl_append $outer $frames
+        }
+        dl_set $dest $outer
+    }
+
+    #
+    # Scan filepath for varname, attributing every matching point to the
+    # obs window it falls in. Returns two parallel Tcl lists of length
+    # n_obs; each cell is itself a list (empty if that obs has no hits).
+    #
+    #   t_ms  - (point_us - begin_us) / 1000, integer ms like stim_on
+    #   data  - raw payloads (JPEG bytes for type 14; do not UTF-8-decode)
+    #
+    # Windows open on ess/in_obs 0->1 (extio / explicit logger match) or
+    # eventlog BEGINOBS (type 19). They close on ess/in_obs 1->0 or
+    # ENDOBS (type 20). Typical ESS files log events, not ess/in_obs;
+    # using both without double-counting covers search and extio.
+    # Points outside any window are ignored.
+    #
+    proc scan_dpoints_in_obs {filepath varname} {
+        set t_ms {}
+        set data {}
+        set obs -1
+        set in 0
+        set begin 0
+
+        set h [dslog::open $filepath r]
+        if {[catch {
+            while {[set d [dslog::next $h]] ne ""} {
+                set name [dict get $d varname]
+                set ts [dict get $d timestamp]
+                set type [dict get $d type]
+                set payload [dict get $d data]
+
+                if {$name eq "ess/in_obs"} {
+                    set v [dpoint_int $type $payload]
+                    if {$v ne "" && $v == 1} {
+                        if {!$in} {
+                            incr obs
+                            set begin $ts
+                            set in 1
+                            lappend t_ms {}
+                            lappend data {}
+                        }
+                    } elseif {$v ne "" && $v == 0} {
+                        set in 0
+                    }
+                    continue
+                }
+
+                if {$name eq "eventlog/events"} {
+                    set et [log_evt_type $type]
+                    if {$et == 19} {
+                        if {!$in} {
+                            incr obs
+                            set begin $ts
+                            set in 1
+                            lappend t_ms {}
+                            lappend data {}
+                        }
+                    } elseif {$et == 20} {
+                        set in 0
+                    }
+                    continue
+                }
+
+                if {$in && $name eq $varname} {
+                    set rel [expr {wide($ts - $begin) / 1000}]
+                    set tcell [lindex $t_ms $obs]
+                    lappend tcell $rel
+                    lset t_ms $obs $tcell
+                    set dcell [lindex $data $obs]
+                    lappend dcell $payload
+                    lset data $obs $dcell
+                }
+            }
+        } err opts]} {
+            catch {dslog::close $h}
+            return -options $opts $err
+        }
+        dslog::close $h
+        return [list $t_ms $data]
+    }
+
+    # Event subtype from the on-disk 4-byte union (see log_evt_type).
+    proc log_evt_subtype {type} {
+        if {($type & 0xff) == 9} {
+            return [expr {($type >> 16) & 0xff}]
+        }
+        return -1
+    }
+
+    #
+    # Camera grabs requested during an obs period.
+    #
+    # ESS stamps CAMERA/REQUEST (type 55, subtype 0) when grab_full is
+    # asked; camera/full carries ring-buffer capture time as its datapoint
+    # timestamp and may be logged after ENDOBS (async encode). Pair the
+    # i-th REQUEST with the i-th camera/full by FIFO, then assign each
+    # pair to the obs whose [begin,end] contains the request timestamp.
+    # A failed grab desyncs the FIFO.
+    #
+    # Returns three parallel Tcl lists of length n_obs:
+    #   request_t_ms - (request_us - begin_us) / 1000
+    #   capture_t_ms - (capture_us - begin_us) / 1000
+    #   data         - raw JPEG payloads
+    #
+    proc scan_camera_requested_in_obs {filepath} {
+        set begins {}
+        set ends {}
+        set obs -1
+        set in 0
+        set begin 0
+        set requests {}
+        set captures {}
+        set payloads {}
+
+        set h [dslog::open $filepath r]
+        if {[catch {
+            while {[set d [dslog::next $h]] ne ""} {
+                set name [dict get $d varname]
+                set ts [dict get $d timestamp]
+                set type [dict get $d type]
+                set payload [dict get $d data]
+
+                if {$name eq "ess/in_obs"} {
+                    set v [dpoint_int $type $payload]
+                    if {$v ne "" && $v == 1} {
+                        if {!$in} {
+                            incr obs
+                            set begin $ts
+                            set in 1
+                            lappend begins $begin
+                            lappend ends {}
+                        }
+                    } elseif {$v ne "" && $v == 0} {
+                        if {$in} {
+                            lset ends $obs $ts
+                            set in 0
+                        }
+                    }
+                    continue
+                }
+
+                if {$name eq "eventlog/events"} {
+                    set et [log_evt_type $type]
+                    set es [log_evt_subtype $type]
+                    if {$et == 19} {
+                        if {!$in} {
+                            incr obs
+                            set begin $ts
+                            set in 1
+                            lappend begins $begin
+                            lappend ends {}
+                        }
+                    } elseif {$et == 20} {
+                        if {$in} {
+                            lset ends $obs $ts
+                            set in 0
+                        }
+                    } elseif {$et == 55 && $es == 0} {
+                        # CAMERA REQUEST
+                        lappend requests $ts
+                    }
+                    continue
+                }
+
+                if {$name eq "camera/full"} {
+                    lappend captures $ts
+                    lappend payloads $payload
+                }
+            }
+            # Open last obs with no ENDOBS yet: leave end empty (unmatchable
+            # via <= end); still counted in begins.
+        } err opts]} {
+            catch {dslog::close $h}
+            return -options $opts $err
+        }
+        dslog::close $h
+
+        set n_obs [llength $begins]
+        set req_lists {}
+        set cap_lists {}
+        set data_lists {}
+        for {set i 0} {$i < $n_obs} {incr i} {
+            lappend req_lists {}
+            lappend cap_lists {}
+            lappend data_lists {}
+        }
+
+        set n_pair [llength $requests]
+        if {[llength $captures] < $n_pair} {
+            set n_pair [llength $captures]
+        }
+        for {set i 0} {$i < $n_pair} {incr i} {
+            set req_ts [lindex $requests $i]
+            set cap_ts [lindex $captures $i]
+            set jpeg [lindex $payloads $i]
+            for {set o 0} {$o < $n_obs} {incr o} {
+                set b [lindex $begins $o]
+                set e [lindex $ends $o]
+                if {$e eq ""} continue
+                if {$req_ts >= $b && $req_ts <= $e} {
+                    set rcell [lindex $req_lists $o]
+                    lappend rcell [expr {wide($req_ts - $b) / 1000}]
+                    lset req_lists $o $rcell
+                    set ccell [lindex $cap_lists $o]
+                    lappend ccell [expr {wide($cap_ts - $b) / 1000}]
+                    lset cap_lists $o $ccell
+                    set dcell [lindex $data_lists $o]
+                    lappend dcell $jpeg
+                    lset data_lists $o $dcell
+                    break
+                }
+            }
+        }
+
+        return [list $req_lists $cap_lists $data_lists]
+    }
     
     #
     # Full file access for analysis
@@ -856,6 +1167,70 @@ namespace eval df {
         
         method group {} {
             return $g
+        }
+
+        #
+        # Raw datapoints in each obs window (see df::scan_dpoints_in_obs).
+        # Returns two nested dynlists of length n_obs, suitable for dl_choose:
+        #   t_ms  - integer ms from obs onset (empty sublist if none)
+        #   data  - DF_CHAR byte vectors, one per point (empty sublist if none)
+        #
+        method ds_in_obs {varname} {
+            lassign [df::scan_dpoints_in_obs $filepath $varname] t_lists data_lists
+
+            set n_file 0
+            if {[dict exists $meta n_obs]} {
+                set n_file [dict get $meta n_obs]
+            }
+            set n_scan [llength $t_lists]
+            if {$n_file > $n_scan} {
+                for {set i $n_scan} {$i < $n_file} {incr i} {
+                    lappend t_lists {}
+                    lappend data_lists {}
+                }
+            } elseif {$n_file > 0 && $n_file < $n_scan} {
+                set t_lists [lrange $t_lists 0 [expr {$n_file - 1}]]
+                set data_lists [lrange $data_lists 0 [expr {$n_file - 1}]]
+            }
+
+            df::fill_nested_ilist $predg:ds_obs_t $t_lists
+            df::fill_nested_clist $predg:ds_obs_d $data_lists
+            return [list $predg:ds_obs_t $predg:ds_obs_d]
+        }
+
+        #
+        # Camera frames whose CAMERA/REQUEST fell in the obs window
+        # (see df::scan_camera_requested_in_obs). Returns three nested
+        # dynlists of length n_obs:
+        #   request_t - ms from obs onset when grab was requested
+        #   capture_t - ms from obs onset of ring-buffer capture stamp
+        #   data      - DF_CHAR JPEG byte vectors
+        #
+        method ds_camera_requested_in_obs {} {
+            lassign [df::scan_camera_requested_in_obs $filepath] \
+                req_lists cap_lists data_lists
+
+            set n_file 0
+            if {[dict exists $meta n_obs]} {
+                set n_file [dict get $meta n_obs]
+            }
+            set n_scan [llength $req_lists]
+            if {$n_file > $n_scan} {
+                for {set i $n_scan} {$i < $n_file} {incr i} {
+                    lappend req_lists {}
+                    lappend cap_lists {}
+                    lappend data_lists {}
+                }
+            } elseif {$n_file > 0 && $n_file < $n_scan} {
+                set req_lists [lrange $req_lists 0 [expr {$n_file - 1}]]
+                set cap_lists [lrange $cap_lists 0 [expr {$n_file - 1}]]
+                set data_lists [lrange $data_lists 0 [expr {$n_file - 1}]]
+            }
+
+            df::fill_nested_ilist $predg:ds_cam_req_t $req_lists
+            df::fill_nested_ilist $predg:ds_cam_cap_t $cap_lists
+            df::fill_nested_clist $predg:ds_cam_d $data_lists
+            return [list $predg:ds_cam_req_t $predg:ds_cam_cap_t $predg:ds_cam_d]
         }
         
         method type_name {id} {
