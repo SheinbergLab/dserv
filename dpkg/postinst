@@ -193,6 +193,60 @@ if [ -d /usr/local/dserv/systemd ] && [ -d /etc/systemd/system ]; then
     fi
 fi
 
+# Mask Debian's fluidsynth USER service, once.
+#
+# We Depend on fluidsynth for the library; Debian's package also ships
+# /usr/lib/systemd/user/fluidsynth.service and globally enables it, so every
+# dserv box quietly gains a second General MIDI daemon in each login session
+# (`fluidsynth -is -r 48000 -z 512 default-GM.sf3`, listening on :9800).
+#
+# That is not merely redundant, it is a card thief. dserv's sound module opens
+# its output EXCLUSIVELY and never releases it (ALSA hw/plughw is an exclusive
+# open -- see the audio notes), so whichever synth reaches the device first
+# keeps it. On dserv-dev (2026-08-24) dserv happened to win and the stray held
+# only /dev/snd/seq, which is exactly what makes this dangerous: it is a RACE,
+# not a fault. Linger=no means the daemon appears and disappears with a login,
+# so a box can be silent only on the days somebody happened to be logged in
+# when dserv started -- the kind of intermittency nobody debugs successfully.
+#
+# MASK, not disable. `systemctl --global disable` just removes the wants-symlink
+# that fluidsynth's own maintainer script created, and deb-systemd-helper is
+# entitled to put it back on the next fluidsynth upgrade. A mask is a /dev/null
+# symlink in /etc/systemd/user, which outranks /usr/lib/systemd/user and cannot
+# be started by any user by any route.
+#
+# ONCE, tracked by a marker, unlike the unit installs above. Unmasking this is a
+# legitimate thing for an admin to want -- somebody may genuinely want a MIDI
+# synth on a dev box -- and re-masking it on every dserv update would be us
+# winning an argument with the operator. First install converges the fleet;
+# after that the decision is theirs. The marker is only written if the mask
+# actually succeeded, so a failure retries next time instead of being recorded
+# as done.
+if command -v systemctl >/dev/null 2>&1 && \
+   [ -f /usr/lib/systemd/user/fluidsynth.service ] && \
+   [ ! -e /var/lib/dserv/fluidsynth-user-masked ]; then
+    if mkdir -p /var/lib/dserv 2>/dev/null && \
+       systemctl --global mask fluidsynth.service >/dev/null 2>&1; then
+        : > /var/lib/dserv/fluidsynth-user-masked 2>/dev/null || true
+        echo "dserv: masked Debian's fluidsynth user service (it competes for the"
+        echo "       exclusive ALSA device dserv plays through). To undo:"
+        echo "           sudo systemctl --global unmask fluidsynth.service"
+        echo "           sudo rm /var/lib/dserv/fluidsynth-user-masked"
+
+        # A mask does not stop what is already running. Reach into each logged-in
+        # user's own manager to stop it now, so the box does not stay in the
+        # racy state until everyone logs out. Best-effort by design: no session
+        # bus, no logind, a user without a running manager -- none of those are
+        # worth a word, let alone a failed package configuration.
+        if command -v loginctl >/dev/null 2>&1; then
+            for _u in $(loginctl list-users --no-legend 2>/dev/null | awk '{print $2}'); do
+                systemctl --machine="${_u}@.host" --user stop fluidsynth.service \
+                    >/dev/null 2>&1 || true
+            done
+        fi
+    fi
+fi
+
 # Put the PTP helpers on PATH; they are otherwise buried in the payload.
 #
 # dserv-ptp-select-phc must be EXECUTABLE even though nobody runs it by hand: the
