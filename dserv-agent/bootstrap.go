@@ -1660,15 +1660,18 @@ EOF
     ok "Recorded identity: profile=${PROFILE}${STIM_MODE:+ (${STIM_MODE})} in /etc/dserv-agent/box.conf"
 }
 
-# Put a unit file where systemd can see it, for a service about to be enabled.
+# Converge a service's unit file on the payload: install it when systemd has
+# never been shown one, refresh it when the /etc copy has fallen behind.
 #
-# The package owns this now -- dserv's postinst installs dserv.service the same
-# way stim2's installs its own -- so on a normal run this finds the unit already
-# there and returns. It exists for the run where the package never got a say:
-# the bootstrap SKIPS installing a component that is already at the target
-# version, so a box carrying a dserv from before that postinst change gets no
-# postinst and therefore no unit, and a re-run to repair it would skip the deb
-# and repair nothing. That is the exact shape of the failure this fixes.
+# The package owns the INSTALL now -- dserv's postinst places dserv.service the
+# same way stim2's places its own -- but it deliberately never overwrites, so
+# nothing in the system refreshes a copy once it exists. Two gaps land here:
+#   - the run where the package never got a say. The bootstrap SKIPS installing
+#     a component already at the target version, so a box carrying a dserv from
+#     before that postinst change gets no postinst and therefore no unit, and a
+#     re-run to repair it would skip the deb and repair nothing.
+#   - the box whose unit predates settings the payload has since gained. See
+#     the refresh branch: this is the entire deployed fleet.
 #
 # The symptom is worth recognizing: the whole start step collapses into
 # "dserv failed to enable/start" and then "dserv not running", for a unit
@@ -1687,14 +1690,53 @@ ensure_unit() {
 
     [[ -f "$src" ]] || return 0
 
-    # Known to systemd from anywhere -- /etc, /lib, a drop-in tree -- means
-    # there is already an answer and this script does not get a vote.
-    if systemctl cat "${svc}.service" &>/dev/null; then
-        if [[ -f "$dst" ]] && ! cmp -s "$src" "$dst"; then
-            warn "${dst} differs from the packaged ${src} (left alone; diff them if ${svc} misbehaves)"
+    # An /etc copy that has fallen behind the payload gets REFRESHED, not
+    # merely reported.
+    #
+    # This started as a warning, on the theory that a unit under
+    # /etc/systemd/system is admin territory. The fleet says otherwise. Both
+    # rig Pis were checked before this was written (raspberrypi.local,
+    # rpi500.local, 2026-08-24) and both were running units copied once by
+    # install-dserv-service.sh and never touched since -- rpi500's from March,
+    # raspberrypi's from July -- each missing two settings that had shipped in
+    # the payload in the meantime:
+    #     Environment=UWS_HTTP_MAX_HEADERS_SIZE=32768   (the 431-on-FQDN fix)
+    #     TimeoutStopSec=20                             (else 90s on every stop)
+    # Neither carried a single line the payload did not. Nothing has ever
+    # propagated a unit change to a deployed box, and a warning on a box nobody
+    # is watching propagates nothing either.
+    #
+    # Safe because per-site customization has a place that survives this: a
+    # drop-in under ${svc}.service.d/ is untouched by replacing the unit FILE,
+    # and this unit's own comments already steer edits there ("don't edit this
+    # unit; mask the waiter"). The office-stim core-dump trap is exactly that
+    # shape and rides through.
+    #
+    # The backup is written ONCE and never overwritten. The irreplaceable thing
+    # is whatever was here before the bootstrap first touched it -- a hand-edit
+    # somebody made years ago; every later state is just a payload version,
+    # recoverable from the payload itself. Overwriting the backup on each
+    # refresh would quietly destroy the only copy worth keeping.
+    if [[ -f "$dst" ]]; then
+        if cmp -s "$src" "$dst"; then return 0; fi
+        if [[ ! -e "${dst}.bootstrap-bak" ]]; then
+            run cp -a "$dst" "${dst}.bootstrap-bak"
         fi
+        run install -m 0644 "$src" "$dst"
+        run systemctl daemon-reload
+        ok "refreshed ${svc}.service from the payload (previous kept at ${dst}.bootstrap-bak)"
+        # Says it plainly rather than acting: a running unit keeps the settings
+        # it started with, and restarting dserv is not something a provisioning
+        # re-run gets to do to a rig that may be mid-session. Same call the
+        # component install already makes about a dserv replaced underneath
+        # itself -- announce the skew, let a human pick the moment.
+        info "  ${svc} keeps its old settings until the next restart"
         return 0
     fi
+
+    # No /etc copy. If systemd still knows the unit it lives somewhere else --
+    # /lib, /run, a distro package -- and that is someone else's answer.
+    if systemctl cat "${svc}.service" &>/dev/null; then return 0; fi
 
     run install -m 0644 "$src" "$dst"
     run systemctl daemon-reload
