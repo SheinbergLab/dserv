@@ -769,7 +769,19 @@ else()
     # Revisit once the fleet actually carries the dserv-agent package: a hard
     # Depends is the better long-term expression, and is safe to add the moment
     # it can be satisfied everywhere.
-    set(CPACK_DEBIAN_DSERV_PACKAGE_DEPENDS "libevdev2, libpq5, zlib1g, yajl-tools, fluidsynth")
+    # alsa-utils is DEPENDS, not Recommends, and the distinction is load-bearing
+    # here: the bootstrap installs component debs with `dpkg -i` followed by
+    # `apt-get install -f`, a path that satisfies Depends and NEVER pulls
+    # Recommends. A Recommends would therefore be absent on exactly the boxes
+    # that are provisioned rather than hand-installed -- the whole fleet.
+    #
+    # Two things need it, both of which fail SILENTLY without it: soundconf's
+    # unmute step is catch-wrapped around amixer, and ensure_shared_pcm probes
+    # supported formats by shelling out to `aplay --dump-hw-params` (there is no
+    # /proc source for that), so `sound shared` degrades to exclusive and stim2
+    # gets no audio. dserv-dev shipped with neither available and a muted card,
+    # which is a lot of invisible failure for one small package.
+    set(CPACK_DEBIAN_DSERV_PACKAGE_DEPENDS "libevdev2, libpq5, zlib1g, yajl-tools, fluidsynth, alsa-utils")
     # chrony is RECOMMENDS and deliberately not DEPENDS. Every dserv host needs a
     # correct wall clock -- not for acquisition (timestamps ride CLOCK_MONOTONIC)
     # but because clock_epoch_offset_us() is captured ONCE at startup, so a host

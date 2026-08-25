@@ -370,7 +370,7 @@ pcm.dserv_shared { type plug slave.pcm \"dserv_dmix\" }
                 puts "sound: NOTE analog outranked any HDMI sink here; if this box\
                       should use its display, declare `sound output_class hdmi`"
             }
-            if { $class eq "usb" } {
+            if { $class in {usb analog} } {
                 # DO NOT auto-normalize the card's hardware mixer to 0 dB.
                 # Tried 2026-08-05 and REVERTED the same evening: full-scale
                 # playback at 0 dB through a C-Media dongle spiked USB VBUS
@@ -381,13 +381,46 @@ pcm.dserv_shared { type plug slave.pcm \"dserv_dmix\" }
                 # decision (PSU headroom, powered vs passive speakers): set it
                 # deliberately with amixer + alsactl store, never blindly.
                 # Unmute alone is safe -- a shipped-muted card is just broken.
-                foreach ctl {Speaker PCM Headphone} {
-                    catch { exec amixer -c [dict get $sel cardid] sset $ctl unmute }
+                #
+                # ANALOG joined this branch 2026-08-24. It used to be excluded
+                # on the reasoning below, which is sound for a DAC HAT and
+                # wrong for Intel HDA: an onboard codec has no considered
+                # default to respect -- dserv-dev (ALC269VC, N-series) shipped
+                # its rear jack MUTED at index 0, and every layer above it
+                # looked perfect (requested/class/device all correct, hw_ptr
+                # draining) while the box was silent.
+                #
+                # Master leads the list, and that ordering is the finding:
+                # on HDA it is a joined-mono amp AHEAD of the per-output legs,
+                # so unmuting Speaker/PCM/Headphone alone changes nothing --
+                # verified by hand on dserv-dev, where Headphone unmuted and
+                # the box stayed silent until Master did too. Cheap where it
+                # does not exist; each control is caught separately.
+                if { [auto_execok amixer] eq "" } {
+                    # Announce, do not swallow. The whole loop is catch-wrapped,
+                    # so a missing amixer is otherwise indistinguishable from a
+                    # card that had nothing to unmute -- and alsa-utils is NOT a
+                    # dserv dependency on every vintage.
+                    puts "sound: amixer not found (install alsa-utils); cannot\
+                          unmute $class card [dict get $sel cardid] -- if this\
+                          box is silent, that is the first thing to check"
+                } else {
+                    foreach ctl {Master Speaker PCM Headphone} {
+                        catch { exec amixer -c [dict get $sel cardid] sset $ctl unmute }
+                    }
                 }
             }
-            # Nothing touches an I2S/analog/HDMI mixer: a DAC HAT ships with a
-            # considered default (the Katana boots at -20 dB) and the gain is a
-            # per-rig electrical decision, exactly as for the USB branch.
+            # Nothing touches an I2S/HDMI mixer, and nothing anywhere touches a
+            # LEVEL: a DAC HAT ships with a considered default (the Katana boots
+            # at -20 dB) and the gain is a per-rig electrical decision.
+            #
+            # Worth knowing when a rig reports "audible but far too quiet":
+            # amixer's percentages are a linear index over a dB range, not
+            # loudness, and HDA legs cascade. dserv-dev sat at Master 70% +
+            # Headphone 70% = -19.5 dB twice over = -39 dB total. Open the
+            # hardware legs and trim with soundGain/soundWavGain/soundSynthGain
+            # instead -- those are per-source, need no root, and persist as rig
+            # settings.
 
             # Shared access, if this rig asked for it. Degrading to exclusive
             # is announced, never silent: the consequence is that stim2 gets
