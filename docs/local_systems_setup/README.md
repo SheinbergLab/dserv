@@ -254,8 +254,9 @@ For Linux the following startup steps should work with amd64 or arm64 -- laptop,
 ### dserv
 
 On Linux we can run dserv as a system service (aka background process or daemon) via [systemd](https://en.wikipedia.org/wiki/Systemd).
-The dserv install above should have created a script for installing the system service.
-Run this script from a terminal:
+The dserv install above places `/etc/systemd/system/dserv.service` but deliberately does not enable or start it --
+installing a program and starting a daemon are separate decisions, and the second one is yours.
+The install also leaves a script that makes it, so run this from a terminal:
 
 ```
 sudo install-dserv-service.sh

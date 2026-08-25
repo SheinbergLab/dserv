@@ -146,25 +146,43 @@ if [ -f /usr/local/dserv/udev/60-extio.rules ] && [ -d /etc/udev/rules.d ]; then
     fi
 fi
 
-# Install the PTP systemd unit TEMPLATES (/usr/local is not a path systemd
-# scans, same reason the udev rule above needs copying).
+# Install dserv.service and the PTP unit TEMPLATES (/usr/local is not a path
+# systemd scans, same reason the udev rule above needs copying).
 #
-# Safe to do unconditionally because these are templates: a `foo@.service` with
-# no instance cannot start, so this copies inert files. Nothing PTP-related runs
-# until an operator picks an interface and a role with `dserv-ptp-setup`, which
-# is a site decision the installer cannot make -- the interface is unknowable
-# here, and "grandmaster" is a network-wide role, not a host preference.
+# The PTP files are safe to place unconditionally because they are templates: a
+# `foo@.service` with no instance cannot start, so this copies inert files.
+# Nothing PTP-related runs until an operator picks an interface and a role with
+# `dserv-ptp-setup`, which is a site decision the installer cannot make -- the
+# interface is unknowable here, and "grandmaster" is a network-wide role, not a
+# host preference.
 #
-# Deliberately does NOT glob dserv.service / dserv-agent.service: on Debian a
-# non-templated unit that lands in /etc/systemd/system can be enabled and started
-# by later tooling, and starting a daemon as a side effect of `apt install` is a
-# different decision from shipping its unit file.
+# dserv.service USED to be excluded here, on the reasoning that a non-templated
+# unit in /etc/systemd/system can be enabled and started by later tooling. That
+# conflated two separate things. Shipping a unit file is not starting a daemon:
+# this copies it and stops, exactly as before -- no enable, no start, so
+# `apt install dserv` still leaves nothing running. What the exclusion actually
+# bought was a box where `systemctl enable --now dserv` fails with no such unit,
+# which is precisely how the amd64/trixie bootstrap ended (dserv-dev,
+# 2026-08-24): the provisioner reported "dserv failed to enable/start" and then
+# "dserv not running", every message aimed at dserv, none of them saying the
+# unit had never been installed. dserv-agent's unit is written by the bootstrap
+# and stim2's is installed by its own postinst -- dserv was the odd one out, and
+# the asymmetry cost a provision.
+#
+# Absent only, never clobber: a unit in /etc/systemd/system is admin territory,
+# and site edits (or an older install-dserv-service.sh copy) must survive an
+# upgrade. Same rule stim2's postinst uses for its own unit.
 if [ -d /usr/local/dserv/systemd ] && [ -d /etc/systemd/system ]; then
 # NOTE the `|| true` on every step. This script runs under `set -e`, so an
 # unguarded failure here aborts package configuration and leaves dserv
 # half-installed -- a steep price for an OPTIONAL convenience on a host that may
 # have no interest in PTP at all. Failing to place a unit template must never
 # cost you the dataserver.
+    if [ -f /usr/local/dserv/systemd/dserv.service ] && \
+       [ ! -e /etc/systemd/system/dserv.service ]; then
+        install -m 0644 /usr/local/dserv/systemd/dserv.service \
+                        /etc/systemd/system/dserv.service || true
+    fi
     for u in /usr/local/dserv/systemd/dserv-ptp4l*@.service \
              /usr/local/dserv/systemd/dserv-phc2sys*@.service; do
         [ -f "$u" ] || continue

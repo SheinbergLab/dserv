@@ -1641,6 +1641,47 @@ EOF
     ok "Recorded identity: profile=${PROFILE}${STIM_MODE:+ (${STIM_MODE})} in /etc/dserv-agent/box.conf"
 }
 
+# Put a unit file where systemd can see it, for a service about to be enabled.
+#
+# The package owns this now -- dserv's postinst installs dserv.service the same
+# way stim2's installs its own -- so on a normal run this finds the unit already
+# there and returns. It exists for the run where the package never got a say:
+# the bootstrap SKIPS installing a component that is already at the target
+# version, so a box carrying a dserv from before that postinst change gets no
+# postinst and therefore no unit, and a re-run to repair it would skip the deb
+# and repair nothing. That is the exact shape of the failure this fixes.
+#
+# The symptom is worth recognizing: the whole start step collapses into
+# "dserv failed to enable/start" and then "dserv not running", for a unit
+# systemd has simply never been shown (dserv-dev, amd64/trixie, 2026-08-24).
+# Every message points at dserv; none of them says "no such unit".
+#
+# Sourced only from the dserv payload, and named only by the service. stim2's
+# postinst installs its own unit AND PICKS THE FLAVOR while doing it (x11 on
+# amd64, cage or weston on arm64, all landing as stim2.service), so copying
+# /usr/local/stim2/systemd/stim2.service by name would install the arm64 cage
+# unit onto an amd64 box -- a working service replaced by a plausible one.
+ensure_unit() {
+    local svc="$1"
+    local src="/usr/local/dserv/systemd/${svc}.service"
+    local dst="/etc/systemd/system/${svc}.service"
+
+    [[ -f "$src" ]] || return 0
+
+    # Known to systemd from anywhere -- /etc, /lib, a drop-in tree -- means
+    # there is already an answer and this script does not get a vote.
+    if systemctl cat "${svc}.service" &>/dev/null; then
+        if [[ -f "$dst" ]] && ! cmp -s "$src" "$dst"; then
+            warn "${dst} differs from the packaged ${src} (left alone; diff them if ${svc} misbehaves)"
+        fi
+        return 0
+    fi
+
+    run install -m 0644 "$src" "$dst"
+    run systemctl daemon-reload
+    ok "installed ${svc}.service from the dserv payload"
+}
+
 step_start_services() {
     info "Starting services..."
 
@@ -1664,6 +1705,7 @@ step_start_services() {
     # reboot away from coming up dark -- running, but only until it wasn't.
     local svc
     for svc in $(profile_services); do
+        ensure_unit "$svc"
         run systemctl enable --now "$svc" || warn "${svc} failed to enable/start"
     done
 
