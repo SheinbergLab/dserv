@@ -7069,6 +7069,13 @@ namespace eval ess {
     set subtypes [dict create FALL 0 RISE 1 PEAK 2 TROUGH 3]
     dict set evt_info STIMULUS_CHANGE [list 54 {Stimulus Change} float $subtypes]
 
+    # CAMERA: request (or related) markers for in-trial full-frame grabs.
+    # REQUEST stamps when ESS asks for grab_full; the JPEG's datapoint
+    # timestamp remains ring-buffer capture time. Trials extraction pairs
+    # REQUEST events to camera/full by FIFO and assigns by request-in-obs.
+    set subtypes [dict create REQUEST 0]
+    dict set evt_info CAMERA [list 55 {Camera} long $subtypes]
+
     dict set evt_info TARGNAME [list 128 {Target Name} string]
     dict set evt_info SCENENAME [list 129 {Scene Name} string]
     dict set evt_info SACCADE_INFO [list 130 {Saccade Data} float]
