@@ -294,6 +294,16 @@ proc set_rotation {deg} {
     settings::put camera rotation $deg -persist
 }
 
+# Capture cadence for camera/preview and the ring-buffer frames grab_full
+# re-encodes. Declared/ persisted as Hz; the camera module still thinks in
+# seconds (set_interval). Gear writes land here via -apply.
+proc apply_capture_hz {hz} {
+    if {![string is double -strict $hz] || $hz <= 0 || $hz > $::stream_fps} {
+        error "capture_hz: expected Hz in (0, $::stream_fps], got \"$hz\""
+    }
+    set_interval [expr {1.0 / double($hz)}]
+}
+
 # Live enable/disable: the gear flips this without a restart. Uses
 # cameraStatus rather than a shadow flag so a start that FAILED (no sensor)
 # reads as not-streaming and a later enable retries it.
@@ -335,12 +345,28 @@ settings::declare camera rotation -default 0 -values {0 90 180 270} -type int \
     -apply {::apply_rotation}
 
 settings::declare camera enabled -default 0 -type bool \
-    -doc "start the camera at boot and keep it streaming (~1 JPEG/s to
-camera/preview; watch at /camera.html). Off (the default) loads the
-subprocess but leaves the sensor untouched -- start/stop by hand
-still work. Flipping it in the gear starts or stops the camera
-immediately." \
+    -doc "start the camera at boot and keep it streaming (see rate_hz
+for the JPEG rate to camera/preview; watch at /camera.html). Off (the
+default) loads the subprocess but leaves the sensor untouched --
+start/stop by hand still work. Flipping it in the gear starts or stops
+the camera immediately." \
     -apply {::apply_enabled}
+
+# Named rate_hz (not capture_hz) so the gear lists it after enabled
+# (knobs sort alphabetically by key).
+settings::declare camera rate_hz -default 1 -values {1 2 5 10 20} -type double \
+    -doc "Snapshot rate in Hz for camera/preview and grab_full (latest
+ring-buffer frame). 1 = one JPEG per second; 10 = every 0.1 s. Quantized
+to whole frames at the 30 fps stream. Change takes effect live while
+streaming." \
+    -apply {::apply_capture_hz}
+
+# Declare does not fire -apply; sync the module interval from the effective
+# rate_hz before a possible boot-time start so the first stream uses it.
+if {[catch { apply_capture_hz [settings::get camera rate_hz] } _hz_err]} {
+    puts stderr "camera: rate_hz apply at declare: $_hz_err"
+}
+unset -nocomplain _hz_err
 
 # Boot-time start. `enabled` is new -- no legacy local/camera.tcl ever
 # auto-started -- so the value is used directly: only a declaration can make
