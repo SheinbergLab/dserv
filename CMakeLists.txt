@@ -769,19 +769,7 @@ else()
     # Revisit once the fleet actually carries the dserv-agent package: a hard
     # Depends is the better long-term expression, and is safe to add the moment
     # it can be satisfied everywhere.
-    # alsa-utils is DEPENDS, not Recommends, and the distinction is load-bearing
-    # here: the bootstrap installs component debs with `dpkg -i` followed by
-    # `apt-get install -f`, a path that satisfies Depends and NEVER pulls
-    # Recommends. A Recommends would therefore be absent on exactly the boxes
-    # that are provisioned rather than hand-installed -- the whole fleet.
-    #
-    # Two things need it, both of which fail SILENTLY without it: soundconf's
-    # unmute step is catch-wrapped around amixer, and ensure_shared_pcm probes
-    # supported formats by shelling out to `aplay --dump-hw-params` (there is no
-    # /proc source for that), so `sound shared` degrades to exclusive and stim2
-    # gets no audio. dserv-dev shipped with neither available and a muted card,
-    # which is a lot of invisible failure for one small package.
-    set(CPACK_DEBIAN_DSERV_PACKAGE_DEPENDS "libevdev2, libpq5, zlib1g, yajl-tools, fluidsynth, alsa-utils")
+    set(CPACK_DEBIAN_DSERV_PACKAGE_DEPENDS "libevdev2, libpq5, zlib1g, yajl-tools, fluidsynth")
     # chrony is RECOMMENDS and deliberately not DEPENDS. Every dserv host needs a
     # correct wall clock -- not for acquisition (timestamps ride CLOCK_MONOTONIC)
     # but because clock_epoch_offset_us() is captured ONCE at startup, so a host
@@ -798,7 +786,23 @@ else()
     # rearranging a host's time configuration is exactly the class of decision
     # dpkg/postinst refuses to make for PTP roles. Recommends is installed by
     # default and stays overridable with --no-install-recommends.
-    set(CPACK_DEBIAN_DSERV_PACKAGE_RECOMMENDS "dserv-agent, chrony")
+    # alsa-utils, same reasoning as chrony and for a sharper reason. Two things
+    # need it and BOTH fail silently without it: soundconf's unmute step is
+    # catch-wrapped around amixer, and ensure_shared_pcm probes a card's
+    # supported formats by shelling out to `aplay --dump-hw-params` (no /proc
+    # source for that exists), so `sound shared` degrades to exclusive and stim2
+    # loses audio. dserv-dev arrived with neither available and a muted card.
+    #
+    # It was briefly DEPENDS, on the grounds that the bootstrap installs debs
+    # with `dpkg -i` + `apt-get install -f` and that path never pulls Recommends
+    # -- true, but the wrong fix. An unsatisfiable Depends makes dpkg REFUSE the
+    # upgrade, which is precisely the hazard argued at length above the DEPENDS
+    # line: an air-gapped or mirror-less box would fail its dserv update over an
+    # optional convenience, and a stranded in-cage box is not improved by having
+    # a dependency message to explain itself. The bootstrap asks for alsa-utils
+    # explicitly instead (step_prerequisites), where failing to get it is a
+    # warning rather than a refused update.
+    set(CPACK_DEBIAN_DSERV_PACKAGE_RECOMMENDS "dserv-agent, chrony, alsa-utils")
 
     set(CPACK_DEBIAN_DSERV-AGENT_PACKAGE_NAME "dserv-agent")
     # The agent's three files used to belong to dserv. Without Replaces, dpkg

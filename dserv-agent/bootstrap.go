@@ -961,6 +961,25 @@ step_prerequisites() {
         apt-get update -qq >> "$LOG_FILE" 2>&1
         apt-get install -y -qq curl jq ca-certificates >> "$LOG_FILE" 2>&1
     fi
+
+    # alsa-utils, asked for here rather than declared as a dserv Depends.
+    #
+    # dserv only RECOMMENDS it, so that a box which cannot reach a mirror still
+    # takes its dserv upgrade instead of having it refused over an optional
+    # convenience. But this script installs component debs with dpkg -i plus
+    # apt-get install -f, and that path satisfies Depends while never pulling
+    # Recommends -- so on a provisioned box the Recommends alone would never
+    # arrive. Asking explicitly is what closes that gap, and failing to get it
+    # is a warning here rather than a refused update.
+    #
+    # Both consumers fail SILENTLY without it: soundconf unmutes the card
+    # through amixer inside a catch, and shared output probes formats with
+    # aplay --dump-hw-params. A box with a muted card and no amixer looks
+    # perfectly configured and plays to nobody.
+    if ! command -v amixer &>/dev/null; then
+        run apt-get install -y -qq -o DPkg::Lock::Timeout=300 alsa-utils \
+            || warn "alsa-utils not installed: a muted card cannot be unmuted, and shared audio output is unavailable"
+    fi
     ok "Prerequisites"
 }
 
