@@ -24,12 +24,15 @@
 #                      timebase, directly comparable with event timestamps.
 #   camera/frame_info  human-readable line per snapshot
 #   camera/status      continuous | stopped | error: ...
-#   camera/interval    actual seconds between snapshots (skip-rate quantized)
+#   camera/interval    actual seconds between snapshots (skip-rate
+#                      quantized), or "never" when snapshots are off
 #
 # Commands (send camera <cmd>):
 #  start ?camera_id?           - Start camera streaming
 #  stop                        - Stop camera streaming
-#  set_interval secs           - Seconds between snapshots (live, no restart)
+#  set_interval secs|never     - Seconds between snapshots (live, no
+#                                restart); never|off|0 disables snapshots
+#                                (grabs unaffected, grab_last starves)
 #  set_rotation deg            - Declare mounting rotation (persists to rig.tcl)
 #  grab_full ?req_id?          - Publish the NEXT sensor frame full-res to
 #                                camera/full (+ camera/full/meta completion).
@@ -84,24 +87,38 @@ set stream_fps 30.0
 set snapshot_interval 1.0
 
 # Compute the skip rate for the current interval, apply it, and publish the
-# actual (quantized) interval to camera/interval. Before the camera is
-# initialized the module call errors — the chosen interval still publishes
-# and start's own apply_interval picks it up. Any OTHER failure must
-# propagate: publishing an interval that did not apply is how a page ends
-# up trusting a rate the stream is not running at.
+# actual (quantized) interval to camera/interval ("never" when snapshots
+# are off). Before the camera is initialized the module call errors — the
+# chosen interval still publishes and start's own apply_interval picks it
+# up. Any OTHER failure must propagate: publishing an interval that did
+# not apply is how a page ends up trusting a rate the stream is not
+# running at.
 proc apply_interval {} {
-    set skip [expr {max(1, round($::stream_fps * $::snapshot_interval))}]
+    if {$::snapshot_interval eq "never"} {
+        set skip 0
+        set actual never
+    } else {
+        set skip [expr {max(1, round($::stream_fps * $::snapshot_interval))}]
+        set actual [format %.3g [expr {$skip / $::stream_fps}]]
+    }
     if {[catch {cameraSetFrameSkipRate $skip} err]} {
         if {![string match "*not initialized*" $err]} { error $err }
     }
-    set actual [expr {$skip / $::stream_fps}]
-    dservSet camera/interval [format %.3g $actual]
+    dservSet camera/interval $actual
     return $actual
 }
 
+# secs in (0, 3600], or never|off|0: the sensor keeps streaming (grab_full
+# still works, and costs nothing extra) but no frame is processed for
+# camera/preview or the ring buffer — so grab_last has nothing to serve
+# until snapshots are re-enabled.
 proc set_interval {secs} {
+    if {$secs in {never off 0}} {
+        set ::snapshot_interval never
+        return [apply_interval]
+    }
     if {![string is double -strict $secs] || $secs <= 0 || $secs > 3600} {
-        error "set_interval: expected seconds in (0, 3600], got \"$secs\""
+        error "set_interval: expected seconds in (0, 3600] or never, got \"$secs\""
     }
     set ::snapshot_interval $secs
     return [apply_interval]
@@ -329,12 +346,16 @@ proc set_rotation {deg} {
 # Preview/snapshot cadence declared in Hz (the module still thinks in
 # seconds via set_interval). This is a WATCHING knob: grab_full uses the
 # next-frame contract and is always fresh, so rate_hz never needs raising
-# for data collection.
+# for data collection. 0 turns snapshots off entirely (pure acquisition).
 proc apply_capture_hz {hz} {
-    if {![string is double -strict $hz] || $hz <= 0 || $hz > $::stream_fps} {
-        error "rate_hz: expected Hz in (0, $::stream_fps], got \"$hz\""
+    if {![string is double -strict $hz] || $hz < 0 || $hz > $::stream_fps} {
+        error "rate_hz: expected 0 (off) or Hz in (0, $::stream_fps], got \"$hz\""
     }
-    set_interval [expr {1.0 / double($hz)}]
+    if {$hz == 0} {
+        set_interval never
+    } else {
+        set_interval [expr {1.0 / double($hz)}]
+    }
 }
 
 # Live enable/disable: the gear flips this without a restart. Uses
@@ -388,11 +409,12 @@ the camera immediately." \
 # Named rate_hz (not capture_hz) so the gear lists it after enabled
 # (knobs sort alphabetically by key). Grabs do NOT depend on this: the
 # sensor free-runs at stream_fps and grab_full takes the next frame.
-settings::declare camera rate_hz -default 1 -values {0.2 0.5 1 2 5 10} \
+settings::declare camera rate_hz -default 1 -values {0 0.2 0.5 1 2 5 10} \
     -type double \
     -doc "camera/preview snapshot rate in Hz (quantized to whole frames
 at the ${stream_fps} fps stream; live while streaming). Watching
-cadence only -- grab_full captures the next sensor frame regardless." \
+cadence only -- grab_full captures the next sensor frame regardless.
+0 = no snapshots at all: pure acquisition for on-demand grabs." \
     -apply {::apply_capture_hz}
 
 # Declare does not fire -apply; sync the module interval from the

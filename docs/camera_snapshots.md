@@ -9,9 +9,15 @@ in `.ess` files, obs dgz files, and trials extraction.
 The sensor free-runs at `stream_fps` (30) whenever the camera is enabled.
 The preview cadence (`camera rate_hz`, default 1/s to `camera/preview`) is
 a *watching* knob only — grabs do not depend on it, so there is no reason
-to raise it for data collection. Idle cost at 30 fps is negligible: frames
-that are neither previewed nor grabbed are requeued untouched (no copies,
-no encode; buffer mappings are created once per configure).
+to raise it for data collection. `rate_hz 0` (or `set_interval never`)
+turns snapshots off entirely: pure acquisition for on-demand grabs, with
+`camera/interval` reporting `never` (`grab_last` starves in this mode —
+the ring buffer only fills from snapshot frames). Idle cost at 30 fps is
+negligible: frames that are neither previewed nor grabbed are requeued
+untouched (no copies, no encode; buffer mappings are created once per
+configure). Measured on a Pi 5: background acquisition ≈ 3.7% of one
+core (libcamera pipeline + IPA threads), +1% for the 1 Hz preview,
+~65 ms of one worker core per grab.
 
 A grab is a contract:
 

@@ -91,6 +91,7 @@
         <option value="10">10 s</option>
         <option value="30">30 s</option>
         <option value="60">60 s</option>
+        <option value="never">never</option>
       </select>
       <label for="rot" title="Mounting rotation; persists to local/rig.tcl">rot</label>
       <select id="rot">
@@ -169,9 +170,16 @@ function closeLightbox() { $('lightbox').classList.remove('open'); }
 function onInfo(d)   { $('info').textContent = d.value || ''; }
 
 function onInterval(d) {
+    const sel = $('rate');
+    if (d.value === 'never') {
+        /* snapshots off: sensor still streams, preview goes stale */
+        const custom = [...sel.options].find(o => o.dataset.custom !== undefined);
+        if (custom) custom.remove();
+        sel.value = 'never';
+        return;
+    }
     const s = parseFloat(d.value);
     if (!(s > 0)) return;
-    const sel = $('rate');
     /* snap to a stock option when within 5%; otherwise show the actual
        (skip-rate quantized) value as a temporary option */
     const stock = [...sel.options].find(o =>

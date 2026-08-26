@@ -1383,9 +1383,11 @@ public:
       }
     }
 
-    // Skip frames if configured and not yet settled
-    if (!ae_settled_ || (++frame_skip_counter_ < frame_skip_rate_)) {
-      if (frame_skip_counter_ >= frame_skip_rate_) {
+    // Skip frames if configured and not yet settled.  Rate 0 = never:
+    // nothing is processed for preview/ring (grabs were serviced above).
+    if (!ae_settled_ || frame_skip_rate_ == 0 ||
+	(++frame_skip_counter_ < frame_skip_rate_)) {
+      if (frame_skip_rate_ > 0 && frame_skip_counter_ >= frame_skip_rate_) {
 	frame_skip_counter_ = 0;
       }
     
@@ -2396,8 +2398,10 @@ public:
   }
 
   // Getters and setters
+  // 0 is the "never" sentinel: no frame is processed for preview/ring
+  // (the streaming callback requeues untouched); grabs are unaffected.
   void set_frame_skip_rate(int rate) {
-    frame_skip_rate_ = std::max(1, rate);
+    frame_skip_rate_ = std::max(0, rate);
   }
 
   void set_settling_frames(int frames) { 
@@ -3534,9 +3538,11 @@ extern "C" {
     if (Tcl_GetIntFromObj(interp, objv[1], &rate) != TCL_OK)
       return TCL_ERROR;
     
-    // Upper bound is generous on purpose: at 30fps, 1800 = one frame/minute.
-    if (rate < 1 || rate > 10000) {
-      Tcl_AppendResult(interp, "Invalid skip rate (1-10000)", NULL);
+    // 0 = never (no preview/ring processing; grabs unaffected).  The upper
+    // bound only catches unit mistakes -- 1000000 = one frame per 9.2h at
+    // 30fps, comfortably past set_interval's 3600s ceiling.
+    if (rate < 0 || rate > 1000000) {
+      Tcl_AppendResult(interp, "Invalid skip rate (0=never, 1-1000000)", NULL);
       return TCL_ERROR;
     }
     
