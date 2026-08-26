@@ -2848,6 +2848,81 @@ namespace eval ess {
     }
 
     ########################################################################
+    # CAMERA GRAB CONTRACT
+    #
+    # An action requests a full-resolution snapshot; a transition decides
+    # when the contract has resolved (transitions decide, actions do):
+    #
+    #     $sys add_action  snap { ::ess::camera_grab; timerTick 500 }
+    #     $sys add_transition snap {
+    #         if { [::ess::camera_grab_done] } { return next_state }
+    #         if { [timerExpired] } { return next_state }   ;# camera AWOL
+    #     }
+    #
+    # camera_grab stamps CAMERA REQUEST (param = request id) and asks the
+    # camera subprocess for the NEXT sensor frame (cameraconf grab_full):
+    # the sensor free-runs, so the image postdates the request by at most
+    # one frame period, at any preview cadence. The camera publishes the
+    # JPEG private to camera/full -- timestamped with the SENSOR capture
+    # time on dserv's timebase -- and announces the outcome on the public
+    # camera/full/meta, which resolves the contract here (CAMERA DONE or
+    # CAMERA FAIL, param = request id, then do_update). file_open logs
+    # both points, so offline extraction pairs each REQUEST with the first
+    # frame captured at or after it; DONE/FAIL make dropped grabs visible.
+    #
+    # The timer backstop matters: if the camera subprocess is absent or
+    # wedged, no meta ever arrives, and the trial must not hang on it.
+
+    variable camera_grab_seq  0    ;# last request id issued
+    variable camera_grab_last 0    ;# last request id resolved (any outcome)
+    variable camera_grab_status {} ;# camera/full/meta JSON of that resolution
+
+    proc camera_grab {} {
+        variable camera_grab_seq
+        set req [incr camera_grab_seq]
+
+        # Self-healing binding, the begin_obs idiom: system loads wipe the
+        # match table (ess::init -> dservRemoveAllMatches), so re-assert on
+        # every grab rather than trusting an earlier registration.
+        dservAddExactMatch camera/full/meta
+        dpointSetScript camera/full/meta ::ess::camera_grab_complete
+
+        ::ess::evt_put CAMERA REQUEST [now] $req
+        sendNoReply camera [list grab_full $req]
+        return $req
+    }
+
+    # dpoint callback for camera/full/meta
+    proc camera_grab_complete { dpoint data } {
+        variable camera_grab_last
+        variable camera_grab_status
+        set req -1
+        set ok 0
+        regexp {"req_id":(-?\d+)} $data -> req
+        regexp {"ok":([01])} $data -> ok
+        set camera_grab_status $data
+        if { $req > $camera_grab_last } { set camera_grab_last $req }
+        if { $ok } {
+            ::ess::evt_put CAMERA DONE [now] $req
+        } else {
+            ::ess::evt_put CAMERA FAIL [now] $req
+        }
+        ::ess::do_update
+    }
+
+    # Transition-side predicates
+    proc camera_grab_done {} {
+        variable camera_grab_seq
+        variable camera_grab_last
+        return [expr { $camera_grab_last >= $camera_grab_seq }]
+    }
+
+    proc camera_grab_ok {} {
+        variable camera_grab_status
+        return [regexp {"ok":1} $camera_grab_status]
+    }
+
+    ########################################################################
     # WHICH EXTIO ANALOG STREAMS THIS SYSTEM RECORDS
     #
     # Declared as an ordinary param, so it layers system -> protocol -> variant
@@ -3060,6 +3135,15 @@ namespace eval ess {
         # they are called, and what was available but deliberately declined.
         dservSet ess/ain/recorded $ain
         dservLoggerAddMatch $filename ess/ain/recorded
+
+        # Camera grabs (::ess::camera_grab). NOT obs_limited: the frame is
+        # encoded off-thread and can be published just after ENDOBS; an
+        # obs-limited match would silently drop exactly those frames.
+        # Extraction assigns frames to obs by pairing CAMERA REQUEST events
+        # with capture timestamps, not by log position. Matching a point
+        # nothing publishes costs nothing, so no camera-presence gate.
+        dservLoggerAddMatch $filename camera/full
+        dservLoggerAddMatch $filename camera/full/meta
 
         # call the system's specific file_open callback
         #  to add matches
@@ -7068,6 +7152,15 @@ namespace eval ess {
     # across a transition.
     set subtypes [dict create FALL 0 RISE 1 PEAK 2 TROUGH 3]
     dict set evt_info STIMULUS_CHANGE [list 54 {Stimulus Change} float $subtypes]
+
+    # CAMERA: in-trial full-frame grab markers (::ess::camera_grab). The
+    # long param is the request id. REQUEST stamps when ESS asked for the
+    # grab; DONE/FAIL stamp when camera/full/meta resolved it. The frame
+    # itself is the camera/full datapoint, whose timestamp is the sensor
+    # capture time -- extraction pairs each REQUEST with the first frame
+    # captured at or after it.
+    set subtypes [dict create REQUEST 0 DONE 1 FAIL 2]
+    dict set evt_info CAMERA [list 55 {Camera} long $subtypes]
 
     dict set evt_info TARGNAME [list 128 {Target Name} string]
     dict set evt_info SCENENAME [list 129 {Scene Name} string]
