@@ -164,6 +164,15 @@
   .status-bar{display:flex;align-items:center;gap:16px;padding:4px 20px;background:var(--bg1);border-top:1px solid var(--bdr);flex-shrink:0;}
   .status-bar span{font-family:var(--mono);font-size:10px;color:var(--t3);}
   .status-bar .plugin-status{margin-left:auto;color:var(--acc);}
+
+  /* Image-bearing cells (camera snapshots etc.) */
+  .dg-img{max-width:260px;max-height:200px;display:block;border-radius:4px;border:1px solid var(--bdr);cursor:zoom-in;}
+  .dg-imgwrap{margin:4px 0;}
+  .dg-imgcap{font-family:var(--mono);font-size:10px;color:var(--t3);margin-top:2px;}
+  .dg-imgchip{display:inline-block;font-family:var(--mono);font-size:10px;color:var(--acc);border:1px solid var(--bdr);border-radius:3px;padding:1px 6px;margin-right:4px;cursor:zoom-in;white-space:nowrap;}
+  #dgLightbox{display:none;position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:1000;align-items:center;justify-content:center;cursor:zoom-out;}
+  #dgLightbox.visible{display:flex;}
+  #dgLightbox img{max-width:92vw;max-height:92vh;border-radius:4px;}
 </style>
 </head>
 <body>
@@ -284,6 +293,127 @@
 
 <script src="js/dg_reader.js"></script>
 <script>
+// ═══════════════════════════════════════════════════════════════
+// Image-bearing cells (camera snapshots etc.)
+//
+// Purely FORMAT-driven, no schema knowledge: any DF_CHAR vector whose
+// bytes carry an image signature (JPEG/PNG/PPM) renders as a thumbnail
+// or chip instead of a byte dump — <blob>camera/full in an obs dg, a
+// cam_jpeg trials column, anything. PPM (cameraPublishPpm*) is decoded
+// to a canvas since browsers can't display it natively.
+// ═══════════════════════════════════════════════════════════════
+const ImageCells = {
+  _urls: new WeakMap(),
+
+  isCharVec(sub) {
+    return sub && sub.dataType === DF_CHAR && sub.data && sub.n >= 12;
+  },
+  // list-of-images cell (e.g. per-trial frame list)?
+  isImageList(sub) {
+    return sub && sub.dataType === DF_LIST && Array.isArray(sub.data) &&
+           sub.data.length > 0 && sub.data.some(c => this.sniff(c));
+  },
+  sniff(sub) {
+    if (!this.isCharVec(sub)) return null;
+    const d = sub.data;
+    const b = (i) => d[i] & 0xff;
+    if (b(0) === 0xFF && b(1) === 0xD8 && b(2) === 0xFF) return 'jpeg';
+    if (b(0) === 0x89 && b(1) === 0x50 && b(2) === 0x4E && b(3) === 0x47) return 'png';
+    if (b(0) === 0x50 && b(1) === 0x36 &&
+        (b(2) === 0x0A || b(2) === 0x20 || b(2) === 0x0D || b(2) === 0x09)) return 'ppm';
+    return null;
+  },
+  toU8(sub) {
+    const d = sub.data;
+    if (d instanceof Int8Array) {
+      return new Uint8Array(d.buffer, d.byteOffset, d.length);
+    }
+    const u = new Uint8Array(sub.n);
+    for (let i = 0; i < sub.n; i++) u[i] = d[i] & 0xff;
+    return u;
+  },
+  label(sub) {
+    const fmt = this.sniff(sub);
+    if (!fmt) return null;
+    const kb = sub.n / 1024;
+    return `📷 ${fmt} ${kb >= 100 ? kb.toFixed(0) : kb.toFixed(1)} KB`;
+  },
+  url(sub) {
+    if (this._urls.has(sub)) return this._urls.get(sub);
+    const fmt = this.sniff(sub);
+    let url = null;
+    if (fmt === 'jpeg' || fmt === 'png') {
+      url = URL.createObjectURL(new Blob([this.toU8(sub)],
+                                         { type: 'image/' + fmt }));
+    } else if (fmt === 'ppm') {
+      url = this._ppmToDataURL(this.toU8(sub));
+    }
+    this._urls.set(sub, url);
+    return url;
+  },
+  _ppmToDataURL(u8) {
+    // P6 <w> <h> <max>\n then binary RGB (comments allowed in header)
+    let p = 2;
+    const tok = () => {
+      while (p < u8.length) {
+        if (u8[p] === 0x23) { while (p < u8.length && u8[p] !== 0x0A) p++; }
+        else if (u8[p] === 0x20 || u8[p] === 0x0A || u8[p] === 0x0D || u8[p] === 0x09) p++;
+        else break;
+      }
+      let s = '';
+      while (p < u8.length && u8[p] > 0x20) s += String.fromCharCode(u8[p++]);
+      return parseInt(s, 10);
+    };
+    const w = tok(), h = tok(), mx = tok();
+    p++;  // single whitespace after maxval
+    if (!(w > 0 && h > 0 && mx > 0) || u8.length < p + w * h * 3) return null;
+    const cv = document.createElement('canvas');
+    cv.width = w; cv.height = h;
+    const ctx = cv.getContext('2d');
+    const img = ctx.createImageData(w, h);
+    const scale = mx === 255 ? 1 : 255 / mx;
+    for (let i = 0, o = 0; i < w * h; i++) {
+      img.data[o++] = u8[p++] * scale;
+      img.data[o++] = u8[p++] * scale;
+      img.data[o++] = u8[p++] * scale;
+      img.data[o++] = 255;
+    }
+    ctx.putImageData(img, 0, 0);
+    return cv.toDataURL('image/png');
+  },
+  imgEl(sub, cls) {
+    const url = this.url(sub);
+    if (!url) return null;
+    const img = document.createElement('img');
+    img.src = url;
+    img.className = cls || 'dg-img';
+    img.title = this.label(sub) + ' — click to enlarge';
+    img.addEventListener('click', (e) => { e.stopPropagation(); this.show(url); });
+    return img;
+  },
+  chipEl(sub) {
+    const url = this.url(sub);
+    const chip = document.createElement('span');
+    chip.className = 'dg-imgchip';
+    chip.textContent = this.label(sub);
+    if (url) chip.addEventListener('click',
+        (e) => { e.stopPropagation(); this.show(url); });
+    return chip;
+  },
+  show(url) {
+    let lb = document.getElementById('dgLightbox');
+    if (!lb) {
+      lb = document.createElement('div');
+      lb.id = 'dgLightbox';
+      lb.addEventListener('click', () => lb.classList.remove('visible'));
+      lb.appendChild(document.createElement('img'));
+      document.body.appendChild(lb);
+    }
+    lb.querySelector('img').src = url;
+    lb.classList.add('visible');
+  },
+};
+
 // ═══════════════════════════════════════════════════════════════
 // DG Viewer — Core Application
 // ═══════════════════════════════════════════════════════════════
@@ -455,7 +585,10 @@ const App = {
     for (let c = 0; c < dg.nlists; c++) {
       const th = document.createElement('th');
       const list = dg.lists[c];
-      th.innerHTML = `${list.name}<span class="col-type">${list.typeName}</span>`;
+      // list.name may carry <ds>/<blob>-style prefixes: escape them or the
+      // browser eats them as unknown tags and columns become ambiguous
+      const safeName = list.name.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      th.innerHTML = `${safeName}<span class="col-type">${list.typeName}</span>`;
       th.dataset.col = c;
       th.addEventListener('click', () => this.sortTable(c));
       tr.appendChild(th);
@@ -494,6 +627,18 @@ const App = {
         const td = document.createElement('td');
         const val = formatCellValue(list, rowIdx);
         td.textContent = val;
+
+        // Image-bearing cells get a legible badge instead of [char × N]
+        if (list.dataType === DF_LIST && Array.isArray(list.data) &&
+            rowIdx < list.data.length) {
+          const sub = list.data[rowIdx];
+          if (ImageCells.sniff(sub)) {
+            td.textContent = ImageCells.label(sub);
+          } else if (ImageCells.isImageList(sub)) {
+            const n = sub.data.filter(c => ImageCells.sniff(c)).length;
+            td.textContent = `📷 ${n} image${n === 1 ? '' : 's'}`;
+          }
+        }
 
         // Style by type
         if (list.dataType === DF_LIST) {
@@ -605,7 +750,10 @@ const App = {
 
       if (list.dataType === DF_LIST && Array.isArray(list.data) && rowIdx < list.data.length) {
         const sub = list.data[rowIdx];
-        val.textContent = `[${sub.typeName} \u00D7 ${sub.n}]`;
+        const isImg = ImageCells.sniff(sub) !== null;
+        const isImgList = !isImg && ImageCells.isImageList(sub);
+        val.textContent = isImg ? ImageCells.label(sub)
+                                : `[${sub.typeName} \u00D7 ${sub.n}]`;
         val.classList.add('expandable');
         val.addEventListener('click', () => {
           // Toggle expansion
@@ -616,20 +764,39 @@ const App = {
           }
           const exp = document.createElement('div');
           exp.className = 'sublist-expansion';
-          const data = sub.data;
-          const limit = Math.min(sub.n, 100);
-          const lines = [];
-          for (let i = 0; i < limit; i++) {
-            const v = Array.isArray(data) ? data[i] : data[i];
-            if (typeof v === 'number') {
-              lines.push(`[${i}] ${Number.isInteger(v) ? v : Number(v).toFixed(4)}`);
-            } else {
-              lines.push(`[${i}] ${v}`);
+          if (isImg) {
+            exp.appendChild(ImageCells.imgEl(sub));
+          } else if (isImgList) {
+            sub.data.forEach((c, i) => {
+              const wrap = document.createElement('div');
+              wrap.className = 'dg-imgwrap';
+              if (ImageCells.sniff(c)) {
+                wrap.appendChild(ImageCells.imgEl(c));
+                const cap = document.createElement('div');
+                cap.className = 'dg-imgcap';
+                cap.textContent = `[${i}] ${ImageCells.label(c)}`;
+                wrap.appendChild(cap);
+              } else {
+                wrap.textContent = `[${i}] (${c.n === 0 ? 'no image' : c.typeName + ' \u00D7 ' + c.n})`;
+              }
+              exp.appendChild(wrap);
+            });
+          } else {
+            const data = sub.data;
+            const limit = Math.min(sub.n, 100);
+            const lines = [];
+            for (let i = 0; i < limit; i++) {
+              const v = Array.isArray(data) ? data[i] : data[i];
+              if (typeof v === 'number') {
+                lines.push(`[${i}] ${Number.isInteger(v) ? v : Number(v).toFixed(4)}`);
+              } else {
+                lines.push(`[${i}] ${v}`);
+              }
             }
+            if (sub.n > limit) lines.push(`... (${sub.n - limit} more)`);
+            exp.textContent = lines.join('\n');
+            exp.style.whiteSpace = 'pre';
           }
-          if (sub.n > limit) lines.push(`... (${sub.n - limit} more)`);
-          exp.textContent = lines.join('\n');
-          exp.style.whiteSpace = 'pre';
           row.after(exp);
         });
       } else {
@@ -1056,6 +1223,23 @@ const App = {
     grid.innerHTML = '';
     const tn = DF_TYPE_NAMES;
     for (const [nm, val] of Object.entries(this.td.row)) {
+      // image-bearing values render as clickable chips
+      if (val && val.data !== undefined) {
+        const sub = { dataType: val.type, n: val.n, data: val.data };
+        const imgs = ImageCells.sniff(sub) ? [sub]
+                   : ImageCells.isImageList(sub)
+                     ? sub.data.filter(c => ImageCells.sniff(c)) : null;
+        if (imgs && imgs.length) {
+          const r = document.createElement('div'); r.className = 'dr';
+          const k = document.createElement('span');
+          k.className = 'k'; k.textContent = nm;
+          const v = document.createElement('span'); v.className = 'v';
+          imgs.forEach(c => v.appendChild(ImageCells.chipEl(c)));
+          r.appendChild(k); r.appendChild(v);
+          grid.appendChild(r);
+          continue;
+        }
+      }
       let d = '';
       if (val === null || val === undefined) d = '(null)';
       else if (typeof val === 'string') d = val;
@@ -1070,7 +1254,9 @@ const App = {
         } else d = `${t}[${val.n}]`;
       } else d = String(Number(val));
       const r = document.createElement('div'); r.className = 'dr';
-      r.innerHTML = `<span class="k">${nm}</span><span class="v">${d}</span>`;
+      const safeNm = nm.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      const safeD = String(d).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      r.innerHTML = `<span class="k">${safeNm}</span><span class="v">${safeD}</span>`;
       grid.appendChild(r);
     }
   },
