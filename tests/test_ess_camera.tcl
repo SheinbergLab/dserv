@@ -91,6 +91,18 @@ set ::log {}
     {{"req_id":0,"frame_id":50,"timestamp_us":1700000001000000,"ok":1}}
 check "manual meta leaves state resolved" {[::ess::camera_grab_done]}
 
+# ---- no camera subprocess: the send throws, the contract still resolves ----
+set ::log {}
+rename sendNoReply sendNoReply.real
+proc sendNoReply {who script} { error "server $who not found" }
+set req [::ess::camera_grab]
+check "no-camera request id is 3"    {$req == 3}
+check "no-camera contract resolved"  {[::ess::camera_grab_done]}
+check "no-camera resolution not ok"  {![::ess::camera_grab_ok]}
+check "no-camera FAIL stamped"       {[list evt CAMERA FAIL 3] in $::log}
+rename sendNoReply {}
+rename sendNoReply.real sendNoReply
+
 # ---- evt_info carries the CAMERA type ----
 set tstart [string first "dict set evt_info CAMERA" $src]
 check "CAMERA in evt_info" {$tstart > 0}

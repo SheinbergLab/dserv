@@ -38,7 +38,34 @@ A grab is a contract:
 4. **Resolve** — ESS's `camera/full/meta` callback stamps `CAMERA DONE`
    (or `FAIL`) with the request id and wakes the state machine.
 
-State-system pattern (transitions decide, actions do):
+### What a state system adds
+
+**Fire-and-forget (the usual case)** — one line in an existing action.
+The contract resolves ~100 ms later on its own; the frame and its
+REQUEST/DONE events land in the datafile with no transition changes.
+In `match_to_sample`, for example, an opt-in param plus one line in
+`sample_on` snaps every sample onset:
+
+```tcl
+$sys add_param snap_on_sample 0 variable int
+...
+$sys add_action sample_on {
+    my sample_on
+    ::ess::evt_put STIMTYPE STIMID [now] $stimtype
+    ::ess::evt_put SAMPLE ON [now]
+    if { $snap_on_sample } { ::ess::camera_grab }
+    timerTick $sample_time
+}
+```
+
+Fire-and-forget is safe anywhere the state dwells longer than ~100 ms
+(a grab requested right before ENDOBS still works — extraction pairs by
+request time, not log position). `camera_grab` also self-resolves as
+FAILed if the rig has no camera subprocess, so enabling the param on a
+camera-less rig costs nothing.
+
+**Wait-for-contract** — only when the system must *know* the frame was
+captured before proceeding (transitions decide, actions do):
 
 ```tcl
 $sys add_action  snap { ::ess::camera_grab; timerTick 500 }
@@ -48,9 +75,9 @@ $sys add_transition snap {
 }
 ```
 
-The timer backstop matters: if the camera subprocess is absent or wedged,
-no meta ever arrives and the trial must not hang on it. `camera_grab_ok`
-tells the two resolutions apart when a state cares.
+The timer backstop matters: if the camera subprocess is wedged, no meta
+ever arrives and the trial must not hang on it. `camera_grab_ok` tells
+the two resolutions apart when a state cares.
 
 `grab_last` keeps the old ring-buffer behavior (instant, but up to one
 preview interval stale, no completion meta) for interactive use.
@@ -81,17 +108,33 @@ capture timestamp — plus the REQUEST events — can.
 
 ## Extraction (`df::File`)
 
+### What an extract script adds
+
+The whole block — drop it into any system's `extract_trials`, after
+`valid_indices` is computed:
+
 ```tcl
-set f [df::File new $filepath]
+if {[$f has_event_type CAMERA] &&
+    [$f has_event_occurrences CAMERA REQUEST]} {
+    lassign [$f camera_frames_in_obs] cam_req cam_cap cam_jpg
+    dl_set $trials:cam_request_t [dl_choose $cam_req $valid_indices]
+    dl_set $trials:cam_capture_t [dl_choose $cam_cap $valid_indices]
+    dl_set $trials:cam_jpeg      [dl_choose $cam_jpg $valid_indices]
+}
+```
 
-# camera frames grouped per obs by REQUEST pairing
-lassign [$f camera_frames_in_obs] req_t cap_t jpegs
-#   req_t: n_obs × requests, ms from obs onset
-#   cap_t: paired capture ms (-1 if the grab never resolved)
-#   jpegs: n_obs × frames of DF_CHAR bytes (empty when unresolved)
-# pairing consumes a frame only for requests with CAMERA DONE evidence,
-# so failed grabs never claim a stray (e.g. manual) frame.
+Per trial that yields: request/capture times (ms from obs onset;
+capture `-1` where a grab never resolved) and a list of JPEG byte
+vectors (empty where unresolved). The double guard keeps old files
+quiet and skips files where no grab was ever requested. Pairing
+consumes a frame only for requests with CAMERA DONE evidence, so a
+failed grab never claims a stray (e.g. manual) frame — and it works for
+frames logged after ENDOBS, since assignment is by request time, not
+log position.
 
+### Other streams
+
+```tcl
 # any recorded stream, with per-record times/counts
 lassign [$f ds_in_obs em/pupil] vals times counts
 
@@ -100,9 +143,6 @@ lassign [$f ain_samples_in_obs extio/box02/state/ain/eye] t v
 # t: n_obs × scans, float ms from obs onset (block t0 + k*interval_us)
 # v: n_obs × channels of DF_SHORT samples
 ```
-
-Attach to trials with the usual `dl_choose ... $valid_indices`, e.g.
-`dl_set $trials:snap_jpeg [dl_choose $jpegs $valid_indices]`.
 
 ## Python
 

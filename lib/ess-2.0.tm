@@ -2888,7 +2888,17 @@ namespace eval ess {
         dpointSetScript camera/full/meta ::ess::camera_grab_complete
 
         ::ess::evt_put CAMERA REQUEST [now] $req
-        sendNoReply camera [list grab_full $req]
+        if { [catch { sendNoReply camera [list grab_full $req] } err] } {
+            # No camera subprocess on this rig (e.g. snap_on_sample turned
+            # on without one): resolve the contract as FAILed right here
+            # instead of erroring out of the calling action mid-trial.
+            variable camera_grab_last
+            variable camera_grab_status
+            set camera_grab_status \
+                "{\"req_id\":$req,\"ok\":0,\"error\":\"no camera subprocess\"}"
+            if { $req > $camera_grab_last } { set camera_grab_last $req }
+            ::ess::evt_put CAMERA FAIL [now] $req
+        }
         return $req
     }
 
