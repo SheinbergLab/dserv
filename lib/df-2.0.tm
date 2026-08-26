@@ -84,24 +84,37 @@ namespace eval df {
     #
     proc extract_column_info {g} {
         set all_columns [dg_tclListnames $g]
-        
+
         set stimdg_cols [list]
         set ds_cols [list]
+        set dst_cols [list]
+        set dsn_cols [list]
+        set blob_cols [list]
+        set session_cols [list]
         set event_cols [list]
         set other_cols [list]
-        
+
         foreach col $all_columns {
             if {[string match "<stimdg>*" $col]} {
                 lappend stimdg_cols $col
             } elseif {[string match "<ds>*" $col]} {
                 lappend ds_cols $col
+            } elseif {[string match "<dst>*" $col]} {
+                lappend dst_cols $col
+            } elseif {[string match "<dsn>*" $col]} {
+                lappend dsn_cols $col
+            } elseif {[string match "<blob>*" $col] ||
+                      [string match "<blobt>*" $col]} {
+                lappend blob_cols $col
+            } elseif {[string match "<session>*" $col]} {
+                lappend session_cols $col
             } elseif {[string match "e_*" $col]} {
                 lappend event_cols $col
             } else {
                 lappend other_cols $col
             }
         }
-        
+
         # Detailed info per column
         set col_info [dict create]
         foreach col $all_columns {
@@ -110,11 +123,15 @@ namespace eval df {
                 depth [dl_depth $g:$col] \
                 length [dl_length $g:$col]]
         }
-        
+
         return [dict create \
             columns $all_columns \
             stimdg_columns $stimdg_cols \
             ds_columns $ds_cols \
+            ds_time_columns $dst_cols \
+            ds_count_columns $dsn_cols \
+            blob_columns $blob_cols \
+            session_columns $session_cols \
             event_columns $event_cols \
             other_columns $other_cols \
             column_info $col_info]
@@ -853,11 +870,229 @@ namespace eval df {
             }
             dict get $meta $key
         }
-        
+
         method group {} {
             return $g
         }
-        
+
+        #
+        # Datapoint streams per obs (readESS emits three parallel columns
+        # per recorded stream):
+        #   <ds>NAME   values, concatenated across the obs's records
+        #   <dst>NAME  per-record times, ms from obs onset (e_times' axis)
+        #   <dsn>NAME  per-record value counts (split <ds> back into records)
+        # Returns the three column names {values times counts}; each is a
+        # nested list of length n_obs.
+        #
+        method ds_in_obs {varname} {
+            set vcol "<ds>$varname"
+            if {![dl_exists $g:$vcol]} {
+                error "no $vcol column in [file tail $filepath] -- stream not recorded"
+            }
+            if {![dl_exists $g:<dst>$varname]} {
+                error "no <dst>$varname column -- file was read with a\
+                       pre-timestamp readESS (rebuild dlsh)"
+            }
+            return [list $g:$vcol "$g:<dst>$varname" "$g:<dsn>$varname"]
+        }
+
+        #
+        # Camera frames grouped per obs by REQUEST pairing.
+        #
+        # readESS stores frames at FILE level (<blob>NAME byte vectors +
+        # <blobt>NAME capture times, ms from the file's first record)
+        # because a frame requested late in an obs is encoded async and
+        # can be logged after ENDOBS. Grouping into obs therefore pairs
+        # each per-obs CAMERA REQUEST event with the first unconsumed
+        # frame captured at or after it -- an invariant the camera module
+        # guarantees (it services a grab only with a frame whose exposure
+        # started at/after the request).
+        #
+        # Returns three nested dynlists of length n_obs (persistent in
+        # this object's scratch dg):
+        #   request_t - ms from obs onset of each CAMERA REQUEST
+        #   capture_t - ms from obs onset of the paired frame's sensor
+        #               capture (-1 if no frame resolved the request)
+        #   jpeg      - DF_CHAR byte vectors (empty if unresolved).
+        #               Recover bytes: numpy arr.astype('uint8').tobytes()
+        #
+        # Request ids of CAMERA <subtype> events, from BOTH the per-obs
+        # event stream and e_pre (a grab's DONE/FAIL is stamped when its
+        # meta arrives, which can be after ENDOBS -- between obs).
+        method CameraEvtIds {subtype_name} {
+            set ids {}
+            dl_local mask [my select_evt CAMERA $subtype_name]
+            if {$mask ne ""} {
+                foreach obs_params [dl_tcllist [dl_select $g:e_params $mask]] {
+                    foreach p $obs_params { lappend ids [lindex $p 0] }
+                }
+            }
+            lassign [my evt CAMERA $subtype_name] t s
+            if {$t ne ""} {
+                dl_local pre_mask [dl_and [dl_eq $predg:types $t] \
+                                       [dl_eq $predg:subtypes $s]]
+                foreach p [dl_tcllist [dl_select $predg:data $pre_mask]] {
+                    lappend ids [lindex $p 0]
+                }
+            }
+            return $ids
+        }
+
+        method camera_frames_in_obs {{varname camera/full}} {
+            set n_obs [dict get $meta n_obs]
+
+            dl_local req_out [dl_llist]
+            dl_local cap_out [dl_llist]
+            dl_local jpg_out [dl_llist]
+
+            set bcol "<blob>$varname"
+            set tcol "<blobt>$varname"
+            set have_frames [dl_exists $g:$bcol]
+
+            # per-obs request times and ids; "" if CAMERA never logged
+            set req_lists {}
+            set req_id_lists {}
+            dl_local req_mask [my select_evt CAMERA REQUEST]
+            if {$req_mask ne ""} {
+                set req_lists [dl_tcllist [dl_select $g:e_times $req_mask]]
+                set req_id_lists [dl_tcllist [dl_select $g:e_params $req_mask]]
+            }
+
+            # The contract's resolution events are the pairing evidence:
+            # only a request with CAMERA DONE consumes a frame. A FAILed
+            # or never-resolved request stays empty rather than claiming
+            # some later stray frame (e.g. a manual grab).
+            set done_ids [my CameraEvtIds DONE]
+            set fail_ids [my CameraEvtIds FAIL]
+
+            set frame_times {}
+            set obs_starts {}
+            if {$have_frames} {
+                set frame_times [dl_tcllist $g:$tcol]
+                if {![dl_exists $g:obs_start_ms]} {
+                    error "no obs_start_ms column -- file was read with a\
+                           pre-timestamp readESS (rebuild dlsh)"
+                }
+                set obs_starts [dl_tcllist $g:obs_start_ms]
+            }
+            set n_frames [llength $frame_times]
+            set k 0
+
+            for {set o 0} {$o < $n_obs} {incr o} {
+                dl_local rts [dl_ilist]
+                dl_local cts [dl_ilist]
+                dl_local jps [dl_llist]
+                set ostart [lindex $obs_starts $o]
+                foreach r [lindex $req_lists $o] \
+                    rp [lindex $req_id_lists $o] {
+                    set req_id [lindex $rp 0]
+                    dl_append $rts $r
+                    set found 0
+                    if {$have_frames && $req_id in $done_ids &&
+                        $req_id ni $fail_ids} {
+                        set abs_r [expr {$ostart + $r}]
+                        while {$k < $n_frames &&
+                               [lindex $frame_times $k] < $abs_r} {
+                            incr k    ;# unclaimed frame (e.g. manual grab)
+                        }
+                        if {$k < $n_frames} {
+                            dl_append $cts \
+                                [expr {[lindex $frame_times $k] - $ostart}]
+                            dl_append $jps [dl_get $g:$bcol $k]
+                            incr k
+                            set found 1
+                        }
+                    }
+                    if {!$found} {
+                        dl_append $cts -1
+                        dl_append $jps [dl_clist]
+                    }
+                }
+                dl_append $req_out $rts
+                dl_append $cap_out $cts
+                dl_append $jpg_out $jps
+            }
+
+            dl_set $predg:camera_req_t $req_out
+            dl_set $predg:camera_cap_t $cap_out
+            dl_set $predg:camera_jpeg $jpg_out
+            return [list $predg:camera_req_t $predg:camera_cap_t \
+                        $predg:camera_jpeg]
+        }
+
+        #
+        # Decode a recorded extio analog stream (record_streams) per obs.
+        #
+        # varname is the block datapoint, e.g. extio/box02/state/ain/eye
+        # (see ess/ain/recorded in the file for what was recorded). Each
+        # record is a self-describing block: 12-byte header + scan-major
+        # int16 samples (lib/extio-1.0.tm is the canonical decoder).
+        # Sample k of a block is at block_time + k*interval_us.
+        #
+        # Returns two nested dynlists of length n_obs (persistent):
+        #   times - float ms from obs onset, one per scan
+        #   vals  - per obs: one DF_SHORT list per channel
+        #
+        method ain_samples_in_obs {varname} {
+            if {[catch {package require extio} err]} {
+                error "ain_samples_in_obs needs lib/extio-1.0.tm on the\
+                       module path: $err"
+            }
+            lassign [my ds_in_obs $varname] vcol tcol ncol
+            set n_obs [dict get $meta n_obs]
+
+            dl_local t_out [dl_llist]
+            dl_local v_out [dl_llist]
+
+            for {set o 0} {$o < $n_obs} {incr o} {
+                dl_local obs_bytes [dl_unpack [dl_choose $vcol [dl_ilist $o]]]
+                set nbytes [dl_toString $obs_bytes bytes]
+                set times  [dl_tcllist [dl_unpack [dl_choose $tcol [dl_ilist $o]]]]
+                set counts [dl_tcllist [dl_unpack [dl_choose $ncol [dl_ilist $o]]]]
+
+                set pos 0
+                set sample_t {}
+                set nchan 0
+                array unset ch
+                foreach t $times n $counts {
+                    set block [string range $bytes $pos [expr {$pos + $n - 1}]]
+                    incr pos $n
+                    set d [extio::ain_decode $block]
+                    set bn [dict get $d nchan]
+                    if {$bn <= 0} { continue }
+                    if {$nchan == 0} {
+                        set nchan $bn
+                        for {set c 0} {$c < $nchan} {incr c} { set ch($c) {} }
+                    }
+                    set interval [dict get $d interval_us]
+                    set k 0
+                    foreach row [extio::ain_scans $d] {
+                        lappend sample_t [expr {$t + $k * $interval / 1000.0}]
+                        for {set c 0} {$c < $nchan} {incr c} {
+                            lappend ch($c) [lindex $row $c]
+                        }
+                        incr k
+                    }
+                }
+
+                dl_local ot [dl_flist {*}$sample_t]
+                dl_local ov [dl_llist]
+                for {set c 0} {$c < $nchan} {incr c} {
+                    dl_local cv [dl_create short]
+                    if {[llength $ch($c)]} {
+                        dl_fromString [binary format s* $ch($c)] $cv
+                    }
+                    dl_append $ov $cv
+                }
+                dl_append $t_out $ot
+                dl_append $v_out $ov
+            }
+
+            dl_set $predg:ain_t $t_out
+            dl_set $predg:ain_v $v_out
+            return [list $predg:ain_t $predg:ain_v]
+        }
+
         method type_name {id} {
             dict get $type_names $id
         }
