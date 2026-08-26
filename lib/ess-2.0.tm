@@ -1954,6 +1954,17 @@ namespace eval ess {
     variable obs_sched_ok 1
     variable obs_pending 0          ;# +30: a scheduled onset is in flight
     variable obs_pending_args {}    ;# {current total} for onset/fallback
+    # +33: request->actual visibility. A led obs starts lead_ms after the
+    # request plus the box's fire error (tens of us); every other mode is a
+    # fallback whose cost (up to lead_ms+500 of dead time) was invisible
+    # until these. Per-obs record on ess/obs_schedule_timing (logged with
+    # the datafile), cumulative story on ess/obs_schedule_stats + ess/health
+    # -- retained, so the settings gear and the obs tooltip read the
+    # session's history whenever they happen to look, not just live.
+    variable obs_req_us 0           ;# [now] when begin_obs asked
+    variable obs_target_us 0        ;# T the box was asked to fire at
+    variable obs_refusal ""         ;# at_abs reply for the in-flight request
+    variable obs_stats              ;# per-bind counters (array; see reset)
 
     # +31: resolve the announced obs leader. Capability is what the boxes
     # DECLARE (manifest obs_leader, from persisted config/obs/mode=leader);
@@ -2020,6 +2031,9 @@ namespace eval ess {
         dservAddExactMatch $io_class/$box/state/in_obs
         dpointSetScript $io_class/$box/state/in_obs ::ess::obs_box_onset
         dservSet ess/obs_schedule "box $box pin $pin lead_ms $lead_ms"
+        # +33: a fresh bind is a fresh story
+        obs_stats_reset
+        obs_sched_report
     }
 
     proc obs_schedule_unbind {} {
@@ -2033,6 +2047,73 @@ namespace eval ess {
         variable obs_sched_box ""
         variable obs_pending 0
         dservSet ess/obs_schedule ""
+        # +33: an unbound rig says nothing -- retained stats/health would
+        # otherwise keep describing a leadership that no longer exists.
+        dservSet ess/obs_schedule_stats ""
+        dservSet ess/health ""
+    }
+
+    # +33 telemetry. Values are SINGLE TOKENS by construction (reasons are
+    # onset_timeout/late/unsynced/sync:<src>, times are HH:MM:SS) so the
+    # published list parses as a dict everywhere, JS included.
+    proc obs_stats_reset {} {
+        variable obs_stats
+        array unset obs_stats
+        array set obs_stats {
+            led 0 fallback 0 untrusted 0 disabled 0 refusals 0
+            last_mode - last_reason - last_refusal -
+            last_delta_us 0 last_courier_us 0 max_abs_delta_us 0
+            last_fallback_at -
+        }
+        set obs_stats(since) [clock format [clock seconds] -format %H:%M:%S]
+    }
+
+    # a bind made before this code loaded (hot-patch) has no counters yet
+    proc obs_stats_ensure {} {
+        variable obs_stats
+        if {![info exists obs_stats(led)]} { obs_stats_reset }
+    }
+
+    # Publish the retained story: ess/obs_schedule_stats (fixed-order dict)
+    # and ess/health, the settings gear's green light for the ess section
+    # (SettingsModal convention: first word ok|off|error, rest the why).
+    proc obs_sched_report {} {
+        variable obs_stats; variable obs_sched_box; variable obs_sched_pin
+        variable obs_sched_lead_ms; variable obs_sched_ok
+        obs_stats_ensure
+        set out {}
+        foreach k {led fallback untrusted disabled refusals last_mode \
+                   last_reason last_refusal last_delta_us last_courier_us \
+                   max_abs_delta_us last_fallback_at since} {
+            lappend out $k $obs_stats($k)
+        }
+        dservSet ess/obs_schedule_stats $out
+        if {$obs_sched_box eq ""} { return }
+        set n [expr {$obs_stats(led) + $obs_stats(fallback) + \
+                     $obs_stats(untrusted) + $obs_stats(disabled)}]
+        set who "obs leader $obs_sched_box"
+        if {!$obs_sched_ok} {
+            dservSet ess/health "error $who: scheduling disabled\
+ (box replied '$obs_stats(last_refusal)') -- re-bind to retry"
+            return
+        }
+        if {$n == 0} {
+            dservSet ess/health "ok $who bound (pin $obs_sched_pin, lead\
+ $obs_sched_lead_ms ms) -- no obs yet"
+            return
+        }
+        set parts {}
+        foreach k {fallback untrusted disabled} {
+            if {$obs_stats($k)} { lappend parts "$obs_stats($k) $k" }
+        }
+        set tail [expr {[llength $parts] ? " ([join $parts {, }])" : ""}]
+        if {$obs_stats(last_mode) eq "led"} {
+            dservSet ess/health "ok $who: led $obs_stats(led)/$n, last\
+ [format %+d $obs_stats(last_delta_us)] us from target$tail"
+        } else {
+            dservSet ess/health "error $who: last obs $obs_stats(last_mode)\
+ ($obs_stats(last_reason)) -- led $obs_stats(led)/$n$tail"
+        }
     }
 
     # at_abs replies while bound. "armed" and our own "cancelled" are fine.
@@ -2045,6 +2126,14 @@ namespace eval ess {
         variable obs_sched_ok
         if {$data eq "armed" || $data eq "cancelled"} { return }
         dservSet ess/obs_schedule_health $data
+        # +33: a refusal is a counted event, and the pending obs remembers
+        # its specific reason so the fallback record says 'late', not the
+        # generic onset_timeout the watchdog would report.
+        variable obs_stats; variable obs_pending; variable obs_refusal
+        obs_stats_ensure
+        incr obs_stats(refusals)
+        set obs_stats(last_refusal) $data
+        if {$obs_pending} { set obs_refusal $data }
         if {$data eq "unsynced"} {
             if {$obs_sched_ok} {
                 set obs_sched_ok 0
@@ -2053,6 +2142,7 @@ namespace eval ess {
         } else {
             ess_warning "obs_schedule: at_abs reply '$data' -- this obs asserts now, next obs retries" "obs"
         }
+        obs_sched_report
     }
 
     # +30: the box's onset event. The datapoint timestamp IS the epoch --
@@ -2074,6 +2164,26 @@ namespace eval ess {
         set in_obs 1
         dservSet ess/obs_scheduled 1
         dservSet ess/obs_schedule_health ok    ;# retained: never lie stale
+        # +33: the request->actual record. delta = how far the actual
+        # assertion landed from the requested T (the box's fire error, seen
+        # through the stamps); courier = how long the onset event took to
+        # reach us past T -- the number that, creeping toward lead_ms+500,
+        # predicts onset timeouts before they happen.
+        variable obs_target_us; variable obs_stats
+        obs_stats_ensure
+        set _d [expr {$T - $obs_target_us}]
+        set _c [expr {[now] - $T}]
+        dservSet ess/obs_schedule_timing [list mode led obs $current \
+            total $total delta_us $_d courier_us $_c \
+            target_us $obs_target_us actual_us $T]
+        incr obs_stats(led)
+        set obs_stats(last_mode) led
+        set obs_stats(last_delta_us) $_d
+        set obs_stats(last_courier_us) $_c
+        if {abs($_d) > $obs_stats(max_abs_delta_us)} {
+            set obs_stats(max_abs_delta_us) [expr {abs($_d)}]
+        }
+        obs_sched_report
         variable trial_reward_ml
         set trial_reward_ml 0.0
         ::ess::do_update
@@ -2117,6 +2227,21 @@ namespace eval ess {
         }
         set in_obs 1
         dservSet ess/obs_scheduled 0
+        # +33: the fallback record -- waited is the real dead time this obs
+        # paid (request to host-side assert, ~lead_ms+500), and the reason
+        # keeps the box's own refusal when there was one.
+        variable obs_req_us; variable obs_refusal; variable obs_stats
+        obs_stats_ensure
+        set _w [expr {[now] - $obs_req_us}]
+        set _r [expr {$obs_refusal ne "" ? $obs_refusal : "onset_timeout"}]
+        dservSet ess/obs_schedule_timing [list mode fallback obs $current \
+            total $total waited_us $_w reason $_r req_us $obs_req_us]
+        incr obs_stats(fallback)
+        set obs_stats(last_mode) fallback
+        set obs_stats(last_reason) $_r
+        set obs_stats(last_fallback_at) \
+            [clock format [clock seconds] -format %H:%M:%S]
+        obs_sched_report
         variable trial_reward_ml
         set trial_reward_ml 0.0
     }
@@ -2151,7 +2276,12 @@ namespace eval ess {
                 # in_obs=1 all happen in obs_box_onset with the box's
                 # actual-instant stamp. The paradigm's wait state watches
                 # ::ess::in_obs (with obs_begin_now as its timeout arm).
-                set T [expr {[now] + $obs_sched_lead_ms * 1000}]
+                variable obs_req_us; variable obs_target_us
+                variable obs_refusal
+                set obs_req_us [now]
+                set T [expr {$obs_req_us + $obs_sched_lead_ms * 1000}]
+                set obs_target_us $T
+                set obs_refusal ""
                 set obs_pending 1
                 set obs_pending_args [list $current $total]
                 dservSet $io_class/$obs_sched_box/cmd/do/$obs_sched_pin/at_abs $T
@@ -2183,6 +2313,27 @@ namespace eval ess {
             # explicitly (end_obs's bound path already clears it).
             catch {dservSet $io_class/$obs_sched_box/cmd/do/$obs_sched_pin 1}
             dservSet ess/obs_scheduled 0
+            # +33: say WHY the leader was not even asked -- this silent
+            # branch is exactly the one that reads as "the leader stopped
+            # leading" (sync source settling, or a sticky 'unsynced').
+            variable obs_stats
+            obs_stats_ensure
+            if {!$obs_sched_ok} {
+                set _m disabled
+                set _r $obs_stats(last_refusal)
+            } else {
+                set _m untrusted
+                set _s ""
+                catch {set _s \
+                    [dservGet $io_class/$obs_sched_box/state/sync/source]}
+                set _r "sync:$_s"
+            }
+            dservSet ess/obs_schedule_timing \
+                [list mode $_m obs $current total $total reason $_r]
+            incr obs_stats($_m)
+            set obs_stats(last_mode) $_m
+            set obs_stats(last_reason) $_r
+            obs_sched_report
         }
         set in_obs 1
         variable trial_reward_ml
@@ -3095,6 +3246,19 @@ namespace eval ess {
                 dservLoggerAddMatch $filename ess/$_sp
                 dservTouch ess/$_sp
             }
+        }
+
+        # Obs-leader scheduling (+33): the bind (box/pin/lead, re-emitted
+        # into THIS file when present) and the per-obs request->actual
+        # record ess publishes at every onset while bound -- mode
+        # led/fallback/untrusted/disabled, delta_us vs the requested
+        # target. Post-hoc this is the audit of "did the leader actually
+        # lead, and by how much did each onset slip". Matching points an
+        # unbound rig never publishes costs nothing (the camera rule).
+        dservLoggerAddMatch $filename ess/obs_schedule_timing
+        if {[dservExists ess/obs_schedule]} {
+            dservLoggerAddMatch $filename ess/obs_schedule
+            dservTouch ess/obs_schedule
         }
 
         variable em_active

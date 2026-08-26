@@ -105,6 +105,8 @@ class ESSControl {
             obsId: 0,
             obsTotal: 0,
             inObs: false,
+            obsSchedule: '',      // ess/obs_schedule: extio obs-leader bind
+            obsSchedStats: null,  // ess/obs_schedule_stats: cumulative story
             
             // Tab state
             activeTab: 'setup',  // 'setup', 'configs', or 'queue'
@@ -1129,6 +1131,21 @@ class ESSControl {
             this.updateInObsIndicator();
         });
 
+        // Obs-leader scheduling (extio box as the obs-onset authority):
+        // the bind and its cumulative request->actual story ride the obs
+        // counter's tooltip. Both retained server-side, so the tooltip is
+        // truthful whenever it is read -- mid-run or after.
+        this.dpManager.subscribe('ess/obs_schedule', (data) => {
+            this.state.obsSchedule = String(data.value ?? '').trim();
+            this.updateObsDisplay();
+        });
+
+        this.dpManager.subscribe('ess/obs_schedule_stats', (data) => {
+            const raw = String(data.value ?? '').trim();
+            this.state.obsSchedStats = raw ? TclParser.parseDict(raw) : null;
+            this.updateObsDisplay();
+        });
+
 	// Project subscriptions for filtering
         this.dpManager.subscribe('projects/active', (data) => {
             this.updateActiveProject(data.value);
@@ -1518,6 +1535,58 @@ updateConfigRunButtons() {
         const id = this.state.obsId + 1;  // Display 1-indexed
         const total = this.state.obsTotal;
         this.elements.obsDisplay.textContent = total > 0 ? `${id}/${total}` : '–/–';
+        this.updateObsTooltip();
+    }
+
+    /**
+     * Obs-onset provenance, where the count already is. With an extio obs
+     * leader bound (ess/obs_schedule), ess keeps a cumulative story
+     * (ess/obs_schedule_stats): how many onsets the box actually led, how
+     * far the last one landed from its requested target, and what every
+     * fallback cost. Hover the counter to read it; the settings gear's
+     * ess section shows the same story as its health line.
+     */
+    updateObsTooltip() {
+        const el = this.elements.obsDisplay;
+        if (!el) return;
+        if (!this.state.obsSchedule) {
+            el.title = 'obs onsets: host-driven (no extio obs leader bound)';
+            return;
+        }
+        const bind = TclParser.parseDict(this.state.obsSchedule);
+        const lines = [`obs onsets: extio leader ${bind.box || '?'}`
+                       + ` (pin ${bind.pin ?? '?'}, lead ${bind.lead_ms ?? '?'} ms)`];
+        const s = this.state.obsSchedStats;
+        if (s) {
+            const num = (k) => parseInt(s[k], 10) || 0;
+            const n = num('led') + num('fallback') + num('untrusted') + num('disabled');
+            if (n === 0) {
+                lines.push('no obs since bind');
+            } else {
+                let led = `led ${num('led')}/${n}`;
+                if (s.last_mode === 'led') {
+                    const d = parseInt(s.last_delta_us, 10) || 0;
+                    const c = parseInt(s.last_courier_us, 10) || 0;
+                    led += ` · last ${d >= 0 ? '+' : ''}${d} µs from target`
+                        + ` · event +${(c / 1000).toFixed(1)} ms`;
+                }
+                lines.push(led);
+                if (num('fallback')) {
+                    lines.push(`${num('fallback')} fallback`
+                        + ` (last: ${s.last_reason} at ${s.last_fallback_at})`);
+                }
+                if (num('untrusted')) {
+                    lines.push(`${num('untrusted')} skipped — sync untrusted`
+                        + (s.last_mode === 'untrusted' ? ` (${s.last_reason})` : ''));
+                }
+                if (num('disabled')) {
+                    lines.push(`${num('disabled')} skipped — scheduling disabled`
+                        + ` ('${s.last_refusal}')`);
+                }
+            }
+            if (s.since && s.since !== '-') lines.push(`since ${s.since}`);
+        }
+        el.title = lines.join('\n');
     }
     
     updateInObsIndicator() {
@@ -4026,6 +4095,7 @@ updateConfigRunButtons() {
             'ess/variant_info_json', 'ess/param_settings',
             'ess/param', 'ess/params', 'ess/datafile',
             'ess/obs_id', 'ess/obs_total', 'ess/in_obs',
+            'ess/obs_schedule', 'ess/obs_schedule_stats',
             'configs/list', 'configs/tags', 'configs/current',
             'queues/list', 'queues/state', 'queues/items',
 	    'projects/active', 'projects/active_detail'	    

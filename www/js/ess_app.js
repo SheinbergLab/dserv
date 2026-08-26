@@ -150,6 +150,7 @@ function requestInitialData() {
           ess/load_error ess/last_good_system
           ess/sound/feedback_volume ess/sound/master_gain
           ess/obs_id ess/obs_total ess/in_obs
+          ess/obs_schedule ess/obs_schedule_stats ess/health
           ess/block_pct_complete ess/block_pct_correct
           ess/screen_w ess/screen_h ess/screen_halfx ess/screen_halfy
           ess/params ess/datafile ess/sortby_columns ess/block_id
