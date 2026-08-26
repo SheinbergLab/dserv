@@ -155,20 +155,3 @@ jpg = np.asarray(d['<blob>camera/full'][k], dtype=np.int8).astype(np.uint8).toby
 open('frame.jpg', 'wb').write(jpg)
 ```
 
-## Fixed on the way (dslog.c)
-
-The readESS overhaul also fixed long-standing defects, verified against
-the 471-file corpus (old vs new dumps differ *only* in these):
-
-- JPEG/PPM/JSON payloads silently dropped (stale dtype enum in dlsh's
-  `datapoint.h`, frozen at `DSERV_NONE`).
-- `DSERV_STRING` streams kept only the **last** string per obs (and leaked
-  the rest) — e.g. a mid-obs `em/settings` recalibration vanished.
-- `obs_times` wrapped negative past 2³¹ µs (~35.8 min) into a session, and
-  per-process `static` anchors corrupted every file after the first in the
-  long-lived df subprocess.
-- One `ds_datapoint_t` leaked per non-event record (tens of MB per file in
-  the df subprocess); `DSERV_DOUBLE` read 8× past its buffer in
-  `dslog::read`; empty-obs placeholders were created in the wrong type
-  space; the `logger:beginobs`/`endobs` markers grew phantom `<session>`
-  columns (colon/slash mismatch).
