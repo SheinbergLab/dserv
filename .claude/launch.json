@@ -2,39 +2,10 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "www",
+      "name": "dgviewer-test",
       "runtimeExecutable": "python3",
-      "runtimeArgs": [
-        "-m",
-        "http.server",
-        "8090",
-        "--directory",
-        "www"
-      ],
-      "port": 8090
-    },
-    {
-      "name": "wwwdev",
-      "runtimeExecutable": "python3",
-      "runtimeArgs": [
-        "tools/devserver.py",
-        "8095",
-        "www"
-      ],
-      "port": 8095
-    },
-    {
-      "name": "extio-setup",
-      "runtimeExecutable": "go",
-      "runtimeArgs": [
-        "-C",
-        "tools/extio-setup",
-        "run",
-        ".",
-        "-open=false",
-        "-dev"
-      ],
-      "port": 2569
+      "runtimeArgs": ["-m", "http.server", "8137", "-d", "/private/tmp/claude-501/-Users-sheinb-src-dserv/fe99cd15-6222-4593-af8f-e93eff451ab4/scratchpad/viewtest"],
+      "port": 8137
     }
   ]
 }
