@@ -2540,6 +2540,8 @@ proc extio_wire_common {} {                 ;# device-independent: sync + obs_pi
     dpointSetScript extio/*/state/ota/trial extio_ota_on_trial
     dservAddMatch extio/*/state/obs_leader  ;# leader announce -> rig-level auto-bind (opt-in)
     dpointSetScript extio/*/state/obs_leader extio_on_obs_leader
+    dservAddMatch extio/*/state/obs_pin     ;# bound leader's pin moved -> the bind tracks it
+    dpointSetScript extio/*/state/obs_pin extio_on_obs_pin
 }
 
 # ---- connect counter (fleet page): a box bursts its announce at every uplink
@@ -2711,6 +2713,76 @@ proc extio_on_obs_leader {dp data} {
     # the manifest; a short defer lets the whole burst land before the
     # resolver reads it (it requires a watchdog-fresh announce anyway)
     dservAfter 1000 [list extio_obs_autobind_try $box]
+}
+
+# ---- obs-pin tracking (the psychophysics 2026-08-26 lesson) -----------------
+# The bind freezes box+pin as session state; the box's pin is persisted,
+# re-appliable config. Change the pin on a BOUND leader (config page, box
+# console CLI, or a reboot restoring a different persisted pin) and the two
+# halves disagreed silently: the host's at_abs kept firing the OLD pin --
+# which no longer classifies as an obs onset on the box -- so every obs paid
+# the full watchdog fallback while the stale pin blinked convincingly. The
+# auto-binder never healed it, because already-bound rigs are deliberately
+# declined.
+#
+# Convergence rule: the BOX owns its pin (a hardware fact about where the
+# line is wired), the HOST owns consent (obs_autobind), and the bind TRACKS.
+# state/obs_pin republishes on every live pin change (fw CFG_OBS_PIN ->
+# box_announce_manifest) and rides every announce burst, so one watcher
+# heals the live edit, the console edit, and the reboot-revert alike.
+# Deliberately NOT gated on the obs_autobind flag: the flag gates ACQUIRING
+# leadership; tracking preserves a leadership decision already made -- a
+# manually-bound rig whose box moves its pin wants the bind to follow, and
+# the alternative is guaranteed 500 ms/obs breakage. Loop-safe: the re-bind
+# asserts the same pin back to the box, both sides converge, and the next
+# event no-ops on the equality check.
+proc extio_on_obs_pin {dp data} {
+    if { ![regexp {^extio/([^/]+)/state/obs_pin$} $dp -> box] } return
+    # same burst-settle defer as the leader announce; also coalesces the
+    # manifest+role double-publish into no-op re-checks
+    dservAfter 1000 [list extio_obs_pin_track $box]
+}
+
+proc extio_obs_pin_track {box} {
+    # never move the line mid-obs (autobind's policy); retry shortly
+    set inobs 0
+    catch { set inobs [dservGet ess/in_obs] }
+    if { $inobs == 1 } {
+        dservAfter 3000 [list extio_obs_pin_track $box]
+        return
+    }
+    # everything re-read at execution time, so a deferral can never act on
+    # stale facts. send reports interp errors as "!TCL_ERROR " STRINGS, not
+    # Tcl errors (the wav_send lesson).
+    set bound ""
+    catch { set bound [send ess {set ::ess::obs_sched_box}] }
+    if { $bound ne $box } return              ;# unbound, or another box leads
+    set pin ""
+    catch { set pin [dservGet extio/$box/state/obs_pin] }
+    if { ![string is integer -strict $pin] } return
+    set cur ""
+    catch { set cur [send ess {set ::ess::obs_sched_pin}] }
+    if { ![string is integer -strict $cur] || $cur == $pin } return
+    if { $pin < 0 } {
+        # leader with no pin (the officepi half-config): nothing sane to
+        # track; leave the loud breadcrumb and let the operator decide
+        dservSet extio/obs_autobind_last \
+            "pin-track: $box announces obs_pin -1 while bound to pin $cur -- not re-binding"
+        return
+    }
+    set lead 20
+    catch { set lead [send ess {set ::ess::obs_sched_lead_ms}] }
+    if { ![string is integer -strict $lead] } { set lead 20 }
+    set r ""
+    catch { set r [send ess [list ::ess::obs_schedule_bind $box $pin $lead]] } r
+    if { [string first "!TCL_ERROR " $r] == 0 } {
+        puts "extio: obs pin-track re-bind to $box pin $pin failed: $r"
+        dservSet extio/obs_autobind_last "pin-track failed: $r"
+    } else {
+        puts "extio: obs schedule re-bound to $box pin $pin (was $cur)"
+        dservSet extio/obs_autobind_last "re-bound $box pin $cur->$pin\
+ [clock format [clock seconds] -format %H:%M:%S]"
+    }
 }
 
 # ---- hot-swap + discovery: runs every 2 s. (Re)open when the box's data port
