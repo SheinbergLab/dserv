@@ -16,7 +16,12 @@
 #
 # Datapoints published:
 #   camera/preview     JPEG snapshot, every snapshot_interval s (view at /camera.html)
-#   camera/full        full-resolution JPEG, on demand via grab_full
+#   camera/full        full-resolution JPEG (private), on demand via grab_full
+#   camera/full/meta   public JSON completion for each grab_full:
+#                      {req_id frame_id timestamp_us width height jpeg_bytes ok}
+#                      (ok 0 + error on failure). ESS waits on this point;
+#                      timestamp_us is the sensor capture time on dserv's
+#                      timebase, directly comparable with event timestamps.
 #   camera/frame_info  human-readable line per snapshot
 #   camera/status      continuous | stopped | error: ...
 #   camera/interval    actual seconds between snapshots (skip-rate quantized)
@@ -26,7 +31,12 @@
 #  stop                        - Stop camera streaming
 #  set_interval secs           - Seconds between snapshots (live, no restart)
 #  set_rotation deg            - Declare mounting rotation (persists to rig.tcl)
-#  grab_full                   - Publish latest frame full-res to camera/full
+#  grab_full ?req_id?          - Publish the NEXT sensor frame full-res to
+#                                camera/full (+ camera/full/meta completion).
+#                                Latency <= one frame period + encode; the
+#                                image always postdates the request.
+#  grab_last                   - Publish the most recent ring-buffer frame
+#                                (can be up to snapshot_interval old)
 #  check_status                - Get camera status
 #  check_ring_buffer           - Get ring buffer status
 #  get_frame_ppm frame_id      - Get frame as PPM data
@@ -181,8 +191,30 @@ proc stop {} {
     puts "Camera stopped"
 }
 
-# Publish the most recent snapshot at full sensor resolution to camera/full
-proc grab_full {} {
+# Grab the NEXT sensor frame at full resolution: the module encodes it
+# off-thread, publishes the JPEG private to camera/full (capture-time
+# timestamp), and announces completion on camera/full/meta. Because the
+# sensor free-runs at stream_fps, this is fresh (<= 1 frame period) no
+# matter how slow the preview cadence is -- there is no need to raise the
+# snapshot rate just to keep grabs current.
+#
+# If the request cannot even be issued (camera idle/broken), publish the
+# failure on camera/full/meta ourselves so a waiting state system's
+# contract still resolves without its timeout.
+proc grab_full { {req_id 0} } {
+    if {[catch {cameraGrabNextFrame camera/full $req_id} result]} {
+        set msg [string map {\" ' \\ /} $result]
+        dservSet camera/full/meta \
+            "{\"req_id\":$req_id,\"ok\":0,\"error\":\"$msg\"}"
+        error "Error requesting grab: $result"
+    }
+    return $req_id
+}
+
+# Publish the most recent ring-buffer snapshot at full sensor resolution
+# to camera/full (the pre-contract behavior: instant, but the frame can be
+# up to snapshot_interval old and carries no completion meta).
+proc grab_last {} {
     if { $::last_frame_id < 0 } {
         error "no frame captured yet - is the camera started?"
     }
@@ -294,6 +326,17 @@ proc set_rotation {deg} {
     settings::put camera rotation $deg -persist
 }
 
+# Preview/snapshot cadence declared in Hz (the module still thinks in
+# seconds via set_interval). This is a WATCHING knob: grab_full uses the
+# next-frame contract and is always fresh, so rate_hz never needs raising
+# for data collection.
+proc apply_capture_hz {hz} {
+    if {![string is double -strict $hz] || $hz <= 0 || $hz > $::stream_fps} {
+        error "rate_hz: expected Hz in (0, $::stream_fps], got \"$hz\""
+    }
+    set_interval [expr {1.0 / double($hz)}]
+}
+
 # Live enable/disable: the gear flips this without a restart. Uses
 # cameraStatus rather than a shadow flag so a start that FAILED (no sensor)
 # reads as not-streaming and a later enable retries it.
@@ -335,12 +378,30 @@ settings::declare camera rotation -default 0 -values {0 90 180 270} -type int \
     -apply {::apply_rotation}
 
 settings::declare camera enabled -default 0 -type bool \
-    -doc "start the camera at boot and keep it streaming (~1 JPEG/s to
-camera/preview; watch at /camera.html). Off (the default) loads the
-subprocess but leaves the sensor untouched -- start/stop by hand
-still work. Flipping it in the gear starts or stops the camera
-immediately." \
+    -doc "start the camera at boot and keep it streaming (see rate_hz
+for the JPEG rate to camera/preview; watch at /camera.html). Off (the
+default) loads the subprocess but leaves the sensor untouched --
+start/stop by hand still work. Flipping it in the gear starts or stops
+the camera immediately." \
     -apply {::apply_enabled}
+
+# Named rate_hz (not capture_hz) so the gear lists it after enabled
+# (knobs sort alphabetically by key). Grabs do NOT depend on this: the
+# sensor free-runs at stream_fps and grab_full takes the next frame.
+settings::declare camera rate_hz -default 1 -values {0.2 0.5 1 2 5 10} \
+    -type double \
+    -doc "camera/preview snapshot rate in Hz (quantized to whole frames
+at the ${stream_fps} fps stream; live while streaming). Watching
+cadence only -- grab_full captures the next sensor frame regardless." \
+    -apply {::apply_capture_hz}
+
+# Declare does not fire -apply; sync the module interval from the
+# effective rate_hz before a possible boot-time start so the first
+# stream uses it.
+if {[catch { apply_capture_hz [settings::get camera rate_hz] } _hz_err]} {
+    puts stderr "camera: rate_hz apply at declare: $_hz_err"
+}
+unset -nocomplain _hz_err
 
 # Boot-time start. `enabled` is new -- no legacy local/camera.tcl ever
 # auto-started -- so the value is used directly: only a declaration can make

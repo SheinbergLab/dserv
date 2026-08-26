@@ -19,6 +19,7 @@
 #include <sstream>
 #include <atomic>
 #include <mutex>
+#include <map>
 #include <queue>
 #include <condition_variable>
 #include <algorithm>
@@ -184,14 +185,14 @@ private:
     std::vector<uint8_t> preview_jpeg_data;  // Preview JPEG data
 
     int frame_id;
-    int64_t timestamp_ms;
+    int64_t timestamp_us;   // dserv timebase (us-since-1970 scale)
     bool valid;
     bool has_jpeg;
     bool has_preview;
     bool has_preview_jpeg;
-    CameraFrameBuffer() : frame_id(-1), timestamp_ms(0), valid(false), 
-			  has_jpeg(false), has_preview(false), 
-			  has_preview_jpeg(false) {}    
+    CameraFrameBuffer() : frame_id(-1), timestamp_us(0), valid(false),
+			  has_jpeg(false), has_preview(false),
+			  has_preview_jpeg(false) {}
   };
   
   static constexpr int RING_BUFFER_SIZE = 16;
@@ -199,8 +200,57 @@ private:
   std::atomic<int> ring_write_index_{0};
 
   std::mutex ring_buffer_mutex_;
-  
+
   RingBufferMode ring_buffer_mode_ = RingBufferMode::FULL_RATE;
+
+  // Persistent plane-0 mappings for every allocated FrameBuffer (both
+  // streams), created once in allocate_buffers().  mmap/munmap per frame
+  // is measurable syscall churn at 30fps and pure waste since the buffers
+  // live for the whole streaming session.
+  std::map<libcamera::FrameBuffer *, std::pair<void *, size_t>> mapped_buffers_;
+
+  // dserv-timebase stamp of the frame currently being processed by
+  // streaming_request_complete (SensorTimestamp when available).
+  int64_t current_frame_us_ = 0;
+
+  // ---- next-frame grab contract ----
+  // A pending grab is serviced with the NEXT frame the sensor delivers,
+  // bypassing the skip filter, so the image always postdates the request
+  // (<= one frame period of latency) regardless of the preview cadence.
+  // JPEG encoding happens on a worker thread; the completion is announced
+  // on a public "<name>/meta" datapoint (the JPEG itself is private).
+  struct GrabJob {
+    std::vector<uint8_t> raw;      // stride-padded plane copy
+    unsigned int width = 0;
+    unsigned int height = 0;
+    unsigned int stride = 0;
+    bool bgr = false;
+    bool sw_rotate = false;
+    int rotation = 0;
+    int jpeg_quality = 85;
+    int frame_id = -1;
+    int64_t timestamp_us = 0;
+    std::string dpoint_name;
+    int64_t request_id = 0;
+    bool failed = false;           // capture-side failure; publish error meta
+    std::string error;
+  };
+  std::atomic<bool> grab_pending_{false};
+  std::string grab_dpoint_name_;
+  int64_t grab_request_id_ = 0;
+  // Only a frame whose exposure STARTED at/after the request satisfies the
+  // contract ("the image postdates the request"): a frame completing just
+  // after the request may have started exposing a frame period earlier.
+  // This also gives extraction a hard invariant -- the paired frame's
+  // capture timestamp is >= the CAMERA REQUEST event's timestamp.
+  std::atomic<int64_t> grab_after_us_{0};
+  std::mutex grab_mutex_;
+
+  std::queue<GrabJob> grab_queue_;
+  std::mutex grab_queue_mutex_;
+  std::condition_variable grab_queue_cv_;
+  std::thread grab_worker_thread_;
+  std::atomic<bool> grab_worker_running_{false};
 
   // Background save thread for continuous mode
   std::queue<std::pair<std::vector<uint8_t>, std::string>> save_queue_;
@@ -444,6 +494,7 @@ public:
     stream_ = nullptr;
     preview_stream_ = nullptr;
     config_.reset();
+    unmap_buffers();
     allocator_.reset();
     requests_.clear();
     image_data_.clear();
@@ -865,6 +916,27 @@ public:
     b = (uint8_t)std::max(0, std::min(255, b_val));
   }  
 
+  // Map plane 0 of every buffer of a stream once; process_buffer and the
+  // grab path then just look pointers up instead of mmap/munmap per frame.
+  void map_stream_buffers(Stream *s) {
+    if (!s || !allocator_) return;
+    for (const auto &buffer : allocator_->buffers(s)) {
+      const libcamera::FrameBuffer::Plane &plane = buffer->planes()[0];
+      void *data = mmap(nullptr, plane.length, PROT_READ, MAP_SHARED,
+			plane.fd.get(), 0);
+      if (data != MAP_FAILED) {
+	mapped_buffers_[buffer.get()] = {data, plane.length};
+      }
+    }
+  }
+
+  void unmap_buffers() {
+    for (auto &entry : mapped_buffers_) {
+      munmap(entry.second.first, entry.second.second);
+    }
+    mapped_buffers_.clear();
+  }
+
   bool allocate_buffers() {
     allocator_ = std::make_unique<FrameBufferAllocator>(camera_);
 
@@ -882,7 +954,12 @@ public:
       }
     }
 
-    
+    map_stream_buffers(stream_);
+    if (preview_enabled_ && preview_stream_) {
+      map_stream_buffers(preview_stream_);
+    }
+
+
     // Use libcamera::FrameBuffer correctly
     const std::vector<std::unique_ptr<libcamera::FrameBuffer>> &buffers = 
       allocator_->buffers(stream_);
@@ -1049,10 +1126,13 @@ public:
     ae_settled_ = false;
     ae_settle_count_ = 0;
     last_frame_time_ = std::chrono::steady_clock::now();
- 
+
+    grab_pending_ = false;
+    start_grab_worker();
+
     // Disconnect any existing callbacks
     camera_->requestCompleted.disconnect();
-    
+
     // Connect streaming callback
     camera_->requestCompleted.connect(this, &CameraCapture::streaming_request_complete);
     
@@ -1092,15 +1172,32 @@ public:
       }
       state_ = CameraState::IDLE;
     }
-    
+
     // Small delay to let callbacks finish processing
     std::this_thread::sleep_for(50ms);
-    
+
     // Disconnect callbacks before stopping
     camera_->requestCompleted.disconnect();
-    
+
     camera_->stop();
-    
+
+    // A grab that never met a frame must still resolve its contract.
+    if (grab_pending_.exchange(false)) {
+      GrabJob job;
+      {
+	std::lock_guard<std::mutex> lock(grab_mutex_);
+	job.dpoint_name = grab_dpoint_name_;
+	job.request_id = grab_request_id_;
+      }
+      job.failed = true;
+      job.error = "streaming stopped before a frame arrived";
+      {
+	std::lock_guard<std::mutex> lock(grab_queue_mutex_);
+	grab_queue_.push(std::move(job));
+      }
+      grab_queue_cv_.notify_one();
+    }
+
     return true;
   }
   
@@ -1165,48 +1262,127 @@ public:
     return true;
   }
 
+  // Return the persistent mapping for a buffer's plane 0 (nullptr if the
+  // buffer was never mapped -- shouldn't happen, but stay safe).
+  std::pair<void *, size_t> buffer_plane0(libcamera::FrameBuffer *buffer) {
+    auto it = mapped_buffers_.find(buffer);
+    if (it != mapped_buffers_.end()) return it->second;
+    return {nullptr, 0};
+  }
+
   void process_buffer(libcamera::FrameBuffer *buffer, bool is_preview) {
-    const libcamera::FrameBuffer::Plane &plane = buffer->planes()[0];
-    
-    void *data = mmap(nullptr, plane.length, PROT_READ, MAP_SHARED,
-		      plane.fd.get(), 0);
-    if (data == MAP_FAILED) return;
+    auto [data, length] = buffer_plane0(buffer);
+    if (!data) return;
 
     {
       std::lock_guard<std::mutex> lock(capture_mutex_);
-      
+
       if (is_preview) {
-	preview_data_.resize(plane.length);
-	std::memcpy(preview_data_.data(), data, plane.length);
+	preview_data_.resize(length);
+	std::memcpy(preview_data_.data(), data, length);
       } else {
-	image_data_.resize(plane.length);
-	std::memcpy(image_data_.data(), data, plane.length);
+	image_data_.resize(length);
+	std::memcpy(image_data_.data(), data, length);
 	frame_ready_ = true;
       }
     }
-      
-    munmap(data, plane.length);
   }
   
+  // Place this frame on dserv's timebase: SensorTimestamp is start-of-
+  // exposure in kernel CLOCK_MONOTONIC ns, and every dserv datapoint
+  // timestamp is steady_clock (== CLOCK_MONOTONIC on Linux) plus a fixed
+  // epoch offset -- so the sum is exact, directly comparable with event
+  // timestamps in the log.  Restamping with wall clock (the old behavior)
+  // drifted from event time by however much NTP has slewed since dserv
+  // started.
+  int64_t frame_timestamp_us(Request *request) {
+    const auto &meta = request->metadata();
+    auto ts = meta.get(controls::SensorTimestamp);
+    if (ts) {
+      return tclserver_clock_epoch_offset_us() + (*ts / 1000);
+    }
+    auto steady_us = std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    return tclserver_clock_epoch_offset_us() + steady_us;
+  }
+
+  // Copy the completed request's main-stream frame into a self-contained
+  // job for the encode worker.  Runs on the libcamera completion thread;
+  // keep it to one memcpy.
+  void service_grab(Request *request) {
+    GrabJob job;
+    {
+      std::lock_guard<std::mutex> lock(grab_mutex_);
+      job.dpoint_name = grab_dpoint_name_;
+      job.request_id = grab_request_id_;
+    }
+    job.frame_id = frame_counter_.load();
+    job.timestamp_us = current_frame_us_;
+
+    const StreamConfiguration &cfg = stream_->configuration();
+    job.width = cfg.size.width;
+    job.height = cfg.size.height;
+    job.stride = stride_ ? stride_ : cfg.size.width * 3;
+    job.bgr = jpeg_input_is_bgr_;
+    job.sw_rotate = software_rotation_;
+    job.rotation = rotation_;
+    job.jpeg_quality = jpeg_quality_;
+
+    const Request::BufferMap &buffers = request->buffers();
+    auto it = buffers.find(stream_);
+    bool copied = false;
+    if (it != buffers.end()) {
+      auto [data, length] = buffer_plane0(it->second);
+      if (data) {
+	job.raw.resize(length);
+	std::memcpy(job.raw.data(), data, length);
+	copied = true;
+      }
+    }
+    if (!copied) {
+      job.failed = true;
+      job.error = "no frame buffer available";
+    }
+
+    {
+      std::lock_guard<std::mutex> lock(grab_queue_mutex_);
+      grab_queue_.push(std::move(job));
+    }
+    grab_queue_cv_.notify_one();
+  }
+
   void streaming_request_complete(Request *request) {
     if (state_ != CameraState::STREAMING) {
       return;
     }
-  
+
     if (request->status() == Request::RequestCancelled) {
       if (state_ == CameraState::STREAMING) {
 	request->reuse(Request::ReuseBuffers);
-	apply_controls_to_request(request);	
+	apply_controls_to_request(request);
 	camera_->queueRequest(request);
       }
       return;
     }
-  
+
     frames_captured_++;
-  
+
     // Check auto-exposure convergence
     check_ae_convergence(request);
-  
+
+    current_frame_us_ = frame_timestamp_us(request);
+
+    // Service a pending grab ahead of the skip filter with the first
+    // frame whose exposure started at/after the request: latency is one
+    // to two frame periods (<=66ms at 30fps), independent of the preview
+    // cadence, and the image strictly postdates the request.
+    if (grab_pending_.load() &&
+	current_frame_us_ >= grab_after_us_.load()) {
+      if (grab_pending_.exchange(false)) {
+	service_grab(request);
+      }
+    }
+
     // Skip frames if configured and not yet settled
     if (!ae_settled_ || (++frame_skip_counter_ < frame_skip_rate_)) {
       if (frame_skip_counter_ >= frame_skip_rate_) {
@@ -1457,39 +1633,39 @@ public:
   }
   
   bool get_ppm_frame_by_id(int frame_id, std::vector<uint8_t> &ppm_data,
-			   int64_t &timestamp_ms) {
+			   int64_t &timestamp_us) {
     std::lock_guard<std::mutex> lock(ring_buffer_mutex_);
-    
+
     for (int i = 0; i < RING_BUFFER_SIZE; i++) {
       if (frame_ring_buffer_[i].valid &&
 	  frame_ring_buffer_[i].frame_id == frame_id) {
-	
+
 	const StreamConfiguration &cfg = stream_->configuration();
-	
+
 	// Create PPM data
-	std::string ppm_header = "P6\n" + 
-	  std::to_string(cfg.size.width) + " " + 
+	std::string ppm_header = "P6\n" +
+	  std::to_string(cfg.size.width) + " " +
 	  std::to_string(cfg.size.height) + "\n255\n";
-	
+
 	ppm_data.clear();
 	ppm_data.resize(ppm_header.size() + frame_ring_buffer_[i].raw_data.size());
 	std::memcpy(ppm_data.data(), ppm_header.c_str(), ppm_header.size());
-	std::memcpy(ppm_data.data() + ppm_header.size(), 
-		    frame_ring_buffer_[i].raw_data.data(), 
+	std::memcpy(ppm_data.data() + ppm_header.size(),
+		    frame_ring_buffer_[i].raw_data.data(),
 		    frame_ring_buffer_[i].raw_data.size());
-	
-	timestamp_ms = frame_ring_buffer_[i].timestamp_ms;
+
+	timestamp_us = frame_ring_buffer_[i].timestamp_us;
 	return true;
       }
     }
     return false;
   }
-  
+
   bool get_jpeg_frame_by_id(int frame_id, std::vector<uint8_t> &jpeg_data,
-			    int64_t &timestamp_ms)
+			    int64_t &timestamp_us)
   {
     std::lock_guard<std::mutex> lock(ring_buffer_mutex_);
-    
+
     for (int i = 0; i < RING_BUFFER_SIZE; i++) {
       if (frame_ring_buffer_[i].valid &&
 	  frame_ring_buffer_[i].frame_id == frame_id) {
@@ -1502,14 +1678,14 @@ public:
 	  }
 	  frame_ring_buffer_[i].has_jpeg = true;
 	}
-	
+
 	jpeg_data = frame_ring_buffer_[i].jpeg_data;
-	timestamp_ms = frame_ring_buffer_[i].timestamp_ms;
+	timestamp_us = frame_ring_buffer_[i].timestamp_us;
 	return true;
       }
     }
     return false;
-  }  
+  }
 
   // Updated frame notification with clearer format names
   void publish_frame_notification() {
@@ -1587,7 +1763,7 @@ public:
 	
 	ds_datapoint_t *dp = dpoint_new(
 					(char*)datapoint_name.c_str(),
-					frame_ring_buffer_[i].timestamp_ms * 1000,
+					frame_ring_buffer_[i].timestamp_us,
 					DSERV_PPM,
 					ppm_data.size(),
 					ppm_data.data()
@@ -1618,10 +1794,10 @@ public:
 	  frame_ring_buffer_[i].has_jpeg = true;
 	}
 	
-	// Publish JPEG data
+	// Publish JPEG data (timestamp = capture time on dserv's timebase)
 	ds_datapoint_t *dp = dpoint_new(
 					(char*)datapoint_name.c_str(),
-					frame_ring_buffer_[i].timestamp_ms * 1000, // Convert to microseconds
+					frame_ring_buffer_[i].timestamp_us,
 					(ds_datatype_t)DSERV_JPEG,
 					frame_ring_buffer_[i].jpeg_data.size(),
 					(unsigned char *)frame_ring_buffer_[i].jpeg_data.data()
@@ -1651,10 +1827,10 @@ public:
           return false;
         }
         
-        // Publish JPEG data
+        // Publish JPEG data (timestamp = capture time on dserv's timebase)
         ds_datapoint_t *dp = dpoint_new(
                                         (char*)datapoint_name.c_str(),
-                                        frame.timestamp_ms * 1000, // Convert to microseconds
+                                        frame.timestamp_us,
                                         (ds_datatype_t)DSERV_JPEG,
                                         jpeg_data.size(),
                                         (unsigned char *)jpeg_data.data()
@@ -1860,7 +2036,8 @@ private:
   void cleanup() {
     stop_continuous_mode();
     stop_streaming();
-  
+    stop_grab_worker();
+
     if (camera_) {
       camera_->requestCompleted.disconnect();
       if (state_ != CameraState::IDLE) {
@@ -1868,7 +2045,8 @@ private:
       }
       camera_->release();
     }
-  
+
+    unmap_buffers();
     state_ = CameraState::IDLE;
   }
 
@@ -1919,16 +2097,13 @@ private:
   
   void store_frame_in_ring_buffer() {
     std::lock_guard<std::mutex> lock(ring_buffer_mutex_);
-  
+
     int write_idx = ring_write_index_.load() % RING_BUFFER_SIZE;
-    auto now = std::chrono::system_clock::now();
-    auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
-									   now.time_since_epoch()).count();
 
     // Store main data
     frame_ring_buffer_[write_idx].raw_data = image_data_;
     frame_ring_buffer_[write_idx].frame_id = frame_counter_.load();
-    frame_ring_buffer_[write_idx].timestamp_ms = timestamp;
+    frame_ring_buffer_[write_idx].timestamp_us = current_frame_us_;
     frame_ring_buffer_[write_idx].valid = true;
     frame_ring_buffer_[write_idx].has_jpeg = false;
     
@@ -1946,10 +2121,11 @@ private:
 
   void call_tcl_frame_callback() {
     if (!tclserver || tcl_callback_proc_.empty()) return;
-    
-    auto now = std::chrono::system_clock::now();
-    auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
-    
+
+    // Frame capture time (dserv timebase) in ms -- same scale as before
+    // (ms since 1970) so `clock format` in handlers keeps working.
+    int64_t timestamp = current_frame_us_ / 1000;
+
     size_t ppm_size_estimate = image_data_.size() + 20; // raw + ~20 byte header
     
     char tcl_command[2048];
@@ -1957,7 +2133,7 @@ private:
 		       "%s %d %lld %d %d %zu %s %s",
 		       tcl_callback_proc_.c_str(),
 		       frame_counter_.load(),           // frame_id
-		       timestamp,                       // timestamp_ms
+		       (long long) timestamp,           // timestamp_ms
 		       width_,                         // width
 		       height_,                        // height
 		       ppm_size_estimate,              // estimated PPM size (not JPEG)
@@ -2014,7 +2190,7 @@ private:
 	// Write to disk
 	std::ofstream file(save_item.second, std::ios::binary);
 	if (file) {
-	  file.write(reinterpret_cast<const char*>(save_item.first.data()), 
+	  file.write(reinterpret_cast<const char*>(save_item.first.data()),
 		     save_item.first.size());
 	  file.close();
 	} else {
@@ -2025,7 +2201,200 @@ private:
       }
     }
   }
+
+  // Self-contained JPEG encode for the grab worker: everything it needs
+  // rides in the job, so it never races the Tcl thread's preview encodes
+  // (write_rgb_scanline shares rb_swap_row_) and never touches libcamera
+  // state that a stop/reconfigure could invalidate mid-encode.
+  static bool encode_job_to_jpeg(const GrabJob &job,
+				 std::vector<uint8_t> &jpeg_output) {
+#ifdef HAS_JPEG
+    if (job.raw.empty()) return false;
+
+    struct jpeg_compress_struct cinfo;
+    struct jpeg_error_mgr jerr;
+
+    cinfo.err = jpeg_std_error(&jerr);
+    jpeg_create_compress(&cinfo);
+
+    unsigned char *jpeg_buffer = nullptr;
+    unsigned long jpeg_size = 0;
+    jpeg_mem_dest(&cinfo, &jpeg_buffer, &jpeg_size);
+
+    unsigned int enc_width = job.width;
+    unsigned int enc_height = job.height;
+    int row_stride = static_cast<int>(job.stride);
+    std::vector<uint8_t> rotated;
+    const uint8_t *encode_src = job.raw.data();
+
+    if (job.sw_rotate && (job.rotation == 90 || job.rotation == 180 ||
+			  job.rotation == 270)) {
+      // Same transform as rotate_rgb888, on local buffers.
+      unsigned int w = job.width, h = job.height;
+      if (job.rotation == 90 || job.rotation == 270) {
+	enc_width = h;
+	enc_height = w;
+      }
+      rotated.resize(enc_width * enc_height * 3);
+      for (unsigned int y = 0; y < h; y++) {
+	for (unsigned int x = 0; x < w; x++) {
+	  unsigned int dst_x = x, dst_y = y;
+	  switch (job.rotation) {
+	  case 90:  dst_x = y;         dst_y = w - 1 - x; break;
+	  case 180: dst_x = w - 1 - x; dst_y = h - 1 - y; break;
+	  case 270: dst_x = h - 1 - y; dst_y = x;         break;
+	  }
+	  const uint8_t *sp = job.raw.data() + y * job.stride + x * 3;
+	  uint8_t *dp = rotated.data() + (dst_y * enc_width + dst_x) * 3;
+	  dp[0] = sp[0]; dp[1] = sp[1]; dp[2] = sp[2];
+	}
+      }
+      encode_src = rotated.data();
+      row_stride = static_cast<int>(enc_width * 3);
+    }
+
+    cinfo.image_width = enc_width;
+    cinfo.image_height = enc_height;
+    cinfo.input_components = 3;
+    cinfo.in_color_space = JCS_RGB;
+
+    jpeg_set_defaults(&cinfo);
+    jpeg_set_quality(&cinfo, job.jpeg_quality, TRUE);
+    jpeg_start_compress(&cinfo, TRUE);
+
+    std::vector<uint8_t> swap_row;
+    JSAMPROW row_pointer[1];
+    while (cinfo.next_scanline < cinfo.image_height) {
+      const uint8_t *row = encode_src + cinfo.next_scanline * row_stride;
+      if (job.bgr) {
+	if (swap_row.size() < enc_width * 3) swap_row.resize(enc_width * 3);
+	for (unsigned int x = 0; x < enc_width; x++) {
+	  swap_row[x * 3 + 0] = row[x * 3 + 2];
+	  swap_row[x * 3 + 1] = row[x * 3 + 1];
+	  swap_row[x * 3 + 2] = row[x * 3 + 0];
+	}
+	row_pointer[0] = swap_row.data();
+      } else {
+	row_pointer[0] = const_cast<uint8_t *>(row);
+      }
+      jpeg_write_scanlines(&cinfo, row_pointer, 1);
+    }
+
+    jpeg_finish_compress(&cinfo);
+
+    jpeg_output.assign(jpeg_buffer, jpeg_buffer + jpeg_size);
+    if (jpeg_buffer) free(jpeg_buffer);
+    jpeg_destroy_compress(&cinfo);
+    return true;
+#else
+    return false;
+#endif
+  }
+
+  // Announce a grab's outcome on the public "<name>/meta" point.  The JPEG
+  // itself is private (log-only), so this is what a state system waits on.
+  void publish_grab_meta(const GrabJob &job, size_t jpeg_bytes, bool ok,
+			 const std::string &error) {
+    if (!tclserver) return;
+    std::string meta_name = job.dpoint_name + "/meta";
+    char meta_json[512];
+    if (ok) {
+      snprintf(meta_json, sizeof(meta_json),
+	       "{\"req_id\":%lld,\"frame_id\":%d,\"timestamp_us\":%lld,"
+	       "\"width\":%u,\"height\":%u,\"jpeg_bytes\":%zu,\"ok\":1}",
+	       (long long) job.request_id, job.frame_id,
+	       (long long) job.timestamp_us,
+	       job.width, job.height, jpeg_bytes);
+    } else {
+      snprintf(meta_json, sizeof(meta_json),
+	       "{\"req_id\":%lld,\"frame_id\":%d,\"timestamp_us\":%lld,"
+	       "\"ok\":0,\"error\":\"%s\"}",
+	       (long long) job.request_id, job.frame_id,
+	       (long long) job.timestamp_us, error.c_str());
+    }
+    ds_datapoint_t *dp = dpoint_new((char *) meta_name.c_str(),
+				    (uint64_t) job.timestamp_us,
+				    DSERV_STRING,
+				    strlen(meta_json) + 1,
+				    (unsigned char *) meta_json);
+    tclserver_set_point(tclserver, dp);
+  }
+
+  void grab_worker_loop() {
+    while (true) {
+      GrabJob job;
+      {
+	std::unique_lock<std::mutex> lock(grab_queue_mutex_);
+	grab_queue_cv_.wait(lock, [this] {
+	  return !grab_queue_.empty() || !grab_worker_running_;
+	});
+	if (grab_queue_.empty()) {
+	  if (!grab_worker_running_) return;
+	  continue;
+	}
+	job = std::move(grab_queue_.front());
+	grab_queue_.pop();
+      }
+
+      if (job.failed) {
+	publish_grab_meta(job, 0, false, job.error);
+	continue;
+      }
+
+      std::vector<uint8_t> jpeg;
+      if (!encode_job_to_jpeg(job, jpeg)) {
+	publish_grab_meta(job, 0, false, "jpeg encode failed");
+	continue;
+      }
+
+      if (tclserver) {
+	ds_datapoint_t *dp = dpoint_new((char *) job.dpoint_name.c_str(),
+					(uint64_t) job.timestamp_us,
+					(ds_datatype_t) DSERV_JPEG,
+					jpeg.size(),
+					jpeg.data());
+	tclserver_set_point_private(tclserver, dp);
+      }
+      publish_grab_meta(job, jpeg.size(), true, "");
+    }
+  }
+
+  void start_grab_worker() {
+    if (grab_worker_running_) return;
+    grab_worker_running_ = true;
+    grab_worker_thread_ = std::thread(&CameraCapture::grab_worker_loop, this);
+  }
+
+  void stop_grab_worker() {
+    if (!grab_worker_running_) return;
+    grab_worker_running_ = false;
+    grab_queue_cv_.notify_all();
+    if (grab_worker_thread_.joinable()) {
+      grab_worker_thread_.join();
+    }
+    std::lock_guard<std::mutex> lock(grab_queue_mutex_);
+    while (!grab_queue_.empty()) grab_queue_.pop();
+  }
+
 public:
+  // Ask for the NEXT sensor frame to be published full-res to dpoint_name
+  // (private JPEG) with "<dpoint_name>/meta" (public JSON) announcing the
+  // result.  Returns immediately; latency is <= one frame period plus the
+  // JPEG encode.  A second request before the first is serviced simply
+  // replaces it.
+  bool request_next_frame_grab(const std::string &dpoint_name,
+			       int64_t request_id) {
+    if (state_ != CameraState::STREAMING) return false;
+    {
+      std::lock_guard<std::mutex> lock(grab_mutex_);
+      grab_dpoint_name_ = dpoint_name;
+      grab_request_id_ = request_id;
+    }
+    grab_after_us_ = tclserver ? (int64_t) tclserver_now(tclserver) : 0;
+    grab_pending_ = true;
+    return true;
+  }
+
   // Getters and setters
   void set_frame_skip_rate(int rate) {
     frame_skip_rate_ = std::max(1, rate);
@@ -3207,10 +3576,56 @@ extern "C" {
     } else {
       Tcl_SetObjResult(interp, Tcl_NewIntObj(info->capture->get_image_size()));
     }
-    
+
     return TCL_OK;
 #endif
-  }  
+  }
+
+  // cameraGrabNextFrame datapoint_name ?request_id?
+  //
+  // Contract-style grab: the NEXT frame the streaming sensor delivers is
+  // encoded full-res off-thread and published private to datapoint_name;
+  // "<datapoint_name>/meta" (public JSON: req_id, frame_id, timestamp_us,
+  // ok/error) announces completion.  Returns immediately.  Unlike the
+  // ring-buffer grab, the image always postdates the request, and the
+  // latency is one frame period regardless of the snapshot interval.
+  static int camera_grab_next_frame_command(ClientData data,
+					    Tcl_Interp *interp,
+					    int objc, Tcl_Obj *objv[])
+  {
+    camera_info_t *info = (camera_info_t *) data;
+
+#ifndef HAS_LIBCAMERA
+    Tcl_AppendResult(interp, "Camera support not available", NULL);
+    return TCL_ERROR;
+#else
+    if (!info->capture) {
+      Tcl_AppendResult(interp, "Camera not initialized", NULL);
+      return TCL_ERROR;
+    }
+
+    if (objc < 2) {
+      Tcl_WrongNumArgs(interp, 1, objv, "datapoint_name ?request_id?");
+      return TCL_ERROR;
+    }
+
+    const char *dpoint_name = Tcl_GetString(objv[1]);
+
+    Tcl_WideInt request_id = 0;
+    if (objc > 2) {
+      if (Tcl_GetWideIntFromObj(interp, objv[2], &request_id) != TCL_OK)
+	return TCL_ERROR;
+    }
+
+    if (!info->capture->request_next_frame_grab(dpoint_name, request_id)) {
+      Tcl_AppendResult(interp, "Camera not streaming - cannot grab", NULL);
+      return TCL_ERROR;
+    }
+
+    Tcl_SetObjResult(interp, Tcl_NewWideIntObj(request_id));
+    return TCL_OK;
+#endif
+  }
   
   
   // Add these 8 new Tcl command implementations to your camera.cpp file
@@ -4048,7 +4463,10 @@ extern "C" {
                          cameraInfo, NULL);
     Tcl_CreateObjCommand(interp, "cameraGrabFrame",
                          (Tcl_ObjCmdProc *) camera_grab_frame_command,
-                         cameraInfo, NULL);    
+                         cameraInfo, NULL);
+    Tcl_CreateObjCommand(interp, "cameraGrabNextFrame",
+                         (Tcl_ObjCmdProc *) camera_grab_next_frame_command,
+                         cameraInfo, NULL);
     Tcl_CreateObjCommand(interp, "cameraSetFrameSkipRate",
                          (Tcl_ObjCmdProc *) camera_set_frame_skip_rate_command,
                          cameraInfo, NULL);
