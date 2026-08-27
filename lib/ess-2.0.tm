@@ -3020,8 +3020,10 @@ namespace eval ess {
     # time on dserv's timebase -- and announces the outcome on the public
     # camera/full/meta, which resolves the contract here (CAMERA DONE or
     # CAMERA FAIL, param = request id, then do_update). file_open logs
-    # both points, so offline extraction pairs each REQUEST with the first
-    # frame captured at or after it; DONE/FAIL make dropped grabs visible.
+    # both points. camera_grab_nearest uses the same events but picks the
+    # already-buffered frame nearest a named time (capture may precede
+    # REQUEST); extraction pairs each DONE request to the unused blob
+    # nearest the request, not "first capture at or after".
     #
     # The timer backstop matters: if the camera subprocess is absent or
     # wedged, no meta ever arrives, and the trial must not hang on it.
@@ -3053,6 +3055,34 @@ namespace eval ess {
             ::ess::evt_put CAMERA FAIL [now] $req
         }
         return $req
+    }
+
+    # Ring-buffer nearest frame to t_us (dserv us; empty = now). Same
+    # REQUEST/DONE contract as camera_grab; does not wait for a new
+    # sensor frame. Pair with set_ring_fill 1 so the ring holds stream
+    # rate, not the preview cadence.
+    proc camera_grab_nearest { {t_us ""} } {
+        variable camera_grab_seq
+        if { $t_us eq "" } { set t_us [now] }
+        set req [incr camera_grab_seq]
+
+        dservAddExactMatch camera/full/meta
+        dpointSetScript camera/full/meta ::ess::camera_grab_complete
+
+        ::ess::evt_put CAMERA REQUEST [now] $req
+        if { [catch { sendNoReply camera [list grab_nearest $req $t_us] } err] } {
+            variable camera_grab_last
+            variable camera_grab_status
+            set camera_grab_status \
+                "{\"req_id\":$req,\"ok\":0,\"error\":\"no camera subprocess\"}"
+            if { $req > $camera_grab_last } { set camera_grab_last $req }
+            ::ess::evt_put CAMERA FAIL [now] $req
+        }
+        return $req
+    }
+
+    proc camera_grab_before { ms } {
+        return [camera_grab_nearest [expr {[now] - wide($ms) * 1000}]]
     }
 
     # dpoint callback for camera/full/meta

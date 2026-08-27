@@ -902,11 +902,7 @@ namespace eval df {
         # readESS stores frames at FILE level (<blob>NAME byte vectors +
         # <blobt>NAME capture times, ms from the file's first record)
         # because a frame requested late in an obs is encoded async and
-        # can be logged after ENDOBS. Grouping into obs therefore pairs
-        # each per-obs CAMERA REQUEST event with the first unconsumed
-        # frame captured at or after it -- an invariant the camera module
-        # guarantees (it services a grab only with a frame whose exposure
-        # started at/after the request).
+        # can be logged after ENDOBS.
         #
         # Returns three nested dynlists of length n_obs (persistent in
         # this object's scratch dg):
@@ -915,6 +911,11 @@ namespace eval df {
         #               capture (-1 if no frame resolved the request)
         #   jpeg      - DF_CHAR byte vectors (empty if unresolved).
         #               Recover bytes: numpy arr.astype('uint8').tobytes()
+        #
+        # Pairing: each CAMERA REQUEST with DONE evidence claims the
+        # unused blob whose capture time is nearest the request (so a
+        # look-behind grab_nearest frame, captured before REQUEST, still
+        # matches). FAIL / unresolved stay empty.
         #
         # Request ids of CAMERA <subtype> events, from BOTH the per-obs
         # event stream and e_pre (a grab's DONE/FAIL is stamped when its
@@ -976,7 +977,7 @@ namespace eval df {
                 set obs_starts [dl_tcllist $g:obs_start_ms]
             }
             set n_frames [llength $frame_times]
-            set k 0
+            set used [lrepeat $n_frames 0]
 
             for {set o 0} {$o < $n_obs} {incr o} {
                 dl_local rts [dl_ilist]
@@ -991,15 +992,21 @@ namespace eval df {
                     if {$have_frames && $req_id in $done_ids &&
                         $req_id ni $fail_ids} {
                         set abs_r [expr {$ostart + $r}]
-                        while {$k < $n_frames &&
-                               [lindex $frame_times $k] < $abs_r} {
-                            incr k    ;# unclaimed frame (e.g. manual grab)
+                        set best -1
+                        set best_dt {}
+                        for {set i 0} {$i < $n_frames} {incr i} {
+                            if {[lindex $used $i]} { continue }
+                            set dt [expr {abs([lindex $frame_times $i] - $abs_r)}]
+                            if {$best < 0 || $dt < $best_dt} {
+                                set best $i
+                                set best_dt $dt
+                            }
                         }
-                        if {$k < $n_frames} {
+                        if {$best >= 0} {
+                            lset used $best 1
                             dl_append $cts \
-                                [expr {[lindex $frame_times $k] - $ostart}]
-                            dl_append $jps [dl_get $g:$bcol $k]
-                            incr k
+                                [expr {[lindex $frame_times $best] - $ostart}]
+                            dl_append $jps [dl_get $g:$bcol $best]
                             set found 1
                         }
                     }

@@ -1,117 +1,210 @@
 # Camera snapshots in the data path
 
-How an experiment takes full-resolution camera frames during trials and how
-those frames (plus other datapoint streams, like extio analog blocks) land
-in `.ess` files, obs dgz files, and trials extraction.
+How an ESS state system takes full-resolution camera frames during trials
+and how those frames land in `.ess` files and trials extract. Aimed at an
+agent adding snaps to a protocol — edit whatever tree ESS loads on the
+rig (`ESS_SYSTEM_PATH` / the lab overlay).
 
-## The grab contract (runtime)
+Camera JPEGs are **private**: they go to log files and nowhere else.
+Explorer, `dservGet`, websocket subscribe, and `/camera.html` cannot show
+the payload. **Do not put images in trialsync.** Frames belong in the
+`.ess` logger and the local trials / obs dgz.
 
-The sensor free-runs at `stream_fps` (30) whenever the camera is enabled.
-The preview cadence (`camera rate_hz`, default 1/s to `camera/preview`) is
-a *watching* knob only — grabs do not depend on it, so there is no reason
-to raise it for data collection. `rate_hz 0` (or `set_interval never`)
-turns snapshots off entirely: pure acquisition for on-demand grabs, with
-`camera/interval` reporting `never` (`grab_last` starves in this mode —
-the ring buffer only fills from snapshot frames). Idle cost at 30 fps is
-negligible: frames that are neither previewed nor grabbed are requeued
-untouched (no copies, no encode; buffer mappings are created once per
-configure). Measured on a Pi 5: background acquisition ≈ 3.7% of one
-core (libcamera pipeline + IPA threads), +1% for the 1 Hz preview,
-~65 ms of one worker core per grab.
+## Which helper
 
-A grab is a contract:
+Pick one. All are fire-and-forget from a state *action* (never from a
+polled transition). They stamp `CAMERA REQUEST` immediately and resolve
+later with `CAMERA DONE` or `FAIL`. The JPEG is private on `camera/full`;
+public completion is `camera/full/meta`.
 
-1. **Request** — `::ess::camera_grab` (from a state's *action*):
-   - stamps `CAMERA REQUEST` (evt 55/0, param = request id),
-   - sends `grab_full <req_id>` to the camera subprocess (`sendNoReply`,
-     never blocks the state thread).
-2. **Capture** — the module services the request with the first frame
-   whose exposure *started at or after* the request (`cameraGrabNextFrame`;
-   latency ≤ 2 frame periods). The frame is JPEG-encoded on a worker
-   thread, off the streaming callback.
-3. **Publish** — the JPEG goes **private** to `camera/full`, timestamped
-   with the *sensor capture time on dserv's timebase*
-   (`SensorTimestamp` ns + `tclserver_clock_epoch_offset_us()`), directly
-   comparable with event timestamps. A public JSON completion goes to
-   `camera/full/meta`: `{req_id frame_id timestamp_us width height
-   jpeg_bytes ok}` (or `ok:0` + `error`).
-4. **Resolve** — ESS's `camera/full/meta` callback stamps `CAMERA DONE`
-   (or `FAIL`) with the request id and wakes the state machine.
+| Helper | Use when | Capture vs REQUEST |
+|---|---|---|
+| `::ess::camera_grab` | The landmark is a command you just issued (stim on, “snap now”) | Always **after** REQUEST, by at most about one frame period (~33 ms at 30 fps) plus encode |
+| `::ess::camera_grab_nearest $t_us` | You have a time on dserv’s clock (`[now]`, an event stamp) and want the already-buffered frame nearest that time | May be **before or after** REQUEST; does not wait |
+| `::ess::camera_grab_before $ms` | Convenience: nearest to `[now] − ms`. Circles target-select uses **100** | Typically **before** REQUEST |
 
-### What a state system adds
+The sensor must already be **streaming** (`camera/status` is `continuous`).
+`camera_grab` does not need the ring. `camera_grab_nearest` / `_before`
+need `set_ring_fill 1` **before the trial** so ~16 stream-rate frames
+are kept (~500 ms at 30 fps). Empty ring still resolves (`ok:0` meta +
+`CAMERA FAIL`) so the trial does not hang.
 
-**Fire-and-forget (the usual case)** — one line in an existing action.
-The contract resolves ~100 ms later on its own; the frame and its
-REQUEST/DONE events land in the datafile with no transition changes.
-In `match_to_sample`, for example, an opt-in param plus one line in
-`sample_on` snaps every sample onset:
+Preview (`camera rate_hz`, default 1/s to `camera/preview`) is a watching
+knob only. Data collection uses `rate_hz 0` (no preview JPEGs). That does
+not starve look-behind as long as ring fill is on. Fill is cheap; leaving
+it on for the open file is the right default when any trial might call
+`camera_grab_before`.
+
+The ess interp registers **`sendNoReply`**, not `send_noreply`. Prefer
+the `::ess::camera_grab*` helpers. A `catch` around the wrong name
+swallows the error and you get a normal-looking session with **zero**
+JPEGs.
+
+Saving Tcl is not enough: **reload** the system/protocol/variant so
+in-memory actions pick up the helpers and params. New camera commands
+live in the camera subprocess — restart dserv (or re-source
+`cameraconf.tcl` there) after changing those.
+
+## Wire it into a protocol
+
+### Fire-and-forget (usual)
+
+One line in an existing action. The contract resolves on its own; juice
+and trial timing stay put. Safe anywhere the state dwells longer than
+~100 ms (a grab requested right before ENDOBS still works — extract pairs
+by request time, not log position). Enabling the param on a camera-less
+rig is fine: the helper self-resolves as FAIL.
 
 ```tcl
 $sys add_param snap_on_sample 0 variable int
 ...
 $sys add_action sample_on {
     my sample_on
-    ::ess::evt_put STIMTYPE STIMID [now] $stimtype
     ::ess::evt_put SAMPLE ON [now]
     if { $snap_on_sample } { ::ess::camera_grab }
     timerTick $sample_time
 }
 ```
 
-Fire-and-forget is safe anywhere the state dwells longer than ~100 ms
-(a grab requested right before ENDOBS still works — extraction pairs by
-request time, not log position). `camera_grab` also self-resolves as
-FAILed if the rig has no camera subprocess, so enabling the param on a
-camera-less rig costs nothing.
+If the landmark is a *transition* predicate (a dpoint flipped, a complete
+flag), do **not** put the grab in the transition — it would fire every
+poll. Insert a one-tick state whose action does the grab, then go on
+immediately.
 
-**Wait-for-contract** — only when the system must *know* the frame was
-captured before proceeding (transitions decide, actions do):
+### Start the sensor with the datafile
+
+Grabs only hit disk while the logger is matching. `camera enabled`
+defaults to 0: the subprocess is up, the sensor is idle, and
+`camera_grab` fails with `"Camera not initialized"`.
+
+Start once per file, not per trial (`start` is init + configure +
+stream). Use blocking `send camera start` on open; `sendNoReply camera
+stop` on close. Only stop what this protocol started, so a gear-enabled
+`/camera.html` preview is left alone.
+
+Set `stream_fps` and `set_rotation` **before** `start`. Rotation is
+0/90/180/270 clockwise (mounting). `rate_hz` / `apply_capture_hz` is
+live; **0** is the data-collection setting. Look-behind also needs
+`set_ring_fill 1`.
+
+Worked example: `search` / `circles` snaps ~100 ms before target
+selection. The system’s `response` action calls a no-op hook; the
+protocol overrides it. File open/close owns the sensor:
+
+```tcl
+# search.tcl — fire-and-forget from the one-shot response action
+$sys add_action response {
+    set resp_time [now]
+    ::ess::evt_put RESP 1 $resp_time
+    my on_target_select
+}
+$sys add_method on_target_select {} {}
+
+# circles.tcl
+$s add_param snap_on_target 1 variable int
+$s add_param snap_before_ms 100 variable int
+$s add_param camera_stream_fps 30 variable float
+$s add_param camera_rotation 90 variable int
+$s add_param camera_rate_hz 0 variable float
+$s add_variable camera_started_for_file 0
+
+$s add_method on_target_select {} {
+    if { $snap_on_target } { ::ess::camera_grab_before $snap_before_ms }
+}
+
+$s set_file_open_callback {
+    set camera_started_for_file 0
+    if { $snap_on_target } {
+        set st ""
+        catch { set st [dservGet camera/status] }
+        if { $st ne "continuous" } {
+            send camera [list set stream_fps $camera_stream_fps]
+            send camera [list set_rotation $camera_rotation]
+            send camera start
+            catch { set st [dservGet camera/status] }
+            if { $st eq "continuous" } { set camera_started_for_file 1 }
+        }
+        if { $st eq "continuous" } {
+            send camera [list apply_capture_hz $camera_rate_hz]
+            send camera {set_ring_fill 1}
+        }
+    }
+}
+$s set_file_close_callback {
+    catch { sendNoReply camera {set_ring_fill 0} }
+    if { $camera_started_for_file } {
+        catch { sendNoReply camera stop }
+        set camera_started_for_file 0
+    }
+}
+```
+
+Do not put `camera_grab` in `wait_for_response`’s transition — that is
+polled every tick. The `response` action fires once.
+
+### Wait-for-contract (rare)
+
+Only when the system must *know* the frame was captured before
+proceeding. Always a timer backstop: if the camera subprocess is wedged,
+no meta arrives and the trial must not hang.
 
 ```tcl
 $sys add_action  snap { ::ess::camera_grab; timerTick 500 }
 $sys add_transition snap {
     if { [::ess::camera_grab_done] } { return next_state }
-    if { [timerExpired] } { return next_state }   ;# camera AWOL — don't hang
+    if { [timerExpired] } { return next_state }
 }
 ```
 
-The timer backstop matters: if the camera subprocess is wedged, no meta
-ever arrives and the trial must not hang on it. `camera_grab_ok` tells
-the two resolutions apart when a state cares.
-
-`grab_last` keeps the old ring-buffer behavior (instant, but up to one
-preview interval stale, no completion meta) for interactive use.
+`grab_last` is interactive only (newest ring frame, possibly stale, no
+REQUEST/DONE). Do not use it in a protocol.
 
 ## Logging
 
-`ess::file_open` matches `camera/full` and `camera/full/meta`
-unconditionally (a match nothing publishes costs nothing) and **not
-obs-limited**: the async encode can publish a frame just after ENDOBS, and
-an obs-limited match would silently drop exactly those frames.
+`ess::file_open` already matches `camera/full` and `camera/full/meta`
+(not obs-limited: encode can finish just after ENDOBS). Do **not**
+logger-match `camera/preview` — that is the watching stream and would
+fill the datafile.
 
-## In the obs dg (`dslog::readESS`)
+## Did it work?
 
-readESS (dlsh `src/lablib/dslog.c`) now emits:
+`dservGet camera/full` always says private, even on success. Check the
+**`.ess` file** (about one full-res JPEG per grab; REQUEST/DONE in the
+eventlog) or `cam_request_t` / `cam_capture_t` / `cam_jpeg` after
+extract.
 
-| column | shape | content |
-|---|---|---|
-| `<ds>NAME` | n_obs × values | decoded values, concatenated per obs (unchanged) |
-| `<dst>NAME` | n_obs × records | per-**record** times, ms from that obs's BEGINOBS (e_times' axis) |
-| `<dsn>NAME` | n_obs × records | per-record value counts (split `<ds>` back into records) |
-| `<blob>NAME` | n_records | one DF_CHAR byte vector per JPEG/PPM record, whole file |
-| `<blobt>NAME` | n_records | per-record capture time, ms from the file's first record |
-| `obs_start_ms` | n_obs | each BEGINOBS, ms from the file's first record |
+| In the `.ess` | Meaning |
+|---|---|
+| no CAMERA REQUEST | the state never called a grab helper (not reloaded, param off, action never entered) |
+| REQUEST, no DONE/FAIL | send reached the camera interp, but meta never came back |
+| REQUEST + FAIL (FAIL may be in `e_pre`, after ENDOBS) | `camera/full/meta` had `ok:0`. `"Camera not initialized"` means the sensor was idle. Extract: `cam_capture_t` `-1`, empty `cam_jpeg` |
+| REQUEST + DONE, no `<blob>camera/full` | logger match / private publish |
+| REQUEST + DONE + blob, capture **after** REQUEST by tens of ms | `camera_grab` (next-frame) working |
+| REQUEST + DONE + blob, capture **before** REQUEST by ~`snap_before_ms` | `camera_grab_before` working |
 
-Blob streams are file-level *on purpose*: log position cannot assign an
-async-encoded frame to an obs (it may be written after ENDOBS), but its
-capture timestamp — plus the REQUEST events — can.
+`dservGet camera/status` should be `continuous` before the first grab.
+Live, test the same command ESS sends. `camera/full/meta` is public:
+
+```tcl
+send camera {grab_full 1}
+dservGet camera/full/meta
+```
+
+Look-behind (ring must already be filling):
+
+```tcl
+send camera {set_ring_fill 1}
+# wait ~0.5 s
+send camera [list grab_nearest 1 [expr {[now] - 100000}]]
+dservGet camera/full/meta
+```
+
+`timestamp_us` should sit ~100 ms before the request. That proves the
+camera contract only, not the logger or extract.
 
 ## Extraction (`df::File`)
 
-### What an extract script adds
-
-The whole block — drop it into any system's `extract_trials`, after
-`valid_indices` is computed:
+Drop this into the system’s `extract_trials` after `valid_indices`:
 
 ```tcl
 if {[$f has_event_type CAMERA] &&
@@ -123,35 +216,29 @@ if {[$f has_event_type CAMERA] &&
 }
 ```
 
-Per trial that yields: request/capture times (ms from obs onset;
-capture `-1` where a grab never resolved) and a list of JPEG byte
-vectors (empty where unresolved). The double guard keeps old files
-quiet and skips files where no grab was ever requested. Pairing
-consumes a frame only for requests with CAMERA DONE evidence, so a
-failed grab never claims a stray (e.g. manual) frame — and it works for
-frames logged after ENDOBS, since assignment is by request time, not
-log position.
+Per trial: request/capture times (ms from obs onset; capture `-1` if
+unresolved) and JPEG byte vectors (empty if unresolved). Each DONE
+request claims the unused blob whose capture time is **nearest** the
+request, so a look-behind frame still pairs. FAIL never claims a stray
+frame.
 
-### Other streams
+**Use DF_CHAR, not DF_STRING** for JPEG bytes (Python `dgread` can abort
+on overlong NUL if they went through Tcl UTF-8).
 
-```tcl
-# any recorded stream, with per-record times/counts
-lassign [$f ds_in_obs em/pupil] vals times counts
-
-# extio analog blocks (record_streams) decoded to per-scan samples
-lassign [$f ain_samples_in_obs extio/box02/state/ain/eye] t v
-# t: n_obs × scans, float ms from obs onset (block t0 + k*interval_us)
-# v: n_obs × channels of DF_SHORT samples
-```
+readESS keeps JPEGs at file level (`<blob>camera/full`, `<blobt>camera/full`)
+because a frame can be logged after ENDOBS. Prefer `camera_frames_in_obs`
+or the trials columns over walking the raw `.ess`.
 
 ## Python
 
-`DF_CHAR` reads as int8 in numpy; recover bytes with:
-
 ```python
 import dgread, numpy as np
-d = dgread.dgread('file.obs.dgz')
-jpg = np.asarray(d['<blob>camera/full'][k], dtype=np.int8).astype(np.uint8).tobytes()
-open('frame.jpg', 'wb').write(jpg)
+d = dgread.dgread('file.trials.dgz')
+arr = d['cam_jpeg'][0][0]   # trial 0, first frame
+jpg = np.asarray(arr, dtype=np.uint8).tobytes()
+assert jpg[:3] == b'\xff\xd8\xff' and jpg[-2:] == b'\xff\xd9'
+# also: d['cam_request_t'][trial], d['cam_capture_t'][trial]
 ```
 
+`UnicodeDecodeError` on load usually means the column was stored as
+DF_STRING instead of DF_CHAR.

@@ -17,7 +17,8 @@
 # Datapoints published:
 #   camera/preview     JPEG snapshot, every snapshot_interval s (view at /camera.html)
 #   camera/full        full-resolution JPEG (private), on demand via grab_full
-#   camera/full/meta   public JSON completion for each grab_full:
+#                      or grab_nearest
+#   camera/full/meta   public JSON completion for each grab_full / grab_nearest:
 #                      {req_id frame_id timestamp_us width height jpeg_bytes ok}
 #                      (ok 0 + error on failure). ESS waits on this point;
 #                      timestamp_us is the sensor capture time on dserv's
@@ -31,13 +32,20 @@
 #  start ?camera_id?           - Start camera streaming
 #  stop                        - Stop camera streaming
 #  set_interval secs|never     - Seconds between snapshots (live, no
-#                                restart); never|off|0 disables snapshots
-#                                (grabs unaffected, grab_last starves)
+#                                restart); never|off|0 disables preview
+#                                (grab_full unaffected; grab_last/nearest
+#                                starve unless set_ring_fill 1)
+#  set_ring_fill 0|1           - Hold every stream frame in the ring
+#                                (zero-copy Request park) without raising
+#                                preview rate. Needed for grab_nearest.
 #  set_rotation deg            - Declare mounting rotation (persists to rig.tcl)
 #  grab_full ?req_id?          - Publish the NEXT sensor frame full-res to
 #                                camera/full (+ camera/full/meta completion).
 #                                Latency <= one frame period + encode; the
 #                                image always postdates the request.
+#  grab_nearest req_id t_us    - Publish the ring frame whose capture time
+#                                is nearest t_us (dserv us; already in the
+#                                buffer, no wait) + camera/full/meta.
 #  grab_last                   - Publish the most recent ring-buffer frame
 #                                (can be up to snapshot_interval old)
 #  check_status                - Get camera status
@@ -79,24 +87,26 @@ proc camera_health {state {detail ""}} {
 }
 
 set last_frame_id -1
+set ring_fill 0
+array unset frame_ts
+array unset frame_wh
+set last_preview_ms -1
 
 # Stream runs at stream_fps; snapshots publish every snapshot_interval seconds
 # (rounded to a whole number of skipped frames). Changing snapshot_interval
-# while streaming takes effect immediately via set_interval.
+# while streaming takes effect immediately via set_interval. set_ring_fill 1
+# parks every stream Request in the ring (and fires this callback for
+# timestamps) while preview stays at snapshot_interval. Skip is preview-only.
 set stream_fps 30.0
 set snapshot_interval 1.0
 
-# Compute the skip rate for the current interval, apply it, and publish the
-# actual (quantized) interval to camera/interval ("never" when snapshots
-# are off). Before the camera is initialized the module call errors — the
-# chosen interval still publishes and start's own apply_interval picks it
-# up. Any OTHER failure must propagate: publishing an interval that did
-# not apply is how a page ends up trusting a rate the stream is not
-# running at.
+# Preview cadence reported on camera/interval. Skip rate matches the preview
+# interval (0 = never: no preview JPEG). Ring fill is independent: hold
+# parks Requests at stream_fps even when skip is 0.
 proc apply_interval {} {
     if {$::snapshot_interval eq "never"} {
-        set skip 0
         set actual never
+        set skip 0
     } else {
         set skip [expr {max(1, round($::stream_fps * $::snapshot_interval))}]
         set actual [format %.3g [expr {$skip / $::stream_fps}]]
@@ -104,14 +114,17 @@ proc apply_interval {} {
     if {[catch {cameraSetFrameSkipRate $skip} err]} {
         if {![string match "*not initialized*" $err]} { error $err }
     }
+    if {[catch {cameraSetRingHold $::ring_fill} err]} {
+        if {![string match "*not initialized*" $err]} { error $err }
+    }
     dservSet camera/interval $actual
     return $actual
 }
 
 # secs in (0, 3600], or never|off|0: the sensor keeps streaming (grab_full
-# still works, and costs nothing extra) but no frame is processed for
-# camera/preview or the ring buffer — so grab_last has nothing to serve
-# until snapshots are re-enabled.
+# still works, and costs nothing extra). Preview to camera/preview stops.
+# The ring also stops filling unless set_ring_fill 1 (hold parks Requests
+# even when skip is 0, so grab_nearest / grab_last still have frames).
 proc set_interval {secs} {
     if {$secs in {never off 0}} {
         set ::snapshot_interval never
@@ -124,9 +137,63 @@ proc set_interval {secs} {
     return [apply_interval]
 }
 
-# Called once per non-skipped frame (~1/sec with the rates set in start)
+# Keep every stream_fps frame in the 16-slot ring (~500 ms at 30 fps) so
+# grab_nearest can look behind. Parks libcamera Requests (no 30 fps RGB
+# memcpy). Preview rate is unchanged (still snapshot_interval / rate_hz).
+# Default off: /camera.html at 1 Hz must not hold every 1080p DMA buffer.
+proc set_ring_fill {on} {
+    if {$on in {1 true on yes}} {
+        set ::ring_fill 1
+    } elseif {$on in {0 false off no}} {
+        set ::ring_fill 0
+    } else {
+        error "set_ring_fill: expected 0|1, got \"$on\""
+    }
+    return [apply_interval]
+}
+
+# Live ring frame_ids from the module (monotonic ids, oldest..newest).
+proc ring_live_ids {} {
+    if {![catch {cameraGetRingBufferStatus} st] &&
+        ![catch {dict get $st oldest_frame_id} a] &&
+        ![catch {dict get $st newest_frame_id} b] &&
+        [string is integer -strict $a] && [string is integer -strict $b] &&
+        $a >= 0 && $b >= $a} {
+        set ids {}
+        for {set i $a} {$i <= $b} {incr i} { lappend ids $i }
+        return $ids
+    }
+    return [array names ::frame_ts]
+}
+
+proc prune_frame_index {newest} {
+    foreach id [array names ::frame_ts] {
+        if {$id < $newest - 32} {
+            unset -nocomplain ::frame_ts($id) ::frame_wh($id)
+        }
+    }
+}
+
+# Called once per non-skipped frame. With ring_fill / hold this is every
+# stream frame (even when skip=0); preview JPEGs still fire only at
+# snapshot_interval.
 proc my_frame_handler {frame_id timestamp_ms width height ppm_size ae_settled datapoint_prefix} {
     set ::last_frame_id $frame_id
+    # timestamp_ms is wall-clock ms (frame_info formats it as a datetime).
+    # ESS now() / JPEG blob timestamps are microseconds on the same epoch.
+    set ::frame_ts($frame_id) [expr {wide($timestamp_ms) * 1000}]
+    set ::frame_wh($frame_id) [list $width $height]
+    prune_frame_index $frame_id
+
+    if {$::snapshot_interval eq "never"} {
+        return
+    }
+    set min_dt [expr {round($::snapshot_interval * 1000)}]
+    if {$::last_preview_ms >= 0 &&
+        ($timestamp_ms - $::last_preview_ms) < $min_dt} {
+        return
+    }
+    set ::last_preview_ms $timestamp_ms
 
     set timestamp_sec [expr $timestamp_ms / 1000]
     set datetime [clock format $timestamp_sec -format "%Y-%m-%d %H:%M:%S"]
@@ -205,6 +272,10 @@ proc stop {} {
     if {[catch {cameraStopStreaming} result]} {
         puts "Error stopping streaming: $result"
     }
+    set ::last_frame_id -1
+    set ::last_preview_ms -1
+    array unset ::frame_ts
+    array unset ::frame_wh
     puts "Camera stopped"
 }
 
@@ -239,6 +310,55 @@ proc grab_last {} {
         error "Error publishing full frame: $result"
     }
     return $::last_frame_id
+}
+
+proc camera_full_meta_fail {req_id msg} {
+    set msg [string map {\" ' \\ /} $msg]
+    dservSet camera/full/meta \
+        "{\"req_id\":$req_id,\"ok\":0,\"error\":\"$msg\"}"
+}
+
+# Publish the already-buffered frame whose capture time is nearest t_us
+# (dserv microseconds, same axis as ESS now()). Does not wait for a future
+# sensor frame — that is grab_full. Needs set_ring_fill 1 so the ring
+# holds stream-rate history (~16 slots, ~500 ms at 30 fps).
+proc grab_nearest { req_id t_us } {
+    if {![string is entier -strict $t_us] && ![string is double -strict $t_us]} {
+        camera_full_meta_fail $req_id "bad t_us"
+        error "grab_nearest: expected t_us, got \"$t_us\""
+    }
+    set t_us [expr {wide($t_us)}]
+    set best_id -1
+    set best_dt -1
+    set best_ts 0
+    foreach id [ring_live_ids] {
+        if {![info exists ::frame_ts($id)]} { continue }
+        set ts $::frame_ts($id)
+        set dt [expr {wide($ts) - $t_us}]
+        if {$dt < 0} { set dt [expr {-$dt}] }
+        if {$best_id < 0 || $dt < $best_dt} {
+            set best_id $id
+            set best_dt $dt
+            set best_ts $ts
+        }
+    }
+    if {$best_id < 0} {
+        camera_full_meta_fail $req_id \
+            "ring empty (set_ring_fill 1 to keep every stream frame)"
+        error "grab_nearest: ring empty"
+    }
+    if {[catch {cameraPublishJpegCallbackFrame $best_id camera/full} result]} {
+        camera_full_meta_fail $req_id $result
+        error "Error publishing nearest frame: $result"
+    }
+    set w 0
+    set h 0
+    if {[info exists ::frame_wh($best_id)]} {
+        lassign $::frame_wh($best_id) w h
+    }
+    dservSet camera/full/meta \
+        "{\"req_id\":$req_id,\"frame_id\":$best_id,\"timestamp_us\":$best_ts,\"width\":$w,\"height\":$h,\"ok\":1}"
+    return $req_id
 }
 
 # Status check function
@@ -346,7 +466,8 @@ proc set_rotation {deg} {
 # Preview/snapshot cadence declared in Hz (the module still thinks in
 # seconds via set_interval). This is a WATCHING knob: grab_full uses the
 # next-frame contract and is always fresh, so rate_hz never needs raising
-# for data collection. 0 turns snapshots off entirely (pure acquisition).
+# for data collection. 0 turns preview off (pure acquisition). grab_nearest
+# still needs set_ring_fill 1 so the ring holds stream-rate frames.
 proc apply_capture_hz {hz} {
     if {![string is double -strict $hz] || $hz < 0 || $hz > $::stream_fps} {
         error "rate_hz: expected 0 (off) or Hz in (0, $::stream_fps], got \"$hz\""
@@ -409,6 +530,8 @@ the camera immediately." \
 # Named rate_hz (not capture_hz) so the gear lists it after enabled
 # (knobs sort alphabetically by key). Grabs do NOT depend on this: the
 # sensor free-runs at stream_fps and grab_full takes the next frame.
+# grab_nearest needs set_ring_fill 1 (every stream frame in the ring);
+# raising rate_hz is the wrong way to get look-behind.
 settings::declare camera rate_hz -default 1 -values {0 0.2 0.5 1 2 5 10} \
     -type double \
     -doc "camera/preview snapshot rate in Hz (quantized to whole frames

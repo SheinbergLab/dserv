@@ -178,11 +178,14 @@ private:
   tclserver_t *tclserver = nullptr;
   
   struct CameraFrameBuffer {
-    std::vector<uint8_t> raw_data;     // Raw RGB data
+    std::vector<uint8_t> raw_data;     // Raw RGB data (copy-ring fallback)
     std::vector<uint8_t> jpeg_data;    // JPEG data (only when needed)
 
     std::vector<uint8_t> preview_raw_data;   // Preview RGB data
     std::vector<uint8_t> preview_jpeg_data;  // Preview JPEG data
+
+    libcamera::Request *held_request = nullptr;  // zero-copy: DMA still owned
+    int pin_count = 0;                           // grab memcpy in progress
 
     int frame_id;
     int64_t timestamp_us;   // dserv timebase (us-since-1970 scale)
@@ -202,6 +205,8 @@ private:
   std::mutex ring_buffer_mutex_;
 
   RingBufferMode ring_buffer_mode_ = RingBufferMode::FULL_RATE;
+  std::atomic<bool> ring_hold_{false};
+  int hold_depth_ = 0;  // slots we may park; 0 = copy ring (not enough DMA bufs)
 
   // Persistent plane-0 mappings for every allocated FrameBuffer (both
   // streams), created once in allocate_buffers().  mmap/munmap per frame
@@ -607,7 +612,7 @@ public:
     stream_config.size.width = width;
     stream_config.size.height = height;
     stream_config.pixelFormat = preferred_format;
-    stream_config.bufferCount = 4;
+    stream_config.bufferCount = 2 + RING_BUFFER_SIZE;
 
     configure_rotation_strategy();
     
@@ -621,7 +626,7 @@ public:
       preview_config.size.width = preview_width;
       preview_config.size.height = preview_height;
       preview_config.pixelFormat = preferred_format;
-      preview_config.bufferCount = 4;
+      preview_config.bufferCount = 2 + RING_BUFFER_SIZE;
     }
 
     CameraConfiguration::Status validation = config_->validate();
@@ -675,6 +680,16 @@ public:
   void set_ring_buffer_mode(RingBufferMode mode) {
     ring_buffer_mode_ = mode;
   }
+
+  void set_ring_hold(bool on) {
+    if (ring_hold_.load() && !on) {
+      clear_held_requests(state_ == CameraState::STREAMING);
+    }
+    ring_hold_ = on;
+  }
+
+  bool ring_hold_enabled() const { return ring_hold_.load(); }
+  int ring_hold_depth() const { return hold_depth_; }
   
   bool encode_jpeg() {
 #ifdef HAS_JPEG
@@ -995,6 +1010,18 @@ public:
       
       requests_.push_back(std::move(request));
     }
+
+    const int nreq = static_cast<int>(requests_.size());
+    if (nreq < 4) {
+      hold_depth_ = 0;
+      std::cout << "Allocated " << nreq
+		<< " requests (<4); ring hold disabled, using copy ring"
+		<< std::endl;
+    } else {
+      hold_depth_ = std::min(RING_BUFFER_SIZE, nreq - 2);
+      std::cout << "Allocated " << nreq
+		<< " requests, ring hold_depth " << hold_depth_ << std::endl;
+    }
     
     return true;
   }
@@ -1181,6 +1208,10 @@ public:
 
     camera_->stop();
 
+    // Held requests are no longer in the camera queue; drop pointers
+    // without requeue so stop can finish cleanly.
+    clear_held_requests(false);
+
     // A grab that never met a frame must still resolve its contract.
     if (grab_pending_.exchange(false)) {
       GrabJob job;
@@ -1351,6 +1382,128 @@ public:
     grab_queue_cv_.notify_one();
   }
 
+  void requeue_request(Request *request) {
+    if (!request) return;
+    if (state_ != CameraState::STREAMING) return;
+    request->reuse(Request::ReuseBuffers);
+    apply_controls_to_request(request);
+    camera_->queueRequest(request);
+  }
+
+  void clear_held_requests(bool requeue) {
+    std::vector<Request *> held;
+    {
+      std::lock_guard<std::mutex> lock(ring_buffer_mutex_);
+      for (int i = 0; i < RING_BUFFER_SIZE; i++) {
+	CameraFrameBuffer &slot = frame_ring_buffer_[i];
+	if (slot.held_request) {
+	  held.push_back(slot.held_request);
+	  slot.held_request = nullptr;
+	}
+	slot.valid = false;
+	slot.has_jpeg = false;
+	slot.has_preview = false;
+	slot.has_preview_jpeg = false;
+	slot.pin_count = 0;
+	slot.raw_data.clear();
+	slot.jpeg_data.clear();
+	slot.preview_raw_data.clear();
+	slot.preview_jpeg_data.clear();
+      }
+      ring_write_index_ = 0;
+    }
+    if (requeue) {
+      for (Request *r : held) {
+	requeue_request(r);
+      }
+    }
+  }
+
+  // Caller holds ring_buffer_mutex_. Copies RGB out of a held mmap (or
+  // the copy-ring vector). Pin keeps eviction from reuse() mid-read.
+  bool copy_slot_rgb_locked(CameraFrameBuffer &slot, std::vector<uint8_t> &out) {
+    if (slot.held_request && stream_) {
+      const Request::BufferMap &buffers = slot.held_request->buffers();
+      auto it = buffers.find(stream_);
+      if (it == buffers.end()) return false;
+      auto [data, length] = buffer_plane0(it->second);
+      if (!data || length == 0) return false;
+      slot.pin_count++;
+      out.resize(length);
+      std::memcpy(out.data(), data, length);
+      slot.pin_count--;
+      return true;
+    }
+    if (!slot.raw_data.empty()) {
+      out = slot.raw_data;
+      return true;
+    }
+    return false;
+  }
+
+  bool snapshot_ring_frame(int frame_id, std::vector<uint8_t> &rgb,
+			   int64_t &timestamp_us) {
+    std::lock_guard<std::mutex> lock(ring_buffer_mutex_);
+    for (int i = 0; i < RING_BUFFER_SIZE; i++) {
+      if (frame_ring_buffer_[i].valid &&
+	  frame_ring_buffer_[i].frame_id == frame_id) {
+	timestamp_us = frame_ring_buffer_[i].timestamp_us;
+	return copy_slot_rgb_locked(frame_ring_buffer_[i], rgb);
+      }
+    }
+    return false;
+  }
+
+  void park_request_in_ring(Request *request, bool have_preview) {
+    Request *evict = nullptr;
+    const int depth = hold_depth_;
+    if (depth < 2) {
+      requeue_request(request);
+      return;
+    }
+
+    {
+      std::lock_guard<std::mutex> lock(ring_buffer_mutex_);
+      int idx = ring_write_index_.load() % depth;
+      CameraFrameBuffer &slot = frame_ring_buffer_[idx];
+      if (slot.pin_count > 0) {
+	evict = request;
+      } else {
+	if (slot.held_request) evict = slot.held_request;
+	slot.held_request = request;
+	slot.raw_data.clear();
+	slot.jpeg_data.clear();
+	slot.has_jpeg = false;
+	slot.has_preview_jpeg = false;
+	slot.frame_id = frame_counter_.load();
+	slot.timestamp_us = current_frame_us_;
+	slot.valid = true;
+	if (have_preview && !preview_data_.empty()) {
+	  slot.preview_raw_data = preview_data_;
+	  slot.has_preview = true;
+	} else {
+	  slot.preview_raw_data.clear();
+	  slot.has_preview = false;
+	}
+	ring_write_index_++;
+      }
+    }
+
+    if (evict == request) {
+      requeue_request(request);
+      return;
+    }
+
+    if (use_tcl_callback_ && !tcl_callback_proc_.empty()) {
+      call_tcl_frame_callback();
+    }
+    frame_counter_++;
+
+    if (evict) {
+      requeue_request(evict);
+    }
+  }
+
   void streaming_request_complete(Request *request) {
     if (state_ != CameraState::STREAMING) {
       return;
@@ -1381,6 +1534,23 @@ public:
       if (grab_pending_.exchange(false)) {
 	service_grab(request);
       }
+    }
+
+    // Zero-copy ring: park this Request until the slot is overwritten.
+    // Skip filter stays for preview only — hold works at skip=0 (preview off).
+    if (ring_hold_.load() && ae_settled_.load() && hold_depth_ >= 2 &&
+	state_ == CameraState::STREAMING) {
+      bool have_preview = false;
+      if (preview_enabled_ && preview_stream_ && frame_skip_rate_ > 0) {
+	const Request::BufferMap &buffers = request->buffers();
+	auto preview_buffer_it = buffers.find(preview_stream_);
+	if (preview_buffer_it != buffers.end()) {
+	  process_buffer(preview_buffer_it->second, true);
+	  have_preview = true;
+	}
+      }
+      park_request_in_ring(request, have_preview);
+      return;
     }
 
     // Skip frames if configured and not yet settled.  Rate 0 = never:
@@ -1609,15 +1779,9 @@ public:
     
     continuous_mode_ = false;
     stop_save_worker();
-    
-    // invalidate all frames when stopping
-    {
-      std::lock_guard<std::mutex> lock(ring_buffer_mutex_);
-      for (int i = 0; i < RING_BUFFER_SIZE; i++) {
-	frame_ring_buffer_[i].valid = false;
-	frame_ring_buffer_[i].has_jpeg = false;
-      }
-    }
+
+    // Release parked Requests back to the camera if still streaming.
+    clear_held_requests(state_ == CameraState::STREAMING);
     
     return true;
   }
@@ -1636,57 +1800,31 @@ public:
   
   bool get_ppm_frame_by_id(int frame_id, std::vector<uint8_t> &ppm_data,
 			   int64_t &timestamp_us) {
-    std::lock_guard<std::mutex> lock(ring_buffer_mutex_);
-
-    for (int i = 0; i < RING_BUFFER_SIZE; i++) {
-      if (frame_ring_buffer_[i].valid &&
-	  frame_ring_buffer_[i].frame_id == frame_id) {
-
-	const StreamConfiguration &cfg = stream_->configuration();
-
-	// Create PPM data
-	std::string ppm_header = "P6\n" +
-	  std::to_string(cfg.size.width) + " " +
-	  std::to_string(cfg.size.height) + "\n255\n";
-
-	ppm_data.clear();
-	ppm_data.resize(ppm_header.size() + frame_ring_buffer_[i].raw_data.size());
-	std::memcpy(ppm_data.data(), ppm_header.c_str(), ppm_header.size());
-	std::memcpy(ppm_data.data() + ppm_header.size(),
-		    frame_ring_buffer_[i].raw_data.data(),
-		    frame_ring_buffer_[i].raw_data.size());
-
-	timestamp_us = frame_ring_buffer_[i].timestamp_us;
-	return true;
-      }
+    std::vector<uint8_t> rgb;
+    if (!snapshot_ring_frame(frame_id, rgb, timestamp_us)) {
+      return false;
     }
-    return false;
+
+    const StreamConfiguration &cfg = stream_->configuration();
+    std::string ppm_header = "P6\n" +
+      std::to_string(cfg.size.width) + " " +
+      std::to_string(cfg.size.height) + "\n255\n";
+
+    ppm_data.clear();
+    ppm_data.resize(ppm_header.size() + rgb.size());
+    std::memcpy(ppm_data.data(), ppm_header.c_str(), ppm_header.size());
+    std::memcpy(ppm_data.data() + ppm_header.size(), rgb.data(), rgb.size());
+    return true;
   }
 
   bool get_jpeg_frame_by_id(int frame_id, std::vector<uint8_t> &jpeg_data,
 			    int64_t &timestamp_us)
   {
-    std::lock_guard<std::mutex> lock(ring_buffer_mutex_);
-
-    for (int i = 0; i < RING_BUFFER_SIZE; i++) {
-      if (frame_ring_buffer_[i].valid &&
-	  frame_ring_buffer_[i].frame_id == frame_id) {
-	// Check if JPEG already encoded for this frame
-	if (!frame_ring_buffer_[i].has_jpeg) {
-	  // Encode on-demand from raw data
-	  if (!encode_frame_to_jpeg(frame_ring_buffer_[i].raw_data,
-				    frame_ring_buffer_[i].jpeg_data)) {
-	    return false;
-	  }
-	  frame_ring_buffer_[i].has_jpeg = true;
-	}
-
-	jpeg_data = frame_ring_buffer_[i].jpeg_data;
-	timestamp_us = frame_ring_buffer_[i].timestamp_us;
-	return true;
-      }
+    std::vector<uint8_t> rgb;
+    if (!snapshot_ring_frame(frame_id, rgb, timestamp_us)) {
+      return false;
     }
-    return false;
+    return encode_frame_to_jpeg(rgb, jpeg_data);
   }
 
   // Updated frame notification with clearer format names
@@ -1723,94 +1861,75 @@ public:
 
   
   bool save_ppm_callback_frame(int frame_id, const std::string& filename) {
-    std::lock_guard<std::mutex> lock(ring_buffer_mutex_);
-    
-    for (int i = 0; i < RING_BUFFER_SIZE; i++) {
-      if (frame_ring_buffer_[i].valid && frame_ring_buffer_[i].frame_id == frame_id) {
-	const StreamConfiguration &cfg = stream_->configuration();
-	
-	// Write PPM file directly
-	std::ofstream file(filename, std::ios::binary);
-	if (!file) return false;
-	
-	file << "P6\n" << cfg.size.width << " " << cfg.size.height << "\n255\n";
-	file.write(reinterpret_cast<const char*>(frame_ring_buffer_[i].raw_data.data()),
-		   frame_ring_buffer_[i].raw_data.size());
-	file.close();
-	return true;
-      }
+    std::vector<uint8_t> rgb;
+    int64_t timestamp_us = 0;
+    if (!snapshot_ring_frame(frame_id, rgb, timestamp_us)) {
+      return false;
     }
-    return false;
+
+    const StreamConfiguration &cfg = stream_->configuration();
+    std::ofstream file(filename, std::ios::binary);
+    if (!file) return false;
+
+    file << "P6\n" << cfg.size.width << " " << cfg.size.height << "\n255\n";
+    file.write(reinterpret_cast<const char*>(rgb.data()), rgb.size());
+    file.close();
+    return true;
   }
   
   bool publish_ppm_callback_frame(int frame_id, const std::string& datapoint_name) {
     if (!tclserver) return false;
-    
-    std::lock_guard<std::mutex> lock(ring_buffer_mutex_);
-    
-    for (int i = 0; i < RING_BUFFER_SIZE; i++) {
-      if (frame_ring_buffer_[i].valid && frame_ring_buffer_[i].frame_id == frame_id) {
-	const StreamConfiguration &cfg = stream_->configuration();
-	
-	// Create PPM data
-	std::string ppm_header = "P6\n" + 
-	  std::to_string(cfg.size.width) + " " + 
-	  std::to_string(cfg.size.height) + "\n255\n";
-	
-	std::vector<uint8_t> ppm_data(ppm_header.size() + frame_ring_buffer_[i].raw_data.size());
-	std::memcpy(ppm_data.data(), ppm_header.c_str(), ppm_header.size());
-	std::memcpy(ppm_data.data() + ppm_header.size(), 
-		    frame_ring_buffer_[i].raw_data.data(), 
-		    frame_ring_buffer_[i].raw_data.size());
-	
-	ds_datapoint_t *dp = dpoint_new(
-					(char*)datapoint_name.c_str(),
-					frame_ring_buffer_[i].timestamp_us,
-					DSERV_PPM,
-					ppm_data.size(),
-					ppm_data.data()
-					);
 
-	tclserver_set_point_private(tclserver, dp);
-	return true;
-      }
+    std::vector<uint8_t> rgb;
+    int64_t timestamp_us = 0;
+    if (!snapshot_ring_frame(frame_id, rgb, timestamp_us)) {
+      return false;
     }
-    return false;
+
+    const StreamConfiguration &cfg = stream_->configuration();
+    std::string ppm_header = "P6\n" +
+      std::to_string(cfg.size.width) + " " +
+      std::to_string(cfg.size.height) + "\n255\n";
+
+    std::vector<uint8_t> ppm_data(ppm_header.size() + rgb.size());
+    std::memcpy(ppm_data.data(), ppm_header.c_str(), ppm_header.size());
+    std::memcpy(ppm_data.data() + ppm_header.size(), rgb.data(), rgb.size());
+
+    ds_datapoint_t *dp = dpoint_new(
+				    (char*)datapoint_name.c_str(),
+				    timestamp_us,
+				    DSERV_PPM,
+				    ppm_data.size(),
+				    ppm_data.data()
+				    );
+
+    tclserver_set_point_private(tclserver, dp);
+    return true;
   }
 
   bool publish_jpeg_callback_frame(int frame_id, const std::string& datapoint_name) {
     if (!tclserver) return false;
-    
-    std::lock_guard<std::mutex> lock(ring_buffer_mutex_);
-    
-    // Find the frame in ring buffer
-    for (int i = 0; i < RING_BUFFER_SIZE; i++) {
-      if (frame_ring_buffer_[i].valid && frame_ring_buffer_[i].frame_id == frame_id) {
-	// Check if JPEG already encoded for this frame
-	if (!frame_ring_buffer_[i].has_jpeg) {
-	  // Encode on-demand from raw data
-	  if (!encode_frame_to_jpeg(frame_ring_buffer_[i].raw_data,
-				    frame_ring_buffer_[i].jpeg_data)) {
-	    return false;
-	  }
-	  frame_ring_buffer_[i].has_jpeg = true;
-	}
-	
-	// Publish JPEG data (timestamp = capture time on dserv's timebase)
-	ds_datapoint_t *dp = dpoint_new(
-					(char*)datapoint_name.c_str(),
-					frame_ring_buffer_[i].timestamp_us,
-					(ds_datatype_t)DSERV_JPEG,
-					frame_ring_buffer_[i].jpeg_data.size(),
-					(unsigned char *)frame_ring_buffer_[i].jpeg_data.data()
-					);
 
-	tclserver_set_point_private(tclserver, dp);
-	return true;
-      }
+    std::vector<uint8_t> rgb;
+    std::vector<uint8_t> jpeg;
+    int64_t timestamp_us = 0;
+    if (!snapshot_ring_frame(frame_id, rgb, timestamp_us)) {
+      return false;
     }
-    
-    return false;  // Frame not found
+    if (!encode_frame_to_jpeg(rgb, jpeg)) {
+      return false;
+    }
+
+    ds_datapoint_t *dp = dpoint_new(
+				    (char*)datapoint_name.c_str(),
+				    timestamp_us,
+				    (ds_datatype_t)DSERV_JPEG,
+				    jpeg.size(),
+				    (unsigned char *)jpeg.data()
+				    );
+
+    tclserver_set_point_private(tclserver, dp);
+    return true;
   }
 
   bool publish_jpeg_preview_frame(int frame_id, const std::string& datapoint_name) {
@@ -1847,35 +1966,24 @@ public:
   }
   
   bool save_jpeg_callback_frame(int frame_id, const std::string& filename) {
-    std::lock_guard<std::mutex> lock(ring_buffer_mutex_);
-    
-    // Find the frame in ring buffer
-    for (int i = 0; i < RING_BUFFER_SIZE; i++) {
-      if (frame_ring_buffer_[i].valid && frame_ring_buffer_[i].frame_id == frame_id) {
-	// Check if JPEG already encoded for this frame
-	if (!frame_ring_buffer_[i].has_jpeg) {
-	  // Encode on-demand from raw data
-	  if (!encode_frame_to_jpeg(frame_ring_buffer_[i].raw_data,
-				    frame_ring_buffer_[i].jpeg_data)) {
-	    return false;
-	  }
-	  frame_ring_buffer_[i].has_jpeg = true;
-	}
-	
-	// Write JPEG data to disk
-	std::ofstream file(filename, std::ios::binary);
-	if (!file) {
-	  return false;
-	}
-	
-	file.write(reinterpret_cast<const char*>(frame_ring_buffer_[i].jpeg_data.data()),
-		   frame_ring_buffer_[i].jpeg_data.size());
-	file.close();
-	return true;
-      }
+    std::vector<uint8_t> rgb;
+    std::vector<uint8_t> jpeg;
+    int64_t timestamp_us = 0;
+    if (!snapshot_ring_frame(frame_id, rgb, timestamp_us)) {
+      return false;
     }
-    
-    return false;  // Frame not found
+    if (!encode_frame_to_jpeg(rgb, jpeg)) {
+      return false;
+    }
+
+    std::ofstream file(filename, std::ios::binary);
+    if (!file) {
+      return false;
+    }
+
+    file.write(reinterpret_cast<const char*>(jpeg.data()), jpeg.size());
+    file.close();
+    return true;
   }
   
   void publish_ppm_frame_to_dataserver() {
@@ -2098,27 +2206,40 @@ private:
   }
   
   void store_frame_in_ring_buffer() {
-    std::lock_guard<std::mutex> lock(ring_buffer_mutex_);
+    Request *evict = nullptr;
+    {
+      std::lock_guard<std::mutex> lock(ring_buffer_mutex_);
 
-    int write_idx = ring_write_index_.load() % RING_BUFFER_SIZE;
+      int write_idx = ring_write_index_.load() % RING_BUFFER_SIZE;
+      CameraFrameBuffer &slot = frame_ring_buffer_[write_idx];
 
-    // Store main data
-    frame_ring_buffer_[write_idx].raw_data = image_data_;
-    frame_ring_buffer_[write_idx].frame_id = frame_counter_.load();
-    frame_ring_buffer_[write_idx].timestamp_us = current_frame_us_;
-    frame_ring_buffer_[write_idx].valid = true;
-    frame_ring_buffer_[write_idx].has_jpeg = false;
-    
-    // Store preview data if available
-    if (preview_enabled_ && !preview_data_.empty()) {
-      frame_ring_buffer_[write_idx].preview_raw_data = preview_data_;
-      frame_ring_buffer_[write_idx].has_preview = true;
-      frame_ring_buffer_[write_idx].has_preview_jpeg = false;
-    } else {
-      frame_ring_buffer_[write_idx].has_preview = false;
+      if (slot.pin_count > 0) {
+	return;
+      }
+      if (slot.held_request) {
+	evict = slot.held_request;
+	slot.held_request = nullptr;
+      }
+
+      slot.raw_data = image_data_;
+      slot.frame_id = frame_counter_.load();
+      slot.timestamp_us = current_frame_us_;
+      slot.valid = true;
+      slot.has_jpeg = false;
+
+      if (preview_enabled_ && !preview_data_.empty()) {
+	slot.preview_raw_data = preview_data_;
+	slot.has_preview = true;
+	slot.has_preview_jpeg = false;
+      } else {
+	slot.has_preview = false;
+      }
+
+      ring_write_index_++;
     }
-    
-    ring_write_index_++;
+    if (evict) {
+      requeue_request(evict);
+    }
   }
 
   void call_tcl_frame_callback() {
@@ -2770,6 +2891,37 @@ extern "C" {
     }
     
     Tcl_SetObjResult(interp, Tcl_NewStringObj(mode_str, -1));
+    return TCL_OK;
+#else
+    Tcl_AppendResult(interp, "Camera support not available", NULL);
+    return TCL_ERROR;
+#endif
+  }
+
+  static int camera_set_ring_hold_command(ClientData data,
+					  Tcl_Interp *interp,
+					  int objc, Tcl_Obj *objv[])
+  {
+#ifdef HAS_LIBCAMERA
+    camera_info_t *info = (camera_info_t *) data;
+
+    if (!info->capture) {
+      Tcl_AppendResult(interp, "Camera not initialized", NULL);
+      return TCL_ERROR;
+    }
+
+    if (objc < 2) {
+      Tcl_WrongNumArgs(interp, 1, objv, "0|1");
+      return TCL_ERROR;
+    }
+
+    int on = 0;
+    if (Tcl_GetBooleanFromObj(interp, objv[1], &on) != TCL_OK) {
+      return TCL_ERROR;
+    }
+
+    info->capture->set_ring_hold(on != 0);
+    Tcl_SetObjResult(interp, Tcl_NewIntObj(on ? 1 : 0));
     return TCL_OK;
 #else
     Tcl_AppendResult(interp, "Camera support not available", NULL);
@@ -4248,6 +4400,12 @@ extern "C" {
     Tcl_DictObjPut(interp, result,
                    Tcl_NewStringObj("buffer_size", -1),
                    Tcl_NewIntObj(16));  // RING_BUFFER_SIZE
+    Tcl_DictObjPut(interp, result,
+                   Tcl_NewStringObj("hold", -1),
+                   Tcl_NewIntObj(info->capture->ring_hold_enabled() ? 1 : 0));
+    Tcl_DictObjPut(interp, result,
+                   Tcl_NewStringObj("hold_depth", -1),
+                   Tcl_NewIntObj(info->capture->ring_hold_depth()));
     
     Tcl_SetObjResult(interp, result);
     return TCL_OK;
@@ -4478,6 +4636,9 @@ extern "C" {
                          cameraInfo, NULL);
     Tcl_CreateObjCommand(interp, "cameraSetRingBufferMode",
 			 (Tcl_ObjCmdProc *) camera_set_ring_buffer_mode_command,
+			 cameraInfo, NULL);
+    Tcl_CreateObjCommand(interp, "cameraSetRingHold",
+			 (Tcl_ObjCmdProc *) camera_set_ring_hold_command,
 			 cameraInfo, NULL);
     Tcl_CreateObjCommand(interp, "cameraStartContinuous",
                          (Tcl_ObjCmdProc *) camera_start_continuous_command,
