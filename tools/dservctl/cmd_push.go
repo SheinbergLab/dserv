@@ -172,7 +172,7 @@ func runPush(cfg *Config, args []string) int {
 
 	// Step 4: If --add, scan for local-only files (new protocols/scripts)
 	if addNew {
-		localOnly := findLocalOnlyScripts(dir, serverScripts)
+		localOnly, skippedDirs := findLocalOnlyScripts(dir, serverScripts)
 		for _, lo := range localOnly {
 			newScripts = append(newScripts, pendingPush{
 				info:    lo.info,
@@ -181,6 +181,7 @@ func runPush(cfg *Config, args []string) int {
 				isNew:   true,
 			})
 		}
+		reportSkippedDirs(skippedDirs)
 	}
 
 	if len(changed) == 0 && len(newScripts) == 0 {
@@ -193,13 +194,17 @@ func runPush(cfg *Config, args []string) int {
 			if err := writeBaseManifest(dir, base); err != nil {
 				PrintError("writing base manifest: %v", err)
 			}
+			// Seeding the base can move files out of "dirty" without
+			// anything having been pushed, so the badge is stale here too.
+			refreshDirtyBadge(cfg)
 		}
 		// Still report local-only if --add wasn't used
 		if !addNew {
-			localOnly := findLocalOnlyScripts(dir, serverScripts)
+			localOnly, skippedDirs := findLocalOnlyScripts(dir, serverScripts)
 			if len(localOnly) > 0 {
 				fmt.Printf("%d local-only script(s) not pushed (use --add to include)\n", len(localOnly))
 			}
+			reportSkippedDirs(skippedDirs)
 		}
 		return 0
 	}
@@ -368,6 +373,8 @@ func runPush(cfg *Config, args []string) int {
 		if err := writeBaseManifest(dir, base); err != nil {
 			PrintError("writing base manifest: %v", err)
 		}
+		// The base moved, so the GUI's unpushed-changes badge is now stale.
+		refreshDirtyBadge(cfg)
 	}
 
 	fmt.Printf("Pushed %d, added %d", pushed, added)
@@ -405,13 +412,15 @@ type localOnlyScript struct {
 }
 
 // findLocalOnlyScripts walks the local directory and returns scripts
-// that are not present in the server manifest.
-func findLocalOnlyScripts(dir string, serverScripts map[string]scriptInfo) []localOnlyScript {
+// that are not present in the server manifest, plus the names of any
+// subdirectories that were skipped for not being protocols.
+func findLocalOnlyScripts(dir string, serverScripts map[string]scriptInfo) ([]localOnlyScript, []string) {
 	var results []localOnlyScript
+	var skippedDirs []string
 
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return results
+		return results, skippedDirs
 	}
 
 	for _, entry := range entries {
@@ -419,8 +428,14 @@ func findLocalOnlyScripts(dir string, serverScripts map[string]scriptInfo) []loc
 			if isHiddenFile(entry.Name()) {
 				continue
 			}
-			// Protocol subdirectory
+			// Protocol subdirectory -- by ESS's definition of one.
+			// A helper directory (scripts/, notes/) is local, and
+			// pushing it invents a protocol named after the folder.
 			proto := entry.Name()
+			if !isProtocolDir(dir, proto) {
+				skippedDirs = append(skippedDirs, proto)
+				continue
+			}
 			subEntries, err := os.ReadDir(filepath.Join(dir, proto))
 			if err != nil {
 				continue
@@ -475,7 +490,21 @@ func findLocalOnlyScripts(dir string, serverScripts map[string]scriptInfo) []loc
 		}
 	}
 
-	return results
+	return results, skippedDirs
+}
+
+// reportSkippedDirs says what was NOT considered, so a helper directory is
+// visibly out of scope rather than mysteriously absent from the push.
+func reportSkippedDirs(dirs []string) {
+	if len(dirs) == 0 {
+		return
+	}
+	noun := "directories"
+	if len(dirs) == 1 {
+		noun = "directory"
+	}
+	fmt.Printf("Skipped %d non-protocol %s (no <name>/<name>.tcl): %s\n",
+		len(dirs), noun, strings.Join(dirs, ", "))
 }
 
 // deriveScriptType determines the registry script type from a protocol

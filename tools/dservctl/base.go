@@ -12,6 +12,61 @@ import (
 	"time"
 )
 
+// refreshDirtyBadge asks a running dserv to re-scan for unpushed changes.
+//
+// The Sync Tasks badge in the web GUI reads scripts/dirty, which the
+// `scripts` subprocess computes by comparing the tree against the SAME
+// .sync_base.json this tool writes. The subprocess refreshes it after its
+// own sync/push, and otherwise only on its self-re-arming 5-minute timer
+// (ess_scripts-1.0.tm, _dirty_periodic). dservctl talks to the registry's
+// HTTP API directly, so without this poke a push from the CLI leaves the
+// badge claiming unpushed changes for up to five minutes after they were
+// pushed — the numbers are right, the clock is just old, and the operator
+// has no way to tell those apart.
+//
+// Best-effort and silent by design: there may be no dserv on this host, it
+// may not run the scripts subprocess, or it may serve a different tree. A
+// spurious rescan costs nothing and cannot be wrong — it recomputes from
+// disk and publishes whatever is actually true.
+//
+// BOUNDED, because "best-effort" is only honest if the failure path is
+// cheap, and the general transport's budget is not this call's budget:
+// DialTimeout allows 5 s and ReadTimeout 30 s, and `send` is synchronous,
+// so a dserv that is merely BUSY — or a tree scan crawling over NFS —
+// would stall a push that has already succeeded. Nothing here needs the
+// answer, so the wait is capped and a timeout is simply not waited for:
+// the subprocess still finishes its scan and publishes, and in the worst
+// case the badge catches up on its own 5-minute rescan, which is exactly
+// the behaviour this poke is an optimization over.
+//
+// Measured for scale: the scan is 10-60 ms on a 5900-file tree, so this
+// budget is for the pathological case, not the normal one.
+var dirtyRefreshBudget = 2 * time.Second
+
+func refreshDirtyBadge(cfg *Config) {
+	done := make(chan error, 1) // buffered: the goroutine must never block
+	go func() {
+		_, err := Send(cfg.Host, "scripts", "scripts::dirty")
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil && cfg.Verbose {
+			fmt.Printf("(could not refresh the sync badge: %v)\n", err)
+		}
+	case <-time.After(dirtyRefreshBudget):
+		// The goroutine is left to finish on the transport's own timeouts.
+		// A leaked goroutine in a process about to exit costs nothing, and
+		// the alternative -- cancelling mid-write -- is what would risk
+		// leaving dserv reading half a command.
+		if cfg.Verbose {
+			fmt.Printf("(sync badge refresh timed out; it will catch up on\n" +
+				" the scripts subprocess's own rescan)\n")
+		}
+	}
+}
+
 // Base-manifest (.sync_base.json) support — the client-side half of the
 // merge-ancestor tracking implemented in Tcl's ess_sync (_base_* procs).
 //

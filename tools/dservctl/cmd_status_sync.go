@@ -153,9 +153,12 @@ func runSyncStatus(cfg *Config, args []string) int {
 				})
 			}
 		} else {
-			// Protocol subdirectory
+			// Protocol subdirectory. A directory that is not a
+			// protocol is not registry material, and listing its
+			// files as local_only would invite the --add that
+			// creates a phantom protocol out of them.
 			proto := entry.Name()
-			if isHiddenFile(proto) {
+			if !isProtocolDir(dir, proto) {
 				continue
 			}
 			subEntries, _ := os.ReadDir(filepath.Join(dir, proto))
@@ -243,6 +246,26 @@ func isHiddenFile(name string) bool {
 
 // shouldIgnoreFile returns true for files that should be excluded from
 // local-only status reporting: hidden files, editor backups, OS metadata.
+// isProtocolDir reports whether a subdirectory of a system directory is an
+// ESS PROTOCOL, using ESS's own rule: find_protocols (lib/ess-2.0.tm) accepts
+// <name>/ only when it contains <name>.tcl, and silently skips anything else.
+//
+// Without this, EVERY subdirectory was treated as a protocol, so a system
+// with a local helper directory -- joystick/scripts, planko/scripts,
+// planko/scripts/build_worlds -- pushed its contents as a phantom protocol
+// named after the directory, typed from a filename that follows no
+// convention ("scripts/test_forage"). That is the same failure as the
+// phantom "_" protocol fixed in cmd_push.go, and it has the same cause:
+// guessing what a protocol is instead of asking. ESS is the authority on
+// that, and this is its answer.
+func isProtocolDir(systemDir, name string) bool {
+	if isHiddenFile(name) {
+		return false
+	}
+	st, err := os.Stat(filepath.Join(systemDir, name, name+".tcl"))
+	return err == nil && !st.IsDir()
+}
+
 func shouldIgnoreFile(name string) bool {
 	if isHiddenFile(name) {
 		return true

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -39,7 +40,15 @@ func resolveHost(host string) string {
 		return cached
 	}
 
-	addrs, err := net.LookupHost(host)
+	// BOUNDED. net.LookupHost has no timeout of its own, so a resolver that
+	// is slow or unreachable (a VPN dropped, a rig named in /etc/resolv.conf
+	// that is not answering) hung here for however long the system resolver
+	// took -- ahead of DialTimeout, which is the only budget anything else
+	// on this path respects. ResolveTimeout was declared for this and then
+	// never used, so the cap existed on paper only.
+	ctx, cancel := context.WithTimeout(context.Background(), ResolveTimeout)
+	defer cancel()
+	addrs, err := net.DefaultResolver.LookupHost(ctx, host)
 	if err != nil || len(addrs) == 0 {
 		return host // fall back to original, let DialTimeout report the error
 	}

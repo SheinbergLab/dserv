@@ -57,11 +57,23 @@ func runSync(cfg *Config, args []string) int {
 		return 2
 	}
 
+	// A pull rewrites tracked files and advances the base, so the GUI's
+	// unpushed-changes badge is stale afterwards exactly as it is after a
+	// push. Once for the whole run rather than per system: the scan looks
+	// at the entire tree anyway.
 	if syncAll {
-		return runSyncAll(cfg, dir, version, dryRun, force)
+		rc := runSyncAll(cfg, dir, version, dryRun, force)
+		if !dryRun {
+			refreshDirtyBadge(cfg)
+		}
+		return rc
 	}
 
-	return syncOneSystem(cfg, system, dir, version, dryRun, force)
+	rc := syncOneSystem(cfg, system, dir, version, dryRun, force)
+	if !dryRun {
+		refreshDirtyBadge(cfg)
+	}
+	return rc
 }
 
 // syncResult tracks counts from a sync operation.
