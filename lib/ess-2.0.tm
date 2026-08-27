@@ -7,6 +7,7 @@ package require tcljson
 package require dslog
 package require ess_paths
 package require ess_dial
+package require ess_roam   ;# free-locomotion response mode (foraging, search)
 package require ess_transports ;# input routing: joystick, buttons, stick shaping, slider
 package require settings   ;# rig-declared input routing (see joystick transport)
 package require qpcs 3.42 ;# stim-event sync + variable-length binary push (dsSocketSendBytesVar)
@@ -1849,6 +1850,7 @@ namespace eval ess {
         slider_deinit
         joystick_deinit
         dial_deinit
+        roam_deinit
     }
 
     proc do_update {args} {
@@ -3293,6 +3295,22 @@ namespace eval ess {
             dservLoggerAddMatch $filename slider/position 1 80 1
             dservLoggerAddMatch $filename slider/raw      1 80 1
             dservLoggerAddMatch $filename slider/settings
+        }
+        variable roam_active
+        if {$roam_active} {
+            # The roamed agent's trajectory. For a dial's cursor a position
+            # track is optional -- the answer is the committed angle. Here
+            # the PATH is the datum (time-to-first-patch, dwell, revisits,
+            # search efficiency), so this is not optional the way a cursor
+            # track is. Same shape as the other fast sources: obs_limited,
+            # 80-byte buffer.
+            dservLoggerAddMatch $filename ess/roam/pos 1 80 1
+            # The arena the path has to be read against, and the patch
+            # transitions the C-processor swap would otherwise be the only
+            # record of.
+            dservLoggerAddMatch $filename ess/roam/geometry
+            dservLoggerAddMatch $filename ess/roam/regions
+            catch { dservTouch ess/roam/geometry }
         }
 
         # extio analog blocks, resolved above. UNBUFFERED on purpose: the log

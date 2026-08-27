@@ -34,14 +34,26 @@ device, and deliberately not renamed. It is what experimenters say, it is in
 it would break past data to improve present prose. A `stick` and a `dpad`
 both answer it; that transport-independence is the whole point.
 
-**Strategy.** Only the dial has these today, because only the dial reads one
-device three incompatible ways:
+**Strategy.** A strategy word says how a device answers a contract, so the
+same word means the same reading wherever it appears:
 
 | strategy | what it does |
 |---|---|
 | `ring` | deflection rotates a bearing; cursor pinned to the ring (1-D) |
-| `sectors` | deflection quantized to eight; cursor walks out a spoke |
+| `sectors` | deflection quantized to eight; a cursor moves along that heading |
 | `rate` | deflection IS the cursor's velocity; continuous, speed-graded |
+
+`dial` (`ess_dial-1.0.tm`) offers all three; `roam` (`ess_roam-1.0.tm`)
+offers `sectors` and `rate`. What a strategy *produces* differs by response
+mode — under the dial, `sectors` walks the cursor out one spoke and reports
+one of eight bearings; under a roam it sets the heading of a free 2-D
+position — but in both it is "the deflection is read as eight directions",
+which is what the word claims.
+
+`roam_init` takes **only** the strategy words. It is new, so it has no old
+spellings to honour; `-sources dpad` raises an error naming `sectors` rather
+than reporting "unknown source" to someone carrying a habit over from the
+dial.
 
 ## Old spellings, and where they are accepted
 
@@ -65,6 +77,8 @@ protocol's `-sources {swipe dpad}` keeps meaning what it meant.
 
 Pinned by `tests/test_ess_transports.tcl` and `tests/test_ess_dial_dpad.tcl`
 — both mappings are asserted, so a later edit cannot quietly drop them.
+`tests/test_ess_roam.tcl` asserts the opposite for `roam_init`: that the
+device words are *refused*, with the strategy word named in the message.
 
 ## What was deliberately NOT renamed
 
