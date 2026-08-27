@@ -6,6 +6,12 @@
       "runtimeExecutable": "python3",
       "runtimeArgs": ["-m", "http.server", "8137", "-d", "/private/tmp/claude-501/-Users-sheinb-src-dserv/fe99cd15-6222-4593-af8f-e93eff451ab4/scratchpad/viewtest"],
       "port": 8137
+    },
+    {
+      "name": "www-dev",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "8091", "--directory", "www"],
+      "port": 8091
     }
   ]
 }
