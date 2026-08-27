@@ -101,9 +101,51 @@ namespace eval viz {
     }
 
     #########################################################################
+    # Datapoint subscriptions owned by a VIZ CONFIG
+    #########################################################################
+    #
+    # Most viz configs only need events, and evtSetScript is cleaned up
+    # wholesale by evtRemoveAllScripts in cleanup_namespace. A config that
+    # follows a LIVE DATAPOINT -- a dial's or a roam's cursor, an eye
+    # position -- cannot be cleaned up that way, because cleanup_namespace
+    # deletes the config's namespace without knowing what it subscribed to.
+    #
+    # A config calling dpointSetScript directly therefore leaves a script
+    # pointing into a namespace that no longer exists: it survives the
+    # config that made it and then throws on EVERY update of that datapoint
+    # under the next system, which is both a stream of errors and a Tcl
+    # dispatch per publish forever. (dpointSetScript's own registry has the
+    # same write-only trap; see TclServer.cpp's note on dpointScripts.)
+    #
+    # So: `vizSubscribe <datapoint> <script>` from a viz config, and this
+    # end remembers and undoes it.
+    #
+    variable config_dpoints {}
+
+    proc subscribe { dpoint script } {
+        variable config_dpoints
+        dservAddExactMatch $dpoint
+        dpointSetScript    $dpoint $script
+        if { $dpoint ni $config_dpoints } { lappend config_dpoints $dpoint }
+    }
+
+    proc unsubscribe_all {} {
+        variable config_dpoints
+        foreach dp $config_dpoints {
+            # No script argument: remove every script on the name. Only
+            # datapoints a CONFIG subscribed to are in this list, so the
+            # framework's own handlers (ess/system, stimdg, ...) are never
+            # in reach of this.
+            catch { dpointRemoveScript   $dp }
+            catch { dservRemoveExactMatch $dp }
+        }
+        set config_dpoints {}
+    }
+
+    #########################################################################
     # Framework Initialization
     #########################################################################
-    
+
     proc init {} {
         # Subscribe to system configuration changes
         dservAddExactMatch ess/system
@@ -280,7 +322,12 @@ namespace eval viz {
     
     proc cleanup_namespace {} {
 	evtRemoveAllScripts
-        
+
+	# ... and the datapoint subscriptions the outgoing config made, which
+	# evtRemoveAllScripts knows nothing about. Before the namespace is
+	# deleted below, so nothing is left pointing into it.
+	unsubscribe_all
+
         # reset trial state
         variable current_trial_id -1
         variable stimulus_visible 0
@@ -539,6 +586,9 @@ namespace eval viz {
 	proc evtSetScriptByName {type_name subtype_name script} {
 	    ::viz::evtSetScriptByName $type_name $subtype_name $script
 	}
+	# Follow a live datapoint from a viz config. Use this rather than
+	# dservAddExactMatch + dpointSetScript: see ::viz::subscribe.
+	proc vizSubscribe {dpoint script} { ::viz::subscribe $dpoint $script }
     }
     
     #########################################################################
