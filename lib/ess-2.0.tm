@@ -10,7 +10,7 @@ package require ess_dial
 package require ess_roam   ;# free-locomotion response mode (foraging, search)
 package require ess_transports ;# input routing: joystick, buttons, stick shaping, slider
 package require settings   ;# rig-declared input routing (see joystick transport)
-package require qpcs 3.42 ;# stim-event sync + variable-length binary push (dsSocketSendBytesVar)
+package require qpcs 3.43 ;# stim-event sync w/ flipwall+tag header (evtPack v2), variable-length binary push
 
 catch {System destroy}
 
@@ -378,7 +378,7 @@ oo::class create System {
 
         set rmtcmd {
             # connect to data server receive stimdg updates
-            package require qpcs 3.42
+            package require qpcs 3.43
 
             # Stim-side lifecycle hooks (analog of the state system's
             # init/deinit callbacks). The stim2 interp is persistent across
@@ -468,17 +468,39 @@ oo::class create System {
                 }
             }
 
-            # Event-bearing send: prepend a sync header {SwapCount StimTicksF},
-            # read live, ahead of an optional float value list, as one
-            # DSERV_BYTE blob (ESS reconstructs the event time from these; see
-            # qpcs::evtPack and ::ess::stim_evt_put). CALL FROM A ThisFrameScript
-            # so the globals reflect the just-flipped frame.
-            proc dserv_send_evt { varname {vals {}} } {
+            # Event-bearing send: prepend a sync header {SwapCount StimTicksF
+            # FlipWallUs tag}, read live, ahead of an optional float value
+            # list, as one DSERV_BYTE blob (ESS reconstructs the event time
+            # from these; see qpcs::evtPack and ::ess::stim_evt_put). CALL
+            # FROM A ThisFrameScript so the globals reflect the just-flipped
+            # frame -- or better, from a swapTag callback (below), which
+            # also carries the hardware flip time.
+            proc dserv_send_evt { varname {vals {}} {flipwall 0} {tag {}} } {
                 if { [info exists ::dserv_return_sock] } {
                     qpcs::dsSocketSendBytes $::dserv_return_sock $varname \
-                        [qpcs::evtPack $::SwapCount $::StimTicksF $vals]
+                        [qpcs::evtPack $::SwapCount $::StimTicksF $vals \
+                             $flipwall $tag]
                 }
             }
+
+            # Default frame-tag pump (stim2 >= 0.26). A stim script calls
+            #     swapTag {TYPE SUBTYPE ?numeric params...?}
+            # in a frame pre script (or bare `swapTag {}` for PATTERN SWAP);
+            # when that frame's flip is confirmed, stim2 invokes this with
+            # the hardware flip time (flipwall, CLOCK_REALTIME us) and the
+            # flip's frame counter.  Everything lands on the single
+            # stim/tagevt datapoint; ::ess::stim_tag_evt mints the event.
+            # Fire-and-forget over the persistent socket, like the rest.
+            proc dserv_tag_evt { payload flipwall counter swapcount flipms } {
+                if { ![info exists ::dserv_return_sock] } return
+                qpcs::dsSocketSendBytes $::dserv_return_sock stim/tagevt \
+                    [qpcs::evtPack $swapcount $::StimTicksF \
+                         [lrange $payload 2 end] $flipwall \
+                         [lrange $payload 0 1]]
+            }
+            # The catch keeps configure_stim working against a pre-0.26
+            # stim2 (no swapTag): tags are simply unavailable there.
+            catch { swapTagCallback dserv_tag_evt }
 
             # Clean up the return socket (called from protocol deinit)
             proc dserv_return_close {} {
@@ -521,6 +543,14 @@ oo::class create System {
         }
 
         rmtSend $rmtcmd
+
+        # Frame-tag events: swapTag payloads arrive from dserv_tag_evt
+        # (above, in the stim2 interp) on the single stim/tagevt datapoint;
+        # mint them as events here.  ::ess::init clears all matches on every
+        # system load, so re-registering per configure_stim is the same
+        # idempotent pattern the obs/camera handlers use.
+        dservAddExactMatch stim/tagevt
+        dpointSetScript stim/tagevt ::ess::stim_tag_evt
 
         # source this protocol's stim functions
         set stimfile [::ess::resolve_file [file join [set ::ess::project] \
@@ -2792,12 +2822,18 @@ namespace eval ess {
     # ----------------------------------------------------------------------
     # Stim-event sync (stim2 -> dserv).
     #
-    # A remote stim2 pushes timed markers via dserv_send_evt (see the
-    # configure_stim block), prepending a sync header {SwapCount StimTicksF}
-    # captured at the buffer flip. These helpers reconstruct each marker's
-    # dserv-clock time from a per-trial anchor and mint the corresponding
+    # A remote stim2 pushes timed markers via dserv_send_evt / swapTag (see
+    # the configure_stim block), prepending a sync header {SwapCount
+    # StimTicksF FlipWallUs tag} captured at the buffer flip. These helpers
+    # reconstruct each marker's dserv-clock time and mint the corresponding
     # event, so stim-sourced events sit on the same timeline as locally
-    # generated ones. The wire format lives in qpcs (evtPack/evtUnpack).
+    # generated ones. The wire format lives in qpcs (evtPack/evtUnpack,
+    # 3.43).
+    #
+    # On PTP-anchored sites the header's FlipWallUs (stim2 swapStats
+    # `flipwall`: the hardware flip on the stim host's CLOCK_REALTIME)
+    # places every marker absolutely to microseconds via ptp/d_us -- the
+    # anchor below then never engages. Elsewhere the anchor path applies:
     #
     # Anchor: set once per trial from the stimulus-onset marker (e.g. the
     # motion-onset TARGET ON) -- ties the stim clock origin (swap0/ticksF0) to
@@ -2821,10 +2857,31 @@ namespace eval ess {
         set stim_evt_anchor {}
     }
 
-    # Reconstruct a marker's dserv-clock time (us) from its sync header.
+    # Reconstruct a marker's dserv-clock time (us) from its sync header,
+    # best source first:
+    #
+    #   1. flipwall (qpcs 3.43 header): the hardware buffer-flip time on the
+    #      stim host's CLOCK_REALTIME, mapped onto the dserv clock via
+    #      ptp/d_us (D = dserv - wall, published by ptpconf on PTP-anchored
+    #      hosts).  Per-event absolute placement at PTP precision -- no
+    #      per-trial anchor involved.  Requires BOTH a plausible flipwall
+    #      (a stim host with a wrong clock fails the epoch floor, same
+    #      constant as dserv core's check) and a published D: on a non-PTP
+    #      site the stim host's wall clock is no better than the anchor, so
+    #      falling through is correct, not a shortcut.
+    #   2. the per-trial anchor: t0 + delta-StimTicksF (relative timing
+    #      exact; absolute placement carries the anchor marker's transport
+    #      latency).
+    #   3. the datapoint's own dserv receipt time.
+    #
     # StimTicksF is ms; dserv timestamps are us, hence the *1000.
-    proc stim_evt_time { name swap ticksF } {
+    proc stim_evt_time { name swap ticksF {flipwall 0} } {
         variable stim_evt_anchor
+        if { $flipwall > 1735689600000000 } {          ;# after 2025-01-01Z
+            if { ![catch { dservGet ptp/d_us } d] && $d ne "" } {
+                return [expr {wide($flipwall) + wide($d)}]
+            }
+        }
         if { [llength $stim_evt_anchor] == 0 } {
             return [dservTimestamp $name]
         }
@@ -2835,8 +2892,27 @@ namespace eval ess {
     # Mint a stim-sourced event on the dserv clock at its reconstructed time.
     # `data` is the blob from dserv_send_evt; extra args become event params.
     proc stim_evt_put { type subtype name data args } {
-        lassign [qpcs::evtUnpack $data] swap ticksF
-        evt_put $type $subtype [stim_evt_time $name $swap $ticksF] {*}$args
+        lassign [qpcs::evtUnpack $data] swap ticksF vals flipwall
+        evt_put $type $subtype [stim_evt_time $name $swap $ticksF $flipwall] \
+            {*}$args
+    }
+
+    # Mint a frame-tag event (stim/tagevt dpoint handler; see the
+    # configure_stim block).  The blob's tag names the event -- "TYPE
+    # ?SUBTYPE?" against the loaded system's event table -- and its float
+    # vals become the params; an empty tag is the generic frame marker
+    # PATTERN SWAP.  Unknown types/subtypes surface as a warning carrying
+    # evt_put's valid-names message rather than silently dropping a
+    # timed marker.
+    proc stim_tag_evt { dpoint data } {
+        lassign [qpcs::evtUnpack $data] swap ticksF vals flipwall tag
+        lassign $tag type subtype
+        if { $type eq {} }    { set type PATTERN; set subtype SWAP }
+        if { $subtype eq {} } { set subtype 0 }
+        set t [stim_evt_time $dpoint $swap $ticksF $flipwall]
+        if { [catch { evt_put $type $subtype $t {*}$vals } err] } {
+            ess_warning "stim_tag_evt ($tag): $err" "stim"
+        }
     }
 
     # ----------------------------------------------------------------------
