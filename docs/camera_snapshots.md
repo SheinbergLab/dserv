@@ -136,12 +136,127 @@ response action just works. On a rig without the setting (or without a
 camera), the helper still resolves — `ok:0` meta, `CAMERA FAIL` — so
 enabling a snap param is safe everywhere.
 
+## Starting the camera with the datafile
+
+Grabs only hit disk while the logger is matching, and `camera enabled`
+defaults to 0: the subprocess is up but the sensor is idle, and any grab
+fails with `"Camera not initialized"`. A protocol that wants snaps
+without requiring the rig to stream 24/7 owns the sensor per **file**,
+not per trial (`start` is init + configure + stream, ~1 s):
+blocking `send camera start` at file open, `sendNoReply camera stop` at
+close — and it stops **only what it started**, so a gear-enabled
+`/camera.html` preview is left exactly as found. `look_behind` and
+`rotation` are rig declarations (settings gear), not the protocol's
+business; `stream_fps` must be set before `start` if the default 30
+isn't wanted.
+
+Worked example — a `search`-style system snaps ~100 ms before target
+selection. The system's one-shot `response` action calls a no-op hook;
+the protocol (`circles` here) overrides it and owns the sensor from the
+file callbacks (which run as methods on the system object, so params
+and variables resolve directly):
+
+```tcl
+# search.tcl -- fire-and-forget from the one-shot response action
+$sys add_action response {
+    set resp_time [now]
+    ::ess::evt_put RESP 1 $resp_time
+    my on_target_select
+}
+$sys add_method on_target_select {} {}
+
+# circles.tcl
+$s add_param snap_on_target 1 variable int
+$s add_param snap_before_ms 100 variable int
+$s add_variable camera_started_for_file 0
+
+$s add_method on_target_select {} {
+    if { $snap_on_target } { ::ess::camera_grab_before $snap_before_ms }
+}
+
+$s set_file_open_callback {
+    set camera_started_for_file 0
+    if { $snap_on_target } {
+        set st ""
+        catch { set st [dservGet camera/status] }
+        if { $st ne "continuous" } {
+            send camera start
+            catch { set st [dservGet camera/status] }
+            if { $st eq "continuous" } {
+                set camera_started_for_file 1
+                # a camera we own runs pure acquisition: no preview JPEGs
+                send camera {apply_capture_hz 0}
+            }
+        }
+    }
+}
+$s set_file_close_callback {
+    if { $camera_started_for_file } {
+        catch { sendNoReply camera stop }
+        set camera_started_for_file 0
+    }
+}
+```
+
+If the camera was already streaming (someone watching the preview), the
+callbacks touch nothing — the grab helpers use it as-is at whatever
+cadence the watcher chose.
+
+Do **not** put a grab in `wait_for_response`'s *transition* — that code
+is polled every tick and would fire a grab per poll. The `response`
+action runs once. If your landmark really is a transition predicate (a
+dpoint flipped, a completion flag), insert a one-tick state whose
+*action* does the grab, then move on immediately.
+
 ## Logging
 
 `ess::file_open` matches `camera/full` and `camera/full/meta`
 unconditionally (a match nothing publishes costs nothing) and **not
 obs-limited**: the async encode can publish a frame just after ENDOBS, and
 an obs-limited match would silently drop exactly those frames.
+
+Camera JPEGs are **private**: they go to log files and nowhere else.
+Explorer, `dservGet`, websocket subscribe, and `/camera.html` cannot
+show the payload — `dservGet camera/full` reads as private even after a
+successful grab. Do not put images in trialsync; frames belong in the
+`.ess` logger and the local obs/trials dgz.
+
+## Did it work?
+
+Since the JPEG itself is invisible live, check the **`.ess` file**
+(roughly one full-res JPEG per grab, REQUEST/DONE in the eventlog) or
+`cam_request_t` / `cam_capture_t` / `cam_jpeg` after extraction:
+
+| In the `.ess` | Meaning |
+|---|---|
+| no CAMERA REQUEST | the state never called a grab helper: param off, action never entered, or the edit wasn't **reloaded** (re-load the system/protocol/variant — saving Tcl is not enough; new *camera-subprocess* commands additionally need a dserv restart) |
+| REQUEST, no DONE/FAIL | the send reached the camera interp but no meta ever came back — wedged subprocess, or a helper misspelling swallowed by a `catch` (the ess interp registers `sendNoReply`, not `send_noreply`; the wrong name inside a catch gives a normal-looking session with zero JPEGs) |
+| REQUEST + FAIL (FAIL may sit in `e_pre`, after ENDOBS) | `camera/full/meta` had `ok:0`. `"Camera not initialized"` = sensor idle (see the datafile-ownership pattern above); `"ring empty"` = look-behind without frames yet. Extract: `cam_capture_t` −1, empty `cam_jpeg` |
+| REQUEST + DONE, no `<blob>camera/full` | logger match / private publish problem |
+| REQUEST + DONE + blob, capture **after** REQUEST by ≤ ~70 ms | `camera_grab` (next-frame) working |
+| REQUEST + DONE + blob, capture **before** REQUEST by ~`snap_before_ms` | `camera_grab_before` working — DONE's second param is the signed capture−request ms, so the offset is readable straight off the event |
+
+Live, prove the camera contract with the same commands ESS sends
+(`camera/full/meta` is public; `camera/status` should read `continuous`
+first):
+
+```tcl
+send camera {grab_full 1}
+dservGet camera/full/meta
+```
+
+Look-behind — `check_ring_buffer` should show `hold 1` and a nonzero
+`hold_depth` (the `look_behind` setting is on and the pool was
+granted), then:
+
+```tcl
+send camera {grab_nearest [expr {[now] - 100000}] 1}
+dservGet camera/full/meta
+```
+
+`timestamp_us` should sit ~100 ms in the past, within half a frame
+period. That proves the camera contract only — the logger and
+extraction have their own rows above.
 
 ## In the obs dg (`dslog::readESS`)
 
