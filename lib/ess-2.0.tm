@@ -3091,13 +3091,25 @@ namespace eval ess {
     # camera_grab stamps CAMERA REQUEST (param = request id) and asks the
     # camera subprocess for the NEXT sensor frame (cameraconf grab_full):
     # the sensor free-runs, so the image postdates the request by at most
-    # one frame period, at any preview cadence. The camera publishes the
-    # JPEG private to camera/full -- timestamped with the SENSOR capture
-    # time on dserv's timebase -- and announces the outcome on the public
-    # camera/full/meta, which resolves the contract here (CAMERA DONE or
-    # CAMERA FAIL, param = request id, then do_update). file_open logs
-    # both points, so offline extraction pairs each REQUEST with the first
-    # frame captured at or after it; DONE/FAIL make dropped grabs visible.
+    # one frame period, at any preview cadence. camera_grab_nearest /
+    # camera_grab_before use the same contract but ask for the
+    # ALREADY-BUFFERED frame nearest a named time (cameraconf
+    # grab_nearest), so the image may PREDATE the request -- look-back
+    # snapshots, served from the ring the `camera look_behind` setting
+    # keeps parked. The camera publishes the JPEG private to camera/full
+    # -- timestamped with the SENSOR capture time on dserv's timebase --
+    # and announces the outcome on the public camera/full/meta, which
+    # resolves the contract here (CAMERA DONE or CAMERA FAIL, then
+    # do_update).
+    #
+    # DONE's params are {req_id rel_ms}: rel_ms = capture minus REQUEST
+    # stamp, from the meta's timestamp_us (negative for look-back grabs).
+    # file_open logs REQUEST and DONE/FAIL, so offline extraction
+    # (df::File camera_frames_in_obs) recovers each grab's EXACT capture
+    # time as request_time + rel_ms and claims the matching frame -- no
+    # ordering heuristics, correct even when two grabs land close
+    # together or a frame is logged after ENDOBS. Old files (single-param
+    # DONE) fall back to first-frame-at-or-after-request pairing.
     #
     # The timer backstop matters: if the camera subprocess is absent or
     # wedged, no meta ever arrives, and the trial must not hang on it.
@@ -3105,9 +3117,18 @@ namespace eval ess {
     variable camera_grab_seq  0    ;# last request id issued
     variable camera_grab_last 0    ;# last request id resolved (any outcome)
     variable camera_grab_status {} ;# camera/full/meta JSON of that resolution
+    # pending request id -> its CAMERA REQUEST stamp (us), for DONE's rel_ms
+    variable camera_grab_req_us
+    array set camera_grab_req_us {}
 
-    proc camera_grab {} {
+    # Shared issue path: stamp REQUEST, remember its time, send the module
+    # command; if the send itself fails (no camera subprocess on this rig,
+    # e.g. snap_on_sample turned on without one), resolve the contract as
+    # FAILed right here instead of erroring out of the calling action
+    # mid-trial.
+    proc camera_grab_issue { module_cmd } {
         variable camera_grab_seq
+        variable camera_grab_req_us
         set req [incr camera_grab_seq]
 
         # Self-healing binding, the begin_obs idiom: system loads wipe the
@@ -3116,25 +3137,45 @@ namespace eval ess {
         dservAddExactMatch camera/full/meta
         dpointSetScript camera/full/meta ::ess::camera_grab_complete
 
-        ::ess::evt_put CAMERA REQUEST [now] $req
-        if { [catch { sendNoReply camera [list grab_full $req] } err] } {
-            # No camera subprocess on this rig (e.g. snap_on_sample turned
-            # on without one): resolve the contract as FAILed right here
-            # instead of erroring out of the calling action mid-trial.
+        set t [now]
+        set camera_grab_req_us($req) $t
+        ::ess::evt_put CAMERA REQUEST $t $req
+        if { [catch { sendNoReply camera [{*}$module_cmd $req] } err] } {
             variable camera_grab_last
             variable camera_grab_status
             set camera_grab_status \
                 "{\"req_id\":$req,\"ok\":0,\"error\":\"no camera subprocess\"}"
             if { $req > $camera_grab_last } { set camera_grab_last $req }
+            unset -nocomplain camera_grab_req_us($req)
             ::ess::evt_put CAMERA FAIL [now] $req
         }
         return $req
+    }
+
+    proc camera_grab {} {
+        return [camera_grab_issue {list grab_full}]
+    }
+
+    # Grab the already-buffered frame nearest t_us (dserv us; empty = now).
+    # Does not wait for a new sensor frame -- that is camera_grab. Needs
+    # the `camera look_behind` setting on the rig for stream-rate history
+    # (~500 ms); without it the nearest frame can be a preview interval
+    # stale, and an empty ring resolves as FAIL rather than hanging.
+    proc camera_grab_nearest { {t_us ""} } {
+        if { $t_us eq "" } { set t_us [now] }
+        return [camera_grab_issue [list list grab_nearest $t_us]]
+    }
+
+    # Convenience: nearest to `ms` milliseconds ago.
+    proc camera_grab_before { ms } {
+        return [camera_grab_nearest [expr {[now] - wide(round($ms * 1000))}]]
     }
 
     # dpoint callback for camera/full/meta
     proc camera_grab_complete { dpoint data } {
         variable camera_grab_last
         variable camera_grab_status
+        variable camera_grab_req_us
         set req -1
         set ok 0
         regexp {"req_id":(-?\d+)} $data -> req
@@ -3142,9 +3183,25 @@ namespace eval ess {
         set camera_grab_status $data
         if { $req > $camera_grab_last } { set camera_grab_last $req }
         if { $ok } {
-            ::ess::evt_put CAMERA DONE [now] $req
+            # Capture time relative to this request's REQUEST stamp -- the
+            # pairing key extraction uses. Missing pieces (manual console
+            # grab, ess restarted mid-contract) degrade to the bare req id.
+            set params $req
+            if { [info exists camera_grab_req_us($req)] &&
+                 [regexp {"timestamp_us":(-?\d+)} $data -> cap_us] } {
+                set rel_ms [expr {round(($cap_us - $camera_grab_req_us($req)) \
+                                            / 1000.0)}]
+                set params [list $req $rel_ms]
+            }
+            ::ess::evt_put CAMERA DONE [now] {*}$params
         } else {
             ::ess::evt_put CAMERA FAIL [now] $req
+        }
+        unset -nocomplain camera_grab_req_us($req)
+        # A request whose meta never arrives (camera wedged mid-contract)
+        # would otherwise pin its stamp forever.
+        foreach k [array names camera_grab_req_us] {
+            if { $k < $req - 64 } { unset -nocomplain camera_grab_req_us($k) }
         }
         ::ess::do_update
     }
@@ -7421,12 +7478,15 @@ namespace eval ess {
     set subtypes [dict create FALL 0 RISE 1 PEAK 2 TROUGH 3]
     dict set evt_info STIMULUS_CHANGE [list 54 {Stimulus Change} float $subtypes]
 
-    # CAMERA: in-trial full-frame grab markers (::ess::camera_grab). The
-    # long param is the request id. REQUEST stamps when ESS asked for the
-    # grab; DONE/FAIL stamp when camera/full/meta resolved it. The frame
-    # itself is the camera/full datapoint, whose timestamp is the sensor
-    # capture time -- extraction pairs each REQUEST with the first frame
-    # captured at or after it.
+    # CAMERA: in-trial full-frame grab markers (::ess::camera_grab and
+    # the look-back camera_grab_nearest/_before). REQUEST stamps when ESS
+    # asked for the grab (param = request id); DONE/FAIL stamp when
+    # camera/full/meta resolved it. DONE's params are {req_id rel_ms}:
+    # capture time minus the REQUEST stamp, negative for look-back grabs
+    # -- extraction recovers each frame's exact capture time as
+    # request_time + rel_ms and pairs on that (files older than rel_ms
+    # pair by first-frame-at-or-after-request). The frame itself is the
+    # camera/full datapoint, timestamped with the sensor capture time.
     set subtypes [dict create REQUEST 0 DONE 1 FAIL 2]
     dict set evt_info CAMERA [list 55 {Camera} long $subtypes]
 

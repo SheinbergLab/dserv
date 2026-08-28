@@ -103,6 +103,15 @@ install_camera_tcl() {
   else
     log "no local/camera.tcl needed (cameraconf.tcl provides the commands; enable/rotation live in the settings gear)"
   fi
+
+  # cameraconf.tcl and the camera module must move in lockstep: the conf
+  # calls module commands (cameraGrabNearest, cameraSetRingPool) that an
+  # older module does not have, and vice versa.
+  if [[ -f "$DSERV_SRC/config/cameraconf.tcl" ]]; then
+    log "installing $DSERV_INSTALL/config/cameraconf.tcl"
+    mkdir -p "$DSERV_INSTALL/config"
+    install -m 0644 "$DSERV_SRC/config/cameraconf.tcl" "$DSERV_INSTALL/config/cameraconf.tcl"
+  fi
 }
 
 install_www() {

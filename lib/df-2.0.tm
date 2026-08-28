@@ -902,29 +902,38 @@ namespace eval df {
         # readESS stores frames at FILE level (<blob>NAME byte vectors +
         # <blobt>NAME capture times, ms from the file's first record)
         # because a frame requested late in an obs is encoded async and
-        # can be logged after ENDOBS. Grouping into obs therefore pairs
-        # each per-obs CAMERA REQUEST event with the first unconsumed
-        # frame captured at or after it -- an invariant the camera module
-        # guarantees (it services a grab only with a frame whose exposure
-        # started at/after the request).
+        # can be logged after ENDOBS.
+        #
+        # Pairing: a DONE event's second param (rel_ms, ess-2.0.tm
+        # camera_grab_complete) is the frame's capture time minus its
+        # REQUEST stamp -- negative for look-back grabs
+        # (camera_grab_before), which capture BEFORE the request. Each
+        # DONE request claims the unused frame nearest request_time +
+        # rel_ms, within half a frame period: exact even when two grabs
+        # land close together, and immune to a manual console grab's
+        # stray frame. Files predating rel_ms (single-param DONE, all
+        # grabs next-frame) pair by first unused frame at/after the
+        # request, the old invariant.
         #
         # Returns three nested dynlists of length n_obs (persistent in
         # this object's scratch dg):
         #   request_t - ms from obs onset of each CAMERA REQUEST
         #   capture_t - ms from obs onset of the paired frame's sensor
-        #               capture (-1 if no frame resolved the request)
+        #               capture (-1 if no frame resolved the request;
+        #               can be NEGATIVE for a look-back grab requested
+        #               just after BEGINOBS)
         #   jpeg      - DF_CHAR byte vectors (empty if unresolved).
         #               Recover bytes: numpy arr.astype('uint8').tobytes()
         #
         # Request ids of CAMERA <subtype> events, from BOTH the per-obs
         # event stream and e_pre (a grab's DONE/FAIL is stamped when its
         # meta arrives, which can be after ENDOBS -- between obs).
-        method CameraEvtIds {subtype_name} {
-            set ids {}
+        method CameraEvtParamLists {subtype_name} {
+            set plists {}
             dl_local mask [my select_evt CAMERA $subtype_name]
             if {$mask ne ""} {
                 foreach obs_params [dl_tcllist [dl_select $g:e_params $mask]] {
-                    foreach p $obs_params { lappend ids [lindex $p 0] }
+                    foreach p $obs_params { lappend plists $p }
                 }
             }
             lassign [my evt CAMERA $subtype_name] t s
@@ -932,10 +941,15 @@ namespace eval df {
                 dl_local pre_mask [dl_and [dl_eq $predg:types $t] \
                                        [dl_eq $predg:subtypes $s]]
                 foreach p [dl_tcllist [dl_select $predg:data $pre_mask]] {
-                    lappend ids [lindex $p 0]
+                    lappend plists $p
                 }
             }
-            return $ids
+            return $plists
+        }
+
+        method CameraEvtIds {subtype_name} {
+            return [lmap p [my CameraEvtParamLists $subtype_name] \
+                        { lindex $p 0 }]
         }
 
         method camera_frames_in_obs {{varname camera/full}} {
@@ -961,8 +975,17 @@ namespace eval df {
             # The contract's resolution events are the pairing evidence:
             # only a request with CAMERA DONE consumes a frame. A FAILed
             # or never-resolved request stays empty rather than claiming
-            # some later stray frame (e.g. a manual grab).
-            set done_ids [my CameraEvtIds DONE]
+            # some later stray frame (e.g. a manual grab). DONE's rel_ms
+            # param (when present) makes the claim exact.
+            set done_ids {}
+            set done_rel [dict create]
+            foreach p [my CameraEvtParamLists DONE] {
+                set id [lindex $p 0]
+                lappend done_ids $id
+                if {[llength $p] >= 2} {
+                    dict set done_rel $id [lindex $p 1]
+                }
+            }
             set fail_ids [my CameraEvtIds FAIL]
 
             set frame_times {}
@@ -976,7 +999,7 @@ namespace eval df {
                 set obs_starts [dl_tcllist $g:obs_start_ms]
             }
             set n_frames [llength $frame_times]
-            set k 0
+            set used [lrepeat $n_frames 0]
 
             for {set o 0} {$o < $n_obs} {incr o} {
                 dl_local rts [dl_ilist]
@@ -991,15 +1014,45 @@ namespace eval df {
                     if {$have_frames && $req_id in $done_ids &&
                         $req_id ni $fail_ids} {
                         set abs_r [expr {$ostart + $r}]
-                        while {$k < $n_frames &&
-                               [lindex $frame_times $k] < $abs_r} {
-                            incr k    ;# unclaimed frame (e.g. manual grab)
+                        set claim -1
+                        if {[dict exists $done_rel $req_id]} {
+                            # Exact: the frame this DONE announced sits at
+                            # request + rel_ms. Nearest unused, gated to
+                            # 15 ms -- covers the <=4 ms of accumulated
+                            # ms-rounding, rejects the 33 ms neighbor, so
+                            # a frame missing from the log reads as
+                            # unresolved instead of claiming its neighbor.
+                            set expect \
+                                [expr {$abs_r + [dict get $done_rel $req_id]}]
+                            set best_dt 0
+                            for {set i 0} {$i < $n_frames} {incr i} {
+                                if {[lindex $used $i]} { continue }
+                                set dt [expr {abs([lindex $frame_times $i] \
+                                                      - $expect)}]
+                                if {$claim < 0 || $dt < $best_dt} {
+                                    set claim $i
+                                    set best_dt $dt
+                                }
+                            }
+                            if {$claim >= 0 && $best_dt > 15} { set claim -1 }
+                        } else {
+                            # Legacy files (no rel_ms): every grab was
+                            # next-frame, so the old invariant holds --
+                            # first unused frame captured at/after the
+                            # request is the one.
+                            for {set i 0} {$i < $n_frames} {incr i} {
+                                if {[lindex $used $i]} { continue }
+                                if {[lindex $frame_times $i] >= $abs_r} {
+                                    set claim $i
+                                    break
+                                }
+                            }
                         }
-                        if {$k < $n_frames} {
+                        if {$claim >= 0} {
+                            lset used $claim 1
                             dl_append $cts \
-                                [expr {[lindex $frame_times $k] - $ostart}]
-                            dl_append $jps [dl_get $g:$bcol $k]
-                            incr k
+                                [expr {[lindex $frame_times $claim] - $ostart}]
+                            dl_append $jps [dl_get $g:$bcol $claim]
                             set found 1
                         }
                     }

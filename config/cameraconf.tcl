@@ -16,8 +16,9 @@
 #
 # Datapoints published:
 #   camera/preview     JPEG snapshot, every snapshot_interval s (view at /camera.html)
-#   camera/full        full-resolution JPEG (private), on demand via grab_full
-#   camera/full/meta   public JSON completion for each grab_full:
+#   camera/full        full-resolution JPEG (private), on demand via
+#                      grab_full or grab_nearest
+#   camera/full/meta   public JSON completion for each grab_full/grab_nearest:
 #                      {req_id frame_id timestamp_us width height jpeg_bytes ok}
 #                      (ok 0 + error on failure). ESS waits on this point;
 #                      timestamp_us is the sensor capture time on dserv's
@@ -32,16 +33,25 @@
 #  stop                        - Stop camera streaming
 #  set_interval secs|never     - Seconds between snapshots (live, no
 #                                restart); never|off|0 disables snapshots
-#                                (grabs unaffected, grab_last starves)
+#                                (grabs unaffected, grab_last starves --
+#                                unless look_behind keeps the ring parked)
 #  set_rotation deg            - Declare mounting rotation (persists to rig.tcl)
 #  grab_full ?req_id?          - Publish the NEXT sensor frame full-res to
 #                                camera/full (+ camera/full/meta completion).
 #                                Latency <= one frame period + encode; the
 #                                image always postdates the request.
+#  grab_nearest t_us ?req_id?  - Publish the ALREADY-BUFFERED frame whose
+#                                capture time is nearest t_us (dserv us,
+#                                same axis as ESS [now]); never waits for
+#                                a new frame, so the image may predate the
+#                                request. Needs the look_behind setting
+#                                for stream-rate history (~16 frames,
+#                                ~500 ms at 30 fps).
 #  grab_last                   - Publish the most recent ring-buffer frame
 #                                (can be up to snapshot_interval old)
 #  check_status                - Get camera status
-#  check_ring_buffer           - Get ring buffer status
+#  check_ring_buffer           - Get ring buffer status (hold/hold_depth
+#                                report the look-behind state)
 #  get_frame_ppm frame_id      - Get frame as PPM data
 #  get_frame_jpeg frame_id     - Get frame as JPEG data
 #  save_frame frame_id file    - Save frame (.ppm/.jpg)
@@ -152,6 +162,14 @@ proc start { { camera_id 0 } } {
     # cameraConfigure
     cameraSetRotation [settings::get camera rotation]
 
+    # Look-behind pool must also be declared before cameraConfigure: it
+    # sizes the DMA allocation (16 extra ~6MB buffers per stream at 1080p,
+    # CMA on the Pi). catch: an older module without the command just
+    # means no look-behind, not a dead camera.
+    set lb 0
+    catch { set lb [settings::get camera look_behind] }
+    catch { cameraSetRingPool [expr {$lb ? 16 : 0}] }
+
     # Native 1920x1080 @ stream_fps; preview 640x360 keeps the 16:9 aspect
     if {[catch {cameraConfigure 1920 1080 $::stream_fps 640 360} result]} {
         puts "Error configuring camera: $result"
@@ -190,8 +208,23 @@ proc start { { camera_id 0 } } {
         return
     }
 
+    # With the pool allocated, parking every stream frame costs nothing
+    # extra (the DMA memory is already committed, no copies) -- so
+    # look_behind on means hold on, no separate toggle to forget. A
+    # refusal (allocator granted too few buffers) is reported but leaves
+    # the camera up: grabs and preview still work, only look-behind is out.
+    set lb_note ""
+    if { $lb } {
+        if {[catch {cameraSetRingHold 1} result]} {
+            puts "look_behind unavailable: $result"
+            set lb_note " (look_behind unavailable: too few buffers)"
+        }
+    } else {
+        catch { cameraSetRingHold 0 }
+    }
+
     dservSet camera/status continuous
-    camera_health ok "streaming, ~1 JPEG/$::snapshot_interval s to camera/preview"
+    camera_health ok "streaming, ~1 JPEG/$::snapshot_interval s to camera/preview$lb_note"
     puts "Camera started - JPEG every $::snapshot_interval s to camera/preview"
 }
 
@@ -224,6 +257,31 @@ proc grab_full { {req_id 0} } {
         dservSet camera/full/meta \
             "{\"req_id\":$req_id,\"ok\":0,\"error\":\"$msg\"}"
         error "Error requesting grab: $result"
+    }
+    return $req_id
+}
+
+# Look-behind grab: publish the already-buffered frame nearest t_us (dserv
+# microseconds, the axis of ESS [now] and event stamps). The opposite
+# contract from grab_full -- never waits for a future frame, so the image
+# may PREDATE the request. The module picks and copies the frame in one
+# critical section and resolves through the same worker/meta path as
+# grab_full (exact capture-time timestamp_us in the meta). Stream-rate
+# history needs the look_behind setting; without it the ring only holds
+# preview-cadence frames and "nearest" can be a second stale. An empty
+# ring still resolves (ok:0 meta), so a waiting trial cannot hang.
+proc grab_nearest { t_us {req_id 0} } {
+    if {![string is entier -strict $t_us]} {
+        set msg "grab_nearest: expected t_us in dserv microseconds, got \"$t_us\""
+        dservSet camera/full/meta \
+            "{\"req_id\":$req_id,\"ok\":0,\"error\":\"[string map {\" ' \\ /} $msg]\"}"
+        error $msg
+    }
+    if {[catch {cameraGrabNearest camera/full $t_us $req_id} result]} {
+        set msg [string map {\" ' \\ /} $result]
+        dservSet camera/full/meta \
+            "{\"req_id\":$req_id,\"ok\":0,\"error\":\"$msg\"}"
+        error "Error requesting nearest grab: $result"
     }
     return $req_id
 }
@@ -384,6 +442,21 @@ proc apply_enabled {v} {
     }
 }
 
+# The look-behind pool is sized at cameraConfigure, so a gear flip while
+# streaming restarts the stream (a beat of black in the preview; grabs in
+# flight resolve as FAILed). An idle camera needs nothing now -- the next
+# start reads the setting.
+proc apply_look_behind {v} {
+    set streaming 0
+    if {![catch {cameraStatus} st]} {
+        set streaming [expr {[dict getdef $st state idle] eq "streaming"}]
+    }
+    if {$streaming} {
+        stop
+        start
+    }
+}
+
 # allow local override for this system (tuning, or wholesale proc overrides;
 # old full copies of the EXAMPLE still work -- they redefine the same procs
 # and re-declare rotation with the same schema)
@@ -416,6 +489,23 @@ at the ${stream_fps} fps stream; live while streaming). Watching
 cadence only -- grab_full captures the next sensor frame regardless.
 0 = no snapshots at all: pure acquisition for on-demand grabs." \
     -apply {::apply_capture_hz}
+
+# Look-behind history for ::ess::camera_grab_nearest / camera_grab_before:
+# every stream-rate frame is parked in the 16-slot ring (~500 ms at 30 fps)
+# by holding its DMA buffer -- no copies, no CPU, but 16 extra ~6MB
+# buffers per stream at 1080p, allocated from CMA on a Pi. That memory is
+# why this is a declared rig decision and not always-on: a Pi at the
+# stock 64MB CMA will refuse the allocation (the camera still runs,
+# look-behind reports unavailable) until config.txt raises it, e.g.
+# `dtoverlay=vc4-kms-v3d,cma-256`. Off costs nothing and grab_full is
+# unaffected either way.
+settings::declare camera look_behind -default 0 -type bool \
+    -doc "keep the last ~half second of stream frames grabbable by
+::ess::camera_grab_before / camera_grab_nearest (look-back snapshots).
+Needs ~200MB of CMA at 1080p -- raise the Pi's cma= if the health line
+reports look_behind unavailable. Flipping while streaming restarts the
+stream." \
+    -apply {::apply_look_behind}
 
 # Declare does not fire -apply; sync the module interval from the
 # effective rate_hz before a possible boot-time start so the first
