@@ -3435,15 +3435,32 @@ namespace eval ess {
             # track is optional -- the answer is the committed angle. Here
             # the PATH is the datum (time-to-first-patch, dwell, revisits,
             # search efficiency), so this is not optional the way a cursor
-            # track is. Same shape as the other fast sources: obs_limited,
-            # 80-byte buffer.
-            dservLoggerAddMatch $filename ess/roam/pos 1 80 1
+            # track is. Same shape as the other fast sources: obs_limited
+            # and buffered.
+            #
+            # 120 bytes = ten 3-float poses. It is sized to the payload on
+            # purpose: a buffer that is not a whole multiple of the sample
+            # splits samples across records for no gain, and ten is what
+            # the 80-byte 2-float buffer held before roam_publish_pose
+            # started carrying its own time.
+            dservLoggerAddMatch $filename ess/roam/pos 1 120 1
+            # How to decode that payload -- 2 floats or 3. The same job
+            # ess/ain/recorded does below, and the reason an old file and a
+            # new one can be told apart rather than guessed at.
+            dservLoggerAddMatch $filename ess/roam/layout
+            catch { dservTouch ess/roam/layout }
             # The arena the path has to be read against, and the patch
             # transitions the C-processor swap would otherwise be the only
             # record of.
-            dservLoggerAddMatch $filename ess/roam/geometry
+            #
+            # geometry is obs_limited, which is what makes it trustworthy:
+            # roam_set_arena runs in nexttrial, BETWEEN obs, so an unlimited
+            # match files trial N's arena under trial N-1. roam_start
+            # republishes it inside the obs, so obs-limiting drops the stale
+            # copy and keeps the right one. stimdg stays the source of truth
+            # for anything a loader declared; this is the cross-check.
+            dservLoggerAddMatch $filename ess/roam/geometry 1 0 1
             dservLoggerAddMatch $filename ess/roam/regions
-            catch { dservTouch ess/roam/geometry }
         }
 
         # extio analog blocks, resolved above. UNBUFFERED on purpose: the log

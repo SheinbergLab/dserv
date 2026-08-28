@@ -897,6 +897,237 @@ namespace eval df {
         }
 
         #
+        # Per-SAMPLE times and values for a buffered fixed-width stream.
+        #
+        # ds_in_obs hands back the RECORDS the logger wrote, and for a fast
+        # source those records are BUFFERED: dservLoggerAddMatch's buffer
+        # concatenates the data of successive datapoints and keeps only the
+        # FIRST one's timestamp. A 10-sample block therefore carries one
+        # time, not ten, and reading <dst> as a sample axis stacks every
+        # sample of a block at the block's onset.
+        #
+        # THE RIGHT ANSWER IS -time_index. If the stream's payload carries
+        # the sample's own time -- ess/roam/pos publishes {x y t} for
+        # exactly this reason, and the extio ain blocks carry their t0 the
+        # same way -- say which channel it is and NOTHING below runs. Each
+        # record's stamp is its first sample's exact time and every other
+        # sample is that plus its own payload offset, per record, so a
+        # payload clock that restarts mid-obs costs at most one record.
+        # The time channel is removed from the returned values, so a caller
+        # sees the same channel numbering either way.
+        #
+        # Everything from here down is the FALLBACK for a stream that does
+        # not: files written before a source started stamping itself, and
+        # sources that genuinely are uniform. What the file still pins down
+        # exactly:
+        #   - the first sample of a record is at that record's time
+        #   - every sample of a record falls before the next record's time
+        #   - a source publishing on a fixed tick spaces them by that tick
+        #
+        # The tick is INFERRED from the file -- the median of span/n over
+        # every non-terminal record -- rather than declared, so this follows
+        # a retuned roam_tick_ms or a different sampler with no argument.
+        # Pass -interval to override it.
+        #
+        # Reconstruction, per record:
+        #
+        #   span <= 1.5*n*tick   contiguous: the source ran at the tick for
+        #                        the whole span, so the samples spread
+        #                        evenly across it.
+        #
+        #   otherwise            the source PAUSED. Only a publish-on-change
+        #                        source can (ess/roam/pos publishes only
+        #                        when the agent moved), and the pause is put
+        #                        directly after the record's first sample:
+        #                        the rest are back-filled at the tick so
+        #                        they end one tick before the next record.
+        #                        That is exactly right for the FIRST record
+        #                        of an obs -- a seed sample at onset, then a
+        #                        wait for the subject's first move -- which
+        #                        is the case that matters and the one an
+        #                        even spread gets most wrong. Where inside a
+        #                        record the pause actually fell is not
+        #                        recoverable; the bound on it is.
+        #
+        # The last record of an obs has no successor, so its samples run
+        # forward from its own time at the tick.
+        #
+        # A stream with one sample per record is not buffered at all: every
+        # time is exact and nothing is inferred.
+        #
+        # width is the values per sample (3 for an x,y,t triple).
+        #
+        # Returns two nested dynlists of length n_obs (persistent in this
+        # object's scratch dg):
+        #   times - float ms from obs onset, one per sample
+        #   vals  - per obs: one list per channel, each n_samples long,
+        #           minus the -time_index channel if one was named
+        #
+        method ds_samples_in_obs {varname args} {
+            set opts [dict merge {-width 1 -interval 0 -time_index -1} $args]
+            set width    [dict get $opts -width]
+            set interval [dict get $opts -interval]
+            set tidx     [dict get $opts -time_index]
+            if {$width < 1} { error "ds_samples_in_obs: -width must be >= 1" }
+            if {$tidx >= $width} {
+                error "ds_samples_in_obs: -time_index $tidx is outside a\
+                       -width $width sample"
+            }
+
+            lassign [my ds_in_obs $varname] vcol tcol ncol
+            set n_obs [dict get $meta n_obs]
+
+            # Record times and per-record SAMPLE counts, per obs.
+            set otimes {}
+            set ocounts {}
+            for {set o 0} {$o < $n_obs} {incr o} {
+                set ts {}
+                set ns {}
+                foreach t [dl_tcllist $tcol:$o] c [dl_tcllist $ncol:$o] {
+                    if {$c % $width} {
+                        error "$varname obs $o: a record holds $c values,\
+                               not a multiple of -width $width"
+                    }
+                    lappend ts $t
+                    lappend ns [expr {$c / $width}]
+                }
+                lappend otimes $ts
+                lappend ocounts $ns
+            }
+
+            # Infer the tick from every record that has a successor.
+            # Skipped entirely when the payload carries its own time.
+            if {$tidx < 0 && $interval <= 0} {
+                set spans {}
+                foreach ts $otimes ns $ocounts {
+                    for {set k 0} {$k < [llength $ts] - 1} {incr k} {
+                        set n [lindex $ns $k]
+                        if {$n <= 0} continue
+                        lappend spans [expr {double([lindex $ts $k+1] -
+                                                    [lindex $ts $k]) / $n}]
+                    }
+                }
+                if {[llength $spans]} {
+                    set spans [lsort -real $spans]
+                    set interval [lindex $spans [expr {[llength $spans]/2}]]
+                }
+                # No successor anywhere means one record per obs; with one
+                # sample in it the time is exact, with more it is not
+                # recoverable and the caller has to say what the rate was.
+                if {$interval <= 0} {
+                    set buffered 0
+                    foreach ns $ocounts {
+                        foreach n $ns { if {$n > 1} { set buffered 1 } }
+                    }
+                    if {$buffered} {
+                        error "$varname: buffered records but no two records\
+                               in any obs to infer the sample interval from\
+                               -- pass -interval"
+                    }
+                    set interval 1.0
+                }
+            }
+
+            dl_local t_out [dl_llist]
+            dl_local v_out [dl_llist]
+
+            for {set o 0} {$o < $n_obs} {incr o} {
+                set ts [lindex $otimes $o]
+                set ns [lindex $ocounts $o]
+                set nrec [llength $ts]
+                set stamps {}
+
+                # The payload carries the sample's own time. Nothing is
+                # inferred: each record's stamp is the exact obs-relative
+                # time of its FIRST sample, and every other sample in that
+                # record is that stamp plus its own offset from the first.
+                # Taken per RECORD rather than against one origin for the
+                # whole obs, so a stream whose payload clock restarts
+                # mid-obs (a roam restarted for a second bout) costs at
+                # most the one record the restart falls in.
+                if {$tidx >= 0} {
+                    set pos 0
+                    foreach t $ts n $ns {
+                        if {$n <= 0} continue
+                        dl_local pt [dl_choose $vcol:$o \
+                            [dl_series [expr {$pos + $tidx}] \
+                                       [expr {$pos + ($n-1)*$width + $tidx}] \
+                                       $width]]
+                        set p0 [dl_get $pt 0]
+                        foreach p [dl_tcllist $pt] {
+                            lappend stamps [expr {$t + ($p - $p0)}]
+                        }
+                        incr pos [expr {$n*$width}]
+                    }
+                    dl_append $t_out [dl_flist {*}$stamps]
+                    set nsamp [llength $stamps]
+                    dl_local chans [dl_llist]
+                    for {set c 0} {$c < $width} {incr c} {
+                        if {$c == $tidx} continue   ;# it is the time axis now
+                        if {$nsamp} {
+                            dl_append $chans [dl_choose $vcol:$o \
+                                [dl_series $c [expr {$nsamp*$width - 1}] \
+                                     $width]]
+                        } else {
+                            dl_append $chans [dl_flist]
+                        }
+                    }
+                    dl_append $v_out $chans
+                    continue
+                }
+
+                for {set k 0} {$k < $nrec} {incr k} {
+                    set t [lindex $ts $k]
+                    set n [lindex $ns $k]
+                    if {$n <= 0} continue
+                    lappend stamps [expr {double($t)}]      ;# exact
+                    if {$n == 1} continue
+                    if {$k == $nrec - 1} {
+                        for {set j 1} {$j < $n} {incr j} {
+                            lappend stamps [expr {$t + $j*$interval}]
+                        }
+                        continue
+                    }
+                    set span [expr {[lindex $ts $k+1] - $t}]
+                    if {$span <= 1.5*$n*$interval} {
+                        set step [expr {double($span)/$n}]
+                        for {set j 1} {$j < $n} {incr j} {
+                            lappend stamps [expr {$t + $j*$step}]
+                        }
+                    } else {
+                        set end [expr {$t + $span - $interval}]
+                        for {set j 1} {$j < $n} {incr j} {
+                            lappend stamps [expr {$end - ($n-1-$j)*$interval}]
+                        }
+                    }
+                }
+
+                dl_append $t_out [dl_flist {*}$stamps]
+
+                set nsamp [llength $stamps]
+                dl_local chans [dl_llist]
+                for {set c 0} {$c < $width} {incr c} {
+                    if {$nsamp} {
+                        dl_append $chans [dl_choose $vcol:$o \
+                            [dl_series $c [expr {$nsamp*$width - 1}] $width]]
+                    } else {
+                        dl_append $chans [dl_flist]
+                    }
+                }
+                dl_append $v_out $chans
+            }
+
+            # Scratch columns named after the STREAM, not a fixed ds_t/ds_v:
+            # a caller decoding two streams (a path and a stick) holds both
+            # handles at once, and a shared name would have the second call
+            # quietly overwrite the first's data under the first's name.
+            set tag [string map {/ _ - _ . _} $varname]
+            dl_set $predg:ds_t_$tag $t_out
+            dl_set $predg:ds_v_$tag $v_out
+            return [list $predg:ds_t_$tag $predg:ds_v_$tag]
+        }
+
+        #
         # Camera frames grouped per obs by REQUEST pairing.
         #
         # readESS stores frames at FILE level (<blob>NAME byte vectors +

@@ -53,21 +53,29 @@
 # and nowhere else -- entering or leaving a patch is the event the protocol
 # is waiting for.
 #
-# Pose is published as a DSERV_FLOAT pair in degrees, exactly like
-# eyetracking/position and slider/position:
+# Pose is published as a DSERV_FLOAT triple, degrees and ms:
 #
-#   ess/roam/pos       "x y" as binary ff, degrees, origin at screen center
+#   ess/roam/pos       "x y t" as binary fff, position in degrees with the
+#                      origin at screen center, t in ms since roam_start
 #
-# That format is not cosmetic. dserv's C `windows` processor tests a point
+# x and y lead deliberately. dserv's C `windows` processor tests a point
 # against N regions and publishes only on state change, and processAttach
-# binds it to ANY datapoint -- so this pose can be handed to it unchanged if
-# the region count or the sample rate ever outgrows the Tcl test below. The
-# region API here is deliberately em_region_set's shape so that swap changes
-# no protocol.
+# binds it to ANY datapoint -- so this pose can be handed to it unchanged
+# if the region count or the sample rate ever outgrows the Tcl test below.
+# windows.c takes float_vals[0] and [1] after a `len >= 2*sizeof(float)`
+# check, so the trailing t rides along without it noticing. The region API
+# here is deliberately em_region_set's shape so that swap changes no
+# protocol.
+#
+# t is the newer half of the contract; roam_publish_pose says why a
+# buffered publish-on-change stream has to carry its own time. Files
+# written before it are 2-float, and ess/roam/layout in the file says
+# which one you have.
 #
 # Companion datapoints, all strings, for things that DRAW:
 #
 #   ess/roam/geometry  "circle,R" | "rect,x0,x1,y0,y1"
+#   ess/roam/layout    "x,y" | "x,y,t" -- the pose payload's decode key
 #   ess/roam/regions   "states_bitmask,changed_bitmask"
 #   ess/roam/wall      0|1  -- is the agent against the boundary right now
 #   ess/dial/pointer   "x,y,show,in_band"  (see roam_init -pointer_dpoint)
@@ -94,6 +102,10 @@ namespace eval ess {
     variable roam_edge           clamp
     variable roam_pose_dpoint    ess/roam/pos
     variable roam_pointer_dpoint ess/dial/pointer
+    # What a pose payload holds, published as ess/roam/layout and recorded
+    # so a reader can tell a 3-float file from the 2-float ones written
+    # before roam_publish_pose started carrying its own time.
+    variable roam_pose_layout    x,y,t
 
     # sectors source: eight headings at one speed
     variable roam_rate           8.0      ;# deg/s
@@ -453,15 +465,44 @@ namespace eval ess {
         roam_test_regions $ts
     }
 
-    # The trajectory record. DSERV_FLOAT pair, degrees, origin at screen
-    # center -- the eyetracking/position contract (see the header).
+    # The trajectory record. DSERV_FLOAT triple {x y t}, degrees and ms,
+    # origin at screen center -- the eyetracking/position contract for the
+    # first two, plus the sample's OWN time.
+    #
+    # WHY THE TIME IS IN THE PAYLOAD. This stream is logged buffered
+    # (ess-2.0.tm), and dserv's log buffer concatenates the data of
+    # successive datapoints while keeping only the FIRST one's timestamp
+    # -- so ten poses reach the file under one stamp. That is fine for a
+    # uniformly sampled source, whose sample times can be counted off the
+    # block. It is NOT fine here, because the pose publishes only when the
+    # agent MOVED: a block spanning 160 ms had a pause somewhere in it and
+    # nothing in the file says where.
+    #
+    # The fix is the one the extio ain blocks already use -- carry the
+    # time in the payload rather than relying on the dserv envelope --
+    # and it is much cheaper than the alternatives. Measured on a
+    # 160-trial forage session: 2 floats buffered 560 KB (times inferred),
+    # 2 floats UNBUFFERED 2084 KB (times exact, buffering given up), 3
+    # floats buffered 751 KB (times exact, buffering kept). The +27% buys
+    # exactness and costs nothing downstream -- a trials dg carries three
+    # floats per sample either way, the third one just stops being a
+    # reconstruction.
+    #
+    # t is ms since roam_start, so the bout's first sample is 0.0.
+    # float32 represents integer ms exactly to 2^24 = 4.7 hours, well past
+    # any obs period. Extraction does not depend on the origin anyway: it
+    # reads each sample as record_stamp + (t - t_of_that_record's_first),
+    # which stays exact across a roam restarted mid-obs.
+    #
     proc roam_publish_pose { ts } {
         variable roam_pose_dpoint
+        variable roam_started_us
         variable roam_x
         variable roam_y
         if { $ts <= 0 } { set ts [now] }
         dservSetData $roam_pose_dpoint $ts 2 \
-            [binary format ff $roam_x $roam_y]     ;# 2 = DSERV_FLOAT
+            [binary format fff $roam_x $roam_y \
+                 [expr {($ts - $roam_started_us)/1000.0}]]  ;# 2 = DSERV_FLOAT
     }
 
     # The drawable cursor, throttled: a stim redrawing at the display's rate
@@ -680,6 +721,7 @@ namespace eval ess {
         variable roam_edge
         variable roam_pose_dpoint
         variable roam_pointer_dpoint
+        variable roam_pose_layout
         variable roam_rate
         variable roam_accel
         variable roam_rate_max
@@ -802,6 +844,11 @@ namespace eval ess {
         set roam_active 1
         dservSet ess/roam_active  1
         dservSet ess/roam/sources $roam_sources
+        # The decode key for ess/roam/pos, in the file -- the same job
+        # ess/ain/recorded does for the analog blocks. A reader that finds
+        # it knows the payload carries its own time; one that does not is
+        # holding a 2-float file and has to reconstruct.
+        dservSet ess/roam/layout  $roam_pose_layout
         roam_publish_geometry
         roam_pointer_hide
         return
@@ -889,8 +936,18 @@ namespace eval ess {
         # the bout belongs in the trajectory: without it the record begins
         # wherever the first push happened to reach, and time-to-first-move
         # is unrecoverable.
-        roam_publish_pose [now]
+        # roam_started_us, not [now]: it makes the seed's payload t exactly
+        # 0.0 rather than the few microseconds since the line above, so the
+        # bout's time axis starts where it says it does.
+        roam_publish_pose $roam_started_us
         roam_publish_pointer [now]
+        # The arena, republished INSIDE the obs period. roam_set_arena is
+        # called from nexttrial, which runs BETWEEN obs, so the record it
+        # produces lands under the PREVIOUS obs -- geometry for trial N
+        # filed under trial N-1. Publishing here puts one correct record in
+        # every obs, and lets the logger match be obs_limited so the stale
+        # one is never written at all.
+        roam_publish_geometry
         # Seed the region states from where the agent actually IS. Placing it
         # inside a patch and then starting would otherwise register as an
         # ENTRY on the first step, latching a response nobody made.
