@@ -214,10 +214,11 @@ private:
   // grab_nearest can reach back ~ring-depth/fps without copying every
   // frame.  ring_pool_frames_ is the DECLARED depth -- set BEFORE
   // configure(), it sizes the DMA buffer pool (one ~6MB 1080p buffer per
-  // parked frame, from CMA on the Pi), which is why it defaults to 0 and
-  // the pool stays at the legacy 4 buffers unless a rig opts in.
-  // hold_depth_ is what allocation actually granted (0 = hold refused,
-  // copy ring only).  ring_hold_ is the live park/don't-park switch.
+  // parked frame: system RAM via the Pi 5's pisp, CMA on older
+  // pipelines), which is why it defaults to 0 and the pool stays at the
+  // legacy 4 buffers unless a rig opts in.  hold_depth_ is what
+  // allocation actually granted (0 = hold refused, copy ring only).
+  // ring_hold_ is the live park/don't-park switch.
   std::atomic<bool> ring_hold_{false};
   int ring_pool_frames_ = 0;
   int hold_depth_ = 0;
@@ -628,8 +629,8 @@ public:
     stream_config.pixelFormat = preferred_format;
     // Holding N frames means N Requests parked out of the camera's queue,
     // so the pool must be N plus a couple in flight.  Each extra buffer is
-    // real DMA memory on both streams (CMA on the Pi), so the deep pool is
-    // strictly opt-in via set_ring_pool_frames.
+    // real DMA memory on both streams (CMA on some platforms), so the
+    // deep pool is strictly opt-in via set_ring_pool_frames.
     unsigned int nbufs =
       ring_pool_frames_ > 0 ? (unsigned int) (ring_pool_frames_ + 2) : 4;
     stream_config.bufferCount = nbufs;

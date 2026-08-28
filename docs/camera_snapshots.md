@@ -110,14 +110,25 @@ frame's DMA buffer in the 16-slot ring — **~500 ms of look-back at
 it; preview stays an independent watching knob.
 
 The cost is memory, which is why it's a declared setting and not
-always-on: 16 extra ~6 MB buffers per stream at 1080p, allocated from
-**CMA** on a Pi at camera start. A Pi at the stock 64 MB CMA will refuse
-the allocation — the camera still runs and `camera/health` appends
-`look_behind unavailable` — until `/boot/firmware/config.txt` raises it
-(e.g. `dtoverlay=vc4-kms-v3d,cma-256`, then reboot; check with
-`grep Cma /proc/meminfo`). `check_ring_buffer` reports `hold` (parking
-active) and `hold_depth` (slots actually granted). Flipping the setting
-restarts the stream, since the pool is sized at configure time.
+always-on: 16 extra ~6 MB DMA buffers per stream at 1080p (~124 MB),
+allocated at camera start. On a **Pi 5** the pisp ISP takes these from
+ordinary system RAM — rig-verified: the full 16-deep pool allocates at
+the stock 64 MB CMA with `CmaFree` untouched, so the setting just
+works. On CMA-backed pipelines (Pi 4 / unicam-class) the pool can
+exceed stock CMA — the camera still runs and `camera/health` appends
+`look_behind unavailable`, or `hold_depth` shrinks to what was granted
+— until `/boot/firmware/config.txt` raises it (e.g.
+`dtoverlay=vc4-kms-v3d,cma-256`, then reboot). `check_ring_buffer`
+reports `hold` (parking active) and `hold_depth` (slots actually
+granted). Flipping the setting restarts the stream, since the pool is
+sized at configure time.
+
+Measured on a Pi 5 (imx708, 30 fps): a 100 ms look-back returns a frame
+within half a frame period of the target, a request older than the
+window honestly clamps to the oldest held frame (the meta's
+`timestamp_us` shows it), and dserv CPU is unchanged with hold on —
+zero-copy means nothing touches a parked frame until a grab asks for
+it.
 
 With the setting on, a protocol needs nothing else: the ring is already
 parked whenever the camera streams, so `camera_grab_before 100` in a

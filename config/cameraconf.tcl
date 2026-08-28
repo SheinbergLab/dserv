@@ -163,9 +163,9 @@ proc start { { camera_id 0 } } {
     cameraSetRotation [settings::get camera rotation]
 
     # Look-behind pool must also be declared before cameraConfigure: it
-    # sizes the DMA allocation (16 extra ~6MB buffers per stream at 1080p,
-    # CMA on the Pi). catch: an older module without the command just
-    # means no look-behind, not a dead camera.
+    # sizes the DMA allocation (16 extra ~6MB buffers per stream at
+    # 1080p). catch: an older module without the command just means no
+    # look-behind, not a dead camera.
     set lb 0
     catch { set lb [settings::get camera look_behind] }
     catch { cameraSetRingPool [expr {$lb ? 16 : 0}] }
@@ -493,18 +493,21 @@ cadence only -- grab_full captures the next sensor frame regardless.
 # Look-behind history for ::ess::camera_grab_nearest / camera_grab_before:
 # every stream-rate frame is parked in the 16-slot ring (~500 ms at 30 fps)
 # by holding its DMA buffer -- no copies, no CPU, but 16 extra ~6MB
-# buffers per stream at 1080p, allocated from CMA on a Pi. That memory is
-# why this is a declared rig decision and not always-on: a Pi at the
-# stock 64MB CMA will refuse the allocation (the camera still runs,
-# look-behind reports unavailable) until config.txt raises it, e.g.
-# `dtoverlay=vc4-kms-v3d,cma-256`. Off costs nothing and grab_full is
+# buffers per stream at 1080p (~124MB). That memory is why this is a
+# declared rig decision and not always-on. On a Pi 5 the pisp ISP takes
+# it from ordinary system RAM (rig-verified at stock CMA); on CMA-backed
+# pipelines (Pi 4 / unicam) the pool can exceed stock CMA -- the camera
+# still runs, look-behind reports unavailable or hold_depth shrinks to
+# what was granted -- until config.txt raises it
+# (dtoverlay=vc4-kms-v3d,cma-256). Off costs nothing and grab_full is
 # unaffected either way.
 settings::declare camera look_behind -default 0 -type bool \
     -doc "keep the last ~half second of stream frames grabbable by
 ::ess::camera_grab_before / camera_grab_nearest (look-back snapshots).
-Needs ~200MB of CMA at 1080p -- raise the Pi's cma= if the health line
-reports look_behind unavailable. Flipping while streaming restarts the
-stream." \
+~124MB of buffer memory while streaming (ordinary RAM on a Pi 5). If
+the health line says look_behind unavailable, the platform's CMA is
+too small -- raise cma= in config.txt. Flipping while streaming
+restarts the stream." \
     -apply {::apply_look_behind}
 
 # Declare does not fire -apply; sync the module interval from the
