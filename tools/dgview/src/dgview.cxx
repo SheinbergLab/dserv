@@ -731,15 +731,29 @@ private:
     
     void showNestedListInDetail(DYN_LIST* dl, const char* name) {
         if (!dl) return;
-        
+
         m_detailTree->clear();
         m_columnMap.clear();
         addNestedListToTree("", name, dl);
-        
+
         Fl_Tree_Item* root = m_detailTree->first();
         if (root) root->open();
-        
+
         m_detailTree->redraw();
+
+        // Open the detail panel if it is closed. Double-clicking a nested
+        // cell is an explicit "show me this list", and without this the
+        // tree is populated into a hidden zero-width pane -- the
+        // double-click looks dead unless the panel already happens to be
+        // open. The panel now starts CLOSED (keyboard-nav commit), which
+        // is why this matters here and did not before.
+        //
+        // Deliberately NOT restored in showRowDetail/showFileOverview,
+        // which the same commit also stripped: those run from the table
+        // callback on every selection change, so auto-opening there would
+        // pop the panel back out on every arrow key and undo the closed
+        // default on the first keystroke.
+        if (!m_detailVisible) showDetailPanel(true);
     }
     
     static void detailTreeCallback(Fl_Widget* w, void* data) {

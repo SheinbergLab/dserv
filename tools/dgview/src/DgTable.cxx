@@ -357,7 +357,15 @@ int DgTable::handle(int event) {
             
         case FL_PUSH:
             take_focus();
-            if (Fl::event_button() == FL_LEFT_MOUSE) {
+            // Click-again-to-deselect, but NOT on the second push of a
+            // double-click: that push lands on the row the first click just
+            // selected, so without this guard every double-click deselects
+            // the row and fires the table callback (which repaints the
+            // detail pane as the file overview) a moment before FL_RELEASE
+            // opens the nested list into it. The nested list still wins,
+            // but the row is left deselected and the pane visibly flickers
+            // through the wrong content.
+            if (Fl::event_button() == FL_LEFT_MOUSE && Fl::event_clicks() == 0) {
                 int R, C;
                 ResizeFlag resizeFlag;
                 TableContext ctx = cursor2rowcol(R, C, resizeFlag);
