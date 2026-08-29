@@ -1,4 +1,5 @@
 #include "TclServer.h"
+#include "SendGuard.h"
 #include "TclCommands.h"
 #include "TclInterpInit.h"
 #include "ObjectRegistry.h"
@@ -282,20 +283,21 @@ void TclServer::start_tcp_server(void)
        std::lock_guard<std::mutex> lock(connection_mutex);
        auto ip_count_it = ip_connection_count.find(client_ip);
        int current_ip_connections = (ip_count_it != ip_connection_count.end()) ? ip_count_it->second : 0;
-       
+
        if (active_connections.load() >= MAX_TOTAL_CONNECTIONS) {
-     std::cout << "Total connection limit reached (" << MAX_TOTAL_CONNECTIONS 
+     std::cout << "Total connection limit reached (" << MAX_TOTAL_CONNECTIONS
            << "), rejecting client from " << client_ip << std::endl;
        } else {
-     std::cout << "Per-IP connection limit reached (" << MAX_CONNECTIONS_PER_IP 
-           << "), rejecting client from " << client_ip 
+     std::cout << "Per-IP connection limit reached (" << per_ip_limit(client_ip)
+           << "), rejecting client from " << client_ip
            << " (current: " << current_ip_connections << ")" << std::endl;
        }
+       dump_ip_connections_locked(client_ip);
        close(new_socket_fd);
-       continue;      
+       continue;
     }
-        
-    register_connection(new_socket_fd, client_ip);
+
+    register_connection(new_socket_fd, client_ip, get_client_port(client_address));
     
     setsockopt(new_socket_fd, IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on));
     dserv_set_keepalive(new_socket_fd);   /* reap peers that vanish */
@@ -334,23 +336,24 @@ void TclServer::start_message_server(void)
       std::lock_guard<std::mutex> lock(connection_mutex);
       auto ip_count_it = ip_connection_count.find(client_ip);
       int current_ip_connections = (ip_count_it != ip_connection_count.end()) ? ip_count_it->second : 0;
-      
+
       if (active_connections.load() >= MAX_TOTAL_CONNECTIONS) {
-    std::cout << "Message server: Total connection limit reached (" << MAX_TOTAL_CONNECTIONS 
+    std::cout << "Message server: Total connection limit reached (" << MAX_TOTAL_CONNECTIONS
           << "), rejecting client from " << client_ip << std::endl;
       } else {
-    std::cout << "Message server: Per-IP connection limit reached (" << MAX_CONNECTIONS_PER_IP 
-          << "), rejecting client from " << client_ip 
+    std::cout << "Message server: Per-IP connection limit reached (" << per_ip_limit(client_ip)
+          << "), rejecting client from " << client_ip
           << " (current: " << current_ip_connections << ")" << std::endl;
       }
+      dump_ip_connections_locked(client_ip);
       close(new_socket_fd);
       continue;
     }
-    
+
     setsockopt(new_socket_fd, IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on));
     dserv_set_keepalive(new_socket_fd);   /* reap peers that vanish */
-    
-    register_connection(new_socket_fd, client_ip);
+
+    register_connection(new_socket_fd, client_ip, get_client_port(client_address));
     
     std::thread thr(message_client_process, this, new_socket_fd, &queue);
     thr.detach();
@@ -369,13 +372,28 @@ std::string TclServer::get_connection_stats() {
   
   stats << "Connections by IP:\n";
   for (const auto& [ip, count] : ip_connection_count) {
-    stats << "  " << ip << ": " << count << "/" << MAX_CONNECTIONS_PER_IP;
-    if (count >= MAX_CONNECTIONS_PER_IP * 0.8) {  // Warn at 80% of limit
+    int limit = per_ip_limit(ip);
+    stats << "  " << ip << ": " << count << "/" << limit;
+    if (count >= limit * 0.8) {  // Warn at 80% of limit
       stats << " (WARNING: approaching limit)";
     }
     stats << "\n";
   }
-  
+
+  auto now = std::chrono::steady_clock::now();
+  stats << "\nHeld connections (fd peer age):\n";
+  for (int fd : active_sockets) {
+    auto ip_it = socket_to_ip.find(fd);
+    auto port_it = socket_to_port.find(fd);
+    auto since_it = socket_since.find(fd);
+    long age_s = (since_it != socket_since.end()) ?
+      std::chrono::duration_cast<std::chrono::seconds>(now - since_it->second).count() : -1;
+    stats << "  fd=" << fd << " "
+          << ((ip_it != socket_to_ip.end()) ? ip_it->second : std::string("?"))
+          << ":" << ((port_it != socket_to_port.end()) ? port_it->second : -1)
+          << " age=" << age_s << "s\n";
+  }
+
   return stats.str();
 }
 
@@ -2015,19 +2033,58 @@ static int send_command (ClientData data, Tcl_Interp *interp,
     }
   }
 
-  SharedQueue<std::string> rqueue;
+  /*
+   * Send-cycle guard (see SendGuard.h for the protocol and why): refuse
+   * loudly rather than deadlock every interpreter thread in the loop.
+   * On success our sending_to is left published; cleared after the wait.
+   */
+  std::string cycle = send_cycle_check(this_server, tclserver);
+  if (!cycle.empty()) {
+    Tcl_AppendResult(interp, Tcl_GetString(objv[0]),
+                     ": send cycle detected (", cycle.c_str(),
+                     ") -- a synchronous send around this loop would "
+                     "deadlock every interpreter thread in it; use "
+                     "send_noreply or restructure the call", NULL);
+    return TCL_ERROR;
+  }
+
+  /*
+   * The reply queue is shared-owned by the queued request, so if we time
+   * out below the interp thread's late reply lands in a still-live queue
+   * (and is discarded) instead of a dead stack frame.
+   */
+  auto rqueue = std::make_shared<SharedQueue<std::string>>();
   client_request_t client_request;
   client_request.type = REQ_SCRIPT;
-  client_request.rqueue = &rqueue;
+  client_request.rqueue = rqueue.get();
+  client_request.owned_rqueue = rqueue;
   client_request.script = concatenated_script; // Use the concatenated string
 
   tclserver->queue.push_back(client_request);
 
-  /* rqueue will be available after command has been processed */
-  /* NOTE: this can create a deadlock between two tclservers   */
+  /*
+   * Timed backstop for wedges the cycle guard cannot see (a target thread
+   * stuck outside Tcl, a transitive wait through non-send machinery).
+   * Generous default: legitimate sends wrap multi-second work (system
+   * loads, world generation).  Override with DSERV_SEND_TIMEOUT_MS.
+   */
+  static const int send_timeout_ms = [] {
+    const char *e = getenv("DSERV_SEND_TIMEOUT_MS");
+    int v = e ? atoi(e) : 0;
+    return v > 0 ? v : 120000;
+  }();
 
-  std::string s(client_request.rqueue->front());
-  client_request.rqueue->pop_front();
+  std::string s;
+  bool got = rqueue->wait_pop(s, send_timeout_ms);
+  this_server->sending_to.store(nullptr);
+
+  if (!got) {
+    Tcl_AppendResult(interp, Tcl_GetString(objv[0]),
+                     ": send to \"", tclserver->name.c_str(),
+                     "\" timed out (target interp busy or wedged; any "
+                     "late reply will be discarded)", NULL);
+    return TCL_ERROR;
+  }
 
   Tcl_SetObjResult(interp, Tcl_NewStringObj(s.c_str(), -1));
   return TCL_OK;
@@ -4159,23 +4216,28 @@ TclServer::tcp_client_process(TclServer *tserv,
   int rval;
   int wrval;
   char buf[1024];
-  
-  // each client has its own request structure and reply queue
-  SharedQueue<std::string> rqueue;
+
+  // Each client has its own request structure and reply queue.  The queue
+  // is shared-owned by every queued copy of the request, so a handler
+  // that abandons a wait (client vanished mid-eval) leaves a live queue
+  // for the interp thread's late reply to land in harmlessly.
+  auto rqueue = std::make_shared<SharedQueue<std::string>>();
   client_request_t client_request;
-  client_request.rqueue = &rqueue;
+  client_request.rqueue = rqueue.get();
+  client_request.owned_rqueue = rqueue;
   client_request.type = REQ_SCRIPT;
   client_request.socket_fd = sockfd;
   client_request.websocket_id = "";
-  std::string script;  
-    
-  while ((rval = recv(sockfd, buf, sizeof(buf), 0)) > 0) {
+  std::string script;
+  bool client_gone = false;
+
+  while (!client_gone && (rval = recv(sockfd, buf, sizeof(buf), 0)) > 0) {
     for (int i = 0; i < rval; i++) {
       char c = buf[i];
       if (c == '\n') {
     // shutdown if main server has shutdown
     if (tserv->m_bDone) break;
-    
+
     if (script.length() > 0) {
       std::string s;
       client_request.script = std::string(script);
@@ -4186,11 +4248,27 @@ TclServer::tcp_client_process(TclServer *tserv,
 
       // push request onto queue for main thread to retrieve
       queue->push_back(client_request);
-      
-      // rqueue will be available after command has been processed
-      s = client_request.rqueue->front();
-      client_request.rqueue->pop_front();
-      
+
+      // Wait for the reply, but keep noticing the socket: while parked
+      // here this thread neither reads nor frees its connection slot, so
+      // a wedged interp used to pin the slot forever and lock the per-IP
+      // budget shut (2026-08-29 outage).  If the client hangs up while
+      // we wait, give the slot back; the eventual reply is discarded via
+      // the shared queue.
+      bool got = false;
+      while (!(got = rqueue->wait_pop(s, 2000))) {
+#ifndef _MSC_VER
+        char probe;
+        ssize_t pr = recv(sockfd, &probe, 1, MSG_PEEK | MSG_DONTWAIT);
+        if (pr == 0 ||
+            (pr < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
+          client_gone = true;
+          break;
+        }
+#endif
+      }
+      if (client_gone) break;
+
       //    std::cout << "TCL Result: " << s << std::endl;
 
       // Add a newline, and send the buffer including the null termination
@@ -4273,16 +4351,18 @@ TclServer::message_client_process(TclServer *tserv,
 {
   int rval;
   int wrval;
-  
-  // each client has its own request structure and reply queue
-  SharedQueue<std::string> rqueue;
+
+  // Shared-owned reply queue -- see tcp_client_process for the rationale
+  // (abandoning a wait must leave a live queue for the late reply).
+  auto rqueue = std::make_shared<SharedQueue<std::string>>();
   client_request_t client_request;
-  client_request.rqueue = &rqueue;
+  client_request.rqueue = rqueue.get();
+  client_request.owned_rqueue = rqueue;
   client_request.type = REQ_SCRIPT;
   client_request.socket_fd = sockfd;
   client_request.websocket_id = "";
-  
-  std::string script;  
+
+  std::string script;
 
   while (true) {
     auto [buffer, msgSize] = receiveMessage(sockfd);
@@ -4300,15 +4380,32 @@ TclServer::message_client_process(TclServer *tserv,
 
       // push request onto queue for main thread to retrieve
       queue->push_back(client_request);
-      
-      // rqueue will be available after command has been processed
-      s = client_request.rqueue->front();
-      client_request.rqueue->pop_front();
+
+      // Wait for the reply while watching for a vanished client, so a
+      // wedged interp cannot pin this connection slot forever (see
+      // tcp_client_process).
+      bool got = false;
+      bool client_gone = false;
+      while (!(got = rqueue->wait_pop(s, 2000))) {
+#ifndef _MSC_VER
+        char probe;
+        ssize_t pr = recv(sockfd, &probe, 1, MSG_PEEK | MSG_DONTWAIT);
+        if (pr == 0 ||
+            (pr < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
+          client_gone = true;
+          break;
+        }
+#endif
+      }
+      if (client_gone) {
+        delete[] buffer;
+        break;
+      }
       //  std::cout << "TCL Result: " << s << std::endl;
-      
+
       // Send a response back to the client
       sendMessage(sockfd, s);
-      
+
       delete[] buffer;
     }
   }

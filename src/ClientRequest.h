@@ -1,6 +1,8 @@
 #ifndef CLIENT_REQUEST_H
 #define CLIENT_REQUEST_H
 
+#include <memory>
+
 #include "sharedqueue.h"
 #include "RequestTiming.h"
 
@@ -32,6 +34,17 @@ typedef struct client_request_s {
   int timer_id;
   std::string script;
   SharedQueue<std::string> *rqueue;
+
+  // Optional shared ownership of the reply queue.  A requester that can
+  // abandon the wait (send timeout, a socket handler whose client
+  // vanished) sets BOTH fields to the same queue: every queued copy of
+  // the request keeps the queue alive, so a late reply from the interp
+  // thread lands in a still-valid queue and is simply never read,
+  // instead of writing through a dangling pointer to a dead stack frame.
+  // Requesters that block unconditionally may leave this empty and keep
+  // using a stack-allocated queue as before.
+  std::shared_ptr<SharedQueue<std::string>> owned_rqueue;
+
   ds_datapoint_t *dpoint;
   int socket_fd = -1;           // Socket FD if request came from socket (-1 if not)
   std::string websocket_id;     // WebSocket ID if request came from websocket (empty if not)

@@ -3,6 +3,7 @@
 
 #include <queue>
 #include <mutex>
+#include <chrono>
 #include <condition_variable>
 
 /*
@@ -22,6 +23,14 @@ public:
 
   T front();
   void pop_front();
+
+  // Timed consume: wait up to timeout_ms for an item; on success copy it
+  // to `out`, pop it, and return true.  Returns false on timeout with the
+  // queue untouched.  Lets a consumer that must not block forever (a
+  // sender guarding against a wedged peer, a socket handler that should
+  // notice its client vanished) poll without busy-waiting.  Same
+  // single-consumer contract as front()/pop_front().
+  bool wait_pop(T& out, int timeout_ms);
 
   void push_back(const T& item);
   void push_back(T&& item);
@@ -63,6 +72,19 @@ void SharedQueue<T>::pop_front()
   queue_.pop_front();
   mlock.unlock();     // unlock before notificiation to minimize mutex con
 }     
+
+template <typename T>
+bool SharedQueue<T>::wait_pop(T& out, int timeout_ms)
+{
+  std::unique_lock<std::mutex> mlock(mutex_);
+  if (!cond_.wait_for(mlock, std::chrono::milliseconds(timeout_ms),
+                      [this] { return !queue_.empty(); })) {
+    return false;
+  }
+  out = queue_.front();
+  queue_.pop_front();
+  return true;
+}
 
 /*
  * push_back notifies while still holding the lock.  With

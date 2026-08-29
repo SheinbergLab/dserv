@@ -185,10 +185,41 @@ private:
   std::atomic<int> active_connections{0};
   static const int MAX_TOTAL_CONNECTIONS = 128;      // Total server limit
   static const int MAX_CONNECTIONS_PER_IP = 8;       // Per-IP limit
+  // Loopback legitimately runs many concurrent clients (agent, essgui,
+  // web bridge, stim2, CLI, scripted drivers), and the 2026-08-29 outage
+  // showed 8 slots pinning shut in seconds once handlers wedge -- give
+  // 127.0.0.1/::1 real headroom.
+  static const int MAX_CONNECTIONS_PER_LOOPBACK = 32;
   std::mutex connection_mutex;
   std::set<int> active_sockets;
   std::unordered_map<int, std::string> socket_to_ip;     // socket -> IP mapping
   std::unordered_map<std::string, int> ip_connection_count;
+  // reject-time diagnostics: who is holding the slots, since when
+  std::unordered_map<int, int> socket_to_port;           // socket -> peer port
+  std::unordered_map<int, std::chrono::steady_clock::time_point> socket_since;
+
+  int per_ip_limit(const std::string& ip) const {
+    return (ip == "127.0.0.1" || ip == "::1") ?
+      MAX_CONNECTIONS_PER_LOOPBACK : MAX_CONNECTIONS_PER_IP;
+  }
+
+  // Print every live connection from `ip` (fd, peer port, age).  Called
+  // from the reject paths so a slot lockout names its holders instead of
+  // only counting them.  Caller must hold connection_mutex.
+  void dump_ip_connections_locked(const std::string& ip) {
+    auto now = std::chrono::steady_clock::now();
+    for (int fd : active_sockets) {
+      auto ip_it = socket_to_ip.find(fd);
+      if (ip_it == socket_to_ip.end() || ip_it->second != ip) continue;
+      auto port_it = socket_to_port.find(fd);
+      auto since_it = socket_since.find(fd);
+      long age_s = (since_it != socket_since.end()) ?
+        std::chrono::duration_cast<std::chrono::seconds>(now - since_it->second).count() : -1;
+      std::cout << "    holder fd=" << fd << " " << ip << ":"
+                << ((port_it != socket_to_port.end()) ? port_it->second : -1)
+                << " age=" << age_s << "s" << std::endl;
+    }
+  }
 
   // Make current request available
   client_request_t* current_request = nullptr;
@@ -246,7 +277,15 @@ public:
   static void wait_websocket_startups(int timeout_ms);
 
   std::string name;		// name of this TclServer
-  
+
+  /* Which TclServer this interp's evaluation thread is currently parked
+     inside a synchronous `send` to (nullptr when not sending).  Written
+     only by this interp's own process_requests thread; read by other
+     senders walking the chain to refuse a send cycle before it deadlocks
+     every thread in the loop (see send_command).  seq_cst so two racing
+     senders cannot both miss each other's store. */
+  std::atomic<TclServer*> sending_to{nullptr};
+
   // identify connection to send process
   std::string client_name;
 
@@ -359,17 +398,20 @@ public:
       return false;
     }
     
-    // Check per-IP limit
+    // Check per-IP limit (loopback gets a higher one)
     auto ip_count_it = ip_connection_count.find(client_ip);
     int current_ip_connections = (ip_count_it != ip_connection_count.end()) ? ip_count_it->second : 0;
-    
-    return current_ip_connections < MAX_CONNECTIONS_PER_IP;
+
+    return current_ip_connections < per_ip_limit(client_ip);
     }
     
-  void register_connection(int sockfd, const std::string& client_ip) {
+  void register_connection(int sockfd, const std::string& client_ip,
+                           int client_port = -1) {
     std::lock_guard<std::mutex> lock(connection_mutex);
     active_sockets.insert(sockfd);
     socket_to_ip[sockfd] = client_ip;
+    socket_to_port[sockfd] = client_port;
+    socket_since[sockfd] = std::chrono::steady_clock::now();
     ip_connection_count[client_ip]++;
     active_connections++;
 #ifdef LOG_CONNECTIONS    
@@ -388,7 +430,9 @@ public:
     
     active_sockets.erase(sockfd);
     socket_to_ip.erase(sockfd);
-    
+    socket_to_port.erase(sockfd);
+    socket_since.erase(sockfd);
+
     if (ip_it != socket_to_ip.end()) {
       ip_connection_count[client_ip]--;
       if (ip_connection_count[client_ip] <= 0) {
@@ -421,7 +465,12 @@ public:
     char ip_str[INET_ADDRSTRLEN];
     inet_ntop(AF_INET, &(addr_in->sin_addr), ip_str, INET_ADDRSTRLEN);
     return std::string(ip_str);
-  }  
+  }
+
+  int get_client_port(const struct sockaddr& addr) {
+    struct sockaddr_in* addr_in = (struct sockaddr_in*)&addr;
+    return ntohs(addr_in->sin_port);
+  }
   
   // socket type can be SOCKET_LINE (newline oriented) or SOCKET_MESSAGE
   socket_t socket_type;

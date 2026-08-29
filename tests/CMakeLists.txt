@@ -1,3 +1,26 @@
+# Unit test for the send-cycle guard protocol (SendGuard.h, incl. the
+# racing-mutual-senders Dekker property) and SharedQueue::wait_pop.
+find_package(Threads REQUIRED)
+add_executable(test_send_guard test_send_guard.cpp)
+target_link_libraries(test_send_guard PRIVATE Threads::Threads)
+add_test(NAME send_guard_unit COMMAND test_send_guard)
+set_property(TEST send_guard_unit PROPERTY PASS_REGULAR_EXPRESSION "ALL PASS")
+
+# End-to-end: a real dserv with two subprocess interps.  Pre-guard, the
+# cycle send wedges both interp threads forever -- the TIMEOUT property
+# turns that hang into a failure.  DSERV_SEND_TIMEOUT_MS shortens the
+# timeout leg of the test.
+add_test(
+    NAME send_cycle
+    COMMAND dserv -c "${CMAKE_SOURCE_DIR}/tests/test_send_cycle.tcl"
+)
+set_property(TEST send_cycle PROPERTY ENVIRONMENT "DSERV_SEND_TIMEOUT_MS=1000")
+set_property(TEST send_cycle PROPERTY TIMEOUT 60)
+# single self-asserted verdict line: listener bind-retry noise (another
+# dserv holding the fixed ports) interleaves with script output, so a
+# strict multi-line match is not robust
+set_property(TEST send_cycle PROPERTY PASS_REGULAR_EXPRESSION "SEND CYCLE TEST: ALL PASS")
+
 add_test(
     NAME not_an_option
     COMMAND dserv --not_an_option
