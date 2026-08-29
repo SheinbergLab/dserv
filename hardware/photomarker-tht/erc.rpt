@@ -1,0 +1,21 @@
+ERC report (2026-08-28T21:17:09, Encoding UTF8)
+Report includes: Errors, Warnings
+
+***** Sheet /
+[lib_symbol_mismatch]: Symbol 'LM393' doesn't match copy in library 'Comparator'
+    ; warning
+    @(78.74 mm, 205.74 mm): Symbol U2 [LM393]
+[lib_symbol_mismatch]: Symbol 'LM393' doesn't match copy in library 'Comparator'
+    ; warning
+    @(187.96 mm, 88.90 mm): Symbol U2 [LM393]
+[lib_symbol_mismatch]: Symbol 'LM393' doesn't match copy in library 'Comparator'
+    ; warning
+    @(187.96 mm, 185.42 mm): Symbol U2 [LM393]
+
+ ** ERC messages: 3  Errors 0  Warnings 3
+
+ ** Ignored checks:
+    - Global label only appears once in the schematic
+    - Four connection points are joined together
+    - SPICE model issue
+    - Assigned footprint doesn't match footprint filters

@@ -1,0 +1,4 @@
+(sym_lib_table
+  (version 7)
+  (lib (name "photomarker")(type "KiCad")(uri "${KIPRJMOD}/photomarker-tht.kicad_sym")(options "")(descr "OPT101 - not in KiCad's stock libraries"))
+)

@@ -1,0 +1,7 @@
+# KiCad working files -- regenerated on open, no value in git
+*.kicad_prl
+*-backups/
+fp-info-cache
+
+# editor local history
+.history/

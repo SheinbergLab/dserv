@@ -1,0 +1,115 @@
+(kicad_symbol_lib
+	(version 20241209)
+	(generator "photomarker-tht")
+	(generator_version "9.0")
+	(symbol "OPT101"
+		(pin_names (offset 0.508))
+		(exclude_from_sim no) (in_bom yes) (on_board yes)
+		(property "Reference" "U"
+			(at -10.16 12.7 0)
+			(show_name no) (do_not_autoplace no)
+			(effects (font (size 1.27 1.27)) (justify left))
+		)
+		(property "Value" "OPT101"
+			(at -10.16 -12.7 0)
+			(show_name no) (do_not_autoplace no)
+			(effects (font (size 1.27 1.27)) (justify left))
+		)
+		(property "Footprint" "Package_DIP:DIP-8_W7.62mm"
+			(at 0 0 0)
+			(show_name no) (do_not_autoplace no)
+			(hide yes)
+			(effects (font (size 1.27 1.27)) (justify left))
+		)
+		(property "Datasheet" "https://www.ti.com/lit/ds/symlink/opt101.pdf"
+			(at 0 0 0)
+			(show_name no) (do_not_autoplace no)
+			(hide yes)
+			(effects (font (size 1.27 1.27)) (justify left))
+		)
+		(property "Description" "Monolithic photodiode + transimpedance amp, DIP-8"
+			(at 0 0 0)
+			(show_name no) (do_not_autoplace no)
+			(hide yes)
+			(effects (font (size 1.27 1.27)) (justify left))
+		)
+		(symbol "OPT101_0_1"
+			(rectangle
+				(start -7.62 7.62) (end 7.62 -7.62)
+				(stroke (width 0.254) (type default))
+				(fill (type background))
+			)
+			(polyline
+				(pts (xy -3.81 1.27) (xy -3.81 -1.27) (xy -1.27 0) (xy -3.81 1.27))
+				(stroke (width 0.2) (type default)) (fill (type none))
+			)
+			(polyline
+				(pts (xy -1.27 1.27) (xy -1.27 -1.27))
+				(stroke (width 0.2) (type default)) (fill (type none))
+			)
+			(polyline
+				(pts (xy -5.72 3.3) (xy -4.45 2.03))
+				(stroke (width 0.15) (type default)) (fill (type none))
+			)
+			(polyline
+				(pts (xy -4.45 3.3) (xy -3.18 2.03))
+				(stroke (width 0.15) (type default)) (fill (type none))
+			)
+			(polyline
+				(pts (xy 1.27 3.81) (xy 5.08 0) (xy 1.27 -3.81) (xy 1.27 3.81))
+				(stroke (width 0.2) (type default)) (fill (type none))
+			)
+		)
+		(symbol "OPT101_1_1"
+			(pin power_in line
+				(at 0 10.16 270)
+				(length 2.54)
+				(name "Vs" (effects (font (size 1.27 1.27))))
+				(number "1" (effects (font (size 1.27 1.27))))
+			)
+			(pin power_in line
+				(at 0 -10.16 90)
+				(length 2.54)
+				(name "-V" (effects (font (size 1.27 1.27))))
+				(number "3" (effects (font (size 1.27 1.27))))
+			)
+			(pin input line
+				(at -10.16 5.08 0)
+				(length 2.54)
+				(name "-IN" (effects (font (size 1.27 1.27))))
+				(number "2" (effects (font (size 1.27 1.27))))
+			)
+			(pin passive line
+				(at -10.16 0 0)
+				(length 2.54)
+				(name "COM" (effects (font (size 1.27 1.27))))
+				(number "8" (effects (font (size 1.27 1.27))))
+			)
+			(pin no_connect line
+				(at -10.16 -5.08 0)
+				(length 2.54)
+				(name "NC" (effects (font (size 1.27 1.27))))
+				(number "7" (effects (font (size 1.27 1.27))))
+			)
+			(pin output line
+				(at 10.16 5.08 180)
+				(length 2.54)
+				(name "OUT" (effects (font (size 1.27 1.27))))
+				(number "5" (effects (font (size 1.27 1.27))))
+			)
+			(pin passive line
+				(at 10.16 0 180)
+				(length 2.54)
+				(name "1M" (effects (font (size 1.27 1.27))))
+				(number "4" (effects (font (size 1.27 1.27))))
+			)
+			(pin no_connect line
+				(at 10.16 -5.08 180)
+				(length 2.54)
+				(name "NC" (effects (font (size 1.27 1.27))))
+				(number "6" (effects (font (size 1.27 1.27))))
+			)
+		)
+		(embedded_fonts no)
+	)
+)
