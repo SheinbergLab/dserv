@@ -736,12 +736,40 @@ oo::class create System {
 	set state_name [dict get $_current_state name]
 	dservSet ess/transition_state ${state_name}_t
 	set next_state [my ${state_name}_t]
-	
+
 	if {$::ess::debug::enabled && $next_state ne ""} {
 	    ::ess::debug::state_exit $state_name $next_state
 	}
-	
+
 	return $next_state
+    }
+
+    # Every state is entered through do_action and left through
+    # do_transition, each of which invokes my <state>_a / my <state>_t
+    # unconditionally.  A state built with only add_transition (or only
+    # add_action) throws TCL LOOKUP METHOD mid-update; the dpoint-script
+    # layer swallows the error (latched in error/ess) and the machine
+    # silently parks in that state until the next unrelated wake.  That
+    # shipped (remap, 2026-08-29) and presented as "responses only
+    # register when the eye moves" -- so refuse the pairing violation
+    # loudly at load instead.  Called from system_init and protocol_init.
+    method validate_state_methods {} {
+        set methods [info object methods [self] -all -private]
+        set problems {}
+        dict for { name s } $_states {
+            set has_a [expr {[lsearch -exact $methods ${name}_a] >= 0}]
+            set has_t [expr {[lsearch -exact $methods ${name}_t] >= 0}]
+            if { !$has_a } {
+                lappend problems "$name has a transition but no action (add: \$sys add_action $name {})"
+            }
+            if { !$has_t } {
+                lappend problems "$name has an action but no transition (add: \$sys add_transition $name {})"
+            }
+        }
+        if { [llength $problems] } {
+            error "system $_systemname state machine is unrunnable -- [join $problems {; }]. Every state needs BOTH (an empty {} is fine); a missing one throws mid-update at runtime and silently parks the machine in that state."
+        }
+        return
     }
 
     method set_params { p } {
@@ -3789,7 +3817,7 @@ proc analyze_ess_patterns {script_content} {
     
     # Clean up the helper proc
     rename count_braces {}
-    
+
     # Timer warning (only if timerTick without timerExpired)
     if {$has_timer_tick && !$has_timer_expired} {
         lappend warnings [dict create \
@@ -3797,9 +3825,57 @@ proc analyze_ess_patterns {script_content} {
             message "timerTick used but no timerExpired check found in script" \
             type "warning"]
     }
-    
+
+    # State action/transition pairing: do_action and do_transition invoke
+    # my <state>_a / my <state>_t unconditionally, so a state with only one
+    # of the pair throws at runtime (the error is swallowed and the machine
+    # parks in that state).  Static mirror of the load-time check in
+    # System::validate_state_methods -- catches it at edit time.
+    set act_lines {}
+    set trans_lines {}
+    set line_num 0
+    foreach line $lines {
+        incr line_num
+        set trimmed [string trim $line]
+        if {$trimmed eq "" || [string index $trimmed 0] eq "#"} continue
+        if {[regexp {\$sys(?:tem)?\s+add_action\s+(\w+)} $line -> nm]} {
+            if {![dict exists $act_lines $nm]} { dict set act_lines $nm $line_num }
+        }
+        if {[regexp {\$sys(?:tem)?\s+add_transition\s+(\w+)} $line -> nm]} {
+            if {![dict exists $trans_lines $nm]} { dict set trans_lines $nm $line_num }
+        }
+        # add_state/set_start supply action and/or transition inline; without
+        # parsing the (possibly multi-line) args, credit both -- the
+        # authoritative arity check happens at load in validate_state_methods.
+        # set_end's argument is an action BODY; it always creates state "end".
+        if {[regexp {\$sys(?:tem)?\s+(?:add_state|set_start)\s+(\w+)} $line -> nm]} {
+            if {![dict exists $act_lines $nm]}   { dict set act_lines $nm $line_num }
+            if {![dict exists $trans_lines $nm]} { dict set trans_lines $nm $line_num }
+        }
+        if {[regexp {\$sys(?:tem)?\s+set_end(\s|$)} $line]} {
+            if {![dict exists $act_lines end]}   { dict set act_lines end $line_num }
+            if {![dict exists $trans_lines end]} { dict set trans_lines end $line_num }
+        }
+    }
+    dict for {nm ln} $trans_lines {
+        if {![dict exists $act_lines $nm]} {
+            lappend warnings [dict create \
+                line $ln \
+                message "State '$nm' has add_transition but no add_action -- it will throw and silently park at runtime (add: \$sys add_action $nm {})" \
+                type "warning"]
+        }
+    }
+    dict for {nm ln} $act_lines {
+        if {![dict exists $trans_lines $nm]} {
+            lappend warnings [dict create \
+                line $ln \
+                message "State '$nm' has add_action but no add_transition -- it will throw and silently park at runtime (add: \$sys add_transition $nm {})" \
+                type "warning"]
+        }
+    }
+
     return [dict create warnings $warnings]
-}    
+}
 
     # Enhanced validation with better ESS awareness
     proc validate_script_syntax_fast {script_content} {
@@ -5380,6 +5456,11 @@ namespace eval ess {
         set s [find_system $system]
         set current(state_system) $s
 
+        # refuse a state machine with unpaired action/transition methods
+        # here, where the load-error contract reports it, rather than
+        # letting it park silently mid-session (see validate_state_methods)
+        $s validate_state_methods
+
         # initialize the system
         $s init
 
@@ -5416,7 +5497,11 @@ namespace eval ess {
 
 	# call the system's protocol init function
 	${s} protocol_init
-	
+
+	# protocols do not add states by contract, but re-validate cheaply in
+	# case one did -- an unpaired state must never survive to run time
+	${s} validate_state_methods
+
 	::ess::evt_put ID PROTOCOL [now] $current(system):$protocol
 	set current(protocol) $protocol
 	set current(open_protocol) 1
