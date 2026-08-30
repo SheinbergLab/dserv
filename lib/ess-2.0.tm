@@ -5852,11 +5852,29 @@ namespace eval ess {
         }
         set aspan [_find_dict_value $text \
             [dict get $lospan cstart] [dict get $lospan cend] $arg]
-        if {$aspan eq "" || [dict get $aspan type] ne "brace"} {
+        if {$aspan eq ""} {
             error "loader option '$arg' not found in variant '$variant'\
                 (only existing options can be edited)"
         }
+        # A single-option list is often written unbraced -- "targ_scale 1.5"
+        # rather than "targ_scale { 1.5 }". Both parse to a one-element
+        # option list, so both are editable: the writer replaces the whole
+        # element, promoting the bare word to a braced list when a second
+        # option is added.
+        if {[dict get $aspan type] ni {brace word}} {
+            error "loader option '$arg' in variant '$variant' is not an\
+                editable option list"
+        }
         return $aspan
+    }
+
+    # The option-list text of a located span: the inside of the braces
+    # for "{ a b }", the word itself for an unbraced single option.
+    proc _variant_option_content {text span} {
+        if {[dict get $span type] eq "brace"} {
+            return [string range $text [dict get $span cstart] [dict get $span cend]]
+        }
+        return [string range $text [dict get $span start] [dict get $span end]]
     }
 
     # An option is emitted bare (single token) when its label equals its
@@ -5979,11 +5997,7 @@ namespace eval ess {
             set v [_scan_element $text [dict get $k next]]
             if {[dict get $v type] eq "eof" || [dict get $v start] > $cend} break
             set aname [string range $text [dict get $k start] [dict get $k end]]
-            if {[dict get $v type] eq "brace"} {
-                set raw [string range $text [dict get $v cstart] [dict get $v cend]]
-            } else {
-                set raw [string range $text [dict get $v start] [dict get $v end]]
-            }
+            set raw [_variant_option_content $text $v]
             $obj string $aname map_open
             $obj string raw string $raw
             $obj string options array_open
@@ -6042,7 +6056,7 @@ namespace eval ess {
         set ls [string last "\n" $text [dict get $span start]]
         incr ls
         set indent ""
-        regexp -start $ls {\A[ \t]*} [string range $text $ls end] indent
+        regexp {\A[ \t]*} [string range $text $ls end] indent
 
         set newval [_format_variant_options $pairs $indent]
         set newtext [string replace $text \
@@ -6055,8 +6069,7 @@ namespace eval ess {
         # Dry-run: re-locate and re-parse the edited option list through
         # the same normalization the loader applies.
         set check [_locate_variant_option $newtext $variant $arg]
-        set parsed [string range $newtext \
-            [dict get $check cstart] [dict get $check cend]]
+        set parsed [_variant_option_content $newtext $check]
         set nopts 0
         foreach o [strip_comments $parsed] {
             if {[llength $o] > 2} {
