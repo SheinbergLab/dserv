@@ -126,6 +126,32 @@ class PageNav {
             category: 'tools',
             windowSize: { width: 900, height: 900 }
         },
+        // stim2's own pages, on whatever box ess/rmt_host names -- which on a
+        // split rig is NOT the machine serving this page. Both are `when`-gated
+        // on the host page having told us a stim host (setStimHost), so they
+        // stay hidden rather than offering a link into the void.
+        {
+            id: 'stim',
+            title: 'Stim Terminal',
+            desc: 'Console on the stimulus display',
+            icon: '🖼️',
+            href: () => PageNav.stimWebUrl(),
+            windowName: () => `stim_${PageNav.stimTarget()}`,
+            when: () => !!PageNav.stimTarget(),
+            category: 'tools',
+            windowSize: { width: 900, height: 700 }
+        },
+        {
+            id: 'stim_dev',
+            title: 'Stim Dev',
+            desc: 'Stimulus development console',
+            icon: '🧪',
+            href: () => PageNav.stimWebUrl('stim2-dev.html'),
+            windowName: () => `stimdev_${PageNav.stimTarget()}`,
+            when: () => !!PageNav.stimTarget(),
+            category: 'tools',
+            windowSize: { width: 900, height: 700 }
+        },
         // Last in the array so its group renders at the bottom of the menu
         // (category order follows first appearance). Distinct from the DLSH
         // Workbench above: this is the docs-subprocess %HELP% browser, the
@@ -206,6 +232,70 @@ class PageNav {
         // a bare IPv6 literal has several colons and no port to strip
         if ((s.match(/:/g) || []).length > 1) return s;
         return s.replace(/:\d+$/, '');
+    }
+
+    /**
+     * Host spellings that can only ever mean "the machine dserv runs on".
+     *
+     * Lives here rather than in a page so the several callers that have to
+     * decide "is this really another box?" all decide it the same way.
+     */
+    static LOCAL_HOST_ALIASES = new Set([
+        '', 'localhost', 'localhost.localdomain', '127.0.0.1', '0.0.0.0',
+        '::1', '[::1]'
+    ]);
+
+    /**
+     * stim2's built-in web server port. Same constant the dserv-agent node
+     * menu uses to build its Stim / Stim Dev links.
+     */
+    static STIM_WEB_PORT = 4613;
+
+    /**
+     * The stimulus display host, as last reported by the page.
+     *
+     * Empty means "not known", NOT "local": the Stim entries stay hidden until
+     * a page calls setStimHost, so pages that never subscribe to ess/rmt_host
+     * don't offer a link they can't aim.
+     */
+    static stimHost = '';
+
+    /**
+     * Tell PageNav which box drives the display (ess/rmt_host).
+     *
+     * The value may carry stim2's command port, which is not the web port, so
+     * everything downstream goes through stripPort.
+     */
+    static setStimHost(host) {
+        PageNav.stimHost = String(host || '').trim();
+    }
+
+    /**
+     * The machine to aim stim2 web links at, or '' when unknown.
+     *
+     * A self-contained rig leaves ess/rmt_host at `localhost`, which names the
+     * dserv box from dserv's point of view but means nothing from the browser's
+     * -- so loopback spellings resolve to the host this page is driving.
+     */
+    static stimTarget() {
+        if (!PageNav.stimHost) return '';
+        const host = PageNav.stripPort(PageNav.stimHost);
+        if (PageNav.LOCAL_HOST_ALIASES.has(host.toLowerCase())) {
+            return PageNav.dservHostname();
+        }
+        return host;
+    }
+
+    /**
+     * A page on stim2's web server, or '' when no stim host is known.
+     *
+     * Plain http, like the agent panel: stim2 serves no TLS, and a popup is a
+     * top-level window so mixed-content rules don't apply.
+     */
+    static stimWebUrl(path = '') {
+        const target = PageNav.stimTarget();
+        if (!target) return '';
+        return `http://${target}:${PageNav.STIM_WEB_PORT}/${path}`;
     }
 
     /**
@@ -321,6 +411,27 @@ class PageNav {
     }
 
     /**
+     * Rebuild just the page list, leaving the toggle and footer alone.
+     *
+     * Called on every open so `when` predicates and function hrefs are
+     * evaluated against current state: ess/rmt_host arrives well after the
+     * component is constructed, so anything resolved once at init would be
+     * permanently stale. Item handlers are delegated from .page-nav-menu, so
+     * replacing the items underneath them is safe.
+     */
+    refreshMenu() {
+        if (this.scrollEl) this.scrollEl.innerHTML = this.renderMenu();
+    }
+
+    /**
+     * Pages that apply right now: everything without a `when`, plus those
+     * whose `when` currently holds.
+     */
+    visiblePages() {
+        return this.options.pages.filter(p => !p.when || PageNav.resolve(p.when));
+    }
+
+    /**
      * Render the scrolling page list.
      *
      * Only pages live here. Home and Reconnect are in the footer: they are the
@@ -329,7 +440,7 @@ class PageNav {
      */
     renderMenu() {
         let html = '';
-        
+
         if (this.options.groupByCategory) {
             // Group pages by category
             const grouped = this.groupPagesByCategory();
@@ -343,7 +454,7 @@ class PageNav {
             }
         } else {
             // Flat list
-            html = this.options.pages.map(page => this.renderMenuItem(page)).join('');
+            html = this.visiblePages().map(page => this.renderMenuItem(page)).join('');
         }
 
         return html;
@@ -422,8 +533,8 @@ class PageNav {
      */
     groupPagesByCategory() {
         const grouped = {};
-        
-        for (const page of this.options.pages) {
+
+        for (const page of this.visiblePages()) {
             const category = page.category || 'other';
             if (!grouped[category]) {
                 grouped[category] = [];
@@ -593,6 +704,7 @@ class PageNav {
      */
     open() {
         this.isOpen = true;
+        this.refreshMenu();
         this.fitToViewport();
         if (this.scrollEl) this.scrollEl.scrollTop = 0;
         this.navEl.classList.add('open');

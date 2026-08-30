@@ -367,11 +367,11 @@ let localHostaddr = '';        // system/hostaddr: this box's LAN IPv4
 
 /**
  * Host spellings that can only ever mean "the machine dserv runs on".
+ *
+ * Owned by PageNav, which needs the same judgement to aim its Stim entries --
+ * two copies of this set would be two places to disagree about `::1`.
  */
-const LOCAL_HOST_ALIASES = new Set([
-    '', 'localhost', 'localhost.localdomain', '127.0.0.1', '0.0.0.0',
-    '::1', '[::1]'
-]);
+const LOCAL_HOST_ALIASES = PageNav.LOCAL_HOST_ALIASES;
 
 /**
  * Canonical form for comparing two spellings of a host.
@@ -514,6 +514,10 @@ function initStimStatus() {
     dpManager.subscribe('ess/rmt_host', (data) => {
         stimHost = String(data.value ?? data.data ?? '');
         updateStimStatus();
+        // Unhides the page menu's Stim / Stim Dev entries and aims them at the
+        // display box. The menu re-renders on open, so this needn't beat the
+        // user to the dropdown.
+        PageNav.setStimHost(stimHost);
     });
 
     dpManager.subscribe('ess/stim_required', (data) => {
