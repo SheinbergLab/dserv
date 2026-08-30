@@ -125,6 +125,19 @@ class PageNav {
             href: 'dlsh.html',
             category: 'tools',
             windowSize: { width: 900, height: 900 }
+        },
+        // Last in the array so its group renders at the bottom of the menu
+        // (category order follows first appearance). Distinct from the DLSH
+        // Workbench above: this is the docs-subprocess %HELP% browser, the
+        // same page the dserv-agent node menu opens as "Help".
+        {
+            id: 'command_reference',
+            title: 'Command Reference',
+            desc: 'Searchable dserv/dlsh command help',
+            icon: '📖',
+            href: 'command_reference.html',
+            category: 'reference',
+            windowSize: { width: 1000, height: 800 }
         }
 
         // Add more pages here as needed:
@@ -145,7 +158,8 @@ class PageNav {
         viewers: 'Viewers',
         tools: 'Tools',
         config: 'Configuration',
-        system: 'System'
+        system: 'System',
+        reference: 'Reference'
     };
 
     /**
