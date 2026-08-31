@@ -1,0 +1,157 @@
+/*
+ * extio-zephyr on a Seeed XIAO nRF52840 (Zephyr board `xiao_ble`).
+ *
+ * Box pin n IS XIAO Dn, the same identity convention as the XIAO nRF54LM20A and
+ * for the same reason: the board ships a `seeed,xiao-gpio` connector map
+ * (seeed_xiao_connector.dtsi) that plays the role the Arduino header plays on
+ * the MCXN947. Pads below are copied from that map, not from the silkscreen.
+ *
+ * BUT THIS XIAO IS NOT THE LM20A XIAO. That module's connector declares D0-D27;
+ * THIS one declares D0-D10 and nothing else. Only 11 field pins exist, and the
+ * map below is 14 entries rather than BOX_NPINS. That is deliberate and safe:
+ * box_gpio.c builds its table with GPIO_DT_SPEC_GET_BY_IDX_OR(..., {0}), so
+ * every index past the list gets a NULL port and box_gpio_reserved() refuses
+ * it. Declaring 30 entries by inventing pads the module does not bring out
+ * would be the "configuring one silently succeeds while doing nothing
+ * electrically" failure this project keeps paying for.
+ */
+
+#include <zephyr/dt-bindings/gpio/gpio.h>
+#include <zephyr/dt-bindings/adc/adc.h>
+#include <zephyr/dt-bindings/adc/nrf-saadc.h>
+
+/ {
+	zephyr,user {
+		box-gpios = <&gpio0  2 0>,   /*  0 = D0  (AIN0) */
+			    <&gpio0  3 0>,   /*  1 = D1  (AIN1) */
+			    <&gpio0 28 0>,   /*  2 = D2  (AIN4) */
+			    <&gpio0 29 0>,   /*  3 = D3  (AIN5) */
+			    <&gpio0  4 0>,   /*  4 = D4  (AIN2) */
+			    <&gpio0  5 0>,   /*  5 = D5  (AIN3) */
+			    <&gpio1 11 0>,   /*  6 = D6  */
+			    <&gpio1 12 0>,   /*  7 = D7  */
+			    <&gpio1 13 0>,   /*  8 = D8  */
+			    <&gpio1 14 0>,   /*  9 = D9  */
+			    <&gpio1 15 0>,   /* 10 = D10 */
+			    /* The module's RGB LEDs, ACTIVE_LOW on this board, so
+			     * the flag is what makes 1 = lit here as everywhere
+			     * else. Off the D connector, so they cost no field pin
+			     * -- and they give LED_PIN somewhere real to land
+			     * instead of the Teensy #else's box pin 3 = D3. */
+			    <&gpio0 26 GPIO_ACTIVE_LOW>,   /* 11 = LED red   */
+			    <&gpio0 30 GPIO_ACTIVE_LOW>,   /* 12 = LED green */
+			    <&gpio0  6 GPIO_ACTIVE_LOW>;   /* 13 = LED blue  */
+
+		box-pin-silk = "D0 (P0.02/AIN0)","D1 (P0.03/AIN1)",
+			       "D2 (P0.28/AIN4)","D3 (P0.29/AIN5)",
+			       "D4 (P0.04/AIN2)","D5 (P0.05/AIN3)",
+			       "D6 (P1.11)","D7 (P1.12)","D8 (P1.13)",
+			       "D9 (P1.14)","D10 (P1.15)",
+			       "LED red (P0.26)","LED green (P0.30)",
+			       "LED blue (P0.06)";
+
+		/* ain channel k -> box pin, hex bytes (see the nRF52840 DK overlay).
+		 * D0/D1/D4/D5 are AIN0..3 and D2/D3 are AIN4/5, so the analog order
+		 * is NOT the pin order -- which is exactly why this property exists
+		 * rather than being assumed. */
+		box-ain-pins = [00 01 04 05 02 03];   /* box pins 0,1,4,5,2,3 */
+		box-ain-silk = "D0 / AIN0","D1 / AIN1","D4 / AIN2","D5 / AIN3",
+			       "D2 / AIN4","D3 / AIN5";
+	};
+};
+
+/* THE GREEN LED SHARES A PAD WITH AIN6 (P0.30). Not a conflict today -- no
+ * channel below uses AIN6 -- but adding one later would fight box pin 12. */
+
+/* console FIRST, data SECOND: instance order sets USB interface numbering and
+ * box_net_usb.c static-asserts it.
+ *
+ * NO BOX_DEFAULT_CONSOLE_MODE GATE for this board, and that is the right call
+ * rather than an oversight: the XIAO has no debugger VCOM at all -- its single
+ * USB connector IS the nRF USB device port -- so CDC is the only console it
+ * has and the default already points there. Exactly the XIAO nRF54LM20A's
+ * situation, and the opposite of both DKs.
+ *
+ * THE BOARD ALREADY DECLARES A CDC, and that is why this section is longer than
+ * every other board's. xiao_ble_common.dtsi includes Zephyr's
+ * boards/common/usb/cdc_acm_serial.dtsi, which adds `board_cdc_acm_uart` under
+ * zephyr_udc0 and points five chosen entries at it. Left in place it takes
+ * instance 0, our console becomes 1 and our data pipe becomes 2 -- and
+ * box_net_usb.c's static assert catches exactly that:
+ *
+ *     "cdc_acm_data must be DT instance 1 (console is declared first)"
+ *
+ * which is the assert doing its job. So delete it and re-point what referenced
+ * it. The nRF52840 DK needs none of this because its board files do not include
+ * that dtsi; neither does the XIAO nRF54LM20A, whose zephyr,console is a (dead)
+ * uart20 instead. Three Nordic boards, three different console origins.
+ *
+ * CONSEQUENCE WORTH KNOWING: with one USB port there is nowhere else for
+ * Zephyr's printk/LOG to go, so it shares the console CDC with the box CLI and
+ * the two interleave. On the DKs those live on separate connectors. */
+/ {
+	chosen {
+		zephyr,console     = &cdc_acm_console;
+		zephyr,shell-uart  = &cdc_acm_console;
+		zephyr,uart-mcumgr = &cdc_acm_console;
+		zephyr,bt-mon-uart = &cdc_acm_console;
+		zephyr,bt-c2h-uart = &cdc_acm_console;
+	};
+};
+
+&zephyr_udc0 {
+	/delete-node/ board_cdc_acm_uart;
+
+	cdc_acm_console: cdc_acm_uart0 {
+		compatible = "zephyr,cdc-acm-uart";
+	};
+	cdc_acm_data: cdc_acm_uart1 {
+		compatible = "zephyr,cdc-acm-uart";
+		rx-fifo-size = <8192>;
+		tx-fifo-size = <8192>;
+	};
+};
+
+/*
+ * ---- ANALOG: the nRF52840 SAADC ----
+ *
+ * Same driver and the same two audited constraints as the nRF52840 DK, which is
+ * the point of using the same SoC: `reg` is a LOGICAL channel index and
+ * `zephyr,input-positive` picks the pad (the driver selects
+ * ADC_CONFIGURABLE_INPUTS), and oversampling is refused with -EINVAL for any
+ * multi-channel sequence -- ours is multi-channel by construction, so the
+ * honest menu is 1x.
+ *
+ * Reference is VDD/4 with gain 1/4, giving a 3.3 V full scale that matches the
+ * module's rails -- the DK's choice, kept so a config moves between them.
+ */
+&adc {
+	status = "okay";
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	channel@0 { reg = <0>; zephyr,gain = "ADC_GAIN_1_4";
+		zephyr,reference = "ADC_REF_VDD_1_4"; zephyr,vref-mv = <3300>;
+		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
+		zephyr,resolution = <12>; zephyr,input-positive = <NRF_SAADC_AIN0>; };
+	channel@1 { reg = <1>; zephyr,gain = "ADC_GAIN_1_4";
+		zephyr,reference = "ADC_REF_VDD_1_4"; zephyr,vref-mv = <3300>;
+		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
+		zephyr,resolution = <12>; zephyr,input-positive = <NRF_SAADC_AIN1>; };
+	channel@2 { reg = <2>; zephyr,gain = "ADC_GAIN_1_4";
+		zephyr,reference = "ADC_REF_VDD_1_4"; zephyr,vref-mv = <3300>;
+		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
+		zephyr,resolution = <12>; zephyr,input-positive = <NRF_SAADC_AIN2>; };
+	channel@3 { reg = <3>; zephyr,gain = "ADC_GAIN_1_4";
+		zephyr,reference = "ADC_REF_VDD_1_4"; zephyr,vref-mv = <3300>;
+		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
+		zephyr,resolution = <12>; zephyr,input-positive = <NRF_SAADC_AIN3>; };
+	channel@4 { reg = <4>; zephyr,gain = "ADC_GAIN_1_4";
+		zephyr,reference = "ADC_REF_VDD_1_4"; zephyr,vref-mv = <3300>;
+		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
+		zephyr,resolution = <12>; zephyr,input-positive = <NRF_SAADC_AIN4>; };
+	channel@5 { reg = <5>; zephyr,gain = "ADC_GAIN_1_4";
+		zephyr,reference = "ADC_REF_VDD_1_4"; zephyr,vref-mv = <3300>;
+		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
+		zephyr,resolution = <12>; zephyr,input-positive = <NRF_SAADC_AIN5>; };
+};

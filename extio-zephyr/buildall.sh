@@ -46,6 +46,12 @@ check mcxn947   -b frdm_mcxn947/mcxn947/cpu0    -d build-check-mcxn947   "$HERE"
 check nrf52840  -b nrf52840dk/nrf52840          -d build-check-nrf52840  "$HERE"
 check xiao54lm20 -b xiao_nrf54lm20a/nrf54lm20a/cpuapp -d build-check-xiao54lm20 "$HERE"
 check lm20dk    -b nrf54lm20dk/nrf54lm20a/cpuapp -d build-check-lm20dk "$HERE"
+# The XIAO nRF52840 -- the intended Zephyr BLE PERIPHERAL board. Deliberately
+# has NO -ota sibling below, unlike every other target that carries one: its
+# board files pull the Adafruit UF2 layout (SoftDevice / app / storage / UF2),
+# which has no slot0+slot1 PAIR, so there is no MCUboot build to check. That is
+# a property of the layout, not an omission -- see boards/xiao_ble.conf.
+check xiao_ble  -b xiao_ble                     -d build-check-xiao_ble  "$HERE"
 
 # The teensy40 in its OTA form, which is a DIFFERENT BUILD, not a variant: it
 # pulls in MCUboot as a second image, relinks the app to slot0, and compiles in

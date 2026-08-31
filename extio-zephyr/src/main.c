@@ -1027,6 +1027,18 @@ static void groups_resync(void)
  * period" is never ambiguous with the boot flash (the MCXN947's reasoning). */
 #define LED_PIN  22   /* LED1 = P0.13, GPIO_ACTIVE_LOW in the pin map   */
 #define BTN_PIN  26   /* BTN1 = P0.11, active low, board pull-up        */
+#elif defined(CONFIG_BOARD_XIAO_BLE)
+/* Box pins 0-10 are XIAO D0-D10 and 11-13 are the module's RGB LEDs, which are
+ * off the D connector and so cost no field pin. Red for the heartbeat, leaving
+ * green and blue free (and note green shares P0.30 with AIN6).
+ *
+ * BTN_PIN IS DELIBERATELY AN UNMAPPED INDEX. This module has NO user button --
+ * only a reset -- so there is no honest value. 14 is past the end of the
+ * board's 14-entry map, so box_gpio_reserved() refuses it and nothing can ever
+ * drive it. Pointing it at a D pin instead would put the "test button" on
+ * someone's signal wire, which is the trap the branches above exist to avoid. */
+#define LED_PIN  11   /* LED red = P0.26, ACTIVE_LOW in the pin map    */
+#define BTN_PIN  14   /* no user button on this module -- unmapped     */
 #elif defined(CONFIG_BOARD_NRF54LM20DK)
 /* Same map shape as the nRF52840 DK -- box pins 22-25 are LED1-LED4, 26-29 are
  * BTN1-BTN4 -- but NOT the same free lunch: on this board every LED and button
