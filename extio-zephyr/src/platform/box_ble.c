@@ -84,9 +84,9 @@ enum disc_stage {
  * 15 ms rather than the 7.5 ms spec floor: BLE.md's power model has the
  * handheld skipping intervals when idle, and the floor buys little once the
  * peripheral is allowed latency. Raise peripheral latency, never the interval. */
-#define CONN_INT_15MS 12
+#define CONN_INT_UNITS 6            /* 6 = 7.5 ms (spec floor); 12 = 15 ms */
 static const struct bt_le_conn_param conn_param =
-	BT_LE_CONN_PARAM_INIT(CONN_INT_15MS, CONN_INT_15MS, 0, 400);
+	BT_LE_CONN_PARAM_INIT(CONN_INT_UNITS, CONN_INT_UNITS, 0, 400);
 
 /* Per-connected-peer discovery/subscription state. */
 struct peer {
