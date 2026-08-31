@@ -125,7 +125,7 @@
  * Reference is VDD/4 with gain 1/4, giving a 3.3 V full scale that matches the
  * module's rails -- the DK's choice, kept so a config moves between them.
  */
-&adc {
+box_adc: &adc {
 	status = "okay";
 	#address-cells = <1>;
 	#size-cells = <0>;
