@@ -3603,10 +3603,19 @@ int main(void)
 				 * console (`ble`), where a human is already asking. */
 				for (int i = 0; i < CONFIG_BT_MAX_CONN; i++) {
 					uint32_t m2 = 0, t2 = 0, r2 = 0;
+					uint16_t c2 = 0;
 					int s2 = 0;
 
-					if (!box_ble_echo_stats(i, NULL, &m2, &t2, &r2, &s2)) {
+					if (!box_ble_echo_stats(i, NULL, &m2, &t2, &r2,
+								&s2, &c2)) {
 						continue;
+					}
+					if (c2) {
+						/* 1.25 ms units -> us, so a host can read
+						 * echo_rtt_us against it without knowing
+						 * the BLE unit convention. */
+						pub_periodic("ble/conn_int_us",
+							     (uint32_t) c2 * 1250u);
 					}
 					nsync += s2;
 					etx += t2;

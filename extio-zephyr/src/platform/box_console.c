@@ -432,13 +432,19 @@ static void run_line(box_config_t *cfg, const char *line)
 		for (int i = 0; i < CONFIG_BT_MAX_CONN; i++) {
 			const char *nm = NULL;
 			uint32_t mn = 0, tx = 0, rx = 0;
+			uint16_t ci = 0;
 			int sy = 0;
 
-			if (!box_ble_echo_stats(i, &nm, &mn, &tx, &rx, &sy)) {
+			if (!box_ble_echo_stats(i, &nm, &mn, &tx, &rx, &sy, &ci)) {
 				continue;
 			}
-			box_console_printf("  %-16s echo tx=%u rx=%u min_rtt=%u us  %s\n",
-					   nm, tx, rx, mn,
+			/* Interval printed in ms from 1.25 ms units, as integer
+			 * quarters (ci*125/100) -- no float, so this needs no
+			 * CBPRINTF_FP_SUPPORT, same rule as `now`. */
+			box_console_printf("  %-16s conn_int=%u.%02u ms echo tx=%u rx=%u"
+					   " min_rtt=%u us  %s\n",
+					   nm, (ci * 125u) / 100u, (ci * 125u) % 100u,
+					   tx, rx, mn,
 					   sy ? "SYNCED (source-stamped)"
 					      : "not synced -- events arrival-stamped");
 		}

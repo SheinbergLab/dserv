@@ -607,7 +607,7 @@ void box_ble_service(void)
 }
 
 int box_ble_echo_stats(int idx, const char **name, uint32_t *min_rtt_us,
-		       uint32_t *tx, uint32_t *rx, int *synced)
+		       uint32_t *tx, uint32_t *rx, int *synced, uint16_t *conn_int)
 {
 	struct peer *p;
 
@@ -623,6 +623,21 @@ int box_ble_echo_stats(int idx, const char **name, uint32_t *min_rtt_us,
 	if (tx)         *tx = p->echo_tx;
 	if (rx)         *rx = p->echo_rx;
 	if (synced)     *synced = p->hh_clock.synced ? 1 : 0;
+	if (conn_int) {
+		/* The NEGOTIATED interval, read live from the controller -- not the
+		 * value we asked for in conn_param. Those differ whenever the
+		 * peripheral has its own preferred parameters and requests an update
+		 * after connect, which is invisible from this side otherwise.
+		 *
+		 * This exists because min_rtt alone cannot be reasoned about: an echo
+		 * round trip cannot beat the connection interval, so "is 25 ms bad?"
+		 * has no answer until you know whether the interval is 15 or 50. */
+		struct bt_conn_info info;
+
+		*conn_int = (bt_conn_get_info(p->conn, &info) == 0 &&
+			     info.type == BT_CONN_TYPE_LE)
+			    ? info.le.interval : 0;
+	}
 	return 1;
 }
 

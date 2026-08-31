@@ -67,9 +67,13 @@ void box_ble_service(void);
  * not a connected peer, so callers can just walk 0..CONFIG_BT_MAX_CONN-1.
  * min_rtt_us is the running floor -- the number that says how good the mapping
  * can possibly be, since the midpoint assumption is only as good as the
- * fastest round trip seen. Any out pointer may be NULL. */
+ * fastest round trip seen. Any out pointer may be NULL.
+ *
+ * conn_int is the NEGOTIATED connection interval in 1.25 ms units (0 = unknown),
+ * read live rather than assumed: it is what makes min_rtt interpretable, since
+ * an echo round trip cannot beat one interval. */
 int box_ble_echo_stats(int idx, const char **name, uint32_t *min_rtt_us,
-		       uint32_t *tx, uint32_t *rx, int *synced);
+		       uint32_t *tx, uint32_t *rx, int *synced, uint16_t *conn_int);
 
 /* Number of peripherals currently connected (telemetry / fleet-ceiling check). */
 int box_ble_conn_count(void);
