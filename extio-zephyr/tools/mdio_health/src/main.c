@@ -121,6 +121,46 @@ int main(void)
 	}
 #endif
 
+	/* SWEEP ALL 32 ADDRESSES ONCE, BEFORE HAMMERING TWO OF THEM.
+	 *
+	 * Added 2026-08-31. prj.conf has claimed since day one that this tool would
+	 * "scan the MDIO bus ourselves instead of trusting one hardcoded address",
+	 * and the loop below then hardcoded 0 and 2 -- so the tool inherited exactly
+	 * the assumption it was written to remove.
+	 *
+	 * That gap has a specific cost. "PHY is dead" and "this board revision put
+	 * the PHY somewhere else" produce IDENTICAL output when you only ever look
+	 * at two addresses, and the second is far likelier than a second RMA in a
+	 * row. A replacement board is precisely the case where the address may have
+	 * moved: the strap pins that set the PHYAD are ordinary board resistors.
+	 *
+	 * A silent sweep is the answer to "is ANYTHING on this bus", which is a
+	 * different question from "is the KSZ8081 healthy at its expected address" --
+	 * and it has to be asked first, because a no to the second means nothing
+	 * until the first is answered. */
+	{
+		int found = 0;
+
+		printk("MDIO address sweep (0-31), reg2/reg3:\n");
+		for (uint8_t a = 0; a < 32; a++) {
+			uint16_t id1 = 0, id2 = 0;
+
+			(void) mdio_read(mdio, a, 2, &id1);
+			(void) mdio_read(mdio, a, 3, &id2);
+			if (live(id1) || live(id2)) {
+				printk("  addr %2d: %04x %04x%s\n", a, id1, id2,
+				       (id1 == 0x0022 && id2 == 0x1561)
+				       ? "   <-- KSZ8081" : "   <-- SOMETHING (not a KSZ8081)");
+				found++;
+			}
+		}
+		if (!found) {
+			printk("  nothing answered at ANY of the 32 addresses --\n"
+			       "  the bus is undriven, so this is not a wrong-address\n"
+			       "  problem. Look at PHY power, the reset line, and MDC.\n");
+		}
+	}
+
 	/* 0 and 2: PORTING.md's mdio scan found the PHY answering at both. */
 	while (1) {
 		hammer(0);
