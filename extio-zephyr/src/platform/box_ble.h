@@ -115,4 +115,17 @@ int box_ble_scanning(void);
  * because the controller refused", which is a fault. */
 int box_ble_scan_err(void);
 
+/* Advertisements seen at all, and those carrying our service UUID. Splits the
+ * two causes of a scanning central with no peers: seen=0 means nothing is
+ * advertising in range (or we are not really scanning); seen>0 with matched=0
+ * means something IS and we are rejecting it. */
+void box_ble_scan_counts(uint32_t *seen, uint32_t *matched);
+
+/* Why a matched advertisement did not become a peer. tries counts create
+ * attempts; create_err the controller refusing outright; est_err a connection
+ * that failed to establish (last_err then holds the NEGATED HCI reason);
+ * dropped a link that came up and went away again. */
+void box_ble_conn_counts(uint32_t *tries, uint32_t *create_err,
+			 uint32_t *est_err, uint32_t *dropped, int *last_err);
+
 #endif /* BOX_BLE_H */

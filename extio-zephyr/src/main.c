@@ -56,8 +56,10 @@
 #include "box_net_eth.h"
 #include "box_ptp.h"
 #endif
-#if defined(CONFIG_BT)
+#if defined(BOX_BLE_CENTRAL)
 #include "box_ble.h"
+#elif defined(CONFIG_BOX_BLE_PERIPHERAL)
+#include "box_ble_periph.h"
 #endif
 #if defined(BOX_HAVE_OTA_SLOT)
 #include "box_ota_flash.h"
@@ -892,7 +894,24 @@ static void sched_dbg_publish(uint64_t T, uint64_t now, uint64_t target_box,
  * are just not aligned yet. */
 static inline uint64_t event_stamp(uint64_t t_us)
 {
+#if defined(CONFIG_BOX_BLE_PERIPHERAL)
+	/* A PERIPHERAL PUBLISHES RAW SOURCE TIME, and this is the one place the
+	 * firmware would otherwise be actively wrong for that role.
+	 *
+	 * box_clock_stamp() maps box time to DSERV time using an anchor that
+	 * arrives in ess/in_obs -- and nothing sends a handheld ess/in_obs, so it
+	 * is never anchored and this would return 0 for every event, forever.
+	 * dserv would then arrival-stamp, discarding the source stamp at the end
+	 * of a chain built entirely to preserve it.
+	 *
+	 * So hand over this box's own microseconds untranslated. The RECEIVER
+	 * rewrites the ts once, at the radio boundary, from its echo-sync
+	 * estimate (BLE.md: "translate exactly once") -- measured to land within
+	 * ~1 ms of a hardware ground truth. */
+	return t_us;
+#else
 	return box_clock_stamp(&boxclk, t_us);
+#endif
 }
 
 /* The console's `now` command, answered here because boxclk is private to this
@@ -1515,7 +1534,7 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 		}
 	}
 
-#if defined(CONFIG_BT)
+#if defined(BOX_BLE_CENTRAL)
 	/* NOT ADDRESSED TO THIS BOX -- so it may belong to one of our BLE
 	 * peripherals, which the host addresses by name exactly like any other box
 	 * (extio/hh1/config/..., extio/hh1/cmd/...) and has no idea are behind a
@@ -2986,7 +3005,7 @@ int main(void)
 	}
 #endif
 
-#if defined(CONFIG_BT)
+#if defined(BOX_BLE_CENTRAL)
 	/* ---- block #6 (ingress): multi-peripheral BLE central ----
 	 *
 	 * GATED on the persisted flag, matching the RP2350's stated contract
@@ -3012,6 +3031,24 @@ int main(void)
 		box_console_printf("BLE central up but NOT SCANNING (scan err %d) --"
 				   " deaf, nothing will connect; see `ble`\n\n",
 				   box_ble_scan_err());
+	}
+#elif defined(CONFIG_BOX_BLE_PERIPHERAL)
+	/* Already up: box_uplink_init() brought the radio on, because here the
+	 * radio IS the uplink rather than an ingress bolted beside one. Nothing
+	 * to gate on cfg.ble_en either -- switching it off would not save power
+	 * on this box, it would disconnect it. */
+	if (!box_ble_periph_active()) {
+		box_console_printf("BLE peripheral: RADIO FAILED TO START -- this box is mute\n\n");
+	} else if (box_ble_periph_advertising()) {
+		box_console_printf("BLE peripheral: advertising as extio-%s; events publish RAW\n"
+				   "               source time (the receiver rewrites ts at the\n"
+				   "               radio boundary)\n\n", cfg.name);
+	} else {
+		/* Radio up, advertiser not running: INVISIBLE. Indistinguishable
+		 * from switched-off to every receiver, so say it loudly. */
+		box_console_printf("BLE peripheral: radio up but NOT ADVERTISING (err %d) --\n"
+				   "               nothing can find this box\n\n",
+				   box_ble_periph_adv_err());
 	}
 #else
 	box_console_printf("no radio on this board -- BLE ingress disabled\n\n");
@@ -3304,7 +3341,7 @@ int main(void)
 			}
 		}
 
-#if defined(CONFIG_BT)
+#if defined(BOX_BLE_CENTRAL)
 		/* Keep the per-peer clock estimators fed (echo REQ every 300 ms). */
 		box_ble_service(&cfg);
 
@@ -3585,7 +3622,7 @@ int main(void)
 			 * read healthy. */
 			pub_periodic("cmds_rx", (uint32_t) cmds_rx);
 
-#if defined(CONFIG_BT)
+#if defined(BOX_BLE_CENTRAL)
 			/* The radio's two facts, for the same reason cmds_rx sits here:
 			 * a hub whose peripherals have all dropped off looks EXACTLY
 			 * like a healthy wired box from every other datapoint. Until

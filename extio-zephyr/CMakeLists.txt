@@ -143,11 +143,26 @@ if(CONFIG_NETWORKING)
 endif()
 
 
-# BLE ingress: frdm_rw612 only (no radio on Teensy).
-if(CONFIG_BT)
+# BLE, in exactly one of its two roles.
+#
+# THE ROLE IS A BUILD CHOICE, not a runtime one, and the reason is power rather
+# than code size: the central scans and holds up to CONFIG_BT_MAX_CONN links,
+# which is precisely what the battery peripheral cannot afford. BLE.md's policy
+# ("compiled per-board, enabled at runtime") applies to the RADIO -- cfg->ble_en
+# -- not to which end of the pipe this box is.
+#
+# BOX_BLE_CENTRAL is defined rather than testing !CONFIG_BOX_BLE_PERIPHERAL at
+# every site, because main.c and box_console.c each have several and a missed
+# one links a hub into a handheld.
+if(CONFIG_BT AND CONFIG_BOX_BLE_PERIPHERAL)
+	target_sources(app PRIVATE
+		src/platform/box_ble_periph.c  # the handheld end: GATT server + uplink
+	)
+elseif(CONFIG_BT)
 	target_sources(app PRIVATE
 		src/platform/box_ble.c         # block #6: multi-peripheral BLE central
 	)
+	target_compile_definitions(app PRIVATE BOX_BLE_CENTRAL=1)
 endif()
 
 # The portable core (forked from wiznet-io, pico_* -> box_*) plus the RW612/Zephyr

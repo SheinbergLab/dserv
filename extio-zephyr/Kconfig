@@ -19,6 +19,38 @@
 # one that amplifies. If an interactive console ever misbehaves again, check this
 # symbol before suspecting the terminal or the host OS.
 
+config BOX_BLE_PERIPHERAL
+	bool "Build this box as a BLE PERIPHERAL (the radio is its uplink)"
+	default n
+	depends on BT_PERIPHERAL
+	help
+	  A battery handheld whose events reach dserv through a receiver, not
+	  through USB or Ethernet: box_ble_periph.c presents the frozen d5e7000x
+	  GATT pipe as an ordinary uplink, so everything above the transport --
+	  config dispatch, the announce/manifest, DI, groups, ain groups, the
+	  CLI, persistence -- is unchanged.
+
+	  MUTUALLY EXCLUSIVE WITH THE CENTRAL by construction, and the reason is
+	  power rather than code: box_ble.c scans and holds up to
+	  CONFIG_BT_MAX_CONN links, which is exactly what a coin cell cannot
+	  afford. BLE.md's policy is "compiled per-board, enabled at runtime",
+	  so the ROLE is a build choice and only the radio itself is a runtime
+	  one (cfg->ble_en).
+
+	  TWO CONSEQUENCES worth knowing before turning this on:
+
+	  * USB becomes CONSOLE-ONLY. The data pipe is not enumerated -- a
+	    peripheral's frames go out the radio, and a host that saw a pipe the
+	    box never writes would list it in extio/boxes as USB-attached and
+	    poll it forever (the Pico handheld's "dead data CDC", BLE.md).
+
+	  * EVENT TIMESTAMPS BECOME RAW SOURCE TIME. A peripheral is never
+	    anchored -- nothing sends it ess/in_obs -- so box_clock_stamp()
+	    would return 0 for every event and dserv would arrival-stamp away
+	    the very source stamp this tier exists to preserve. The receiver
+	    rewrites the ts at the radio boundary instead ("translate exactly
+	    once"), which is measured to land within ~1 ms.
+
 config BOX_ADC_STREAM
 	bool "Hardware-paced ADC stream pipeline (CTIMER -> LPADC -> eDMA ring)"
 	default n

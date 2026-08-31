@@ -10,7 +10,7 @@
 #include "box_obs.h"
 #include "box_event.h"
 #include "box_uplink.h"
-#if defined(CONFIG_BT)
+#if defined(BOX_BLE_CENTRAL)
 #include "box_ble.h"
 #endif
 #if defined(CONFIG_NETWORKING)
@@ -394,7 +394,7 @@ static void run_line(box_config_t *cfg, const char *line)
 		return;
 	}
 
-#if defined(CONFIG_BT)
+#if defined(BOX_BLE_CENTRAL)
 	/* `ble` (bare) -- what the radio is ACTUALLY doing.
 	 *
 	 * Platform-local for the same reason as `now` and `verbose`: it reaches into
@@ -412,8 +412,19 @@ static void run_line(box_config_t *cfg, const char *line)
 			box_console_printf("ble: radio DOWN (`ble enable 1` -- live)\n");
 			return;
 		}
-		box_console_printf("ble: radio up, conns %d/%d\n",
-				   box_ble_conn_count(), CONFIG_BT_MAX_CONN);
+		{
+			uint32_t seen = 0, matched = 0;
+
+			box_ble_scan_counts(&seen, &matched);
+			uint32_t tr = 0, ce = 0, ee = 0, dr = 0;
+			int le = 0;
+
+			box_ble_conn_counts(&tr, &ce, &ee, &dr, &le);
+			box_console_printf("ble: radio up, conns %d/%d, adv seen=%u matched=%u\n"
+					   "  conn try=%u create_err=%u est_err=%u dropped=%u last=%d\n",
+					   box_ble_conn_count(), CONFIG_BT_MAX_CONN,
+					   seen, matched, tr, ce, ee, dr, le);
+		}
 		if (box_ble_scanning()) {
 			box_console_printf("  scanning for d5e7000x peripherals\n");
 		} else if (box_ble_scan_err()) {
@@ -468,7 +479,7 @@ static void run_line(box_config_t *cfg, const char *line)
 
 	box_console_write(resp);   /* the OK/ERR line box_cli produced */
 
-#if defined(CONFIG_BT)
+#if defined(BOX_BLE_CENTRAL)
 	/* `ble enable 1` is documented as live, so honour it here rather than
 	 * making the user reboot. Turning it back OFF needs a reboot: bringing the
 	 * controller down cleanly is not something this module supports, and

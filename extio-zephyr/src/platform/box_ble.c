@@ -140,6 +140,21 @@ static struct peer peers[CONFIG_BT_MAX_CONN];
 static atomic_t connected_count;
 static bool scanning;
 
+/* Advertisement ledger. Without it, "conns 0/8 scanning" has two completely
+ * different causes that look identical from the console: nothing is
+ * advertising within range, or something is and we are rejecting it (wrong
+ * service UUID, wrong adv type, fleet full). One counter each turns a guess
+ * into a reading. */
+static uint32_t adv_seen, adv_matched;
+
+/* Connection ledger, for the same reason as the advertisement one. "matched but
+ * never connected" has at least three causes -- the controller refusing the
+ * create, the establishment failing, or the link coming up and dropping again --
+ * and on a board whose LOG_DEFAULT_LEVEL is ERR, none of them says anything.
+ * Counting is cheaper than raising log levels on a box that is misbehaving. */
+static uint32_t conn_try, conn_create_err, conn_est_err, conn_dropped;
+static int      conn_last_err;
+
 static struct peer *peer_for(struct bt_conn *c)
 {
 	for (int i = 0; i < CONFIG_BT_MAX_CONN; i++) {
@@ -406,6 +421,9 @@ static void connected(struct bt_conn *conn, uint8_t err)
 {
 	if (err) {
 		struct bt_conn *c = conn;
+
+		conn_est_err++;
+		conn_last_err = -(int) err;            /* HCI reason, negated to be distinct */
 		bt_conn_unref(c);
 		start_scan();                          /* try again */
 		return;
@@ -426,7 +444,8 @@ static void connected(struct bt_conn *conn, uint8_t err)
 
 static void disconnected(struct bt_conn *conn, uint8_t reason)
 {
-	ARG_UNUSED(reason);
+	conn_dropped++;
+	conn_last_err = -(int) reason;
 	struct peer *p = peer_for(conn);
 	if (p) {
 		bt_conn_unref(p->conn);
@@ -470,18 +489,25 @@ static void scan_cb(const bt_addr_le_t *addr, int8_t rssi, uint8_t adv_type,
 	}
 
 	bool match = false;
+
+	adv_seen++;
 	bt_data_parse(buf, ad_has_service, &match);
 	if (!match) {
 		return;
 	}
+	adv_matched++;
 
 	if (bt_le_scan_stop() == 0) {
 		scanning = false;
 	}
 	struct bt_conn *conn = NULL;
-	int err = bt_conn_le_create(addr, BT_CONN_LE_CREATE_CONN,
-				    &conn_param, &conn);
+	int err;
+
+	conn_try++;
+	err = bt_conn_le_create(addr, BT_CONN_LE_CREATE_CONN, &conn_param, &conn);
 	if (err) {
+		conn_create_err++;
+		conn_last_err = err;
 		LOG_WRN("create conn failed (%d)", err);
 		start_scan();
 	} else if (conn) {
@@ -727,6 +753,22 @@ int box_ble_peer_info(int idx, box_ble_peer_info_t *out)
 	out->conn_int = (bt_conn_get_info(p->conn, &info) == 0 &&
 			 info.type == BT_CONN_TYPE_LE) ? info.le.interval : 0;
 	return 1;
+}
+
+void box_ble_scan_counts(uint32_t *seen, uint32_t *matched)
+{
+	if (seen)    *seen = adv_seen;
+	if (matched) *matched = adv_matched;
+}
+
+void box_ble_conn_counts(uint32_t *tries, uint32_t *create_err,
+			 uint32_t *est_err, uint32_t *dropped, int *last_err)
+{
+	if (tries)      *tries = conn_try;
+	if (create_err) *create_err = conn_create_err;
+	if (est_err)    *est_err = conn_est_err;
+	if (dropped)    *dropped = conn_dropped;
+	if (last_err)   *last_err = conn_last_err;
 }
 
 int box_ble_scanning(void)

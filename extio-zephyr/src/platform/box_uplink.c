@@ -3,6 +3,9 @@
  */
 #include "box_uplink.h"
 #include "box_net_usb.h"
+#if defined(CONFIG_BOX_BLE_PERIPHERAL)
+#include "box_ble_periph.h"
+#endif
 #if defined(CONFIG_NETWORKING)
 #include "box_net_eth.h"
 #include "box_obs.h"                     /* box_obs_active(): gate the match refresh */
@@ -51,7 +54,10 @@ int  box_uplink_verbose(void)       { return reg_verbose; }
 static int u_usb_init(const box_config_t *c)
 {
 	int with_data = 1;
-#if defined(CONFIG_NETWORKING)
+#if defined(CONFIG_BOX_BLE_PERIPHERAL)
+	ARG_UNUSED(c);
+	with_data = 0;                          /* handheld: USB is console + charger */
+#elif defined(CONFIG_NETWORKING)
 	with_data = (strap_override(c->transport_mode) != XMODE_ETH);
 #else
 	ARG_UNUSED(c);                          /* USB-only board: always the data pipe */
@@ -72,6 +78,39 @@ static const box_uplink_if uplink_usb = {
 	.poll = u_usb_poll, .send = u_usb_send, .send_stream = u_usb_send_stream,
 	.self_register = u_usb_register,
 };
+
+/* ---- BLE PERIPHERAL: the radio IS the uplink ----
+ *
+ * Only built for CONFIG_BOX_BLE_PERIPHERAL, and when it is built it is the ONLY
+ * candidate: desired() returns it unconditionally below. There is deliberately
+ * no failover to USB, because the two are not alternatives here -- a handheld's
+ * USB is a console and a charger, and a host that saw a data pipe the box never
+ * writes would list it in extio/boxes as USB-attached and poll it forever
+ * (BLE.md, the Pico handheld's "dead data CDC").
+ *
+ * connected() is the interesting one: it is not "a receiver is connected" but
+ * "connected, SUBSCRIBED, and the MTU carries a whole frame". Publishing into
+ * the gap between connect and CCC-write would silently drop the announce burst,
+ * which is the one transmission whose loss is invisible -- the box would simply
+ * never appear in extio/boxes.
+ */
+#if defined(CONFIG_BOX_BLE_PERIPHERAL)
+static int u_ble_init(const box_config_t *c)        { return box_ble_periph_init(c); }
+static int u_ble_available(void)                    { return box_ble_periph_active(); }
+static int u_ble_connect(const box_config_t *c)     { (void) c; return 0; } /* advertising is implicit */
+static int u_ble_connected(void)                    { return box_ble_periph_ready(); }
+static int u_ble_poll(uint8_t *b, int m)            { return box_ble_periph_poll(b, m); }
+static int u_ble_send(const uint8_t *b, int l)      { return box_ble_periph_send(b, l); }
+static int u_ble_send_stream(const uint8_t *b, int l) { return box_ble_periph_send_stream(b, l); }
+static int u_ble_register(const box_config_t *c)    { (void) c; return 0; } /* the receiver relays; nothing to register */
+
+static const box_uplink_if uplink_ble = {
+	.name = "ble", .init = u_ble_init, .available = u_ble_available,
+	.connect = u_ble_connect, .connected = u_ble_connected,
+	.poll = u_ble_poll, .send = u_ble_send, .send_stream = u_ble_send_stream,
+	.self_register = u_ble_register,
+};
+#endif
 
 /* Ethernet is only present on boards with a MAC+PHY (frdm_rw612, teensy41).
  * A USB-only board (teensy40) compiles this out and the arbiter simply has one
@@ -367,7 +406,10 @@ static uint8_t strap_override(uint8_t persisted) { return persisted; }
 /* Which uplink the policy wants right now. */
 static const box_uplink_if *desired(const box_config_t *cfg)
 {
-#if !defined(CONFIG_NETWORKING)
+#if defined(CONFIG_BOX_BLE_PERIPHERAL)
+	ARG_UNUSED(cfg);
+	return &uplink_ble;                     /* the radio, and nothing else */
+#elif !defined(CONFIG_NETWORKING)
 	ARG_UNUSED(cfg);
 	return &uplink_usb;                     /* USB-only board: one candidate */
 #else
@@ -393,7 +435,14 @@ static const box_uplink_if *desired(const box_config_t *cfg)
 
 int box_uplink_init(const box_config_t *cfg)
 {
+	/* USB comes up on EVERY board, peripheral included -- but on a peripheral
+	 * build box_net_usb_init() is called with no data pipe (see u_usb_init),
+	 * so what survives is the console. A handheld still needs one: it is how
+	 * the thing is named, configured and rescued on a bench. */
 	int ok = (uplink_usb.init(cfg) == 0);
+#if defined(CONFIG_BOX_BLE_PERIPHERAL)
+	ok |= (uplink_ble.init(cfg) == 0);
+#endif
 #if defined(CONFIG_NETWORKING)
 	eth_cfg = cfg;
 	ok |= (uplink_eth.init(cfg) == 0);
