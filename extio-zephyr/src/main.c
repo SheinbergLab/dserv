@@ -3294,7 +3294,7 @@ int main(void)
 
 #if defined(CONFIG_BT)
 		/* Keep the per-peer clock estimators fed (echo REQ every 300 ms). */
-		box_ble_service();
+		box_ble_service(&cfg);
 
 		/* BLE ingress. Each peripheral's frame is source-stamped on ITS OWN
 		 * clock; box_ble has already done hop one of BLE.md's "translate
@@ -3602,26 +3602,28 @@ int main(void)
 				 * name we learn at runtime -- per-peer detail is on the
 				 * console (`ble`), where a human is already asking. */
 				for (int i = 0; i < CONFIG_BT_MAX_CONN; i++) {
-					uint32_t m2 = 0, t2 = 0, r2 = 0;
-					uint16_t c2 = 0;
-					int s2 = 0;
+					box_ble_peer_info_t pi;
 
-					if (!box_ble_echo_stats(i, NULL, &m2, &t2, &r2,
-								&s2, &c2)) {
+					if (!box_ble_peer_info(i, &pi)) {
 						continue;
 					}
-					if (c2) {
+					if (pi.conn_int) {
 						/* 1.25 ms units -> us, so a host can read
 						 * echo_rtt_us against it without knowing
 						 * the BLE unit convention. */
 						pub_periodic("ble/conn_int_us",
-							     (uint32_t) c2 * 1250u);
+							     (uint32_t) pi.conn_int * 1250u);
 					}
-					nsync += s2;
-					etx += t2;
-					erx += r2;
-					if (m2 && (mn == 0 || m2 < mn)) {
-						mn = m2;
+					/* The APPLIED latency, not the configured one:
+					 * the manager cycles it between 0 (sync burst)
+					 * and the target, so a host watching power
+					 * behaviour needs what is actually on the link. */
+					pub_periodic("ble/latency", pi.lat_applied);
+					nsync += (pi.synced ? 1 : 0);
+					etx += pi.echo_tx;
+					erx += pi.echo_rx;
+					if (pi.min_rtt_us && (mn == 0 || pi.min_rtt_us < mn)) {
+						mn = pi.min_rtt_us;
 					}
 				}
 				pub_periodic("ble/synced",      (uint32_t) nsync);

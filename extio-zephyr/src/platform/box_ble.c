@@ -113,6 +113,17 @@ struct peer {
 	uint8_t                          win_n;
 	uint32_t                         min_rtt_us;  /* running floor, telemetry      */
 	uint32_t                         echo_tx, echo_rx;
+	/* 0 none, 1 first snap (offset only), 2 a windowed min-RTT anchor has
+	 * committed. The latency manager gates on 2: raising latency before the
+	 * estimator has a filtered anchor would coarsen the very samples it still
+	 * needs to converge. */
+	uint8_t                          sync_level;
+
+	/* Adaptive peripheral latency state (service-loop thread only). */
+	uint16_t                         lat_applied;
+	uint32_t                         lat_phase_ms;
+	uint32_t                         lat_try_ms;
+	uint8_t                          lat_idle;
 };
 static struct peer peers[CONFIG_BT_MAX_CONN];
 static atomic_t connected_count;
@@ -231,12 +242,14 @@ static void echo_reply(struct peer *p, const uint8_t *v)
 	 * has no business setting a slope. */
 	if (!p->hh_clock.synced) {
 		box_clock_sync(&p->hh_clock, p->win_rmid, p->win_h, 0);
+		p->sync_level = 1;
 		LOG_INF("echo: %s synced, rtt %u us", p->named ? p->pfx : "peer", rtt);
 	}
 
 	if (p->win_n >= ECHO_WIN) {
 		box_clock_sync(&p->hh_clock, p->win_rmid, p->win_h, 1);
 		p->win_n = 0;
+		p->sync_level = 2;
 	}
 }
 
@@ -567,11 +580,80 @@ int box_ble_forward(const char *name, uint16_t namelen, const uint8_t *frame)
 	return 0;
 }
 
-void box_ble_service(void)
+/* ---- adaptive peripheral latency (BLE.md "Power") ----
+ *
+ * Ported from the Pico receiver's box_ble_latency_service, per peer rather than
+ * per pipe. The windows are ITS first-cut values and remain UNTUNED here: they
+ * are pending a real battery-life measurement, which no bench-powered board can
+ * provide. Do not read them as validated.
+ *
+ * The supervision timeout must outlast a fully-skipped stretch. At 7.5 ms with
+ * timeout 4 s, even ble_latency = 255 gives (1+255) * 7.5 * 2 = 3840 ms < 4000,
+ * so a uint8_t latency can never ask for a link the timeout cannot survive.
+ * That headroom is a property of the 7.5 ms interval -- re-check it if the
+ * interval is ever raised. */
+#define LAT_SYNC_MS   3000     /* dense latency-0 window: (re)converge echo-sync */
+#define LAT_IDLE_MS  30000     /* low-power window between sync bursts           */
+#define LAT_RETRY_MS   250     /* throttle: an update may already be in flight   */
+
+static void latency_service(struct peer *p, const box_config_t *cfg, uint32_t now_ms)
+{
+	uint16_t target;
+
+	if (cfg->ble_latency == 0) {
+		/* Feature off -- the always-listen behaviour every timing
+		 * measurement so far was taken against. */
+		target = 0;
+		p->lat_phase_ms = now_ms;
+		p->lat_idle = 0;
+	} else if (!p->lat_idle) {
+		if (!p->lat_phase_ms) {
+			p->lat_phase_ms = now_ms;
+		}
+		target = 0;
+		if ((uint32_t) (now_ms - p->lat_phase_ms) >= LAT_SYNC_MS &&
+		    p->sync_level >= 2) {
+			p->lat_idle = 1;
+			p->lat_phase_ms = now_ms;
+		}
+	} else {
+		target = cfg->ble_latency;
+		if ((uint32_t) (now_ms - p->lat_phase_ms) >= LAT_IDLE_MS) {
+			p->lat_idle = 0;          /* back to a sync burst */
+			p->lat_phase_ms = now_ms;
+		}
+	}
+
+	if (target == p->lat_applied ||
+	    (uint32_t) (now_ms - p->lat_try_ms) < LAT_RETRY_MS) {
+		return;
+	}
+	p->lat_try_ms = now_ms;
+	{
+		/* Interval PINNED, only latency moves -- raising the interval would
+		 * put the midpoint bias back (measured +5.39 ms at 15 ms vs
+		 * +1.12 ms at 7.5), and that is accuracy, not power. */
+		struct bt_le_conn_param np = {
+			.interval_min = CONN_INT_UNITS,
+			.interval_max = CONN_INT_UNITS,
+			.latency      = target,
+			.timeout      = 400,
+		};
+
+		if (bt_conn_le_param_update(p->conn, &np) == 0) {
+			p->lat_applied = target;
+			LOG_INF("%s peripheral latency -> %u (%s)",
+				p->named ? p->pfx : "peer", target,
+				target ? "idle power-save" : "sync burst");
+		}
+	}
+}
+
+void box_ble_service(const box_config_t *cfg)
 {
 	uint32_t now_ms;
 
-	if (!ble_up) {
+	if (!ble_up || !cfg) {
 		return;
 	}
 	now_ms = k_uptime_get_32();
@@ -583,6 +665,8 @@ void box_ble_service(void)
 		if (!p->conn || !p->rx_handle) {
 			continue;               /* receive-only peer: nothing to probe with */
 		}
+		latency_service(p, cfg, now_ms);
+
 		if ((uint32_t) (now_ms - p->last_echo_ms) < ECHO_INTERVAL_MS) {
 			continue;
 		}
@@ -606,38 +690,31 @@ void box_ble_service(void)
 	}
 }
 
-int box_ble_echo_stats(int idx, const char **name, uint32_t *min_rtt_us,
-		       uint32_t *tx, uint32_t *rx, int *synced, uint16_t *conn_int)
+int box_ble_peer_info(int idx, box_ble_peer_info_t *out)
 {
 	struct peer *p;
+	struct bt_conn_info info;
 
-	if (idx < 0 || idx >= CONFIG_BT_MAX_CONN) {
+	if (idx < 0 || idx >= CONFIG_BT_MAX_CONN || !out) {
 		return 0;
 	}
 	p = &peers[idx];
 	if (!p->conn) {
 		return 0;
 	}
-	if (name)       *name = p->named ? p->pfx : "(unnamed)";
-	if (min_rtt_us) *min_rtt_us = (p->min_rtt_us == 0xFFFFFFFFu) ? 0 : p->min_rtt_us;
-	if (tx)         *tx = p->echo_tx;
-	if (rx)         *rx = p->echo_rx;
-	if (synced)     *synced = p->hh_clock.synced ? 1 : 0;
-	if (conn_int) {
-		/* The NEGOTIATED interval, read live from the controller -- not the
-		 * value we asked for in conn_param. Those differ whenever the
-		 * peripheral has its own preferred parameters and requests an update
-		 * after connect, which is invisible from this side otherwise.
-		 *
-		 * This exists because min_rtt alone cannot be reasoned about: an echo
-		 * round trip cannot beat the connection interval, so "is 25 ms bad?"
-		 * has no answer until you know whether the interval is 15 or 50. */
-		struct bt_conn_info info;
-
-		*conn_int = (bt_conn_get_info(p->conn, &info) == 0 &&
-			     info.type == BT_CONN_TYPE_LE)
-			    ? info.le.interval : 0;
-	}
+	memset(out, 0, sizeof *out);
+	out->name        = p->named ? p->pfx : "(unnamed)";
+	out->min_rtt_us  = (p->min_rtt_us == 0xFFFFFFFFu) ? 0 : p->min_rtt_us;
+	out->echo_tx     = p->echo_tx;
+	out->echo_rx     = p->echo_rx;
+	out->synced      = p->sync_level;
+	out->lat_applied = p->lat_applied;
+	/* The NEGOTIATED interval, read live from the controller -- not the value
+	 * we asked for in conn_param. Those differ whenever the peripheral has its
+	 * own preferred parameters and requests an update after connect, which is
+	 * invisible from this side otherwise. */
+	out->conn_int = (bt_conn_get_info(p->conn, &info) == 0 &&
+			 info.type == BT_CONN_TYPE_LE) ? info.le.interval : 0;
 	return 1;
 }
 

@@ -430,23 +430,23 @@ static void run_line(box_config_t *cfg, const char *line)
 		 * min_rtt bounds how good the mapping can get -- the midpoint
 		 * assumption is only as good as the fastest round trip seen. */
 		for (int i = 0; i < CONFIG_BT_MAX_CONN; i++) {
-			const char *nm = NULL;
-			uint32_t mn = 0, tx = 0, rx = 0;
-			uint16_t ci = 0;
-			int sy = 0;
+			box_ble_peer_info_t pi;
 
-			if (!box_ble_echo_stats(i, &nm, &mn, &tx, &rx, &sy, &ci)) {
+			if (!box_ble_peer_info(i, &pi)) {
 				continue;
 			}
 			/* Interval printed in ms from 1.25 ms units, as integer
 			 * quarters (ci*125/100) -- no float, so this needs no
 			 * CBPRINTF_FP_SUPPORT, same rule as `now`. */
-			box_console_printf("  %-16s conn_int=%u.%02u ms echo tx=%u rx=%u"
-					   " min_rtt=%u us  %s\n",
-					   nm, (ci * 125u) / 100u, (ci * 125u) % 100u,
-					   tx, rx, mn,
-					   sy ? "SYNCED (source-stamped)"
-					      : "not synced -- events arrival-stamped");
+			box_console_printf("  %-16s conn_int=%u.%02u ms lat=%u/%u"
+					   " echo tx=%u rx=%u min_rtt=%u us  %s\n",
+					   pi.name,
+					   (pi.conn_int * 125u) / 100u,
+					   (pi.conn_int * 125u) % 100u,
+					   pi.lat_applied, cfg->ble_latency,
+					   pi.echo_tx, pi.echo_rx, pi.min_rtt_us,
+					   pi.synced ? "SYNCED (source-stamped)"
+						     : "not synced -- events arrival-stamped");
 		}
 		return;
 	}

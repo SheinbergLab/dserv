@@ -15,6 +15,7 @@
 #define BOX_BLE_H
 
 #include <stdint.h>
+#include "dserv_config.h"   /* ble_latency: the manager reads it live */
 
 /* Enable the controller, register callbacks, and start scanning. 0 on success.
  * IDEMPOTENT -- safe to call again to bring the radio up at runtime. */
@@ -60,20 +61,44 @@ int box_ble_forward(const char *name, uint16_t namelen, const uint8_t *frame);
  * the offset it cannot translate, so it publishes 0 and dserv arrival-stamps
  * (accurate to radio latency, ~10-50 ms). Once synced, box_ble_poll() hands
  * back frames already mapped into THIS box's clock, and main.c's usual
- * box->dserv sync finishes the job. */
-void box_ble_service(void);
-
-/* Per-peer echo telemetry for the console/datapoints. Returns 0 when `idx` is
- * not a connected peer, so callers can just walk 0..CONFIG_BT_MAX_CONN-1.
- * min_rtt_us is the running floor -- the number that says how good the mapping
- * can possibly be, since the midpoint assumption is only as good as the
- * fastest round trip seen. Any out pointer may be NULL.
+ * box->dserv sync finishes the job.
  *
- * conn_int is the NEGOTIATED connection interval in 1.25 ms units (0 = unknown),
- * read live rather than assumed: it is what makes min_rtt interpretable, since
- * an echo round trip cannot beat one interval. */
-int box_ble_echo_stats(int idx, const char **name, uint32_t *min_rtt_us,
-		       uint32_t *tx, uint32_t *rx, int *synced, uint16_t *conn_int);
+ * Also runs the ADAPTIVE PERIPHERAL LATENCY manager (BLE.md "Power"), which is
+ * why it needs the config. At connect the pipe runs latency 0 -- every event
+ * listened for, best for echo convergence, worst for the peripheral's battery.
+ * Once the estimator has settled we raise latency to cfg->ble_latency so the
+ * peripheral may SKIP idle events, then drop back to 0 periodically for a short
+ * SYNC BURST so the clock stays disciplined against drift.
+ *
+ * THE PROPERTY THAT MAKES THIS SAFE: peripheral latency lets the peripheral
+ * skip LISTENING, but it still wakes to TRANSMIT on any event -- so button and
+ * joystick edges are delivered just as fast at latency 4 as at latency 0. Only
+ * receiver->peripheral writes and the echo RTT coarsen, and both are
+ * latency-tolerant. cfg->ble_latency == 0 (the factory default) keeps the
+ * always-listen behaviour every measurement so far was taken against. */
+void box_ble_service(const box_config_t *cfg);
+
+/* Per-peer telemetry for the console/datapoints. A struct rather than a dozen
+ * out-params, which is where this was heading. */
+typedef struct {
+	const char *name;         /* published prefix, or "(unnamed)"            */
+	uint32_t    min_rtt_us;   /* running echo floor; 0 = none yet            */
+	uint32_t    echo_tx;
+	uint32_t    echo_rx;
+	uint16_t    conn_int;     /* NEGOTIATED interval, 1.25 ms units (0 = ?)  */
+	uint16_t    lat_applied;  /* peripheral latency currently on the link    */
+	uint8_t     synced;       /* 0 none, 1 snapped, 2 windowed/rate-teaching */
+} box_ble_peer_info_t;
+
+/* Fills `out` for peer `idx`; returns 0 when that slot is not a connected peer,
+ * so callers can just walk 0..CONFIG_BT_MAX_CONN-1.
+ *
+ * min_rtt_us bounds how good the mapping can possibly be, and conn_int is what
+ * makes it interpretable -- an echo round trip cannot beat one interval, so
+ * "is 25 ms bad?" has no answer without it. The two together also predict the
+ * midpoint BIAS, which is the error the interval owns: measured +5.39 ms at a
+ * 15 ms interval and +1.12 ms at 7.5 ms, against a hardware ground truth. */
+int box_ble_peer_info(int idx, box_ble_peer_info_t *out);
 
 /* Number of peripherals currently connected (telemetry / fleet-ceiling check). */
 int box_ble_conn_count(void);
