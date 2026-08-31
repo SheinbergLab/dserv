@@ -424,6 +424,24 @@ static void run_line(box_config_t *cfg, const char *line)
 		} else {
 			box_console_printf("  not scanning -- a connect is in flight (normal)\n");
 		}
+		/* Per-peer echo-sync. `synced=0` is the line that matters: that peer's
+		 * events are reaching dserv ARRIVAL-stamped, not source-stamped, so
+		 * they carry radio latency (~10-50 ms) instead of the tier's ~1 ms.
+		 * min_rtt bounds how good the mapping can get -- the midpoint
+		 * assumption is only as good as the fastest round trip seen. */
+		for (int i = 0; i < CONFIG_BT_MAX_CONN; i++) {
+			const char *nm = NULL;
+			uint32_t mn = 0, tx = 0, rx = 0;
+			int sy = 0;
+
+			if (!box_ble_echo_stats(i, &nm, &mn, &tx, &rx, &sy)) {
+				continue;
+			}
+			box_console_printf("  %-16s echo tx=%u rx=%u min_rtt=%u us  %s\n",
+					   nm, tx, rx, mn,
+					   sy ? "SYNCED (source-stamped)"
+					      : "not synced -- events arrival-stamped");
+		}
 		return;
 	}
 #endif

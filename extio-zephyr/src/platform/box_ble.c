@@ -4,6 +4,9 @@
  */
 #include "box_ble.h"
 #include "dserv_msg.h"   /* peers are identified by the frames they publish */
+#include "dserv_ble.h"   /* the frozen echo-sync side-channel layout          */
+#include "box_clock.h"   /* the same offset+rate estimator the box uses       */
+#include "box_gpio.h"    /* box_gpio_now_us(): the receiver's own clock       */
 
 #include <zephyr/kernel.h>
 #include <zephyr/bluetooth/bluetooth.h>
@@ -50,6 +53,41 @@ enum disc_stage {
  * worse than not routing at all. */
 #define PEER_PFX_MAX 40
 
+/* ---- echo-sync cadence and filtering (BLE.md "Time") ----
+ *
+ * 300 ms matches the Pico receiver: ~3 probes/s, dense enough to converge in a
+ * couple of seconds and cheap enough to leave running forever.
+ *
+ * MINIMUM-RTT, NOT AVERAGING, and the reason is specific to this radio: BLE
+ * round trips are quantised by the connection interval, so the distribution is
+ * a floor with a long upper tail rather than noise about a mean. Averaging
+ * walks INTO the tail; the lowest-RTT sample in a window is the one whose
+ * midpoint assumption (that the request and the reply each took rtt/2) is least
+ * wrong. Same NTP reasoning the Pico's estimator uses.
+ *
+ * A window of 8 at 300 ms commits a rate-teaching anchor about every 2.4 s. */
+#define ECHO_INTERVAL_MS 300
+#define ECHO_WIN         8
+
+/* Connection parameters, PINNED rather than defaulted -- 15 ms interval,
+ * peripheral latency 0, 4 s supervision. Units are 1.25 ms (interval) and
+ * 10 ms (timeout).
+ *
+ * Zephyr's BT_LE_CONN_PARAM_DEFAULT is 30-50 ms, and that is not a detail
+ * here: an echo round trip cannot beat the connection interval, `rtt/2` is
+ * the midpoint uncertainty, and the tier's target is ~1 ms. MEASURED on the
+ * default against hh1: min RTT 22,895 us, i.e. ~11 ms of error baked into
+ * every mapping before any noise. The Pico receiver pinned 15 ms for exactly
+ * this reason ("btstack's default too coarse, the offset noise swamped the
+ * ~1 ms target") and the same arithmetic applies to any central.
+ *
+ * 15 ms rather than the 7.5 ms spec floor: BLE.md's power model has the
+ * handheld skipping intervals when idle, and the floor buys little once the
+ * peripheral is allowed latency. Raise peripheral latency, never the interval. */
+#define CONN_INT_15MS 12
+static const struct bt_le_conn_param conn_param =
+	BT_LE_CONN_PARAM_INIT(CONN_INT_15MS, CONN_INT_15MS, 0, 400);
+
 /* Per-connected-peer discovery/subscription state. */
 struct peer {
 	struct bt_conn                  *conn;
@@ -62,6 +100,19 @@ struct peer {
 	struct bt_gatt_discover_params   disc;
 	struct bt_gatt_subscribe_params  sub;
 	struct bt_gatt_exchange_params   mtu;
+
+	/* Echo-sync: maps THIS PEER's clock -> the receiver's own clock. Written
+	 * and read only on the BT RX thread (on_notify); the console reads it
+	 * through box_clock_snap's seqlock. box_ble_service() sends requests from
+	 * the service loop but never touches this. */
+	box_clock_t                      hh_clock;
+	uint32_t                         last_echo_ms;
+	uint32_t                         win_rtt;     /* best RTT in the open window */
+	uint64_t                         win_rmid;    /* ...and its receiver midpoint */
+	uint64_t                         win_h;       /* ...and the peer time it maps  */
+	uint8_t                          win_n;
+	uint32_t                         min_rtt_us;  /* running floor, telemetry      */
+	uint32_t                         echo_tx, echo_rx;
 };
 static struct peer peers[CONFIG_BT_MAX_CONN];
 static atomic_t connected_count;
@@ -82,6 +133,10 @@ static struct peer *peer_alloc(struct bt_conn *c)
 	for (int i = 0; i < CONFIG_BT_MAX_CONN; i++) {
 		if (!peers[i].conn) {
 			memset(&peers[i], 0, sizeof peers[i]);
+			/* A zeroed running MINIMUM would never be beaten, so every
+			 * echo sample would fail `rtt < min` and the filter would
+			 * silently never narrow. Start it at the ceiling. */
+			peers[i].min_rtt_us = 0xFFFFFFFFu;
 			peers[i].conn = c;
 			return &peers[i];
 		}
@@ -132,6 +187,59 @@ static void learn_name(struct peer *p, const uint8_t *frame)
 	LOG_INF("peer identified as %s", p->pfx);
 }
 
+/* One echo REPLY: turn it into an offset sample, min-RTT filter, feed the clock.
+ *
+ * The receiver stays STATELESS across the round trip -- r0 comes back in the
+ * reply rather than being remembered here -- so a dropped request costs nothing
+ * and there is no outstanding-request bookkeeping to get wrong.
+ *
+ * rtt/2 assumes the two legs are symmetric, which is exactly the assumption the
+ * min-RTT filter protects: the fastest round trip observed is the one least
+ * inflated by a connection-interval wait on either side. */
+static void echo_reply(struct peer *p, const uint8_t *v)
+{
+	uint64_t r1 = box_gpio_now_us();
+	uint64_t r0 = 0, h_recv = 0;
+	uint32_t rtt;
+
+	memcpy(&r0,     v + DSERV_ECHO_OFF_R0,    sizeof r0);
+	memcpy(&h_recv, v + DSERV_ECHO_OFF_HRECV, sizeof h_recv);
+
+	/* A reply that claims to predate its own request, or that carries no peer
+	 * stamp, is garbage -- from a reboot mid-flight, or a peripheral whose
+	 * clock is not running. Dropping it is right: a bad pair here would be
+	 * indistinguishable from a real one later. */
+	if (r1 <= r0 || h_recv == 0) {
+		return;
+	}
+	rtt = (uint32_t) (r1 - r0);
+	p->echo_rx++;
+	if (rtt < p->min_rtt_us) {
+		p->min_rtt_us = rtt;
+	}
+
+	if (p->win_n == 0 || rtt < p->win_rtt) {
+		p->win_rtt  = rtt;
+		p->win_rmid = r0 + rtt / 2;
+		p->win_h    = h_recv;
+	}
+	p->win_n++;
+
+	/* Snap the offset from the very first sample so relayed frames start
+	 * carrying real time within ~300 ms instead of waiting out a full window
+	 * -- but NOT as a rate-teaching anchor (trusted=0): one unfiltered sample
+	 * has no business setting a slope. */
+	if (!p->hh_clock.synced) {
+		box_clock_sync(&p->hh_clock, p->win_rmid, p->win_h, 0);
+		LOG_INF("echo: %s synced, rtt %u us", p->named ? p->pfx : "peer", rtt);
+	}
+
+	if (p->win_n >= ECHO_WIN) {
+		box_clock_sync(&p->hh_clock, p->win_rmid, p->win_h, 1);
+		p->win_n = 0;
+	}
+}
+
 /* ---- notifications: one whole 128-byte frame per PDU -> the queue ---- */
 static uint8_t on_notify(struct bt_conn *conn, struct bt_gatt_subscribe_params *params,
 			 const void *data, uint16_t length)
@@ -141,12 +249,42 @@ static uint8_t on_notify(struct bt_conn *conn, struct bt_gatt_subscribe_params *
 		return BT_GATT_ITER_STOP;
 	}
 	if (length == FRAME_LEN) {                     /* whole-frame contract */
+		const uint8_t *v = data;
 		struct peer *p = peer_for(conn);
+		uint8_t f[FRAME_LEN];
+		dserv_msg_t m;
 
-		if (p) {
-			learn_name(p, data);
+		/* Echo replies are handled ENTIRELY here and never relayed: they are
+		 * a radio-boundary side-channel, not datapoints (dserv_ble.h). */
+		if (v[0] == DSERV_ECHO_CHAR && v[1] == DSERV_ECHO_REPLY) {
+			if (p) {
+				echo_reply(p, v);
+			}
+			return BT_GATT_ITER_CONTINUE;
 		}
-		(void) k_msgq_put(&rx_q, data, K_NO_WAIT); /* drop if full (best-effort) */
+
+		memcpy(f, v, FRAME_LEN);
+		if (p) {
+			learn_name(p, f);
+
+			/* THE REWRITE. BLE.md: "translate exactly once, at the radio
+			 * boundary." The peer stamped this at its own GPIO IRQ on its
+			 * own clock; box_clock_stamp maps that into OUR clock, and
+			 * main.c then applies the box->dserv sync every local event
+			 * already goes through. Two hops, each owned by the layer that
+			 * has the evidence for it.
+			 *
+			 * Unsynced (or an unstamped frame) deliberately yields 0, which
+			 * tells dserv to arrival-stamp. That is a real loss of accuracy
+			 * and it is the HONEST one: before this existed the peer's raw
+			 * uptime was relayed verbatim and landed ~56 years off, a
+			 * plausible-looking number nothing downstream could catch. */
+			if (dserv_msg_parse(f, &m) == 0 && m.timestamp) {
+				dserv_msg_set_timestamp(
+					f, box_clock_stamp(&p->hh_clock, m.timestamp));
+			}
+		}
+		(void) k_msgq_put(&rx_q, f, K_NO_WAIT);    /* drop if full (best-effort) */
 	}
 	return BT_GATT_ITER_CONTINUE;
 }
@@ -318,7 +456,7 @@ static void scan_cb(const bt_addr_le_t *addr, int8_t rssi, uint8_t adv_type,
 	}
 	struct bt_conn *conn = NULL;
 	int err = bt_conn_le_create(addr, BT_CONN_LE_CREATE_CONN,
-				    BT_LE_CONN_PARAM_DEFAULT, &conn);
+				    &conn_param, &conn);
 	if (err) {
 		LOG_WRN("create conn failed (%d)", err);
 		start_scan();
@@ -427,6 +565,65 @@ int box_ble_forward(const char *name, uint16_t namelen, const uint8_t *frame)
 		return 1;
 	}
 	return 0;
+}
+
+void box_ble_service(void)
+{
+	uint32_t now_ms;
+
+	if (!ble_up) {
+		return;
+	}
+	now_ms = k_uptime_get_32();
+	for (int i = 0; i < CONFIG_BT_MAX_CONN; i++) {
+		struct peer *p = &peers[i];
+		uint8_t req[FRAME_LEN];
+		uint64_t r0;
+
+		if (!p->conn || !p->rx_handle) {
+			continue;               /* receive-only peer: nothing to probe with */
+		}
+		if ((uint32_t) (now_ms - p->last_echo_ms) < ECHO_INTERVAL_MS) {
+			continue;
+		}
+		p->last_echo_ms = now_ms;
+
+		memset(req, 0, sizeof req);          /* zero-padded, whole-PDU rule */
+		req[0] = DSERV_ECHO_CHAR;
+		req[1] = DSERV_ECHO_REQ;
+		/* Stamp r0 as late as possible -- everything between here and the
+		 * write lands in the measured RTT as pure noise. */
+		r0 = box_gpio_now_us();
+		memcpy(req + DSERV_ECHO_OFF_R0, &r0, sizeof r0);
+
+		if (bt_gatt_write_without_response(p->conn, p->rx_handle,
+						   req, FRAME_LEN, false) == 0) {
+			p->echo_tx++;
+		}
+		/* A refused write is ordinary backpressure (no ATT buffer this
+		 * instant), not a fault: the next tick retries, and min-RTT
+		 * filtering is built to tolerate gaps. */
+	}
+}
+
+int box_ble_echo_stats(int idx, const char **name, uint32_t *min_rtt_us,
+		       uint32_t *tx, uint32_t *rx, int *synced)
+{
+	struct peer *p;
+
+	if (idx < 0 || idx >= CONFIG_BT_MAX_CONN) {
+		return 0;
+	}
+	p = &peers[idx];
+	if (!p->conn) {
+		return 0;
+	}
+	if (name)       *name = p->named ? p->pfx : "(unnamed)";
+	if (min_rtt_us) *min_rtt_us = (p->min_rtt_us == 0xFFFFFFFFu) ? 0 : p->min_rtt_us;
+	if (tx)         *tx = p->echo_tx;
+	if (rx)         *rx = p->echo_rx;
+	if (synced)     *synced = p->hh_clock.synced ? 1 : 0;
+	return 1;
 }
 
 int box_ble_scanning(void)

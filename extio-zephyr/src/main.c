@@ -3293,10 +3293,27 @@ int main(void)
 		}
 
 #if defined(CONFIG_BT)
-		/* BLE ingress: each peripheral's frame is already source-stamped
-		 * (extio/<client>/...); relay it out the active uplink verbatim. */
+		/* Keep the per-peer clock estimators fed (echo REQ every 300 ms). */
+		box_ble_service();
+
+		/* BLE ingress. Each peripheral's frame is source-stamped on ITS OWN
+		 * clock; box_ble has already done hop one of BLE.md's "translate
+		 * exactly once" and handed us a stamp in THIS box's time. Hop two is
+		 * the box->dserv sync every local event already goes through, so a
+		 * relayed event and a local one now reach dserv by the same route and
+		 * are directly comparable -- which is the entire point of the tier.
+		 *
+		 * A zero ts means the peer is not synced yet (or never stamped), and
+		 * is passed through untouched so dserv arrival-stamps it. Do NOT
+		 * event_stamp() a zero: that would map "no time" onto a real one. */
 		uint8_t bframe[DSERV_MSG_LEN];
 		while (box_ble_poll(bframe)) {
+			dserv_msg_t bm;
+
+			if (dserv_msg_parse(bframe, &bm) == 0 && bm.timestamp) {
+				dserv_msg_set_timestamp(bframe,
+							event_stamp(bm.timestamp));
+			}
 			box_pub_event(bframe);   /* remote boxes' events: same class as ours */
 		}
 #endif
@@ -3571,8 +3588,37 @@ int main(void)
 			 * this is not debug chatter, it is whether the box does its
 			 * job, and pub_periodic suppresses the unchanged repeats. */
 			if (box_ble_active()) {
+				uint32_t mn = 0, etx = 0, erx = 0;
+				int syn = 0, nsync = 0;
+
 				pub_periodic("ble/conns",    (uint32_t) box_ble_conn_count());
 				pub_periodic("ble/scanning", (uint32_t) box_ble_scanning());
+
+				/* Fleet-wide echo health. ble/synced is the one a host
+				 * should alarm on: a connected-but-unsynced peer is
+				 * publishing arrival-stamped events that look completely
+				 * normal and are tens of ms late. Aggregated rather than
+				 * per-peer because the key would otherwise depend on a
+				 * name we learn at runtime -- per-peer detail is on the
+				 * console (`ble`), where a human is already asking. */
+				for (int i = 0; i < CONFIG_BT_MAX_CONN; i++) {
+					uint32_t m2 = 0, t2 = 0, r2 = 0;
+					int s2 = 0;
+
+					if (!box_ble_echo_stats(i, NULL, &m2, &t2, &r2, &s2)) {
+						continue;
+					}
+					nsync += s2;
+					etx += t2;
+					erx += r2;
+					if (m2 && (mn == 0 || m2 < mn)) {
+						mn = m2;
+					}
+				}
+				pub_periodic("ble/synced",      (uint32_t) nsync);
+				pub_periodic("ble/echo_rtt_us", mn);
+				pub_dbg("dbg/ble_echo_tx", etx);
+				pub_dbg("dbg/ble_echo_rx", erx);
 			}
 #endif
 

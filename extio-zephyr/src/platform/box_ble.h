@@ -49,6 +49,28 @@ int box_ble_poll(uint8_t *out);
  * not on the advertised GAP name -- see box_ble.c. */
 int box_ble_forward(const char *name, uint16_t namelen, const uint8_t *frame);
 
+/* ---- echo-sync: run the clock estimator ----
+ *
+ * Call once per service pass. Sends one echo REQUEST per connected peer every
+ * ECHO_INTERVAL_MS; replies are consumed on the BT thread and never relayed.
+ *
+ * What this buys, and why box_ble_poll() is useless for timing without it: a
+ * peripheral stamps its events at GPIO IRQ on ITS OWN clock, and nothing else
+ * in the system knows what that clock reads. Until the receiver has measured
+ * the offset it cannot translate, so it publishes 0 and dserv arrival-stamps
+ * (accurate to radio latency, ~10-50 ms). Once synced, box_ble_poll() hands
+ * back frames already mapped into THIS box's clock, and main.c's usual
+ * box->dserv sync finishes the job. */
+void box_ble_service(void);
+
+/* Per-peer echo telemetry for the console/datapoints. Returns 0 when `idx` is
+ * not a connected peer, so callers can just walk 0..CONFIG_BT_MAX_CONN-1.
+ * min_rtt_us is the running floor -- the number that says how good the mapping
+ * can possibly be, since the midpoint assumption is only as good as the
+ * fastest round trip seen. Any out pointer may be NULL. */
+int box_ble_echo_stats(int idx, const char **name, uint32_t *min_rtt_us,
+		       uint32_t *tx, uint32_t *rx, int *synced);
+
 /* Number of peripherals currently connected (telemetry / fleet-ceiling check). */
 int box_ble_conn_count(void);
 
