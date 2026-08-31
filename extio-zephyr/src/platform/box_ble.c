@@ -75,15 +75,26 @@ enum disc_stage {
  *
  * Zephyr's BT_LE_CONN_PARAM_DEFAULT is 30-50 ms, and that is not a detail
  * here: an echo round trip cannot beat the connection interval, `rtt/2` is
- * the midpoint uncertainty, and the tier's target is ~1 ms. MEASURED on the
- * default against hh1: min RTT 22,895 us, i.e. ~11 ms of error baked into
- * every mapping before any noise. The Pico receiver pinned 15 ms for exactly
- * this reason ("btstack's default too coarse, the offset noise swamped the
- * ~1 ms target") and the same arithmetic applies to any central.
+ * the midpoint uncertainty, and the tier's target is ~1 ms. The Pico receiver
+ * pinned 15 ms for the same reason ("btstack's default too coarse, the offset
+ * noise swamped the ~1 ms target").
  *
- * 15 ms rather than the 7.5 ms spec floor: BLE.md's power model has the
- * handheld skipping intervals when idle, and the floor buys little once the
- * peripheral is allowed latency. Raise peripheral latency, never the interval. */
+ * 7.5 ms -- the spec floor -- rather than the Pico's 15, and this is MEASURED
+ * rather than reasoned. Against hh1 on the Phase 2 rig, the systematic bias in
+ * the mapped timestamps was:
+ *
+ *     15.00 ms interval   median +5.39 ms   IQR 0.51 ms
+ *      7.50 ms interval   median +1.12 ms   IQR 0.55 ms
+ *
+ * The interval owns the BIAS and not the jitter, which is what the midpoint
+ * model predicts: the central transmits promptly while the peripheral's reflex
+ * reply waits for the next connection event, so the error is (leg2-leg1)/2 and
+ * leg2 is interval-quantised. Only at 7.5 ms does the tier meet its ~1 ms
+ * target against a hardware ground truth.
+ *
+ * The cost is the peripheral's battery, and the answer to that is peripheral
+ * LATENCY (see latency_service) -- never a longer interval, which would buy
+ * power by giving the bias straight back. */
 #define CONN_INT_UNITS 6            /* 6 = 7.5 ms (spec floor); 12 = 15 ms */
 static const struct bt_le_conn_param conn_param =
 	BT_LE_CONN_PARAM_INIT(CONN_INT_UNITS, CONN_INT_UNITS, 0, 400);
