@@ -394,6 +394,40 @@ static void run_line(box_config_t *cfg, const char *line)
 		return;
 	}
 
+#if defined(CONFIG_BT)
+	/* `ble` (bare) -- what the radio is ACTUALLY doing.
+	 *
+	 * Platform-local for the same reason as `now` and `verbose`: it reaches into
+	 * box_ble, which the shared grammar (and the RP2350 boxes that fork it) does
+	 * not have. The core CLI only offers `ble enable 0|1`, i.e. the setting --
+	 * and the setting was the only thing observable here until 2026-08-31, on a
+	 * central whose scan/connect path had never been run against a peer.
+	 *
+	 * THREE distinct states, because collapsing them is what makes an unproven
+	 * central undebuggable: radio down; radio up but not scanning (fleet full,
+	 * or the controller refused -- box_ble_scan_err tells which); radio up and
+	 * scanning. "Nothing connected" means something different in each. */
+	if (strcmp(line, "ble") == 0) {
+		if (!box_ble_active()) {
+			box_console_printf("ble: radio DOWN (`ble enable 1` -- live)\n");
+			return;
+		}
+		box_console_printf("ble: radio up, conns %d/%d\n",
+				   box_ble_conn_count(), CONFIG_BT_MAX_CONN);
+		if (box_ble_scanning()) {
+			box_console_printf("  scanning for d5e7000x peripherals\n");
+		} else if (box_ble_scan_err()) {
+			box_console_printf("  NOT scanning -- scan start failed (%d);"
+					   " this central is DEAF\n", box_ble_scan_err());
+		} else if (box_ble_conn_count() >= CONFIG_BT_MAX_CONN) {
+			box_console_printf("  not scanning -- fleet full (normal)\n");
+		} else {
+			box_console_printf("  not scanning -- a connect is in flight (normal)\n");
+		}
+		return;
+	}
+#endif
+
 #if defined(BOX_HAVE_ADC) && defined(CONFIG_DAC)
 	/* Handled BEFORE the core CLI, which would answer `ERR unknown` first. */
 	if (strncmp(line, "adccal", 6) == 0) {
@@ -417,9 +451,19 @@ static void run_line(box_config_t *cfg, const char *line)
 	 * pretending otherwise would be another field that lies. */
 	if (strncmp(line, "ble enable", 10) == 0) {
 		if (cfg->ble_en && !box_ble_active()) {
-			box_console_write(box_ble_init() == 0
-					  ? "  ble: radio up, scanning\r\n"
-					  : "  ble: radio FAILED to start\r\n");
+			/* Report the SCAN, not just bt_enable(). This line used to say
+			 * "radio up, scanning" whenever box_ble_init() returned 0 --
+			 * which tests only bt_enable() -- so a failed scan start was
+			 * announced as a working central. `ble` prints the full state. */
+			if (box_ble_init() != 0) {
+				box_console_write("  ble: radio FAILED to start\r\n");
+			} else if (box_ble_scanning()) {
+				box_console_write("  ble: radio up, scanning\r\n");
+			} else {
+				box_console_printf("  ble: radio up but NOT SCANNING"
+						   " (scan err %d) -- deaf; see `ble`\r\n",
+						   box_ble_scan_err());
+			}
 		} else if (!cfg->ble_en && box_ble_active()) {
 			box_console_write("  ble: still running -- reboot to stop\r\n");
 		}

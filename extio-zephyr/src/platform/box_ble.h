@@ -30,4 +30,16 @@ int box_ble_poll(uint8_t *out);
 /* Number of peripherals currently connected (telemetry / fleet-ceiling check). */
 int box_ble_conn_count(void);
 
+/* 1 iff a scan is actually RUNNING right now -- which is not implied by
+ * box_ble_active(). The radio can be enabled with no scan in progress: the scan
+ * start can fail, and it is also stopped deliberately while a connection is
+ * being established and whenever the fleet is full. A central that is up but
+ * not scanning is deaf to new peripherals, so the two must be reported apart. */
+int box_ble_scanning(void);
+
+/* Last scan-start failure (0 = none). Distinguishes "not scanning because the
+ * fleet is full or a connect is in flight" -- normal -- from "not scanning
+ * because the controller refused", which is a fault. */
+int box_ble_scan_err(void);
+
 #endif /* BOX_BLE_H */

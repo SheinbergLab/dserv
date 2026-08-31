@@ -88,7 +88,14 @@ endif()
 # The XIAO nRF54LM20A does NOT, and the distinction is the point: that module
 # has no debugger VCOM at all -- its single USB connector IS the nRF USB device
 # port -- so CDC is the only console it has and the default is already right.
-if(CONFIG_BOARD_FRDM_MCXN947 OR CONFIG_BOARD_NRF52840DK)
+#
+# The nRF54LM20 DK joins on 2026-08-31, VERIFIED rather than assumed -- which is
+# what its overlay asked for when it deferred this decision as a scout. Its
+# cpuapp dtsi chooses `uart20` for zephyr,console, uart20 is an IMCU VCOM, and
+# the IMCU USB port is the one connector the board's own doc tells you to plug
+# in. Flashed with the CDC default it reproduced the nRF52840 DK's symptom
+# exactly: VCOM1 printed Zephyr's banner and not one line from the box.
+if(CONFIG_BOARD_FRDM_MCXN947 OR CONFIG_BOARD_NRF52840DK OR CONFIG_BOARD_NRF54LM20DK)
 	target_compile_definitions(app PRIVATE BOX_DEFAULT_CONSOLE_MODE=CONSOLE_MODE_UART)
 endif()
 

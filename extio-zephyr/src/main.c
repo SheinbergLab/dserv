@@ -1027,6 +1027,20 @@ static void groups_resync(void)
  * period" is never ambiguous with the boot flash (the MCXN947's reasoning). */
 #define LED_PIN  22   /* LED1 = P0.13, GPIO_ACTIVE_LOW in the pin map   */
 #define BTN_PIN  26   /* BTN1 = P0.11, active low, board pull-up        */
+#elif defined(CONFIG_BOARD_NRF54LM20DK)
+/* Same map shape as the nRF52840 DK -- box pins 22-25 are LED1-LED4, 26-29 are
+ * BTN1-BTN4 -- but NOT the same free lunch: on this board every LED and button
+ * ALSO appears on the PORT0/PORT1 headers (see the overlay's silk table), so the
+ * heartbeat does cost a pad someone could have wired to. It costs a pad that is
+ * labelled LED1 either way, which is the best available answer.
+ *
+ * ADDED 2026-08-31 AFTER WATCHING IT HAPPEN AGAIN. The #else below applied and
+ * the first boot banner read "board LED=pin 3, button=pin 1" -- box pin 3 is
+ * P1.03 (EXP03) here, a bare header pin taking three 120 ms pulses per boot.
+ * That is the second board to fall into the Teensy default silently, nine days
+ * after the nRF52840 comment above predicted it would keep happening. */
+#define LED_PIN  22   /* LED1 = P1.22, ACTIVE HIGH on this board        */
+#define BTN_PIN  26   /* BTN1 = P1.26, active low, board pull-up        */
 #elif defined(CONFIG_BOARD_XIAO_NRF54LM20A)
 /* Box pins 0-27 are XIAO D0-D27; 28/29 are the module's own blue LED and push
  * button, mapped in the overlay for exactly this reason. Same #else trap as the
@@ -2955,11 +2969,20 @@ int main(void)
 	 * A wired-only box should not be running a radio it was told to leave off. */
 	if (!cfg.ble_en) {
 		box_console_printf("BLE disabled (ble enable 1 -- live, `save` to persist)\n\n");
-	} else if (box_ble_init() == 0) {
+	} else if (box_ble_init() != 0) {
+		box_console_printf("BLE init failed (continuing wired-only)\n\n");
+	} else if (box_ble_scanning()) {
 		box_console_printf("BLE central up; scanning for d5e7000x peripherals (max %d)\n\n",
 		       CONFIG_BT_MAX_CONN);
 	} else {
-		box_console_printf("BLE init failed (continuing wired-only)\n\n");
+		/* box_ble_init() returning 0 means bt_enable() worked -- it says
+		 * NOTHING about the scan, and this line claimed "scanning" on that
+		 * basis alone until 2026-08-31. A deaf central announcing itself as
+		 * a listening one is the worst possible boot message to trust while
+		 * bringing this path up against a real peripheral. */
+		box_console_printf("BLE central up but NOT SCANNING (scan err %d) --"
+				   " deaf, nothing will connect; see `ble`\n\n",
+				   box_ble_scan_err());
 	}
 #else
 	box_console_printf("no radio on this board -- BLE ingress disabled\n\n");
@@ -3515,6 +3538,26 @@ int main(void)
 			 * has cost twice, hiding behind a box whose every status field
 			 * read healthy. */
 			pub_periodic("cmds_rx", (uint32_t) cmds_rx);
+
+#if defined(CONFIG_BT)
+			/* The radio's two facts, for the same reason cmds_rx sits here:
+			 * a hub whose peripherals have all dropped off looks EXACTLY
+			 * like a healthy wired box from every other datapoint. Until
+			 * 2026-08-31 box_ble_conn_count() was called from nowhere at
+			 * all, so the fleet size was unobservable from the host -- on
+			 * a box whose entire job is ferrying that fleet.
+			 *
+			 * ble/scanning is the one that catches the nastier failure:
+			 * conns=0 with scanning=1 means "listening, nobody there",
+			 * conns=0 with scanning=0 means the central is DEAF and no
+			 * peripheral could ever be found. HEALTH level, not FULL --
+			 * this is not debug chatter, it is whether the box does its
+			 * job, and pub_periodic suppresses the unchanged repeats. */
+			if (box_ble_active()) {
+				pub_periodic("ble/conns",    (uint32_t) box_ble_conn_count());
+				pub_periodic("ble/scanning", (uint32_t) box_ble_scanning());
+			}
+#endif
 
 			/* How many frames change-detection SAVED. Sent only on the refresh
 			 * tick, because it is a counter that moves every second and would

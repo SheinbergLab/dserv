@@ -225,14 +225,36 @@ static void scan_cb(const bt_addr_le_t *addr, int8_t rssi, uint8_t adv_type,
 	}
 }
 
+/* Last bt_le_scan_start() failure; 0 = none. Kept because a central that is not
+ * scanning is DEAF, and until 2026-08-31 that state was completely invisible:
+ * this function tested the return value only to decide whether to set
+ * `scanning`, and dropped the error on the floor. Meanwhile both callers that
+ * announce the radio -- main.c's boot line and the CLI's `ble enable` -- printed
+ * "scanning" on the strength of box_ble_init() returning 0, which only tests
+ * bt_enable(). So a box whose scan never started said "radio up, scanning" and
+ * then found nothing, forever, with no error anywhere.
+ *
+ * That is this repo's own "fields that report memory, not reality" (PORTING.md)
+ * on the one message you would most want to trust while bringing up an unproven
+ * central against a real peripheral -- where "it didn't connect" and "it was
+ * never listening" are the two hypotheses you must be able to tell apart. */
+static int scan_err;
+
 static void start_scan(void)
 {
+	int err;
+
 	if (scanning || atomic_get(&connected_count) >= CONFIG_BT_MAX_CONN) {
+		return;                                /* already on, or fleet full */
+	}
+	err = bt_le_scan_start(BT_LE_SCAN_ACTIVE, scan_cb);
+	if (err) {
+		scan_err = err;
+		LOG_ERR("scan start FAILED (%d) -- central is deaf, nothing will connect", err);
 		return;
 	}
-	if (bt_le_scan_start(BT_LE_SCAN_ACTIVE, scan_cb) == 0) {
-		scanning = true;
-	}
+	scan_err = 0;
+	scanning = true;
 }
 
 /* ---- public API ---- */
@@ -269,4 +291,14 @@ int box_ble_poll(uint8_t *out)
 int box_ble_conn_count(void)
 {
 	return (int) atomic_get(&connected_count);
+}
+
+int box_ble_scanning(void)
+{
+	return scanning ? 1 : 0;
+}
+
+int box_ble_scan_err(void)
+{
+	return scan_err;
 }
