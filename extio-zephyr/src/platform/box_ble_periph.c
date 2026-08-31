@@ -5,6 +5,7 @@
 #include "dserv_msg.h"
 #include "dserv_ble.h"
 #include "box_gpio.h"    /* box_gpio_now_us(): this box's own clock, for h_recv */
+#include "box_uplink.h"  /* BOX_NET_RESET: the "pipe just opened" signal        */
 
 #include <zephyr/kernel.h>
 #include <zephyr/bluetooth/bluetooth.h>
@@ -334,6 +335,33 @@ int box_ble_periph_send_stream(const uint8_t *buf, int len)
 
 int box_ble_periph_poll(uint8_t *buf, int max)
 {
+	static int prev_ready;
+	int ready = box_ble_periph_ready();
+
+	/* THE PIPE JUST OPENED -> ANNOUNCE. Same edge, and the same reason, as
+	 * box_net_usb_server_poll's rising DTR: dserv only learns what it is told
+	 * while it is listening, so a box that described itself before anyone was
+	 * subscribed described itself to nobody.
+	 *
+	 * That is not hypothetical here, it is what happened. A peripheral emits
+	 * its announce burst when the uplink comes up at boot -- but "up" for a
+	 * radio means advertising, and the receiver connects and writes the CCC
+	 * some seconds later. Measured on the first XIAO run: state/watchdog
+	 * advanced in dserv (it is periodic, so the next one lands) while
+	 * state/transport, state/board and state/fw never appeared at all --
+	 * one-shot frames, sent into the gap between connect and subscribe, gone.
+	 * A box present in extio/boxes with no manifest is worse than an absent
+	 * one: the fleet page has a row it cannot describe.
+	 *
+	 * Reported as a RESET rather than a new signal so main.c's existing
+	 * handler does the work -- it already re-announces and resets the framer,
+	 * which a fresh link also needs. */
+	if (ready && !prev_ready) {
+		prev_ready = ready;
+		return BOX_NET_RESET;
+	}
+	prev_ready = ready;
+
 	if (max < FRAME_LEN) {
 		return 0;
 	}

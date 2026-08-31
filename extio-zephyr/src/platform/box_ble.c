@@ -420,19 +420,22 @@ static void mtu_cb(struct bt_conn *conn, uint8_t err,
 static void connected(struct bt_conn *conn, uint8_t err)
 {
 	if (err) {
-		struct bt_conn *c = conn;
-
 		conn_est_err++;
 		conn_last_err = -(int) err;            /* HCI reason, negated to be distinct */
-		bt_conn_unref(c);
+		bt_conn_unref(conn);                   /* the create reference; nothing took it */
 		start_scan();                          /* try again */
 		return;
 	}
 	struct peer *p = peer_alloc(conn);
 	if (!p) {
+		/* Fleet full. Drop the link AND the create reference -- disconnected()
+		 * will not clean up after us, because there is no slot for peer_for()
+		 * to find. */
 		bt_conn_disconnect(conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
+		bt_conn_unref(conn);
 		return;
 	}
+	/* p->conn now OWNS the reference bt_conn_le_create() returned. */
 	atomic_inc(&connected_count);
 
 	p->mtu.func = mtu_cb;
@@ -510,9 +513,24 @@ static void scan_cb(const bt_addr_le_t *addr, int8_t rssi, uint8_t adv_type,
 		conn_last_err = err;
 		LOG_WRN("create conn failed (%d)", err);
 		start_scan();
-	} else if (conn) {
-		bt_conn_unref(conn);                   /* connected cb re-refs via callback */
 	}
+	/* THE CREATE REFERENCE IS DELIBERATELY NOT RELEASED HERE. It is handed to
+	 * the peer slot in connected(), and released once in disconnected().
+	 *
+	 * This used to unref immediately, on the strength of a comment saying "the
+	 * connected cb re-refs via callback" -- which it does not: a Zephyr conn
+	 * callback receives a BORROWED reference and adds nothing. So peers[i].conn
+	 * held a pointer the module did not own, and disconnected() then unref'd a
+	 * reference it had never taken.
+	 *
+	 * MEASURED, and it is why this was invisible for a day: nothing at all goes
+	 * wrong until the FIRST disconnect. hh1 stayed connected all afternoon and
+	 * the pipe was flawless. The moment a peripheral went away (a UF2 reflash),
+	 * the unbalanced unref freed the conn object early, the stack kept a stale
+	 * entry for that peer, and every subsequent bt_conn_le_create() for it
+	 * returned -EINVAL -- for ever. The ledger read
+	 * `conn try=2431 create_err=2430 dropped=1 last=-22`: one disconnect, then
+	 * nothing but refusals. */
 }
 
 /* Last bt_le_scan_start() failure; 0 = none. Kept because a central that is not
