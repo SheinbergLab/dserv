@@ -1503,6 +1503,23 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 		}
 	}
 
+#if defined(CONFIG_BT)
+	/* NOT ADDRESSED TO THIS BOX -- so it may belong to one of our BLE
+	 * peripherals, which the host addresses by name exactly like any other box
+	 * (extio/hh1/config/..., extio/hh1/cmd/...) and has no idea are behind a
+	 * radio. That transparency is the whole point of the tier, and it only
+	 * works if the hub forwards on the host's behalf.
+	 *
+	 * A NULL leaf is the right hook, and it is cheap: frame_leaf() has already
+	 * done the prefix compare that says "not mine", and every handler below
+	 * requires a non-NULL leaf anyway, so nothing addressed to this box can
+	 * reach here. Frames for nobody we know still fall through untouched --
+	 * box_ble_forward returns 0 and the historical path continues. */
+	if (!leaf && box_ble_forward(m.name, m.namelen, frame) > 0) {
+		return;
+	}
+#endif
+
 #if defined(CONFIG_PTP_CLOCK)
 	/* <prefix>/cmd/ptp/offset <us> -- the host's PHC->dserv constant.
 	 *

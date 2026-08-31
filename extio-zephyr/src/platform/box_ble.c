@@ -3,6 +3,7 @@
  * Zephyr Bluetooth (bt_* / GATT client), up to CONFIG_BT_MAX_CONN peers.
  */
 #include "box_ble.h"
+#include "dserv_msg.h"   /* peers are identified by the frames they publish */
 
 #include <zephyr/kernel.h>
 #include <zephyr/bluetooth/bluetooth.h>
@@ -22,14 +23,42 @@ static const struct bt_uuid_128 svc_uuid = BT_UUID_INIT_128(
 	BT_UUID_128_ENCODE(0xd5e70001, 0x8f2c, 0x4b6a, 0x9ae5, 0x3c7a10a5b2c1));
 static const struct bt_uuid_128 tx_uuid = BT_UUID_INIT_128(
 	BT_UUID_128_ENCODE(0xd5e70002, 0x8f2c, 0x4b6a, 0x9ae5, 0x3c7a10a5b2c1));
+/* RX: central -> peripheral, WRITE_WITHOUT_RESPONSE. Same frozen contract as
+ * the other two; this end simply never used it until 2026-08-31. */
+static const struct bt_uuid_128 rx_uuid = BT_UUID_INIT_128(
+	BT_UUID_128_ENCODE(0xd5e70003, 0x8f2c, 0x4b6a, 0x9ae5, 0x3c7a10a5b2c1));
 
 /* Received whole frames, filled on the BT RX thread, drained by the main loop. */
 K_MSGQ_DEFINE(rx_q, FRAME_LEN, 16, 4);
 
+/* How far along the discovery chain a peer is. The chain walks
+ * primary service -> TX characteristic -> its CCC (subscribe) -> RX
+ * characteristic, and every step lands in the SAME callback, so the stage has
+ * to be explicit: TX and RX both arrive as BT_GATT_DISCOVER_CHARACTERISTIC and
+ * are otherwise indistinguishable there. */
+enum disc_stage {
+	DISC_TX_CHAR = 1,   /* looking for d5e70002 */
+	DISC_TX_CCC,        /* looking for its CCC, then subscribing */
+	DISC_RX_CHAR,       /* looking for d5e70003 */
+	DISC_DONE,
+};
+
+/* The longest `<class>/<box>` we will remember for a peer. BOX_NAME_MAX is 24
+ * in dserv_config.h and the class is "extio", so 40 leaves room without
+ * pulling that header in for one constant. A longer prefix is dropped rather
+ * than truncated -- a TRUNCATED prefix would match the wrong box, which is
+ * worse than not routing at all. */
+#define PEER_PFX_MAX 40
+
 /* Per-connected-peer discovery/subscription state. */
 struct peer {
 	struct bt_conn                  *conn;
+	uint16_t                         svc_start;
 	uint16_t                         svc_end;
+	uint16_t                         rx_handle;   /* d5e70003 value handle, 0 = none */
+	char                             pfx[PEER_PFX_MAX];  /* "extio/hh1", learned */
+	uint8_t                          named;
+	uint8_t                          stage;
 	struct bt_gatt_discover_params   disc;
 	struct bt_gatt_subscribe_params  sub;
 	struct bt_gatt_exchange_params   mtu;
@@ -62,16 +91,61 @@ static struct peer *peer_alloc(struct bt_conn *c)
 
 static void start_scan(void);
 
+/* Learn which box a peer IS, from the frames it publishes.
+ *
+ * WHY FROM THE TRAFFIC AND NOT FROM THE ADVERTISEMENT. The peripheral
+ * advertises `extio-<name>` (BLE.md), so the GAP name is available at connect
+ * time and would be the obvious source. It is the wrong one: the host addresses
+ * boxes by the datapoint prefix they PUBLISH, and those two strings are related
+ * by a firmware convention rather than by anything enforced. Routing a
+ * `config/` write by the advertised name would send it to a box whose
+ * published identity might differ -- silently, and only for the peer that had
+ * been renamed. The frames are the authority, so take the name from them.
+ *
+ * Costs one thing worth stating: a peer is unroutable until it has published
+ * something. In practice that is its announce burst, immediately after connect. */
+static void learn_name(struct peer *p, const uint8_t *frame)
+{
+	dserv_msg_t m;
+	int i = 0, slash = 0, plen;
+
+	if (p->named || dserv_msg_parse(frame, &m) != 0) {
+		return;
+	}
+	/* "<class>/<box>/..." -- keep the first two segments verbatim. */
+	while (i < (int) m.namelen && slash < 2) {
+		if (m.name[i] == '/') {
+			slash++;
+		}
+		i++;
+	}
+	if (slash < 2) {
+		return;                                /* no leaf yet -- not an addressable key */
+	}
+	plen = i - 1;                                  /* drop the second '/' */
+	if (plen <= 0 || plen >= PEER_PFX_MAX) {
+		return;                                /* see PEER_PFX_MAX: never truncate */
+	}
+	memcpy(p->pfx, m.name, (size_t) plen);
+	p->pfx[plen] = '\0';
+	p->named = 1;
+	LOG_INF("peer identified as %s", p->pfx);
+}
+
 /* ---- notifications: one whole 128-byte frame per PDU -> the queue ---- */
 static uint8_t on_notify(struct bt_conn *conn, struct bt_gatt_subscribe_params *params,
 			 const void *data, uint16_t length)
 {
-	ARG_UNUSED(conn);
 	if (!data) {                                   /* peer unsubscribed */
 		params->value_handle = 0;
 		return BT_GATT_ITER_STOP;
 	}
 	if (length == FRAME_LEN) {                     /* whole-frame contract */
+		struct peer *p = peer_for(conn);
+
+		if (p) {
+			learn_name(p, data);
+		}
 		(void) k_msgq_put(&rx_q, data, K_NO_WAIT); /* drop if full (best-effort) */
 	}
 	return BT_GATT_ITER_CONTINUE;
@@ -88,9 +162,11 @@ static uint8_t discover_cb(struct bt_conn *conn, const struct bt_gatt_attr *attr
 
 	if (params->type == BT_GATT_DISCOVER_PRIMARY) {
 		const struct bt_gatt_service_val *sv = attr->user_data;
+		p->svc_start = attr->handle + 1;
 		p->svc_end = sv->end_handle;
+		p->stage = DISC_TX_CHAR;
 		p->disc.uuid = &tx_uuid.uuid;
-		p->disc.start_handle = attr->handle + 1;
+		p->disc.start_handle = p->svc_start;
 		p->disc.end_handle = p->svc_end;
 		p->disc.type = BT_GATT_DISCOVER_CHARACTERISTIC;
 		(void) bt_gatt_discover(conn, &p->disc);
@@ -98,7 +174,18 @@ static uint8_t discover_cb(struct bt_conn *conn, const struct bt_gatt_attr *attr
 	}
 
 	if (params->type == BT_GATT_DISCOVER_CHARACTERISTIC) {
+		if (p->stage == DISC_RX_CHAR) {
+			/* The write end. Nothing follows it, so the chain ends here --
+			 * and a peer without it stays receive-only rather than
+			 * failing: an older peripheral that predates the RX
+			 * characteristic should keep publishing, not drop off. */
+			p->rx_handle = bt_gatt_attr_value_handle(attr);
+			p->stage = DISC_DONE;
+			LOG_INF("peer downlink ready (rx handle %u)", p->rx_handle);
+			return BT_GATT_ITER_STOP;
+		}
 		p->sub.value_handle = bt_gatt_attr_value_handle(attr);
+		p->stage = DISC_TX_CCC;
 		p->disc.uuid = BT_UUID_GATT_CCC;
 		p->disc.start_handle = attr->handle + 2;
 		p->disc.end_handle = p->svc_end;
@@ -107,12 +194,27 @@ static uint8_t discover_cb(struct bt_conn *conn, const struct bt_gatt_attr *attr
 		return BT_GATT_ITER_STOP;
 	}
 
-	/* CCC descriptor -> subscribe to notifications */
+	/* CCC descriptor -> subscribe to notifications, then go find the RX
+	 * characteristic. Subscribing first is deliberate: the uplink is what the
+	 * peripheral needs in order to be useful at all, so a failure hunting the
+	 * write end must never cost us the read end. */
 	p->sub.notify = on_notify;
 	p->sub.value = BT_GATT_CCC_NOTIFY;
 	p->sub.ccc_handle = attr->handle;
 	if (bt_gatt_subscribe(conn, &p->sub) == 0) {
 		LOG_INF("subscribed to a peer's frame pipe");
+	} else {
+		LOG_WRN("subscribe FAILED -- this peer will publish nothing");
+	}
+
+	p->stage = DISC_RX_CHAR;
+	p->disc.uuid = &rx_uuid.uuid;
+	p->disc.start_handle = p->svc_start;
+	p->disc.end_handle = p->svc_end;
+	p->disc.type = BT_GATT_DISCOVER_CHARACTERISTIC;
+	if (bt_gatt_discover(conn, &p->disc) != 0) {
+		LOG_WRN("RX characteristic discovery did not start -- peer is receive-only");
+		p->stage = DISC_DONE;
 	}
 	return BT_GATT_ITER_STOP;
 }
@@ -291,6 +393,40 @@ int box_ble_poll(uint8_t *out)
 int box_ble_conn_count(void)
 {
 	return (int) atomic_get(&connected_count);
+}
+
+int box_ble_forward(const char *name, uint16_t namelen, const uint8_t *frame)
+{
+	if (!ble_up || !name || !frame) {
+		return 0;
+	}
+	for (int i = 0; i < CONFIG_BT_MAX_CONN; i++) {
+		struct peer *p = &peers[i];
+		size_t n;
+		int err;
+
+		if (!p->conn || !p->named || !p->rx_handle) {
+			continue;
+		}
+		n = strlen(p->pfx);
+		/* Prefix match on a SEGMENT boundary. Without the '/' test,
+		 * `extio/hh10` would be routed to `extio/hh1`. */
+		if (namelen <= n || memcmp(name, p->pfx, n) != 0 || name[n] != '/') {
+			continue;
+		}
+		/* Write-without-response, per the frozen contract: the peripheral
+		 * owes no ATT ack, and for the echo-sync frames that will ride this
+		 * path a response would add exactly the variable latency the
+		 * estimator exists to remove. */
+		err = bt_gatt_write_without_response(p->conn, p->rx_handle,
+						     frame, FRAME_LEN, false);
+		if (err) {
+			LOG_WRN("forward to %s failed (%d)", p->pfx, err);
+			return err;
+		}
+		return 1;
+	}
+	return 0;
 }
 
 int box_ble_scanning(void)

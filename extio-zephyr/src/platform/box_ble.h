@@ -27,6 +27,28 @@ int box_ble_active(void);
  * filled, 0 if the queue is empty. Drain in a loop each service pass. */
 int box_ble_poll(uint8_t *out);
 
+/* ---- the DOWNLINK: host -> peripheral ----
+ *
+ * Forward one whole frame to whichever connected peripheral owns `name`
+ * (`<class>/<box>/...`, e.g. `extio/hh1/cmd/...`). Returns 1 if a peer took it,
+ * 0 if no connected peer answers to that name (the caller then treats the frame
+ * as it always did), <0 if the GATT write failed.
+ *
+ * This half did not exist until 2026-08-31, and its absence was invisible
+ * because the pipe LOOKED complete: hh1's events flowed, its manifest appeared
+ * in dserv, and nothing reported an error. What was missing is everything that
+ * travels the other way -- `config/` and `cmd/` pushes ("configure
+ * peripherals from home base", which the host already speaks per-name), and,
+ * more consequentially, the `'E'` echo-sync frames. Without a write path the
+ * receiver cannot run the RTT estimator, cannot learn a peripheral's clock
+ * offset, and therefore cannot rewrite the ts field at the radio boundary --
+ * so source-stamped events arrive in the PERIPHERAL's clock domain and are
+ * unusable for timing (measured: hh1 edges landed carrying its ~1000 s uptime).
+ *
+ * The peer is matched on the name it PUBLISHES, learned from its own frames,
+ * not on the advertised GAP name -- see box_ble.c. */
+int box_ble_forward(const char *name, uint16_t namelen, const uint8_t *frame);
+
 /* Number of peripherals currently connected (telemetry / fleet-ceiling check). */
 int box_ble_conn_count(void);
 
