@@ -10,15 +10,25 @@
 
 /*
  * Window Processor
- * 
+ *
  * Monitors eye position and determines if position is inside/outside defined windows.
  * Supports both rectangular and elliptical windows with refractory periods.
- * 
- * Auto-detects input type:
- *   - DSERV_SHORT (uint16_t) - ADC units (legacy)
- *   - DSERV_FLOAT - degrees visual angle
- * 
- * Coordinates are expected as [y, x] pairs (matching ain/vals convention).
+ *
+ * INPUT CONTRACT: DSERV_FLOAT, [x, y, ...] in degrees of visual angle, origin
+ * at screen center. Attached to eyetracking/position (config/triggers.tcl),
+ * which every eye source in config/emconf.tcl -- video, analog and virtual --
+ * publishes as `binary format ff $h_deg $v_deg`. Only the leading two floats
+ * are read, so a longer payload (ess/roam/pos is {x y t}) rides along fine.
+ *
+ * DSERV_SHORT input is REJECTED, not converted. This file used to read raw
+ * MCP3204 ADC counts off ain/vals and compare them against centers also held
+ * in ADC units; centers now arrive in degrees from ess::em_fixwin_set, so
+ * accepting counts would silently test ~2000 against ~5 and report garbage
+ * window states. There is no scale factor to apply here that would be right --
+ * the raw->degrees calibration (offset, gain, invert, swap, or a biquadratic
+ * fit) lives in em::process_analog, upstream, and that is where an integer
+ * eye source belongs. See processors/windows.c.SHORT for the pre-degrees
+ * version if the ADC-unit history is needed.
  */
 
 enum { WINDOW_UNDEFINED, WINDOW_IN, WINDOW_OUT };
@@ -27,6 +37,13 @@ enum { WINDOW_NOT_INITIALIZED, WINDOW_INITIALIZED };
 enum { WINDOW_RECTANGLE, WINDOW_ELLIPSE };
 
 #define NWIN (8)
+
+/* Centers are degrees of visual angle, so an unconfigured window has to be
+ * parked somewhere no eye can reach. No display subtends 1000 deg, so a
+ * window switched on before em_region_set has been called reports OUT --
+ * the same unreachable-by-default behaviour the old ADC-midpoint 2047 gave,
+ * restated in the units this file now works in. */
+#define WINDOW_UNSET_CENTER (1000.0)
 
 static char *status_str = "status";
 static char *params_str = "settings";
@@ -43,9 +60,10 @@ typedef struct process_params_s {
   int refractory_countdown[NWIN];
   
   /* Input type detection */
-  int input_type;		/* DSERV_SHORT or DSERV_FLOAT */
-  int type_locked;		/* has type been detected?    */
-  
+  int input_type;		/* DSERV_FLOAT once locked    */
+  int type_locked;		/* has a valid sample landed? */
+  int warned_type;		/* last rejected type warned about */
+
   /* Last position (stored as float regardless of input type) */
   float last_x, last_y;
   
@@ -76,16 +94,17 @@ void *newProcessParams(void)
   /* Type detection state */
   p->input_type = -1;
   p->type_locked = 0;
+  p->warned_type = -1;
 
   for (i = 0; i < NWIN; i++) {
     p->active[i] = WINDOW_INACTIVE;
     p->state[i] = WINDOW_UNDEFINED;
     p->type[i] = WINDOW_ELLIPSE;
-    /* Default to ADC-like values for backward compatibility */
-    p->center_x[i] = 2047.0;
-    p->center_y[i] = 2047.0;
-    p->plusminus_x[i] = 200.0;
-    p->plusminus_y[i] = 200.0;
+    /* Degrees of visual angle; parked out of reach until em_region_set */
+    p->center_x[i] = WINDOW_UNSET_CENTER;
+    p->center_y[i] = WINDOW_UNSET_CENTER;
+    p->plusminus_x[i] = 1.0;
+    p->plusminus_y[i] = 1.0;
     p->refractory_count[i] = 20;
     p->refractory_countdown[i] = 0;
   }
@@ -276,32 +295,35 @@ int onProcess(dpoint_process_info_t *pinfo, void *params)
   int retval = DPOINT_PROCESS_IGNORE;
   uint16_t changes = 0, states = 0;
 
-  /* Auto-detect input type on first sample */
-  if (!p->type_locked) {
-    if (pinfo->input_dpoint->data.type == DSERV_SHORT ||
-        pinfo->input_dpoint->data.type == DSERV_FLOAT) {
-      p->input_type = pinfo->input_dpoint->data.type;
-      p->type_locked = 1;
-    } else {
-      /* Unsupported type - ignore */
-      return DPOINT_PROCESS_IGNORE;
+  /* DSERV_FLOAT degrees is the only accepted input -- see the file header for
+   * why an integer eye source has to be converted upstream rather than here.
+   * Complain once per offending type: this runs at the eye sample rate, so a
+   * per-sample message would bury the log, and staying silent is what let the
+   * old missing-else branch feed uninitialized x/y into every window test. */
+  if (pinfo->input_dpoint->data.type != DSERV_FLOAT ||
+      pinfo->input_dpoint->data.len < 2*sizeof(float)) {
+    if (p->warned_type != (int) pinfo->input_dpoint->data.type) {
+      p->warned_type = (int) pinfo->input_dpoint->data.type;
+      fprintf(stderr,
+	      "windows: ignoring %s (type %d, %u bytes): this processor "
+	      "requires DSERV_FLOAT (%d) [x y] in degrees of visual angle. "
+	      "No window states will be produced from this input.\n",
+	      pinfo->input_dpoint->varname ?
+	        pinfo->input_dpoint->varname : "(unnamed dpoint)",
+	      (int) pinfo->input_dpoint->data.type,
+	      pinfo->input_dpoint->data.len,
+	      (int) DSERV_FLOAT);
     }
+    return DPOINT_PROCESS_IGNORE;
   }
 
-  /* Validate type matches what we locked in */
-  if (pinfo->input_dpoint->data.type != p->input_type)
-    return DPOINT_PROCESS_IGNORE;
+  p->input_type = DSERV_FLOAT;
+  p->type_locked = 1;
 
-  /* Extract coordinates based on detected type */
-  if (p->input_type == DSERV_FLOAT) {
-    /* Float input (degrees visual angle) */
-    if (pinfo->input_dpoint->data.len < 2*sizeof(float))
-      return DPOINT_PROCESS_IGNORE;
-    
+  {
     float *float_vals = (float *) pinfo->input_dpoint->data.buf;
     x = float_vals[0];
     y = float_vals[1];
-    
   }
 
   /* store these away */
@@ -332,8 +354,14 @@ int onProcess(dpoint_process_info_t *pinfo, void *params)
       dy = y - p->center_y[i];
       inside = (fabsf(dx) < p->plusminus_x[i]) && (fabsf(dy) < p->plusminus_y[i]);
       break;
+    default:
+      /* `type` is a free-form int through the param API; an unrecognized
+       * shape reads OUT rather than leaving `inside` uninitialized. */
+      inside = 0;
+      break;
     }
-        
+
+
     if (inside) {
       if (p->state[i] != WINDOW_IN) {
 	p->state[i] = WINDOW_IN;
