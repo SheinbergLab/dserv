@@ -33,17 +33,25 @@
 
 		box-pin-silk = "LEDr","LEDg","LEDb";
 
-		/* NO box-status-rgb, and the omission is deliberate. These three
-		 * LEDs are exactly what box_status_led.c wants, but that module
-		 * only claims its pins under CONFIG_BOX_BLE_PERIPHERAL -- a central
-		 * has no states defined for it yet. Declaring the property would
-		 * compile a module that then does nothing, which is a property that
-		 * lies about the board. Declare it the day a central palette exists
-		 * (scanning / linked / fleet-full would all be worth showing on a
-		 * stick with no console attached).
+		/* NO box-status-rgb YET, and the omission is deliberate:
+		 * box_status_led.c only claims its pins under
+		 * CONFIG_BOX_BLE_PERIPHERAL, so declaring the property today would
+		 * compile a module that then does nothing -- a property that lies
+		 * about the board.
+		 *
+		 * BUT THIS BOARD IS THE STRONGEST CASE FOR A CENTRAL PALETTE. The
+		 * dongle ships SEALED IN A CASE: not one pin is reachable, no console
+		 * is attached in service, and these three LEDs shining through the
+		 * shell are its ENTIRE observable surface. That is a stronger
+		 * argument than the handheld had, and the handheld at least has a
+		 * button. scanning / linked / fleet-full / radio-fault are all states
+		 * a receiver cannot report about itself -- when a central goes deaf,
+		 * the silence looks exactly like "no peripherals in range". Declare
+		 * this the day box_status_led.c grows a central decide().
 		 *
 		 * NO box-ain-pins either: no analog pads are broken out that anyone
-		 * has confirmed, and CONFIG_ADC stays off in the .conf to match. */
+		 * has confirmed, and CONFIG_ADC stays off in the .conf to match.
+		 * Sealed in a case, that is not a limitation -- it is the truth. */
 	};
 };
 
