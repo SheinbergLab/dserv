@@ -42,21 +42,41 @@
 			    <&gpio0 30 GPIO_ACTIVE_LOW>,   /* 12 = LED green */
 			    <&gpio0  6 GPIO_ACTIVE_LOW>;   /* 13 = LED blue  */
 
-		box-pin-silk = "D0 (P0.02/AIN0)","D1 (P0.03/AIN1)",
-			       "D2 (P0.28/AIN4)","D3 (P0.29/AIN5)",
-			       "D4 (P0.04/AIN2)","D5 (P0.05/AIN3)",
-			       "D6 (P1.11)","D7 (P1.12)","D8 (P1.13)",
-			       "D9 (P1.14)","D10 (P1.15)",
-			       "LED red (P0.26)","LED green (P0.30)",
-			       "LED blue (P0.06)";
+		/* TERSE ON PURPOSE, and this is a BLE constraint rather than taste.
+		 *
+		 * The silk map is published as ONE datapoint whose body must fit a
+		 * single frame: `varlen + datalen <= DSERV_MSG_MAX_PAYLOAD` (109),
+		 * and the name "extio/<box>/state/pins/silk" already spends ~25 of
+		 * it. On USB and Ethernet that limit does not bite, because
+		 * pub_silk_map() uses the VARIABLE-length frame builder and the
+		 * framer carries whatever length it produces -- which is why the two
+		 * DKs can afford "P3.05 (EXP00)" for thirty pins.
+		 *
+		 * A BLE PERIPHERAL CANNOT. dserv_ble.h freezes the radio unit as one
+		 * unmodified 128-byte frame per ATT PDU, and the check is for EXACTLY
+		 * that size -- a frame that is too SHORT is refused just as an
+		 * oversized one is. Worth stating plainly because shortening these
+		 * labels alone did NOT fix it: the verbose form built a ~290-byte
+		 * frame and the terse form a ~105-byte one, and both were dropped at
+		 * box_ble_periph_send()'s length check. The fix is in pub_silk_map(),
+		 * which now asks box_uplink_max_frame() and emits a fixed-size frame
+		 * when the transport demands one.
+		 *
+		 * These labels stay terse anyway, because that budget is real: the
+		 * body must fit DSERV_MSG_MAX_PAYLOAD minus the datapoint name, and
+		 * ~80 bytes leaves room for a longer box name before truncation
+		 * starts eating pins. Pad numbers live in the board doc and in the
+		 * box-gpios comments above; what a UI needs is the SILKSCREEN. */
+		box-pin-silk = "D0","D1","D2","D3","D4","D5","D6","D7","D8","D9",
+			       "D10","LEDr","LEDg","LEDb";
 
 		/* ain channel k -> box pin, hex bytes (see the nRF52840 DK overlay).
 		 * D0/D1/D4/D5 are AIN0..3 and D2/D3 are AIN4/5, so the analog order
 		 * is NOT the pin order -- which is exactly why this property exists
 		 * rather than being assumed. */
 		box-ain-pins = [00 01 04 05 02 03];   /* box pins 0,1,4,5,2,3 */
-		box-ain-silk = "D0 / AIN0","D1 / AIN1","D4 / AIN2","D5 / AIN3",
-			       "D2 / AIN4","D3 / AIN5";
+		box-ain-silk = "D0/AIN0","D1/AIN1","D4/AIN2","D5/AIN3",
+			       "D2/AIN4","D3/AIN5";
 	};
 };
 

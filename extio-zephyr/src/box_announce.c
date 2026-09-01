@@ -221,14 +221,32 @@ static void pub_silk_map(const box_config_t *c, const char *leaf,
         char body[320];
         char nm[80];
         int k = 0;
+        int lim, cap;
+
+        /* Build the NAME first: on a length-limited uplink it is what is left
+         * of the payload budget after the name that bounds the body. */
+        dserv_state_name(c, nm, sizeof nm, leaf);
+        lim = box_uplink_max_frame();
+        cap = (int) sizeof body - 1;
+        if (lim) {
+                int room = DSERV_MSG_MAX_PAYLOAD - (int) strlen(nm) - 1;
+
+                if (room < 0) {
+                        room = 0;
+                }
+                if (room < cap) {
+                        cap = room;
+                }
+        }
 
         for (int i = 0; i < n; i++) {
                 if (!names[i] || !names[i][0]) {
                         continue;               /* not bonded out on this variant */
                 }
-                int w = snprintf(body + k, sizeof body - k, "%s%d:%s",
+                int w = snprintf(body + k, (size_t) (cap - k + 1), "%s%d:%s",
                                  k ? "," : "", i, names[i]);
-                if (w < 0 || k + w >= (int) sizeof body) {
+                if (w < 0 || k + w > cap) {
+                        body[k] = '\0';
                         break;                  /* full: publish what fits */
                 }
                 k += w;
@@ -237,7 +255,20 @@ static void pub_silk_map(const box_config_t *c, const char *leaf,
                 return;
         }
         body[k] = '\0';
-        dserv_state_name(c, nm, sizeof nm, leaf);
+
+        if (lim) {
+                /* Fixed-size frame, through the SAME queue every other manifest
+                 * string uses -- box_uplink_send() is a one-shot direct write
+                 * whose return this ignored, so a momentarily busy radio ate
+                 * the silk map with no retry and no trace. */
+                uint8_t f[DSERV_MSG_LEN];
+
+                if (dserv_msg_string(f, nm, 0, body) > 0) {
+                        (void) box_pub_bulk(f);
+                }
+                return;
+        }
+
         int vlen = dserv_msg_var_string(vf, sizeof vf, nm, 0, body);
 
         if (vlen > 0) {

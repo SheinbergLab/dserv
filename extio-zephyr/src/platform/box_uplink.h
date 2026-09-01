@@ -87,6 +87,17 @@ int box_uplink_send_stream(const uint8_t *buf, int len);
  * worth dequeuing" gate. Frames enqueued while this is 0 simply wait. */
 int box_uplink_ready(void);
 
+/* The exact frame size the active uplink can carry, or 0 = "any length".
+ *
+ * Exists for ONE caller (box_announce's silk map) and states a real difference
+ * between transports rather than papering over it. USB and Ethernet carry the
+ * VARIABLE-length dserv frame, so a long string publishes whole. BLE cannot:
+ * dserv_ble.h freezes the radio unit as one unmodified DSERV_MSG_LEN frame per
+ * ATT PDU with no fragmentation layer, so a frame of any other size -- longer
+ * OR SHORTER -- is refused outright, and the datapoint silently never appears.
+ * A caller that can truncate should ask, and truncate. */
+int box_uplink_max_frame(void);
+
 /* Name of the active uplink ("eth"/"usb"), or "none". */
 const char *box_uplink_active_name(void);
 

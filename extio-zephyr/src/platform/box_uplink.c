@@ -750,6 +750,15 @@ int box_uplink_ready(void)
 	return r;
 }
 
+int box_uplink_max_frame(void)
+{
+#if defined(CONFIG_BOX_BLE_PERIPHERAL)
+	return DSERV_MSG_LEN;           /* the frozen one-frame-per-PDU radio rule */
+#else
+	return 0;                       /* the framer carries whatever length */
+#endif
+}
+
 const char *box_uplink_active_name(void)
 {
 	return active ? active->name : "none";
