@@ -3833,7 +3833,11 @@ int main(void)
 				pub_dbg("dbg/pub_bulk_hwm",    ps.bulk_hwm);
 				pub_dbg("dbg/pub_gathers",     ps.gathers);
 				pub_dbg("dbg/pub_frames",      ps.gather_frames);
-				pub_dbg("dbg/pub_stalled_out", ps.stalled_out);
+				/* Unconditional, like the USB ring counters below and for
+				 * the same reason: a gather abandoning its frames means a
+				 * transport stopped draining, which is a fault report, not
+				 * a debug statistic. */
+				pub_periodic_raw("dbg/pub_stalled_out", ps.stalled_out);
 			}
 
 			/* The USB TX ring, which had no telemetry at all until a box
@@ -3841,15 +3845,26 @@ int main(void)
 			 * other end. tx_full rising with tx_hwm pinned at the ring size
 			 * is "the host stopped draining"; tx_hwm well below it while the
 			 * box is mute means the ring is NOT the problem and the frames
-			 * never got this far. Neither could be told apart before. */
+			 * never got this far. Neither could be told apart before.
+			 *
+			 * pub_periodic_raw, NOT pub_dbg -- these must NOT sit behind
+			 * dbg_level=full. They were written as pub_dbg and box3 runs at
+			 * `health`, so on the very box they were built for they published
+			 * nothing at all; the absence read exactly like a zero. It is the
+			 * same argument the receipt helper below makes: a host cannot be
+			 * told to raise a debug level before the thing it needs becomes
+			 * observable -- and a box that has stopped talking cannot be told
+			 * anything at all. Free on a healthy box anyway, because
+			 * pub_periodic_raw suppresses a value equal to the last one sent,
+			 * and on a healthy box these never change. */
 #if !defined(CONFIG_BOX_BLE_PERIPHERAL)
 			{
 				uint32_t hwm = 0, full = 0, size = 0;
 
 				box_net_usb_tx_stats(&hwm, &full, &size);
-				pub_dbg("dbg/usb_tx_hwm",  hwm);
-				pub_dbg("dbg/usb_tx_full", full);
-				pub_dbg("dbg/usb_tx_size", size);
+				pub_periodic_raw("dbg/usb_tx_hwm",  hwm);
+				pub_periodic_raw("dbg/usb_tx_full", full);
+				pub_periodic_raw("dbg/usb_tx_size", size);
 			}
 #endif
 
