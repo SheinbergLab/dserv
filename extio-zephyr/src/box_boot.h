@@ -96,4 +96,25 @@ int box_boot_note_confirm(void);
  * catches an image written to the wrong place. */
 int box_boot_image_ver(int slot, char *buf, uint32_t len);
 
+/* Make the NEXT boot stop in the board's UF2 bootloader instead of running us,
+ * and reset into it. DOES NOT RETURN on a board that supports it; returns 0 on
+ * one that does not, so the caller can say so rather than appear to hang.
+ *
+ * Lives here because "what the next boot does" is exactly this file's subject.
+ *
+ * The point is reach rather than convenience. These boards are reflashed by
+ * dropping a .uf2 on a mass-storage volume, and the only documented way to
+ * expose that volume is PHYSICAL -- double-tap reset, or hold the button while
+ * plugging in. The MDK dongle is the second kind AND ships sealed in a case, in
+ * a USB port behind a machine. Neither software escape people reach for works:
+ * a plain reset just restarts the app, and the 1200-baud touch is an
+ * application behaviour Arduino and Adafruit cores implement and Zephyr does
+ * not (both measured on that dongle, 2026-09-01). The bootloader's real trigger
+ * is a retained register that only the running firmware can write -- so if the
+ * firmware does not offer this, nothing can.
+ *
+ * Callers: cmd/bootsel (main.c) and the `bootsel` console verb. Flush anything
+ * that must be SEEN before calling -- this does not come back. */
+int box_boot_enter_uf2(void);
+
 #endif /* BOX_BOOT_H */

@@ -2677,12 +2677,22 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 	} else if (r == CFG_BOOTSEL) {
 		/* Program-mode entry is board-specific and NOT universally reachable:
 		 *   RP2350   reset_usb_boot() -- trivial (the Pico's `bootsel`)
+		 *   nRF52840 UF2 boards -- see below; implemented 2026-09-01
 		 *   Teensy   bootloader is a separate chip watching the Program button;
 		 *            Teensyduino's handshake is not exposed by Zephyr
 		 *   RW612    moot -- MCUboot + mcumgr does DFU over the live link
 		 * Report honestly rather than silently doing nothing. */
-		box_console_printf("cmd/bootsel -> not supported on this board; "
-		       "press the Program button to enter the bootloader\n");
+		box_console_printf("cmd/bootsel -> rebooting into the bootloader;"
+				   " the box will vanish and a drive should appear\n");
+		box_pub_flush(K_MSEC(300));     /* the receipt, before we disappear */
+		k_msleep(100);                  /* let the console drain */
+		if (!box_boot_enter_uf2()) {
+			/* Says so instead of appearing to hang. Printed AFTER the
+			 * attempt, so the message describes what happened rather
+			 * than what we intended. */
+			box_console_printf("cmd/bootsel -> not supported on this board; "
+			       "press the Program button to enter the bootloader\n");
+		}
 	}
 }
 

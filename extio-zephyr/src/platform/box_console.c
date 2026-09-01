@@ -18,6 +18,7 @@
 #include "dserv_ble.h"        /* DSERV_BLE_MTU_MIN: the whole-frame floor */
 #endif
 #include "box_status_led.h"
+#include "box_boot.h"         /* box_boot_enter_uf2(): the `bootsel` verb */
 #if defined(CONFIG_NETWORKING)
 #include "box_net_eth.h"
 #endif
@@ -517,6 +518,27 @@ static void run_line(box_config_t *cfg, const char *line)
 		return;
 	}
 #endif
+
+	/* `bootsel` -- the console twin of cmd/bootsel, for the case that matters.
+	 *
+	 * The datapoint form needs a working uplink AND a host that can reach it.
+	 * The moment you most want to reflash a box is when one of those is broken,
+	 * and the console is what you still have. Same name as the wire verb on
+	 * purpose: one thing to remember, and `help` lists the wire verbs already.
+	 *
+	 * Deliberately NOT handled by the shared core CLI -- entering a bootloader
+	 * is as board-specific as it gets, and box_cli.h is the grammar the RP2350
+	 * boxes fork. */
+	if (strcmp(line, "bootsel") == 0) {
+		box_console_printf("bootsel: rebooting into the bootloader --"
+				   " a drive should appear; drop a .uf2 on it\n");
+		k_msleep(150);                  /* let that line actually go out */
+		if (!box_boot_enter_uf2()) {
+			box_console_printf("ERR no UF2 bootloader on this board --"
+					   " use the board's own program button\n");
+		}
+		return;
+	}
 
 	/* `led auto|off|<rgb>` -- bench override for the status LED.
 	 *

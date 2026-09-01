@@ -277,3 +277,34 @@ int box_boot_note_confirm(void)
 	on_trial       = 0;
 	return rec_store();
 }
+
+/* ---- entering the UF2 bootloader (see the header for why this exists) ---- */
+
+#if defined(BOX_HAVE_UF2_BOOTLOADER)
+#include <hal/nrf_power.h>
+#include <zephyr/sys/reboot.h>
+
+int box_boot_enter_uf2(void)
+{
+	/* 0x57 = DFU_MAGIC_UF2_RESET in Adafruit's nRF52 bootloader. GPREGRET
+	 * survives a soft reset BY DESIGN -- that is what the register is for --
+	 * so the bootloader reads it on the way up and stops in UF2 mode instead
+	 * of chaining to us.
+	 *
+	 * Its siblings 0xA8 (OTA) and 0xB0 (serial-only) are deliberately NOT
+	 * offered: nothing here uses those paths, and a verb that half-works is
+	 * worse than one that is honestly absent.
+	 *
+	 * If a board ever gets flashed at 0x0 with no bootloader beneath it, the
+	 * magic is simply ignored and this degrades to an ordinary cold reset --
+	 * which is the right failure. */
+	nrf_power_gpregret_set(NRF_POWER, 0, 0x57);
+	sys_reboot(SYS_REBOOT_COLD);
+	return 1;                      /* not reached */
+}
+#else
+int box_boot_enter_uf2(void)
+{
+	return 0;                      /* no UF2 bootloader on this board */
+}
+#endif
