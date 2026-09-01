@@ -61,6 +61,7 @@
 #elif defined(CONFIG_BOX_BLE_PERIPHERAL)
 #include "box_ble_periph.h"
 #endif
+#include "box_status_led.h"   /* stubs itself out on a board with no status LED */
 #if defined(BOX_HAVE_OTA_SLOT)
 #include "box_ota_flash.h"
 #include "box_ota.h"
@@ -1091,6 +1092,50 @@ static void groups_resync(void)
 #define LED_PIN  3    /* gpio2.3 = B0_03 = Teensy pin 13, on-board LED  */
 #define BTN_PIN  1    /* gpio2.1 = B0_01 = Teensy pin 12, header pin    */
 #endif
+
+/* ---- WHERE THE SERVICE LOOP WAS WHEN IT STOPPED ----
+ *
+ * 2026-09-01: box3 lost 658 consecutive 1 Hz beats (dbg/wd_skipped) while its
+ * uptime clock ran on normally, and resumed the instant a single byte arrived
+ * over USB. Every existing counter said the box was healthy, because every one
+ * of them is published BY the loop that had stopped -- the frozen values were
+ * the last healthy pass, not the sick one. loop_max_us in particular measures a
+ * COMPLETED pass, so a pass that never completes never contributes to it: the
+ * one number that looks like it should catch this is blind to it by
+ * construction.
+ *
+ * So record the phase and time it in the loop itself, and report the WORST
+ * dwell seen. After a stall the box can then say which stage it sat in, which
+ * is the question a day of bisecting could not answer from the outside. Cost is
+ * one k_uptime_get_32() per stage; ms resolution is all a multi-second stall
+ * needs, and it does not wrap the way a 32-bit cycle count would (~16 s at this
+ * clock -- useless for measuring exactly the gaps that matter).
+ *
+ * This is the "add a counter, do not raise log levels" rule applied to a hang
+ * rather than to a protocol: no log line survives the thing that stops the
+ * thread doing the logging. */
+enum {
+	LP_WAIT = 0, LP_UPLINK, LP_CONSOLE, LP_LED, LP_BEACON,
+	LP_INBOUND, LP_BLE, LP_BEAT, LP_NPHASE
+};
+static const char *const lp_name[LP_NPHASE] = {
+	"wait", "uplink", "console", "led", "beacon", "inbound", "ble", "beat",
+};
+static uint8_t  lp_cur, lp_worst;
+static uint32_t lp_t0, lp_worst_ms;
+
+static inline void loop_phase(uint8_t p)
+{
+	uint32_t now = k_uptime_get_32();
+	uint32_t held = now - lp_t0;
+
+	if (held > lp_worst_ms) {
+		lp_worst_ms = held;
+		lp_worst    = lp_cur;
+	}
+	lp_cur = p;
+	lp_t0  = now;
+}
 
 /* The rig's obs begin/end edge. The host module forwards this to EVERY box
  * (config/extioconf.tcl: dservAddMatch ess/in_obs -> usbio_forward), and unlike
@@ -2761,6 +2806,12 @@ int main(void)
 	if (box_gpio_init() != 0) {
 		/* nothing to print to yet; the LED demo below simply won't run */
 	}
+	/* Claim the status LEDs BEFORE the first apply_config and before anything
+	 * reads box_gpio_reserved_mask(). A claim made later would leave a window
+	 * in which the CLI accepts `pin 11 mode out` and the manifest advertises a
+	 * pin the firmware is about to take -- the host and the box disagreeing
+	 * about who owns a pad, which is the worst way for this to go wrong. */
+	box_status_led_init();
 	box_sched_init();
 	box_gpio_apply_config(&cfg);
 
@@ -2893,9 +2944,20 @@ int main(void)
 	 * as configuration -- they are no longer seeded into cfg (see main()), and
 	 * saying "pin 9=out" for a pad nobody has configured is the same lie the
 	 * manifest used to tell. */
-	box_console_printf("gpio: board LED=pin %d (heartbeat only), button=pin %d"
-			   " -- neither configured; `pin N mode ...` to use them\n",
-			   LED_PIN, BTN_PIN);
+	if (box_status_led_claimed()) {
+		/* The same pad, but no longer available to say that about: on a
+		 * handheld the status LED has CLAIMED it (box_status_led.h), so
+		 * `pin N mode ...` is refused and the manifest reports it reserved.
+		 * Printing the line below here would tell an operator to configure a
+		 * pin the firmware owns, and then leave them to discover otherwise
+		 * from a rejection. */
+		box_console_printf("gpio: board LEDs are the STATUS LED (reserved);"
+				   " button=pin %d -- `led` to override\n", BTN_PIN);
+	} else {
+		box_console_printf("gpio: board LED=pin %d (heartbeat only), button=pin %d"
+				   " -- neither configured; `pin N mode ...` to use them\n",
+				   LED_PIN, BTN_PIN);
+	}
 
 	/* Boot heartbeat: three hardware-timed LED pulses (the hardware counter
 	 * drops each falling edge, not software). */
@@ -3063,15 +3125,30 @@ int main(void)
 	if (!box_ble_periph_active()) {
 		box_console_printf("BLE peripheral: RADIO FAILED TO START -- this box is mute\n\n");
 	} else if (box_ble_periph_advertising()) {
+		/* dserv_cfg_name(), NOT cfg.name -- the same accessor the advertiser
+		 * itself uses. The raw field is EMPTY on a fresh config, so this line
+		 * said "advertising as extio-" on the very box whose air name was
+		 * `extio-box`: a banner disagreeing with the radio it describes. */
 		box_console_printf("BLE peripheral: advertising as extio-%s; events publish RAW\n"
 				   "               source time (the receiver rewrites ts at the\n"
-				   "               radio boundary)\n\n", cfg.name);
+				   "               radio boundary)\n\n", dserv_cfg_name(&cfg));
 	} else {
 		/* Radio up, advertiser not running: INVISIBLE. Indistinguishable
 		 * from switched-off to every receiver, so say it loudly. */
 		box_console_printf("BLE peripheral: radio up but NOT ADVERTISING (err %d) --\n"
 				   "               nothing can find this box\n\n",
 				   box_ble_periph_adv_err());
+	}
+	if (box_status_led_claimed()) {
+		/* State the palette once, here, because the LED is meant to be read
+		 * with no console attached -- and a colour code nobody can look up
+		 * is decoration. Same palette as the Pico handheld (BLE.md). */
+		box_console_printf("status LED: blue blip=advertising  amber=linking"
+				   "  green blip=linked+synced\n"
+				   "            amber blip=linked but echo-sync STOPPED"
+				   "  red=radio fault\n"
+				   "            slow red=up but not advertising."
+				   "  `led` / `led auto|off|rgb`\n\n");
 	}
 #else
 	box_console_printf("no radio on this board -- BLE ingress disabled\n\n");
@@ -3089,13 +3166,18 @@ int main(void)
 	char name[80];
 
 	while (1) {
+		loop_phase(LP_UPLINK);
 		box_uplink_service(&cfg);         /* carrier/strap selection + (re)connect */
+		loop_phase(LP_CONSOLE);
 		box_console_service(&cfg);        /* two-way CLI (non-blocking, bounded) */
+		loop_phase(LP_LED);
+		box_status_led_service();         /* the handheld's local UI (no-op wired) */
 
 		/* AFTER uplink_service so the health it reports is this pass's, and
 		 * outside every dserv-target gate on purpose: a box with no target is
 		 * precisely the box that most needs to be findable. Self-rate-limited
 		 * to 1.5 s and a no-op without a local IP. */
+		loop_phase(LP_BEACON);
 		box_beacon_service(&cfg);
 
 		/* No drain call here any more: queued frames leave through the
@@ -3184,6 +3266,7 @@ int main(void)
 		 * burst per pass so a config flood clears in one wake. */
 		int rlen = 0;
 		uint64_t rarr = 0;
+		loop_phase(LP_INBOUND);
 		int kind = box_uplink_poll2(rx, sizeof rx, &rlen, &rarr);
 		for (int drain = 0; kind == BOX_UPLINK_RX_FRAME ||
 				    kind == BOX_UPLINK_RX_FRAME_RAW; ) {
@@ -3366,6 +3449,7 @@ int main(void)
 
 #if defined(BOX_BLE_CENTRAL)
 		/* Keep the per-peer clock estimators fed (echo REQ every 300 ms). */
+		loop_phase(LP_BLE);
 		box_ble_service(&cfg);
 
 		/* BLE ingress. Each peripheral's frame is source-stamped on ITS OWN
@@ -3390,6 +3474,7 @@ int main(void)
 		}
 #endif
 
+		loop_phase(LP_BEAT);
 		int64_t wd_now = k_uptime_get();
 
 		if (wd_now >= next_wd) {
@@ -3731,7 +3816,25 @@ int main(void)
 				pub_dbg("dbg/pub_bulk_hwm",    ps.bulk_hwm);
 				pub_dbg("dbg/pub_gathers",     ps.gathers);
 				pub_dbg("dbg/pub_frames",      ps.gather_frames);
+				pub_dbg("dbg/pub_stalled_out", ps.stalled_out);
 			}
+
+			/* The USB TX ring, which had no telemetry at all until a box
+			 * went silent for eleven minutes with a healthy reader at the
+			 * other end. tx_full rising with tx_hwm pinned at the ring size
+			 * is "the host stopped draining"; tx_hwm well below it while the
+			 * box is mute means the ring is NOT the problem and the frames
+			 * never got this far. Neither could be told apart before. */
+#if !defined(CONFIG_BOX_BLE_PERIPHERAL)
+			{
+				uint32_t hwm = 0, full = 0, size = 0;
+
+				box_net_usb_tx_stats(&hwm, &full, &size);
+				pub_dbg("dbg/usb_tx_hwm",  hwm);
+				pub_dbg("dbg/usb_tx_full", full);
+				pub_dbg("dbg/usb_tx_size", size);
+			}
+#endif
 
 #if defined(BOX_HAVE_CPU1)
 			/* The second core's pulse. hb frozen with alive=0 is "cpu1
@@ -3753,6 +3856,18 @@ int main(void)
 			 * legitimately; anything else wants explaining. */
 			dserv_state_name(&cfg, name, sizeof name, "dbg/wd_skipped");
 			dserv_msg_int(f, name, 0, (int32_t) wd_skipped);
+			box_pub_bulk(f);
+
+			/* ...and WHICH STAGE held it, which wd_skipped alone cannot say.
+			 * Published as a name rather than an index: the one time anybody
+			 * reads this they are debugging a box that has already recovered,
+			 * and a bare "5" would send them to this file to decode it. */
+			dserv_state_name(&cfg, name, sizeof name, "dbg/stall_phase");
+			dserv_msg_string(f, name, 0, lp_name[lp_worst]);
+			box_pub_bulk(f);
+
+			dserv_state_name(&cfg, name, sizeof name, "dbg/stall_ms");
+			dserv_msg_int(f, name, 0, (int32_t) lp_worst_ms);
 			box_pub_bulk(f);
 
 #if defined(BOX_HAVE_OTA_SLOT)
@@ -4064,6 +4179,7 @@ int main(void)
 		/* Block until an ISR has work for us (CDC RX / DI edge), or the
 		 * watchdog tick is due. Replaces a flat k_msleep(1) that added up to
 		 * 1 ms to BOTH halves of every round trip. */
+		loop_phase(LP_WAIT);
 		box_event_wait(K_MSEC(1));
 		loop_t0 = k_cycle_get_32();
 	}

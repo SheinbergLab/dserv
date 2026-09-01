@@ -13,6 +13,11 @@
 #if defined(BOX_BLE_CENTRAL)
 #include "box_ble.h"
 #endif
+#if defined(CONFIG_BOX_BLE_PERIPHERAL)
+#include "box_ble_periph.h"
+#include "dserv_ble.h"        /* DSERV_BLE_MTU_MIN: the whole-frame floor */
+#endif
+#include "box_status_led.h"
 #if defined(CONFIG_NETWORKING)
 #include "box_net_eth.h"
 #endif
@@ -462,6 +467,105 @@ static void run_line(box_config_t *cfg, const char *line)
 		return;
 	}
 #endif
+
+#if defined(CONFIG_BOX_BLE_PERIPHERAL)
+	/* `ble` on the OTHER end of the same pipe. The central has had this since
+	 * the day its scan path was first run against a peer; the peripheral had
+	 * only a boot banner, so every question after boot ("did it ever connect?",
+	 * "is the receiver still syncing me?") needed a reflash to answer.
+	 *
+	 * Deliberately the same three-way split as the central's, because the
+	 * states that matter here are the ones the RECEIVER cannot see: from its
+	 * side, a peripheral that never advertised, one out of range, and one with
+	 * a flat battery are one indistinguishable silence. */
+	if (strcmp(line, "ble") == 0) {
+		uint16_t mtu = 0;
+		uint32_t erx = 0, tok = 0, tdrop = 0;
+
+		box_ble_periph_stats(&mtu, &erx, &tok, &tdrop);
+		if (!box_ble_periph_active()) {
+			box_console_printf("ble: radio DOWN -- this box is mute\n");
+			return;
+		}
+		box_console_printf("ble: peripheral up as extio-%s\n"
+				   "  tx ok=%u dropped=%u (dropped = nobody subscribed)\n",
+				   dserv_cfg_name(cfg), tok, tdrop);
+		if (box_ble_periph_ready()) {
+			/* echo_rx is the load-bearing number, not the link: it is
+			 * the receiver running the estimator that makes this box's
+			 * source stamps mean anything. Frozen here = timestamps
+			 * decaying while everything still looks connected. */
+			box_console_printf("  LINKED, mtu %u, echo answered=%u"
+					   " (must keep rising, ~3/s)\n", mtu, erx);
+		} else if (mtu) {
+			box_console_printf("  connected, mtu %u, but NOT subscribed%s"
+					   " -- nothing this box publishes goes anywhere\n",
+					   mtu,
+					   mtu < DSERV_BLE_MTU_MIN ? " and the MTU is too small" : "");
+		} else if (box_ble_periph_advertising()) {
+			box_console_printf("  advertising, no receiver connected\n");
+		} else {
+			box_console_printf("  NOT advertising (err %d) -- INVISIBLE;"
+					   " indistinguishable from switched off\n",
+					   box_ble_periph_adv_err());
+		}
+		if (box_status_led_claimed()) {
+			box_console_printf("  led: %s%s\n",
+					   box_status_led_state_name(box_status_led_state()),
+					   box_status_led_overridden() ? "  [OVERRIDDEN -- `led auto`]" : "");
+		}
+		return;
+	}
+#endif
+
+	/* `led auto|off|<rgb>` -- bench override for the status LED.
+	 *
+	 * Answers the one question the LED itself cannot: whether a colour that
+	 * never appears means the state machine never selects it, or that that
+	 * leg of the LED has never lit on this board. Only ever runtime -- a box
+	 * that boots into a forced colour has a status light that lies. */
+	if (strcmp(line, "led") == 0 || strncmp(line, "led ", 4) == 0) {
+		const char *a = (line[3] == ' ') ? line + 4 : "";
+
+		if (!box_status_led_claimed()) {
+			box_console_printf("ERR no status LED on this build"
+					   " (the board LEDs are ordinary pins here)\n");
+			return;
+		}
+		if (*a == '\0') {
+			box_console_printf("led: %s%s\n",
+					   box_status_led_state_name(box_status_led_state()),
+					   box_status_led_overridden() ? "  [OVERRIDDEN]" : "");
+			return;
+		}
+		if (strcmp(a, "auto") == 0) {
+			box_status_led_override(1, 0);
+			box_console_printf("OK led auto\n");
+			return;
+		}
+		if (strcmp(a, "off") == 0) {
+			box_status_led_override(0, 0);
+			box_console_printf("OK led off (forced)\n");
+			return;
+		}
+		{
+			uint8_t m = 0;
+
+			for (const char *p = a; *p; p++) {
+				if (*p == 'r' || *p == 'R') m |= 1;
+				else if (*p == 'g' || *p == 'G') m |= 2;
+				else if (*p == 'b' || *p == 'B') m |= 4;
+				else {
+					box_console_printf("ERR led auto|off|<rgb letters>"
+							   " e.g. `led rg` = amber\n");
+					return;
+				}
+			}
+			box_status_led_override(0, m);
+			box_console_printf("OK led %s (forced; `led auto` to release)\n", a);
+		}
+		return;
+	}
 
 #if defined(BOX_HAVE_ADC) && defined(CONFIG_DAC)
 	/* Handled BEFORE the core CLI, which would answer `ERR unknown` first. */

@@ -81,6 +81,9 @@ typedef struct {
 	uint32_t ev_dropped;      /* event frames refused at enqueue (queue full)   */
 	uint32_t bulk_dropped;    /* bulk frames displaced by drop-oldest           */
 	uint32_t wire_dropped;    /* dequeued frames the transport then refused     */
+	uint32_t stalled_out;     /* gathers abandoned: transport took nothing for
+				   * PUB_STALL_RETRIES ms. Non-zero means a pipe
+				   * stopped draining -- see send_gather()         */
 	uint32_t gathers;         /* send calls issued...                           */
 	uint32_t gather_frames;   /* ...and frames they carried (ratio = batching)  */
 } box_pub_stats_t;

@@ -28,10 +28,36 @@
  * Returns 0 on success, negative on a missing/!ready device. Call once at boot. */
 int box_gpio_init(void);
 
-/* Bitmask of box pins this board refuses (unmapped, or listed in box-reserved).
- * Handed to the CLI so a reserved pin is rejected at the point of entry rather
- * than silently ignored when the config is applied. */
+/* Bitmask of box pins this box refuses (unmapped, listed in box-reserved, or
+ * claimed by the firmware below). Handed to the CLI so a reserved pin is
+ * rejected at the point of entry rather than silently ignored when the config
+ * is applied, and announced as state/pins/reserved. */
 uint32_t box_gpio_reserved_mask(void);
+
+/* ---- pins the FIRMWARE owns ----
+ *
+ * Claim pins out of the host pin map and drive them directly, bypassing
+ * pin_mode. One caller today: box_status_led on a handheld, whose LEDs are the
+ * box's entire local UI and must not be fought over.
+ *
+ * A claim is a RESERVATION, not a private side channel: claimed pins join
+ * box_gpio_reserved_mask(), so the CLI refuses `pin N mode ...` on them and the
+ * announced pins/reserved says so. The alternative -- driving them behind the
+ * config's back -- is the "configuring one silently succeeds while doing
+ * nothing electrically" failure this project keeps paying for, with the
+ * blame landing on the host instead.
+ *
+ * Claiming a pad the BOARD refuses (unmapped, or box-reserved) is ignored:
+ * a status LED wired to the PHY's MDIO line is a board-file bug, and taking
+ * the box off the network to blink would be the wrong way to report it.
+ *
+ * Call before box_gpio_reserved_mask() is read (boot, right after
+ * box_gpio_init) so the CLI and the manifest agree with the hardware. */
+void box_gpio_fw_claim(uint32_t mask);
+
+/* Drive a claimed pin. Silently does nothing for anything not claimed, so a
+ * mis-wired board file cannot reach a pin the host is using. */
+void box_gpio_fw_set(int pin, int on);
 
 /* (Re)configure every pin from cfg: output / input / input+pullup, plus the DI
  * edge interrupts, the obs-mirror output, and the hardware obs-sync input.

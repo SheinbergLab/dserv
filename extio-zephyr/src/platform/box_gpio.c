@@ -51,16 +51,19 @@ static const struct gpio_dt_spec specs[BOX_NPINS] = {
 	LISTIFY(BOX_NPINS, BOX_PINMAP_ENTRY, (,))
 };
 
-/* A pin is refused if the board does not map it at all, or lists it reserved.
- * On the MCXN947 that is Arduino D5 = P1_21 = ENET0_MDIO: it exists on the
- * header, it is the PHY's, and claiming it would take the box off the network
- * to no purpose. Declaring it in the map and refusing it here is deliberate --
- * the map then documents the whole header rather than quietly omitting a pin. */
-static inline int box_gpio_reserved(int n)
+/* Does this board bring the pin out at all? */
+static inline int pin_mapped(int n)
 {
-	if (n < 0 || n >= BOX_NPINS || specs[n].port == NULL) {
-		return 1;
-	}
+	return (n >= 0 && n < BOX_NPINS && specs[n].port != NULL);
+}
+
+/* Pins the BOARD refuses. On the MCXN947 that is Arduino D5 = P1_21 =
+ * ENET0_MDIO: it exists on the header, it is the PHY's, and claiming it would
+ * take the box off the network to no purpose. Declaring it in the map and
+ * refusing it here is deliberate -- the map then documents the whole header
+ * rather than quietly omitting a pin. */
+static inline int pin_board_reserved(int n)
+{
 #if DT_NODE_HAS_PROP(BOX_USER_NODE, box_reserved)
 	static const uint8_t rsv[] = DT_PROP(BOX_USER_NODE, box_reserved);
 
@@ -69,8 +72,48 @@ static inline int box_gpio_reserved(int n)
 			return 1;
 		}
 	}
+#else
+	ARG_UNUSED(n);
 #endif
 	return 0;
+}
+
+/* Pins the FIRMWARE has taken for its own use at runtime (box_status_led on a
+ * handheld). Separate from the board list because the two answer different
+ * questions -- see box_gpio_fw_claim() in the header. */
+static uint32_t fw_claimed;
+
+/* A pin is refused if the board does not map it, lists it reserved, or the
+ * firmware has claimed it. This is the ONE answer the host-facing surfaces
+ * take: the CLI's pin gate, apply_config, and the announced pins/reserved. */
+static inline int box_gpio_reserved(int n)
+{
+	if (!pin_mapped(n)) {
+		return 1;
+	}
+	if (n < 32 && (fw_claimed & BIT(n))) {
+		return 1;
+	}
+	return pin_board_reserved(n);
+}
+
+void box_gpio_fw_claim(uint32_t mask)
+{
+	for (int i = 0; i < BOX_NPINS && i < 32; i++) {
+		if (!(mask & BIT(i)) || !pin_mapped(i) || pin_board_reserved(i)) {
+			continue;      /* never claim a pad the board itself refuses */
+		}
+		fw_claimed |= BIT(i);
+		gpio_pin_configure_dt(&specs[i], GPIO_OUTPUT_INACTIVE);
+	}
+}
+
+void box_gpio_fw_set(int pin, int on)
+{
+	if (pin < 0 || pin >= 32 || !(fw_claimed & BIT(pin))) {
+		return;                /* only ever drives what it claimed */
+	}
+	gpio_pin_set_dt(&specs[pin], on ? 1 : 0);
 }
 
 /* ---- the box clock: THE monotonic microsecond source for every event ----
@@ -596,7 +639,12 @@ uint32_t box_gpio_do_refused(void)
  * boot and never again, so this cannot become a back door for anything else. */
 void box_gpio_boot_pulse(int pin, uint32_t us)
 {
-	if (pin < 0 || pin >= BOX_NPINS || box_gpio_reserved(pin)) {
+	/* NOT box_gpio_reserved(): that now also refuses fw-claimed pins, and the
+	 * boot heartbeat is itself firmware use of the board LED -- on a handheld
+	 * the status LED claims the very pad LED_PIN names, and testing the
+	 * host-facing gate here would silently delete the sign of life on exactly
+	 * the board that most needs one. The BOARD's refusals still apply. */
+	if (!pin_mapped(pin) || pin_board_reserved(pin)) {
 		return;
 	}
 	gpio_pin_configure_dt(&specs[pin], GPIO_OUTPUT_INACTIVE);

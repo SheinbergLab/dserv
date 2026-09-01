@@ -20,6 +20,7 @@ target_sources(app PRIVATE
 	src/platform/box_usbd.c        # block #4: USB device (device_next) context
 	src/platform/box_net_usb.c     # block #4: CDC-ACM frame transport
 	src/platform/box_event.c       # service-loop wakeup (ISR-driven)
+	src/platform/box_status_led.c  # the handheld's local UI (board-gated)
 	src/platform/box_uplink.c      # block #6: uplink arbiter
 	src/platform/box_pub.c         # publish queues + the uplink-writer thread
 )

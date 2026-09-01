@@ -53,6 +53,19 @@ check lm20dk    -b nrf54lm20dk/nrf54lm20a/cpuapp -d build-check-lm20dk "$HERE"
 # a property of the layout, not an omission -- see boards/xiao_ble.conf.
 check xiao_ble  -b xiao_ble                     -d build-check-xiao_ble  "$HERE"
 
+# ...and the SAME board in its PERIPHERAL role, which is a different build, not
+# a variant: periph.conf swaps the whole BLE role (box_ble_periph.c instead of
+# box_ble.c, CONFIG_BOX_BLE_PERIPHERAL gating the raw-source-time stamping, the
+# uplink face, and the status LED's pin claim). Every one of those files is
+# UNBUILT by the line above.
+#
+# Added 2026-09-01, and the gap was real rather than theoretical: the peripheral
+# had been built only by hand since the day it was written, which is exactly the
+# state both Teensy targets were in when they rotted for days -- the situation
+# this script exists to prevent, reproduced inside it.
+check xiao_periph -b xiao_ble -d build-check-xiao_periph "$HERE" -- \
+      -DEXTRA_CONF_FILE=periph.conf
+
 # The teensy40 in its OTA form, which is a DIFFERENT BUILD, not a variant: it
 # pulls in MCUboot as a second image, relinks the app to slot0, and compiles in
 # box_ota_flash.c plus the whole arm/confirm path that the plain build never

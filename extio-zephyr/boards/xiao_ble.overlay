@@ -42,6 +42,23 @@
 			    <&gpio0 30 GPIO_ACTIVE_LOW>,   /* 12 = LED green */
 			    <&gpio0  6 GPIO_ACTIVE_LOW>;   /* 13 = LED blue  */
 
+		/* THE HANDHELD'S ONLY UI (box_status_led.h). Box pin indices for
+		 * R, G, B -- indices into the map above, not pads, so the
+		 * ACTIVE_LOW flags there are the single place the polarity is
+		 * stated.
+		 *
+		 * Declaring this property is what makes the module compile in AND
+		 * what makes it claim the pins, so a board that would rather keep
+		 * its LEDs host-configurable simply leaves it out. On THIS board
+		 * they cost no field pin (they are off the D connector), and a BLE
+		 * peripheral is the one box in the fleet with nobody watching its
+		 * console -- so the trade is free here and would not be elsewhere.
+		 *
+		 * Only a CONFIG_BOX_BLE_PERIPHERAL build claims them; the plain USB
+		 * box built from this same board file leaves all three as ordinary
+		 * outputs, because a box on a cable has a console to answer with. */
+		box-status-rgb = [0b 0c 0d];   /* box pins 11, 12, 13 */
+
 		/* TERSE ON PURPOSE, and this is a BLE constraint rather than taste.
 		 *
 		 * The silk map is published as ONE datapoint whose body must fit a

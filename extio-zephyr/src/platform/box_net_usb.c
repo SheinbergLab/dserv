@@ -120,11 +120,44 @@ int box_net_usb_server_poll(uint8_t *buf, int max)
  * rising drop count is the real "too many datapoints" signal on this transport. */
 static uint32_t usend_last_us, usend_max_us, usend_drops;
 
+/* ---- how FULL the ring gets, and how often it refuses ----
+ *
+ * ADDED 2026-09-01 after a box went silent for eleven minutes with dserv's
+ * reader open and healthy (rx_bin frozen, rx_bad 0, alive 1) and revived on the
+ * first inbound byte. Everything above this layer looked fine; the counters
+ * that existed could not distinguish "nothing to send" from "the ring is full
+ * and nothing is draining it", because a refusal here is a plain `return 0`
+ * that the caller retries. usend_drops only counts the SINGLE-frame path
+ * (box_net_usb_client_send), so the gathered path -- which is how essentially
+ * every frame leaves this box -- was contributing to no counter at all.
+ *
+ * hwm is bytes, not frames, and is never reset: the question it answers is
+ * "has this ring EVER been close to full", which a live reading cannot answer
+ * on a box that has already recovered. */
+static uint32_t utx_hwm, utx_full;
+
 void box_net_usb_send_stats(uint32_t *last_us, uint32_t *max_us, uint32_t *drops)
 {
 	if (last_us) *last_us = usend_last_us;
 	if (max_us)  *max_us  = usend_max_us;
 	if (drops)   *drops   = usend_drops;
+}
+
+void box_net_usb_tx_stats(uint32_t *hwm, uint32_t *full, uint32_t *size)
+{
+	if (hwm)  *hwm  = utx_hwm;
+	if (full) *full = utx_full;
+	if (size) *size = ring_buf_capacity_get(&tx_rb);
+}
+
+/* Called after every successful put: record the deepest the ring has been. */
+static inline void note_tx_depth(void)
+{
+	uint32_t used = ring_buf_capacity_get(&tx_rb) - ring_buf_space_get(&tx_rb);
+
+	if (used > utx_hwm) {
+		utx_hwm = used;
+	}
 }
 
 int box_net_usb_client_send(const uint8_t *buf, int len)
@@ -138,6 +171,7 @@ int box_net_usb_client_send(const uint8_t *buf, int len)
 	}
 	uint32_t t0 = k_cycle_get_32();
 	(void) ring_buf_put(&tx_rb, buf, (uint32_t) len);
+	note_tx_depth();
 	uart_irq_tx_enable(data_dev);
 	uint32_t dt = k_cyc_to_us_floor32(k_cycle_get_32() - t0);
 
@@ -162,11 +196,16 @@ int box_net_usb_client_send_stream(const uint8_t *buf, int len)
 
 	take -= take % 128;                     /* the ring is declared in 128s too */
 	if (take == 0) {
+		/* NOT room for even one whole frame. The caller (box_pub's
+		 * send_gather) retries, so this is the one place that knows the
+		 * transport is refusing -- count it or the refusal is invisible. */
+		utx_full++;
 		return 0;
 	}
 	uint32_t t0 = k_cycle_get_32();
 
 	(void) ring_buf_put(&tx_rb, buf, (uint32_t) take);
+	note_tx_depth();
 	uart_irq_tx_enable(data_dev);
 	uint32_t dt = k_cyc_to_us_floor32(k_cycle_get_32() - t0);
 

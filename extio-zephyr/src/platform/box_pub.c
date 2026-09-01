@@ -162,10 +162,17 @@ static int gather_from(struct k_msgq *q, int max, uint32_t *wait_us)
 	return n;
 }
 
+/* How many consecutive no-progress retries before a gather gives up, at 1 ms
+ * each. Generous against ordinary backpressure -- a host that pauses for a
+ * quarter second still loses nothing -- and short enough that a transport which
+ * has genuinely stopped draining cannot hold this thread indefinitely. */
+#define PUB_STALL_RETRIES 250
+
 static void send_gather(int nframes)
 {
 	int glen = nframes * DSERV_MSG_LEN;
 	int sent = 0;
+	int stuck = 0;
 
 	while (sent < glen) {
 		int n = box_uplink_send_stream(gbuf + sent, glen - sent);
@@ -178,11 +185,32 @@ static void send_gather(int nframes)
 			return;
 		}
 		sent += n;
+		if (n > 0) {
+			stuck = 0;              /* the budget is per stall, not per gather */
+		}
 		if (sent < glen) {
 			/* Socket/ring full mid-gather. The transport owns any partial
-			 * frame (box_net_eth.c txp_*), progress is frame-aligned, and
-			 * its strike counter bounds how long a dead peer keeps us here.
-			 * 1 ms is one TCP drain opportunity, not a tuning knob. */
+			 * frame (box_net_eth.c txp_*), and progress is frame-aligned.
+			 * 1 ms is one TCP drain opportunity, not a tuning knob.
+			 *
+			 * THIS USED TO BE UNBOUNDED, on the strength of a comment saying
+			 * "its strike counter bounds how long a dead peer keeps us here".
+			 * That is true of box_net_eth.c, which calls uplink_strike() at
+			 * three sites and eventually returns -1. box_net_usb.c contains
+			 * no strike logic at all: a full TX ring is a plain `return 0`,
+			 * for ever, so on USB the only exit above was one that transport
+			 * never takes. A wedged pipe therefore pinned this thread in a
+			 * 1 kHz retry with no counter moving anywhere -- silent, because
+			 * every drop counter here is on a path it was not taking.
+			 *
+			 * Give up like the hard-failure branch does, and count it the
+			 * same way. Telemetry is the right thing to lose when a
+			 * transport stops draining; the thread is not. */
+			if (++stuck > PUB_STALL_RETRIES) {
+				st.wire_dropped += (uint32_t) ((glen - sent) / DSERV_MSG_LEN);
+				st.stalled_out++;
+				return;
+			}
 			k_msleep(1);
 		}
 	}

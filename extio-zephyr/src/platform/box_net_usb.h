@@ -34,6 +34,20 @@ int box_net_usb_server_poll(uint8_t *buf, int max);
  * limit is the host's drain rate, not service-loop time. */
 void box_net_usb_send_stats(uint32_t *last_us, uint32_t *max_us, uint32_t *drops);
 
+/* TX ring occupancy. Any pointer may be NULL.
+ *
+ *   hwm   the deepest the ring has EVER been, in bytes. Never reset, because
+ *         the question worth asking after a box recovers is whether it was
+ *         ever close to full -- which a live reading can no longer answer.
+ *   full  send_stream calls refused for want of room for one whole frame.
+ *         The gathered path retries such a refusal rather than dropping, so
+ *         without this counter a transport that has stopped draining is
+ *         indistinguishable from one with nothing to say.
+ *   size  the ring's capacity, so hwm reads as a fraction without the caller
+ *         hard-coding what this file declares.
+ */
+void box_net_usb_tx_stats(uint32_t *hwm, uint32_t *full, uint32_t *size);
+
 int box_net_usb_client_send(const uint8_t *buf, int len);
 
 /* Gathered send (box_pub.c): len = k * 128. Puts as many WHOLE frames as the
