@@ -277,10 +277,18 @@ void box_ble_periph_rename(const box_config_t *cfg)
 	sd[0].data_len = (uint8_t) strlen(adv_name);
 	sd[0].data = (const uint8_t *) adv_name;
 
-	/* Advertising data is captured at start, so a rename only reaches the
-	 * air by stopping and restarting. Harmless while connected: bt_le_adv_stop
-	 * on a non-advertising set returns -EALREADY and the new name takes
-	 * effect at the next disconnect. */
+	/* Advertising data is captured at start, so a rename only reaches the air
+	 * by stopping and restarting the advertiser.
+	 *
+	 * NOT WHILE CONNECTED, though. A legacy connectable advertiser is already
+	 * stopped for the duration of a connection, and with one connection slot
+	 * bt_le_adv_start() would simply fail -- setting adv_err and reporting
+	 * "NOT ADVERTISING" for what is actually a healthy connected box. The name
+	 * is already staged in adv_name, so it takes effect at the next disconnect,
+	 * which is what the header promises. */
+	if (peer) {
+		return;
+	}
 	(void) bt_le_adv_stop();
 	adv_start();
 }

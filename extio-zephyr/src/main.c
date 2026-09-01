@@ -2408,6 +2408,29 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 		 * the box re-emerges under its new name complete and commandable.
 		 * extio_rename (extioconf.tcl) drives this end to end. */
 		box_uplink_reregister(&cfg);
+#if defined(CONFIG_BOX_BLE_PERIPHERAL)
+		/* ...and the ADVERTISED name, which is baked into the advertising
+		 * data at start and does not follow the config on its own. Without
+		 * this a renamed handheld keeps advertising its old identity while
+		 * publishing under the new one -- the two disagreeing is exactly what
+		 * box_ble.c's learn_name() refuses to rely on at the other end. */
+		box_ble_periph_rename(&cfg);
+
+		/* AND RE-ANNOUNCE, because box_uplink_reregister() did nothing here.
+		 * It calls the transport's self_register, and on Ethernet that
+		 * re-registers the %match patterns with dserv -- which is what
+		 * releases the announce hold and republishes the manifest under the
+		 * new prefix. A radio box has no registration to redo, so its
+		 * self_register is a no-op and NOTHING re-announced.
+		 *
+		 * MEASURED on the first live rename: extio/xiao1 appeared in
+		 * extio/boxes with a live watchdog and no board, transport or
+		 * pins/silk at all -- the periodic datapoints moved to the new name
+		 * (the next one lands) and every ONE-SHOT manifest key stayed behind
+		 * under the old one. Same failure as the connect->subscribe gap, and
+		 * the same fix: say it again when the identity changes. */
+		box_announce_burst(&cfg, groups);
+#endif
 		box_console_printf("config/name -> now '%s'; re-registering\n",
 				   dserv_cfg_name(&cfg));
 	} else if (r == CFG_ANNOUNCE) {

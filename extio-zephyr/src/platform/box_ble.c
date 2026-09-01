@@ -201,7 +201,7 @@ static void learn_name(struct peer *p, const uint8_t *frame)
 	dserv_msg_t m;
 	int i = 0, slash = 0, plen;
 
-	if (p->named || dserv_msg_parse(frame, &m) != 0) {
+	if (dserv_msg_parse(frame, &m) != 0) {
 		return;
 	}
 	/* "<class>/<box>/..." -- keep the first two segments verbatim. */
@@ -218,10 +218,24 @@ static void learn_name(struct peer *p, const uint8_t *frame)
 	if (plen <= 0 || plen >= PEER_PFX_MAX) {
 		return;                                /* see PEER_PFX_MAX: never truncate */
 	}
+	/* RE-LEARN ON CHANGE, not once. A peer that is renamed keeps the same
+	 * connection and simply starts publishing under a new prefix -- and the
+	 * downlink routes on this string, so a stale copy would leave
+	 * `extio/<newname>/config/...` matching nothing while the box itself is
+	 * connected and healthy. Cheap: a memcmp of ~10 bytes against a prefix
+	 * that almost never changes. */
+	if (p->named && (int) strlen(p->pfx) == plen &&
+	    memcmp(p->pfx, m.name, (size_t) plen) == 0) {
+		return;                                /* unchanged, the usual case */
+	}
+	if (p->named) {
+		LOG_INF("peer renamed: %s -> %.*s", p->pfx, plen, m.name);
+	} else {
+		LOG_INF("peer identified as %.*s", plen, m.name);
+	}
 	memcpy(p->pfx, m.name, (size_t) plen);
 	p->pfx[plen] = '\0';
 	p->named = 1;
-	LOG_INF("peer identified as %s", p->pfx);
 }
 
 /* One echo REPLY: turn it into an offset sample, min-RTT filter, feed the clock.
