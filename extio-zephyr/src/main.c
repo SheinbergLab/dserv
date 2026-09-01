@@ -408,7 +408,14 @@ static const box_ota_flash_t g_ota_flash_ops = {
  * ain/stream/* that only appear when streamtest runs). If that grows past 64,
  * raise this -- dbg/pub_suppressed collapsing toward zero while pub_frames
  * climbs is the tell. */
-#define PUB_PERIODIC_MAX 64
+/* Distinct periodic leaves this box can dedupe. Raised 64 -> 96 on 2026-09-01
+ * when the BLE adv/conn ledgers went on the wire: the count was already 58, and
+ * eight more would have overflowed. Overflow is not silence -- pub_periodic_raw
+ * publishes the excess UNCONDITIONALLY rather than dropping it -- but that turns
+ * a static counter into one frame per second for ever, which is the opposite of
+ * what changed-only publishing is for. ~16 bytes a slot, so the headroom is
+ * free; check this again when adding a batch of leaves. */
+#define PUB_PERIODIC_MAX 96
 #define PUB_REFRESH_S    30
 
 static struct { const char *leaf; uint32_t v; uint8_t seen; } pub_hist[PUB_PERIODIC_MAX];
@@ -3804,6 +3811,61 @@ int main(void)
 
 				pub_periodic("ble/conns",    (uint32_t) box_ble_conn_count());
 				pub_periodic("ble/scanning", (uint32_t) box_ble_scanning());
+
+				/* ---- THE ADV/CONN LEDGERS, on the wire ----
+				 *
+				 * These were console-only (`ble`) until 2026-09-01, and that
+				 * was the wrong call twice over. BOTH BLE bugs found so far
+				 * were found by READING THESE COUNTERS, on a board whose
+				 * LOG_DEFAULT_LEVEL is ERR and which said nothing: the
+				 * pre-existing conn-refcount leak (try=2431 create_err=2430
+				 * -- every create failing for ever after one disconnect) and
+				 * the peripheral's dead advertiser. Neither was found by
+				 * reading code, and neither would have been visible from
+				 * dserv.
+				 *
+				 * A counter that only a serial cable can reach is not
+				 * telemetry, it is a debugging session waiting to be
+				 * repeated -- and on a SEALED dongle in a USB port behind a
+				 * machine there may be no cable at all.
+				 *
+				 * pub_periodic (health), and changed-only, so a healthy
+				 * central pays one frame each and then nothing: these sit
+				 * still unless something is wrong. What they separate:
+				 *
+				 *   adv_seen 0        nothing is advertising, or we are deaf
+				 *   seen>0 matched=0  something IS, and we reject it (wrong
+				 *                     service UUID -- a firmware mismatch)
+				 *   create_err rising the controller refuses to connect; the
+				 *                     refcount leak's fingerprint
+				 *   est_err rising    connects that fail to establish;
+				 *                     conn_last_err holds the HCI reason
+				 *   dropped rising    links that came up and went away --
+				 *                     range, battery, or a resetting peer
+				 */
+				{
+					uint32_t sn = 0, mt = 0;
+					uint32_t tr = 0, ce = 0, ee = 0, dr = 0;
+					int le = 0;
+
+					box_ble_scan_counts(&sn, &mt);
+					box_ble_conn_counts(&tr, &ce, &ee, &dr, &le);
+					pub_periodic("ble/adv_seen",       sn);
+					pub_periodic("ble/adv_matched",    mt);
+					pub_periodic("ble/conn_try",       tr);
+					pub_periodic("ble/conn_create_err", ce);
+					pub_periodic("ble/conn_est_err",   ee);
+					pub_periodic("ble/conn_dropped",   dr);
+					/* Signed: a negated HCI reason. pub_periodic carries a
+					 * uint32_t but publishes it as int32_t, so the cast
+					 * round-trips and the host reads -8, not 4294967288. */
+					pub_periodic("ble/conn_last_err",  (uint32_t) le);
+					/* 0 = "not scanning for a normal reason" (fleet full, a
+					 * connect in flight); non-zero = the controller refused
+					 * and this central is DEAF. scanning=0 alone cannot tell
+					 * those apart, which is why both are published. */
+					pub_periodic("ble/scan_err", (uint32_t) box_ble_scan_err());
+				}
 
 				/* Fleet-wide echo health. ble/synced is the one a host
 				 * should alarm on: a connected-but-unsynced peer is
