@@ -1059,6 +1059,19 @@ static void groups_resync(void)
  * someone's signal wire, which is the trap the branches above exist to avoid. */
 #define LED_PIN  11   /* LED red = P0.26, ACTIVE_LOW in the pin map    */
 #define BTN_PIN  14   /* no user button on this module -- unmapped     */
+#elif defined(CONFIG_BOARD_NRF52840_MDK_USB_DONGLE)
+/* The BLE central in a USB stick. Its whole pin map is three LEDs (the overlay
+ * explains why nothing else is declared), so box pin 0 IS the red LED.
+ *
+ * BTN_PIN IS AN UNMAPPED INDEX, and here that is not merely "no button fitted"
+ * -- this board's ONLY button is wired as nRESET (`gpio-as-nreset` in its UICR
+ * node), so P0.18 is physically incapable of being a user input. 3 is past the
+ * end of the 3-entry map, box_gpio_reserved() refuses it, and nothing can ever
+ * drive it. The alternative -- the Teensy #else -- would put LED_PIN on box
+ * pin 3, which on this board is not mapped either, so a new board silently
+ * losing its heartbeat is the failure this branch prevents. */
+#define LED_PIN  0    /* LED red = P0.23, ACTIVE_LOW in the pin map    */
+#define BTN_PIN  3    /* only button is nRESET -- deliberately unmapped */
 #elif defined(CONFIG_BOARD_NRF54LM20DK)
 /* Same map shape as the nRF52840 DK -- box pins 22-25 are LED1-LED4, 26-29 are
  * BTN1-BTN4 -- but NOT the same free lunch: on this board every LED and button

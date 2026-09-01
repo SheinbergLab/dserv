@@ -66,6 +66,19 @@ check xiao_ble  -b xiao_ble                     -d build-check-xiao_ble  "$HERE"
 check xiao_periph -b xiao_ble -d build-check-xiao_periph "$HERE" -- \
       -DEXTRA_CONF_FILE=periph.conf
 
+# The makerdiary nRF52840 MDK USB Dongle -- the BLE CENTRAL for a USB-only host,
+# and the OTHER END of the same silicon the XIAO peripheral runs on. Checked in
+# BOTH forms for the same reason the XIAO is: central.conf swaps the whole radio
+# role (box_ble.c instead of box_ble_periph.c, BOX_BLE_CENTRAL gating several
+# sites in main.c and box_console.c), so the plain-box line below builds none of
+# it. No -ota sibling yet -- the board HAS a real slot0/slot1 pair, unlike the
+# XIAO, but turning it on means flashing MCUboot over the factory nRF5
+# bootloader and giving up USB DFU recovery on a board with no debugger. See
+# boards/nrf52840_mdk_usb_dongle.conf.
+check mdkdongle -b nrf52840_mdk_usb_dongle -d build-check-mdkdongle "$HERE"
+check mdkdongle-central -b nrf52840_mdk_usb_dongle -d build-check-mdkdongle-central "$HERE" -- \
+      -DEXTRA_CONF_FILE=central.conf
+
 # The teensy40 in its OTA form, which is a DIFFERENT BUILD, not a variant: it
 # pulls in MCUboot as a second image, relinks the app to slot0, and compiles in
 # box_ota_flash.c plus the whole arm/confirm path that the plain build never
