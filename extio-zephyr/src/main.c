@@ -3844,14 +3844,15 @@ int main(void)
 				 *                     range, battery, or a resetting peer
 				 */
 				{
-					uint32_t sn = 0, mt = 0;
+					uint32_t sn = 0, mt = 0, dp = 0;
 					uint32_t tr = 0, ce = 0, ee = 0, dr = 0;
 					int le = 0;
 
-					box_ble_scan_counts(&sn, &mt);
+					box_ble_scan_counts(&sn, &mt, &dp);
 					box_ble_conn_counts(&tr, &ce, &ee, &dr, &le);
 					pub_periodic("ble/adv_seen",       sn);
 					pub_periodic("ble/adv_matched",    mt);
+					pub_periodic("ble/adv_dup",        dp);
 					pub_periodic("ble/conn_try",       tr);
 					pub_periodic("ble/conn_create_err", ce);
 					pub_periodic("ble/conn_est_err",   ee);

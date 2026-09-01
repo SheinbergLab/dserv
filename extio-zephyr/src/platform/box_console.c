@@ -419,17 +419,17 @@ static void run_line(box_config_t *cfg, const char *line)
 			return;
 		}
 		{
-			uint32_t seen = 0, matched = 0;
+			uint32_t seen = 0, matched = 0, dup = 0;
 
-			box_ble_scan_counts(&seen, &matched);
+			box_ble_scan_counts(&seen, &matched, &dup);
 			uint32_t tr = 0, ce = 0, ee = 0, dr = 0;
 			int le = 0;
 
 			box_ble_conn_counts(&tr, &ce, &ee, &dr, &le);
-			box_console_printf("ble: radio up, conns %d/%d, adv seen=%u matched=%u\n"
+			box_console_printf("ble: radio up, conns %d/%d, adv seen=%u matched=%u dup=%u\n"
 					   "  conn try=%u create_err=%u est_err=%u dropped=%u last=%d\n",
 					   box_ble_conn_count(), CONFIG_BT_MAX_CONN,
-					   seen, matched, tr, ce, ee, dr, le);
+					   seen, matched, dup, tr, ce, ee, dr, le);
 		}
 		if (box_ble_scanning()) {
 			box_console_printf("  scanning for d5e7000x peripherals\n");

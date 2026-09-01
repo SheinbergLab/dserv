@@ -145,7 +145,7 @@ static bool scanning;
  * advertising within range, or something is and we are rejecting it (wrong
  * service UUID, wrong adv type, fleet full). One counter each turns a guess
  * into a reading. */
-static uint32_t adv_seen, adv_matched;
+static uint32_t adv_seen, adv_matched, adv_dup;
 
 /* Connection ledger, for the same reason as the advertisement one. "matched but
  * never connected" has at least three causes -- the controller refusing the
@@ -159,6 +159,20 @@ static struct peer *peer_for(struct bt_conn *c)
 {
 	for (int i = 0; i < CONFIG_BT_MAX_CONN; i++) {
 		if (peers[i].conn == c) {
+			return &peers[i];
+		}
+	}
+	return NULL;
+}
+
+/* Is `addr` a peer we ALREADY hold? bt_conn_get_dst() gives the identity
+ * address of a live connection, which is what scan_cb is handed for an
+ * advertisement -- so the comparison is apples to apples. */
+static struct peer *peer_by_addr(const bt_addr_le_t *addr)
+{
+	for (int i = 0; i < CONFIG_BT_MAX_CONN; i++) {
+		if (peers[i].conn &&
+		    bt_addr_le_eq(bt_conn_get_dst(peers[i].conn), addr)) {
 			return &peers[i];
 		}
 	}
@@ -514,6 +528,31 @@ static void scan_cb(const bt_addr_le_t *addr, int8_t rssi, uint8_t adv_type,
 	}
 	adv_matched++;
 
+	/* ALREADY OURS -- do not try to connect to it again.
+	 *
+	 * Without this, every matching advertisement became a
+	 * bt_conn_le_create() call, including advertisements from peers already in
+	 * a slot: the controller refuses those (-EINVAL, "a connection to this
+	 * peer exists") and the attempt is pure churn -- a scan stop, a failed
+	 * create, and a scan restart, repeated for as long as the box runs.
+	 *
+	 * MEASURED, and it is exactly what publishing the ledgers exposed on their
+	 * first reading from dserv: conn_try EQUALLED adv_matched (204/204, and
+	 * 109/109 in an earlier sample) with create_err at 197 -- a 97% refusal
+	 * rate on a fleet that was otherwise perfectly healthy (conns 2, synced 2).
+	 * One create attempt per matched advert, unconditionally.
+	 *
+	 * Counted rather than silently skipped, because the two readings answer
+	 * different questions and BOTH were guesses until now: adv_dup rising with
+	 * create_err flat means this is working and the churn was self-inflicted;
+	 * create_err STILL rising means the refusals come from somewhere else and
+	 * the address filter was the wrong theory. A fix that cannot be told apart
+	 * from its own hypothesis is not worth shipping. */
+	if (peer_by_addr(addr)) {
+		adv_dup++;
+		return;
+	}
+
 	if (bt_le_scan_stop() == 0) {
 		scanning = false;
 	}
@@ -787,10 +826,11 @@ int box_ble_peer_info(int idx, box_ble_peer_info_t *out)
 	return 1;
 }
 
-void box_ble_scan_counts(uint32_t *seen, uint32_t *matched)
+void box_ble_scan_counts(uint32_t *seen, uint32_t *matched, uint32_t *dup)
 {
 	if (seen)    *seen = adv_seen;
 	if (matched) *matched = adv_matched;
+	if (dup)     *dup = adv_dup;
 }
 
 void box_ble_conn_counts(uint32_t *tries, uint32_t *create_err,

@@ -115,11 +115,22 @@ int box_ble_scanning(void);
  * because the controller refused", which is a fault. */
 int box_ble_scan_err(void);
 
-/* Advertisements seen at all, and those carrying our service UUID. Splits the
- * two causes of a scanning central with no peers: seen=0 means nothing is
- * advertising in range (or we are not really scanning); seen>0 with matched=0
- * means something IS and we are rejecting it. */
-void box_ble_scan_counts(uint32_t *seen, uint32_t *matched);
+/* Advertisements seen at all, those carrying our service UUID, and those
+ * matched but SKIPPED because that address is already a connected peer. Any
+ * pointer may be NULL.
+ *
+ * seen/matched split the two causes of a scanning central with no peers: seen=0
+ * means nothing is advertising in range (or we are not really scanning); seen>0
+ * with matched=0 means something IS and we are rejecting it.
+ *
+ * `dup` exists to keep the connect filter honest about itself. Before it,
+ * scan_cb called bt_conn_le_create() on EVERY matched advertisement, so
+ * conn_try equalled adv_matched exactly and the controller refused ~97% of them
+ * (measured 204/204 with create_err 197, on a fleet that was otherwise
+ * healthy). dup rising while create_err stays flat is that churn being
+ * suppressed; create_err rising ANYWAY means the refusals never came from
+ * duplicate addresses and the fix addressed the wrong thing. */
+void box_ble_scan_counts(uint32_t *seen, uint32_t *matched, uint32_t *dup);
 
 /* Why a matched advertisement did not become a peer. tries counts create
  * attempts; create_err the controller refusing outright; est_err a connection
