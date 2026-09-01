@@ -2473,22 +2473,36 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 		 * publishing under the new one -- the two disagreeing is exactly what
 		 * box_ble.c's learn_name() refuses to rely on at the other end. */
 		box_ble_periph_rename(&cfg);
-
-		/* AND RE-ANNOUNCE, because box_uplink_reregister() did nothing here.
-		 * It calls the transport's self_register, and on Ethernet that
-		 * re-registers the %match patterns with dserv -- which is what
-		 * releases the announce hold and republishes the manifest under the
-		 * new prefix. A radio box has no registration to redo, so its
-		 * self_register is a no-op and NOTHING re-announced.
-		 *
-		 * MEASURED on the first live rename: extio/xiao1 appeared in
-		 * extio/boxes with a live watchdog and no board, transport or
-		 * pins/silk at all -- the periodic datapoints moved to the new name
-		 * (the next one lands) and every ONE-SHOT manifest key stayed behind
-		 * under the old one. Same failure as the connect->subscribe gap, and
-		 * the same fix: say it again when the identity changes. */
-		box_announce_burst(&cfg, groups);
 #endif
+		/* AND RE-ANNOUNCE, because box_uplink_reregister() CANNOT do it on
+		 * two of the three transports.
+		 *
+		 * It calls the active transport's self_register. Over Ethernet that
+		 * re-registers the %match patterns with dserv, and THAT is what
+		 * releases the announce hold and republishes the manifest under the
+		 * new prefix -- which is why the comment above is true for eth and
+		 * only for eth. Both other transports have nothing to re-register:
+		 *
+		 *     u_ble_register  -- a radio box has no registration
+		 *     u_usb_register  -- "host module owns forwarding (v1)"
+		 *
+		 * Both are `return 0`, so on a USB or BLE box the rename changed the
+		 * publishing prefix and NOTHING re-announced.
+		 *
+		 * MEASURED TWICE. First on the XIAO peripheral: extio/xiao1 appeared
+		 * in extio/boxes with a live watchdog and no board, transport or
+		 * pins/silk at all. That fix was gated on CONFIG_BOX_BLE_PERIPHERAL --
+		 * the instance, not the class -- and the identical failure turned up
+		 * hours later on the first USB box renamed after it (dongle1: watchdog
+		 * and ble/conns present, every one-shot manifest key absent). USB is
+		 * the transport most boxes actually use.
+		 *
+		 * The shape is always the same: PERIODIC datapoints survive an
+		 * identity change because the next one lands under the new name, and
+		 * ONE-SHOT ones simply vanish. Ungated now. On Ethernet this costs one
+		 * duplicate manifest burst on a rename -- rare, idempotent, and a fair
+		 * price for the same behaviour on every transport. */
+		box_announce_burst(&cfg, groups);
 		box_console_printf("config/name -> now '%s'; re-registering\n",
 				   dserv_cfg_name(&cfg));
 	} else if (r == CFG_ANNOUNCE) {
