@@ -44,6 +44,7 @@ static uint8_t  radio_up;
  * is no excuse for reintroducing it at the other end of the same pipe. */
 static uint8_t  advertising;
 static int      adv_err;
+static int64_t  adv_retry_at;         /* next allowed adv_start(); see poll() */
 static uint8_t  subscribed;           /* CCC written: notifications wanted    */
 static uint16_t att_mtu;
 static uint32_t st_echo_rx, st_tx_ok, st_tx_drop;
@@ -344,7 +345,40 @@ int box_ble_periph_send_stream(const uint8_t *buf, int len)
 int box_ble_periph_poll(uint8_t *buf, int max)
 {
 	static int prev_ready;
-	int ready = box_ble_periph_ready();
+	int ready;
+
+	/* KEEP THE ADVERTISER UP -- a retry, because every other call is a
+	 * one-shot from an event callback.
+	 *
+	 * adv_start() was reached only from init, connected_cb's error path and
+	 * disconnected_cb. Nothing ever tried again, so a single failure in any of
+	 * them left this box permanently invisible: radio up, no link, no
+	 * advertiser, no path back except a power cycle. And the most likely one to
+	 * fail is the disconnect path, which is the WELL-KNOWN Zephyr trap --
+	 * bt_le_adv_start() from inside the disconnected callback can return
+	 * -EAGAIN because the connection object has not been released yet, which is
+	 * why the in-tree peripheral samples defer it to a work item.
+	 *
+	 * OBSERVED 2026-09-01, and only because the status LED existed: box3 was
+	 * reflashed, the link dropped, and the XIAO sat on slow red (INVISIBLE)
+	 * while the central scanned and saw nothing. Without the LED this is a
+	 * handheld that "stopped working" after its receiver rebooted, with no
+	 * console attached and nothing to distinguish it from a dead battery.
+	 *
+	 * Retrying from the service loop fixes every failure path at once rather
+	 * than the one errno we happen to know about -- the same "say it again"
+	 * principle as the announce-on-ready and re-announce-on-rename fixes. Once
+	 * a second: a start that keeps failing should not spin the radio. */
+	if (radio_up && !peer && !advertising) {
+		int64_t now = k_uptime_get();
+
+		if (now >= adv_retry_at) {
+			adv_retry_at = now + 1000;
+			(void) adv_start();
+		}
+	}
+
+	ready = box_ble_periph_ready();
 
 	/* THE PIPE JUST OPENED -> ANNOUNCE. Same edge, and the same reason, as
 	 * box_net_usb_server_poll's rising DTR: dserv only learns what it is told

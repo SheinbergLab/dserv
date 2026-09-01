@@ -3163,6 +3163,23 @@ int main(void)
 	uint32_t wd_skipped = 0;          /* 1 Hz beats skipped after a loop stall */
 	uint32_t disp_last_us = 0, disp_max_us = 0;
 	int64_t next_wd = k_uptime_get() + 1000;
+
+	/* START THE PHASE CLOCK HERE, not at zero.
+	 *
+	 * lp_t0 defaults to 0, so the first loop_phase() call measured "now minus
+	 * the epoch" -- the whole of boot -- and filed it against phase 0. First
+	 * reading on real hardware: stall_phase=wait stall_ms=10830, which is the
+	 * console's 2 s enumeration wait plus the LED heartbeat plus flash init,
+	 * all attributed to a stage that had not run yet.
+	 *
+	 * Not merely cosmetic: lp_worst_ms is a HIGH-WATER MARK, so a bogus 10.8 s
+	 * floor would swallow every real stall shorter than that -- the instrument
+	 * would sit there looking healthy through exactly the multi-second stalls
+	 * it exists to catch. An instrument whose first sample is garbage is worse
+	 * than none, because this one is silent about it. */
+	lp_t0       = k_uptime_get_32();
+	lp_cur      = LP_WAIT;
+	lp_worst_ms = 0;
 	char name[80];
 
 	while (1) {
