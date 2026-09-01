@@ -155,6 +155,18 @@ Send only after the box re-registers and looks alive — the command arriving
 at all is the proof that matters (a "publishing but deaf" image can't ack
 it). `state/ota/confirm=confirmed`, `trial→0`, `updates` +1.
 
+**"Did the trial take?" is answered by `state/boot`, not by `fw_ver`.**
+`boot=trial` means the armed image is running unconfirmed; `revert` means it
+ran and wasn't kept; `rejected` means MCUboot declined it. `state/ota/trial=1`
+says the same from the bootloader flag rather than the persisted breadcrumb.
+Do NOT compare `fw_ver` against `staged_ver` for this: `fw_ver` is the MCUboot
+header version and **nothing bumps it between dev commits** — every dev image
+is `0.4.0+100` — so equal proves nothing, and a box whose header isn't where
+the tooling looks reports the literal string `unreadable`, which matches no
+staged version at all. Both were seen on box3, 2026-09-01;
+`extio_ota_lc_booted` used to fail the lifecycle on the second one and skip the
+confirm, leaving a good image to revert.
+
 **To reject a trial**: don't confirm — power-cycle. The old image returns by
 construction and the box reports `revert` in `state/ota/*`.
 

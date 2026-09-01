@@ -1216,6 +1216,45 @@ proc extio_imgver_cmp {a b} {
     return 0
 }
 
+# Does imgVersion actually DISTINGUISH the images on this channel+build?
+#
+# It is supposed to. It is the MCUboot header version, the only version a box
+# can report about ITSELF -- state/fw is a build-time constant and the shelf's
+# git-describe never reaches the box. But it comes from extio-zephyr/VERSION, a
+# hand-edited file that nothing bumps per commit, so every dev image of this app
+# is stamped "0.4.0+100" whichever commit built it. Where that holds, equality
+# is not "the same image", it is "no information", and reporting it as "up to
+# date" is a badge that is right only by accident -- the same failure this
+# section's header note describes for the other version fields.
+#
+# ASK THE SHELF rather than hard-coding "dev builds do not bump". The manifest
+# is already in hand from the pick, and it settles the question directly: walk
+# the versions that carry an image for this build and count the distinct
+# imgVersions. Two or more separately published versions sharing one imgVersion
+# is proof that the field does not move here.
+#
+# 1 when it discriminates -- including when there is only one published version
+# for this build, where there is nothing to disprove and the honest default is
+# to trust the field. 0 only when the shelf demonstrates otherwise.
+proc extio_imgver_discriminates {manifest bbuild} {
+    if { ![dict exists $manifest versions] } { return 1 }
+    set seen {}
+    set nvers 0
+    foreach v [dict get $manifest versions] {
+        if { ![dict exists $v images] } continue
+        foreach im [dict get $v images] {
+            if { ![dict exists $im build] || [dict get $im build] ne $bbuild } continue
+            if { ![dict exists $im bin] || [dict get $im bin] eq "" } continue
+            incr nvers
+            set iv [expr {[dict exists $im imgVersion] ? [dict get $im imgVersion] : ""}]
+            if { $iv ne "" && $iv ni $seen } { lappend seen $iv }
+            break     ;# one image per version for this build -- the pick's rule
+        }
+    }
+    if { $nvers < 2 } { return 1 }
+    return [expr {[llength $seen] > 1}]
+}
+
 proc extio_fw_check {box} {
     if { ![dservExists extio/$box/state/build] } {
         error "extio_fw_check: box '$box' hasn't announced state/build yet (connected?)"
@@ -1262,7 +1301,7 @@ proc extio_fw_check {box} {
         append when "Z"
     }
 
-    # THE FIRST FIELD IS A CONTRACT. It is always one of exactly four phrases,
+    # THE FIRST FIELD IS A CONTRACT. It is always one of exactly five phrases,
     # and callers -- including extio-config.html, which colors the row by it --
     # match on the text before the first " · ". A machine token bolted on with a
     # delimiter would read badly from dservctl; a phrase that is both the
@@ -1273,9 +1312,27 @@ proc extio_fw_check {box} {
     # published before imgVersion existed, or an RP2350 .uf2 that has no
     # MCUboot header, genuinely cannot be compared -- and saying so is the
     # difference between an honest gap and a badge that is wrong.
+    #
+    # "cannot distinguish" is the SAME honesty applied to the case that looks
+    # like an answer. Two equal imgVersions read as "up to date", and on the dev
+    # channel that is what they read for two entirely different images, because
+    # nothing bumps VERSION between commits (extio_imgver_discriminates). The old
+    # wording did not merely overstate: the page turns "up to date" into "⚠ the
+    # shelf image is the one already running -- MCUboot rejects a swap to the
+    # same image", which talks an operator OUT of a perfectly good update.
     switch -- $cmp {
         1       { set verdict "update available" ; set detail "$imgver · you have $boxver" }
-        0       { set verdict "up to date"       ; set detail $imgver }
+        0       {
+            if { [extio_imgver_discriminates [dict get $pick manifest] $bbuild] } {
+                set verdict "up to date"
+                set detail  $imgver
+            } else {
+                set verdict "cannot distinguish"
+                set detail  "both stamped $imgver · several shelf versions for build\
+                             '$bbuild' share that ONE image version, so it cannot say\
+                             which of them you are running"
+            }
+        }
         -1      { set verdict "shelf is older"   ; set detail "$imgver · you have $boxver ·\
                                                                updating would DOWNGRADE" }
         default {
@@ -1716,8 +1773,16 @@ proc extio_req_timeout {box id label ms} {
 #                          refused_no_verified_image|refused_no_image_header
 #   state/ota/confirm      confirmed|failed
 #   state/ota/trial        1 = running an unconfirmed image
+#   state/boot             the boot's own verdict, LATCHED at box_boot_init:
+#                          trial | revert | rejected after an arm, otherwise the
+#                          reset cause (power|pin|watchdog|...). This is what
+#                          says whether a trial took -- see extio_ota_lc_booted.
 #   state/fw_ver           what MCUboot ACTUALLY booted. NOT state/fw, which is
 #                          a build-time constant and can never show an update.
+#                          Nor is it a per-commit identity: it is the header's
+#                          imgVersion, and every dev image of this app is
+#                          0.4.0+100 (extio-zephyr/VERSION). Good for "which
+#                          release", useless for "did this update land".
 #
 # Rolled up into ONE key for the UI:
 #   state/ota/lifecycle      idle|staging|verifying|arming|trial|confirming|
@@ -1887,13 +1952,23 @@ proc extio_ota_lc_verified {box value} {
     set sv "" ; catch { set sv [dservGet extio/$box/state/ota/staged_ver] }
     set ::extio_ota_lc($box,want_ver) $sv
 
-    # fw_ver is cleared HERE, with the arm, not later: arming resets the box, and
-    # fw_ver reappearing is how we learn it came back. Clearing it after the reset
-    # would race the announce burst and could erase the very fact we are waiting
-    # for; a retained value would report the OLD boot as proof of the new one.
+    # THE BOOT EVIDENCE IS CLEARED HERE, with the arm, not later: arming resets
+    # the box, and these reappearing is how we learn it came back. Clearing them
+    # after the reset would race the announce burst and could erase the very fact
+    # we are waiting for; a retained value would report the OLD boot as proof of
+    # the new one.
+    #
+    # `boot` and `ota/trial` are in this list for a sharper reason than fw_ver.
+    # box_boot_reason() is LATCHED for a whole boot session, so a box that came
+    # up in a trial and was then confirmed still reads boot=trial hours later --
+    # box3 does, right now, from its last successful update. Retained, that
+    # stale "trial" would satisfy the NEXT update's evidence check without the
+    # box having done anything at all: exactly the level-check trap described at
+    # the top of the request layer, in the one place where believing it means
+    # confirming an image that never booted.
     extio_ota_lc_pub $box arming "arming trial boot of $sv"
     extio_request $box "arm" ota/arm 1 ota/arm {ne ""} 30000 \
-        extio_ota_lc_armed extio_ota_lc_fail {ota/arm ota/arm_rc fw_ver}
+        extio_ota_lc_armed extio_ota_lc_fail {ota/arm ota/arm_rc fw_ver boot ota/trial}
 }
 
 proc extio_ota_lc_armed {box value} {
@@ -1908,17 +1983,146 @@ proc extio_ota_lc_armed {box value} {
         extio_ota_lc_booted extio_ota_lc_fail
 }
 
+# ---- DID THE TRIAL IMAGE ACTUALLY BOOT? ------------------------------------
+#
+# THE VERSION COMPARISON THIS USED TO MAKE WAS NOT EVIDENCE, in either
+# direction, and both halves were observed on box3 on 2026-09-01.
+#
+# It compared state/fw_ver against the staged_ver recorded at the arm and failed
+# the lifecycle on any difference. But fw_ver is the MCUboot header's
+# imgVersion, and NOTHING bumps it between commits: every dev image of this app
+# is "0.4.0+100". A real update from 0.55.3-16-gc19067b2 to 0.55.3-18-gd4ad40a7
+# had staged == booted == 0.4.0+100, so the check PASSED while verifying
+# precisely nothing. It cannot tell two dev images apart, which is the only
+# comparison it is ever asked to make here.
+#
+# And when the header is not where the tooling looks, the box says so HONESTLY:
+# box_boot_init publishes the literal string "unreadable"
+# (extio-zephyr/src/box_boot.c). That equals no staged_ver ever, so on such a
+# box a perfectly good trial boot was declared "trial did not take" and the
+# confirm was never sent. That is the DESTRUCTIVE direction: unconfirmed means
+# the next reset reverts the image that had just booted fine. box3 did exactly
+# that until it was reflashed cleanly over J-Link.
+#
+# The evidence that does vary correctly was already being published:
+#
+#   state/boot = trial     box_boot_init found rec.armed set AND the running
+#                          image unconfirmed -- we are IN the trial boot of the
+#                          image we armed. The box's own answer, from its own
+#                          persisted breadcrumb, not a string we guessed at.
+#   state/boot = revert    armed, ran, and we are back on a confirmed image:
+#                          the trial was not kept.
+#   state/boot = rejected  armed and never ran: MCUboot declined the image.
+#   state/ota/trial = 1    running an unconfirmed image. Computed from
+#                          boot_is_img_confirmed() rather than the breadcrumb,
+#                          so it still answers on a board with no boot record --
+#                          and under SWAP_USING_OFFSET (sysbuild.conf) a trial
+#                          boot is unconfirmed BY CONSTRUCTION, which is what
+#                          makes a fresh 0 mean something too.
+#
+# ANNOUNCE ORDER IS WHAT MAKES state/boot READABLE HERE. announce_ident
+# publishes `boot` BEFORE `fw_ver` (extio-zephyr/src/box_announce.c) and this
+# fires on fw_ver, so the fresh boot reason has already landed. `ota/trial` goes
+# out just AFTER fw_ver, so it may still be in flight -- hence primary and
+# corroborating rather than either/or, and hence the timestamp gate on it.
+#
+# FAIL SAFE MEANS CONFIRM. The two mistakes are not symmetric. A confirm we
+# should not have sent re-writes a flag on an image that is already running and
+# already permanent -- a no-op (box_boot_note_confirm only counts an update if
+# something was armed). A confirm we failed to send throws away a good image at
+# the next reset, silently, hours later. So only DEMONSTRATED failure fails
+# here: the box saying revert or rejected, a fresh ota/trial=0, or two readable
+# versions that genuinely disagree. Thin evidence confirms, and says so.
 proc extio_ota_lc_booted {box value} {
     set want ""
     if { [info exists ::extio_ota_lc($box,want_ver)] } { set want $::extio_ota_lc($box,want_ver) }
-    # The box is back and has said which image MCUboot chose. If that is not the
-    # staged one, the trial did not take -- MCUboot declined it, or it booted and
-    # reverted -- and confirming would be meaningless.
-    if { $want ne "" && $value ne $want } {
-        extio_ota_lc_fail $box "trial did not take: booted $value, staged $want -- check state/ota/rejects and the boot reason"
+
+    # The box's own verdict on its own boot. Absent means no verdict -- a board
+    # with no persisted boot record, or a burst we have only part of -- and that
+    # is not the same as a bad one.
+    set boot ""
+    catch { set boot [dservGet extio/$box/state/boot] }
+
+    # Corroboration, and ONLY from this announce. The arm clears it, so presence
+    # already implies fresh; the stamp is checked anyway because the manual path
+    # (extio_ota_arm by hand, a console arm) does not go through that clear, and
+    # a retained trial=1 from the previous update is precisely the value that
+    # would rubber-stamp a box that never rebooted.
+    set trial ""
+    if { [dservExists extio/$box/state/ota/trial] } {
+        set tts [dservTimestamp extio/$box/state/ota/trial]
+        set fts 0
+        catch { set fts [dservTimestamp extio/$box/state/fw_ver] }
+        if { $tts >= $fts } { set trial [dservGet extio/$box/state/ota/trial] }
+    }
+
+    # ---- demonstrated failure, in the box's own words ----
+    if { $boot eq "revert" } {
+        set n "?" ; catch { set n [dservGet extio/$box/state/ota/reverts] }
+        extio_ota_lc_fail $box "the trial image ran and was NOT kept: the box reports\
+            boot=revert (reverts=$n), so it is back on the PREVIOUS image and there is\
+            nothing to confirm. A reset before the confirm landed, a wedge, or a power\
+            cut -- state/ota/last_arm_ver names what it was becoming."
         return
     }
-    extio_ota_lc_pub $box confirming "trial image $value is live -- confirming"
+    if { $boot eq "rejected" } {
+        set n "?" ; catch { set n [dservGet extio/$box/state/ota/rejects] }
+        extio_ota_lc_fail $box "MCUboot DECLINED the staged image: the box reports\
+            boot=rejected (rejects=$n), so the trial never ran. Bad signature, or an image\
+            written where the bootloader does not look -- and hdr_ok said otherwise, so\
+            check the signing key before the offset."
+        return
+    }
+
+    set on_trial [expr {$boot eq "trial" || $trial eq "1"}]
+
+    # A fresh trial=0 is a real negative, not merely an absent positive: under a
+    # swap-with-revert mode the image MCUboot just tested cannot already be
+    # confirmed. Only trusted when `boot` has not already claimed the trial --
+    # a confirm racing in from elsewhere republishes trial=0 while boot stays
+    # "trial", and there confirming again is the harmless answer.
+    if { !$on_trial && $trial eq "0" } {
+        extio_ota_lc_fail $box "the box is back but is running a CONFIRMED image\
+            (state/ota/trial=0, boot=[expr {$boot eq "" ? "absent" : $boot}]) -- the swap\
+            did not take, so this is the old image, not a trial of the new one."
+        return
+    }
+
+    # THE VERSION COMPARISON, used only where it carries information: both sides
+    # readable, and actually different from one another. Equal is what every dev
+    # pair reports whether or not anything changed, and "unreadable" is the box
+    # saying it cannot answer. Neither is evidence of anything.
+    set readable [expr {$want ne "" && $value ne ""
+                        && $want ne "unreadable" && $value ne "unreadable"}]
+    set disagree [expr {$readable && $value ne $want}]
+
+    if { !$on_trial && $disagree } {
+        extio_ota_lc_fail $box "trial did not take: booted $value, staged $want, and the\
+            box reports no trial boot (boot=[expr {$boot eq "" ? "absent" : $boot}]) --\
+            check state/ota/rejects and state/ota/reverts"
+        return
+    }
+
+    if { $boot eq "trial" } {
+        set ev "boot=trial"
+    } elseif { $trial eq "1" } {
+        set ev "ota/trial=1"
+    } else {
+        # Up, talking, and saying nothing either way. Confirm: see FAIL SAFE above.
+        set ev "no trial marker (boot=[expr {$boot eq "" ? "absent" : $boot}],\
+                ota/trial=[expr {$trial eq "" ? "absent" : $trial}]) -- confirming anyway,\
+                a live image must not be left to revert"
+    }
+    # Reported, never acted on: the box is demonstrably ON TRIAL of the image
+    # MCUboot swapped in, which is by construction the one we armed, so the
+    # confirm is right regardless of what the two header strings say.
+    if { $on_trial && $disagree } {
+        puts "extio ota\[$box\]: NOTE -- booted $value but staged $want. Confirming\
+              anyway: $ev is the direct evidence, and the image the box is running is\
+              the one it is on trial for."
+    }
+
+    extio_ota_lc_pub $box confirming "trial image $value is live ($ev) -- confirming"
     # The command ARRIVING is itself the liveness proof: a "publishing but deaf"
     # image cannot ack it, and the deadline catches precisely that. Resent every
     # 2 s: fw_ver (which got us here) lands ms BEFORE the box re-registers its
@@ -2007,8 +2211,13 @@ proc extio_ota_arm {box} {
         return "extio_ota_arm: $box has no MCUboot header where MCUboot looks\
                 (hdr_ok=[dservGet extio/$box/state/ota/hdr_ok]) -- arm would be refused"
     }
+    # Same clear list as the lifecycle's arm, and for the same reason: `boot` is
+    # latched for a whole boot session, so a box confirmed out of an earlier
+    # trial keeps reading boot=trial. Anyone reading these after a hand-driven
+    # arm -- a human, or extio_ota_lc_booted if the lifecycle is resumed -- must
+    # not be handed the previous update's answer.
     extio_request $box "arm" ota/arm 1 ota/arm {ne ""} 30000 \
-        extio_ota_arm_done extio_ota_step_fail {ota/arm ota/arm_rc fw_ver}
+        extio_ota_arm_done extio_ota_step_fail {ota/arm ota/arm_rc fw_ver boot ota/trial}
     return "arm sent to $box"
 }
 proc extio_ota_arm_done {box value} {

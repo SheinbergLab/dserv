@@ -604,7 +604,7 @@ async function otaUpdate(box) {
   } else if (verdict === 'up to date') {
     warn = `\n\n⚠ The shelf image is the one already running (${seen.text}).\n`
          + `MCUboot rejects a swap to the same image.\n`;
-  } else if (verdict === 'cannot compare') {
+  } else if (verdict === 'cannot compare' || verdict === 'cannot distinguish') {
     warn = `\n\n⚠ Cannot tell whether this moves forward: ${seen.text}\n`;
   }
   /* The pre-check exists to catch a downgrade. If it could not run, say so
@@ -640,23 +640,37 @@ async function otaUpdate(box) {
  * said, which is the confusion this page keeps having to undo. (extio_fw_check
  * does publish it under extio/shelf/<channel>/<build>/* for scripts.)
  *
- * NO "up to date" VERDICT, deliberately: state/fw_ver is a MCUboot header
- * version (0.4.0+91) and a shelf version is a git describe
- * (0.52.9-3-g08cea56c). They are different namespaces, the shelf records no
- * image version, and on 2026-08-14 the newest shelf image was OLDER than the
- * flashed box -- so any automatic comparison would have advertised a
- * downgrade. Show both, stamp when we asked, let the reader judge. */
+ * THE VERDICT IS THE TCL'S, NOT THIS PAGE'S. This block used to say there was
+ * no "up to date" verdict at all, and the reason was sound: state/fw_ver is a
+ * MCUboot header version (0.4.0+100), a shelf version is a git describe
+ * (0.52.9-3-g08cea56c), the two are different namespaces, and on 2026-08-14 the
+ * newest shelf image was OLDER than the flashed box -- so a naive comparison
+ * would have advertised a downgrade. publish.sh then started recording the
+ * header version read out of the .bin itself, which made the comparison real
+ * and ORDERED, and extio_fw_check owns it.
+ *
+ * With one gap left, which is why "cannot distinguish" exists: the header
+ * version comes from extio-zephyr/VERSION, and nothing bumps it per commit, so
+ * every dev image is 0.4.0+100. Equal versions there are not "the same image",
+ * they are no information. Show the verdict, stamp when we asked, and let the
+ * reader judge the cases where the shelf says it cannot tell. */
 const shelfSeen = new Map();   /* box -> {text, at} */
 
-/* extio_fw_check's first field is a closed set of four phrases (see the switch
+/* extio_fw_check's first field is a closed set of five phrases (see the switch
  * in extioconf.tcl). Colour keys off that rather than off a parallel
  * comparison here -- the ordering lives in Tcl precisely so the page and a
- * script cannot reach different verdicts about the same box. */
+ * script cannot reach different verdicts about the same box.
+ *
+ * "cannot distinguish" is equal imgVersions on a channel that stamps every
+ * build with the same one, i.e. "up to date" with the accident taken out of it.
+ * It is warn, not ok: green next to a box that may well be two releases behind
+ * is the wrong reassurance, and it used to be the one this row gave. */
 const SHELF_COLOUR = {
-  'up to date':        'var(--ok)',
-  'update available':  'var(--accent)',
-  'shelf is older':    'var(--bad)',
-  'cannot compare':    'var(--warn)',
+  'up to date':         'var(--ok)',
+  'update available':   'var(--accent)',
+  'shelf is older':     'var(--bad)',
+  'cannot compare':     'var(--warn)',
+  'cannot distinguish': 'var(--warn)',
 };
 const shelfVerdict = text => String(text).split(' · ')[0];
 
