@@ -1445,14 +1445,36 @@ proc extio_fw_check {box} {
     }
     set pfx "extio/shelf/$channel/$bbuild"
 
+    # WHICH ARTIFACT THIS BOX CAN ACTUALLY USE. An MCUboot box installs the
+    # signed `bin` through cmd/ota/*; a UF2 box (the nRF52840 dongles, the XIAO)
+    # has no A/B pair and installs `file` via extio_uf2_push. Asking only for
+    # `bin` -- which this did -- reports "shelf check FAILED ... no .bin image"
+    # for a box whose image is sitting right there, with a wall of 120 version
+    # numbers after it. A check that alarms about a healthy fleet teaches people
+    # to ignore it.
+    #
+    # bin first, so a board that can do both keeps the framed path (it has a
+    # trial and a revert; the UF2 write does not).
+    set method ota
     if { [catch { extio_shelf_pick $channel $bbuild } pick] } {
-        dservSet $pfx/error   $pick
-        dservSet $pfx/checked [clock seconds]
-        return "shelf check FAILED for $box ($channel/$bbuild): $pick"
+        set binerr $pick
+        set method uf2
+        if { [catch { extio_shelf_pick $channel $bbuild "" file } pick] } {
+            dservSet $pfx/error   $binerr
+            dservSet $pfx/checked [clock seconds]
+            return "shelf check FAILED for $box ($channel/$bbuild): $binerr"
+        }
     }
+    dservSet $pfx/method $method
     set img [dict get $pick img]
     set pub [dict get $pick published]
     set imgver [expr {[dict exists $img imgVersion] ? [dict get $img imgVersion] : ""}]
+    # A UF2 image carries no MCUboot header, so it has no imgVersion -- and the
+    # BOX has no state/fw_ver either, for the same reason. There is therefore
+    # nothing to compare on this path yet: the shelf version is a git describe
+    # and the box reports no version at all. Say so rather than implying a
+    # comparison happened. (Fix would be baking the build version into the
+    # image and publishing it as a datapoint; not done.)
     dservClear $pfx/error
     dservSet $pfx/version   [dict get $pick version]
     dservSet $pfx/imgver    $imgver
