@@ -527,7 +527,11 @@ function cardHtml(b) {
              ? `<span class="chip" title="peripherals this central will connect to; others are refused (see ble/adv_unadopted)">adopted: ${esc(b.blePaired)}</span>`
              : `<span class="chip free" title="empty allowlist: connects to ANY d5e7000x peripheral it sees. This is what a box upgrades into, and what the first adopt ends.">promiscuous</span>`)
         : '';
-    const owner = bleOwnerOf(name);
+    /* b.name, NOT `name` -- a bare `name` here resolves to window.name, which
+     * is ALWAYS a defined string, so the lookup silently returned nothing for
+     * every peripheral instead of throwing. Rendered as "not adopted" on a
+     * peripheral that was plainly in the roster shown one card above. */
+    const owner = bleOwnerOf(b.name);
     const ochip = (id.transport === 'ble')
         ? (owner
              ? `<span class="chip" title="adopted by ${esc(owner)} -- it will reconnect to this peripheral and refuse the ones it has not adopted">held by ${esc(owner)}</span>`

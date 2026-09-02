@@ -916,34 +916,57 @@ void box_ble_pair_service(box_config_t *cfg)
 		pair_until_ms = 0;
 		LOG_INF("adoption window closed -- %u adopted", cfg->ble_pair_n);
 	}
-	if (!open) {
-		return;
-	}
-	was_open = 1;
+	was_open = open ? 1 : was_open;
 
 	for (int i = 0; i < CONFIG_BT_MAX_CONN; i++) {
 		struct peer *p = &peers[i];
 		const bt_addr_le_t *a;
 		const char *nm;
+		int slot;
 
 		if (!p->conn || !p->named) {
 			continue;      /* not identified yet -- nothing to bind */
 		}
 		a = bt_conn_get_dst(p->conn);
-		if (pair_find(cfg, a) >= 0) {
+		nm = strchr(p->pfx, '/');
+		nm = nm ? nm + 1 : p->pfx;
+		slot = pair_find(cfg, a);
+
+		/* ALREADY ADOPTED: refresh the LABEL, always, window or not.
+		 *
+		 * The allowlist keys on address and carries the name only as a
+		 * label, which the plan said to refresh on every learn_name() --
+		 * and this is that refresh. Without it a rename strands the old
+		 * label: adopted as "box", renamed to "xiao3", and the roster still
+		 * says "box" for ever. The peripheral keeps working (the address
+		 * still matches, so it reconnects), but every NAME-based question
+		 * gets the wrong answer -- the fleet page shows it as "not adopted"
+		 * beside a central whose roster names a box that no longer exists,
+		 * and `ble release xiao3` finds nothing to release.
+		 *
+		 * Seen on the rig within minutes of the first adoption, because
+		 * naming a fresh peripheral is the FIRST thing anyone does after
+		 * adopting it. */
+		if (slot >= 0) {
+			if (strncmp(cfg->ble_pair_name[slot], nm, BOX_NAME_MAX)) {
+				LOG_INF("adopted peer renamed: %s -> %s",
+					cfg->ble_pair_name[slot], nm);
+				snprintf(cfg->ble_pair_name[slot], BOX_NAME_MAX,
+					 "%s", nm);
+			}
 			continue;
+		}
+		if (!open) {
+			continue;      /* not adopted, and not adopting right now */
 		}
 		if (cfg->ble_pair_n >= BOX_BLE_MAX_PAIR) {
 			LOG_WRN("allowlist full (%d) -- not adopting %s",
 				BOX_BLE_MAX_PAIR, p->pfx);
 			continue;
 		}
-		/* Store the BOX name, not the published prefix: "extio/xiao1" is how
-		 * it appears on the wire, "xiao1" is what every host verb and the
-		 * fleet page say. */
-		nm = strchr(p->pfx, '/');
-		nm = nm ? nm + 1 : p->pfx;
-
+		/* nm is the BOX name, not the published prefix: "extio/xiao1" is
+		 * how it appears on the wire, "xiao1" is what every host verb and
+		 * the fleet page say. */
 		cfg->ble_pair_addr[cfg->ble_pair_n][0] = a->type;
 		memcpy(cfg->ble_pair_addr[cfg->ble_pair_n] + 1, a->a.val, 6);
 		snprintf(cfg->ble_pair_name[cfg->ble_pair_n], BOX_NAME_MAX, "%s", nm);
