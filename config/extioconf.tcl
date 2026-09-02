@@ -2740,10 +2740,20 @@ proc extio_uf2_push {box {channel ""} {version ""}} {
 
     set vol [extio_uf2_wait $before 20000]
     if { $vol eq "" } {
-        catch { file delete $tmp }
-        error "extio_uf2_push: no UF2 volume appeared within 20 s. Either this\
- box has no UF2 bootloader (cmd/bootsel answers 'not supported'), or its drive\
- did not automount -- copy $tmp by hand."
+        # KEEP $tmp. Every branch below tells the operator to flash it by hand,
+        # and deleting the one verified copy of the image while saying "copy
+        # this file" would be its own small betrayal.
+        error "extio_uf2_push: no UF2 volume appeared within 20 s.\
+\n  * MOST LIKELY: this box's firmware PREDATES cmd/bootsel, so it cannot\
+ reboot itself into its bootloader. That is a one-time bootstrap, not a\
+ fault -- remote UF2 update needs firmware that already has the verb, so the\
+ FIRST hop onto this scheme is always by hand. Flash $tmp manually (button\
+ while plugging in, or double-tap reset) and every update after it is one\
+ command.\
+\n  * or the board has no UF2 bootloader at all (cmd/bootsel answers 'not\
+ supported on this board'),\
+\n  * or its drive did not automount -- copy $tmp by hand.\
+\nThe image is downloaded and verified; nothing was written to the box."
     }
     lassign $vol path board
     puts "extio uf2\[$box\]: bootloader up at $path ([expr {$board eq "" ? "no Board-ID" : $board}])"
