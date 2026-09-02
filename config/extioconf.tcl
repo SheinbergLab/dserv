@@ -2535,6 +2535,150 @@ proc extio_cfg_dirty {box} {
 # and NOTHING is published, so a UI keeps showing the old value -- which is
 # indistinguishable from the write having failed, and is exactly the kind of
 # silent staleness this tree keeps paying for.
+# ---- UF2 UPDATE: the OTA path for boards with no MCUboot ----
+#
+# The nRF52840 dongles and the XIAO carry an Adafruit-style UF2 bootloader and
+# no A/B pair, so the framed cmd/ota/* path cannot work on them -- and turning
+# MCUboot on would trade drag-and-drop recovery for SWD-only on sealed hardware
+# with no debugger. This is the update path those boards actually have:
+#
+#   1. cmd/bootsel  -- the box reboots into its UF2 bootloader. SOFTWARE, so it
+#      works on a dongle sealed in a case behind a machine, which is the whole
+#      reason cmd/bootsel exists.
+#   2. its bootloader mounts as a USB drive; copy the .uf2 onto it.
+#   3. it flashes, resets, and re-enumerates.
+#
+# Host-mediated rather than box-mediated, and that is fine: the box cannot pull
+# its own image (it is in a bootloader with no network), but the host can.
+#
+# THE VOLUME IS FOUND BY WATCHING, NOT BY NAME. Every board labels its drive
+# differently (MDK-DONGLE, MDBT50QBOOT, ...), so this waits for a volume that
+# appears AND contains INFO_UF2.TXT -- and then reads Board-ID out of that file,
+# which lets it verify what it is about to flash instead of trusting a label.
+# A name could never do that.
+
+proc extio_uf2_volumes {} {
+    set out {}
+    set dirs {}
+    if { $::tcl_platform(os) eq "Darwin" } {
+        set dirs [glob -nocomplain /Volumes/*]
+    } else {
+        # udisks-style automount; a headless rig may mount nowhere at all, in
+        # which case the caller is told to copy by hand rather than left waiting.
+        foreach d [glob -nocomplain /media/*/* /run/media/*/*] { lappend dirs $d }
+    }
+    foreach d $dirs {
+        set inf [file join $d INFO_UF2.TXT]
+        if { ![file readable $inf] } continue
+        set board ""
+        if { ![catch { open $inf r } fh] } {
+            foreach line [split [read $fh] \n] {
+                if { [regexp {^Board-ID:\s*(.+?)\s*$} $line -> b] } { set board $b }
+            }
+            close $fh
+        }
+        lappend out [list $d $board]
+    }
+    return $out
+}
+
+# Wait up to `ms` for a UF2 volume that was NOT already mounted. Returns
+# {path board-id} or "".
+proc extio_uf2_wait {before ms} {
+    set deadline [expr {[clock milliseconds] + $ms}]
+    while { [clock milliseconds] < $deadline } {
+        foreach v [extio_uf2_volumes] {
+            if { [lsearch -exact $before [lindex $v 0]] < 0 } { return $v }
+        }
+        after 400
+    }
+    return ""
+}
+
+# Push a .uf2 to a box: fetch from the shelf, reboot it into its bootloader,
+# copy, and wait for it to come back.
+#
+# NOT SAVED, NOT ARMED, NO TRIAL -- a UF2 write is immediate and total. There is
+# no A/B pair to fall back to, so the previous image is GONE the moment the copy
+# lands. That is the real cost of this path versus MCUboot's, and the reason the
+# confirm/revert vocabulary is absent here rather than merely unimplemented.
+proc extio_uf2_push {box {channel ""} {version ""}} {
+    if { ![dservExists extio/$box/state/build] } {
+        error "extio_uf2_push: box '$box' hasn't announced state/build yet (connected?)"
+    }
+    set bbuild [string map {/ _} [dservGet extio/$box/state/build]]
+    if { $channel eq "" } {
+        set channel dev
+        if { [dservExists extio/$box/state/channel] } {
+            set c [dservGet extio/$box/state/channel]
+            if { $c ne "" } { set channel $c }
+        }
+    }
+    set pick [extio_shelf_pick $channel $bbuild $version]
+    set d    [dict get $pick manifest]
+    set img  [dict get $pick img]
+    set ver  [dict get $pick version]
+    if { ![dict exists $img uf2] || [dict get $img uf2] eq "" } {
+        error "extio_uf2_push: shelf image $channel/$ver for '$bbuild' has no uf2\
+ (published before publish.sh learned to ship one, or an MCUboot-only board --\
+ use extio_ota_push_shelf for those)"
+    }
+    set file [dict get $img uf2]
+    set url  "$::extio_fw_shelf_url/firmware/extio/$channel/$ver/$file"
+    set tmp  [file join /tmp "extio_uf2_${box}_${ver}.uf2"]
+    if { [catch { https_get $url -outfile $tmp -timeout 60000 } n] } {
+        catch { file delete $tmp }
+        error "extio_uf2_push: fetch failed ($url): $n"
+    }
+    # Verify BEFORE touching the box. A truncated download copied onto a
+    # bootloader is an unrecoverable-without-hands flash of garbage.
+    if { [dict exists $img uf2Sha256] && [dict get $img uf2Sha256] ne "" } {
+        set got [sha256 -file $tmp]
+        if { ![string equal -nocase $got [dict get $img uf2Sha256]] } {
+            catch { file delete $tmp }
+            error "extio_uf2_push: sha mismatch -- shelf [dict get $img uf2Sha256], got $got"
+        }
+    }
+    puts "extio uf2\[$box\]: $channel/$ver $file ([file size $tmp] B) -- rebooting into the bootloader"
+
+    set before {}
+    foreach v [extio_uf2_volumes] { lappend before [lindex $v 0] }
+
+    # SEND IT DIRECTLY, not via dservSet.
+    #
+    # usbio_forward is a dpointSetScript callback and therefore EVENT-LOOP
+    # DEFERRED: a dservSet issued inside a blocking command does not reach the
+    # box until that command RETURNS. This proc then blocks waiting for the
+    # bootloader volume, so the reboot it is waiting for could not happen until
+    # it had already given up -- measured exactly that on the first run ("NO
+    # VOLUME" after 20 s, box still running). extio_ota_push_usb documents the
+    # same trap and solves it the same way.
+    set uh [extio_usb_handle_req $box "extio_uf2_push"]
+    if { [catch { usbioSendFrame $uh extio/$box/cmd/bootsel 0 1 } werr] } {
+        catch { file delete $tmp }
+        error "extio_uf2_push: could not send cmd/bootsel to $box: $werr"
+    }
+
+    set vol [extio_uf2_wait $before 20000]
+    if { $vol eq "" } {
+        catch { file delete $tmp }
+        error "extio_uf2_push: no UF2 volume appeared within 20 s. Either this\
+ box has no UF2 bootloader (cmd/bootsel answers 'not supported'), or its drive\
+ did not automount -- copy $tmp by hand."
+    }
+    lassign $vol path board
+    puts "extio uf2\[$box\]: bootloader up at $path ([expr {$board eq "" ? "no Board-ID" : $board}])"
+
+    # The copy IS the flash. macOS reports a spurious extended-attribute error
+    # because the volume vanishes mid-copy when the bootloader resets -- that is
+    # the SUCCESS signature here, not a failure, so the error is ignored and the
+    # box coming back is what we actually check.
+    catch { file copy -force $tmp [file join $path [file tail $tmp]] } cerr
+    catch { file delete $tmp }
+
+    return "uf2 push $box: $ver written to $path; watch extio/boxes for it to return"
+}
+
 # ---- BLE ADOPTION (BLE_AFFINITY.md) ----
 #
 # `central` is a BLE CENTRAL box (a dongle); `peripheral` is what it holds.

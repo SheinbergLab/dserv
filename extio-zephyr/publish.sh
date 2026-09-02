@@ -58,9 +58,26 @@ SHELF="${FW_SHELF_URL:-https://dserv.net}"
 # The sysbuild app image. NOT zephyr.bin: that is the unsigned link output, which
 # MCUboot refuses, and the failure lands on the BOX as a rejected trial boot
 # rather than here -- so check the signed one exists explicitly.
-BIN="$BUILD_DIR/extio-zephyr/zephyr/zephyr.signed.bin"
-[ -f "$BIN" ] || { echo "!! no signed image at $BIN
-   build it first:  west build -b $BOARD_TARGET . --sysbuild -d $(basename "$BUILD_DIR")" >&2; exit 1; }
+# TWO BUILD LAYOUTS, because two kinds of board publish here now.
+#
+#   sysbuild (MCUboot):  <dir>/extio-zephyr/zephyr/   -- signed slot image
+#   plain:               <dir>/zephyr/                -- zephyr.uf2
+#
+# The nRF52840 dongles and the XIAO ship an Adafruit-style UF2 bootloader and no
+# MCUboot, so they have no signed image to publish and never will. Requiring one
+# is what made this script sysbuild-only.
+if [ -d "$BUILD_DIR/extio-zephyr/zephyr" ]; then
+  ZDIR="$BUILD_DIR/extio-zephyr/zephyr"
+else
+  ZDIR="$BUILD_DIR/zephyr"
+fi
+
+BIN="$ZDIR/zephyr.signed.bin"; [ -f "$BIN" ] || BIN=""
+UF2="$ZDIR/zephyr.uf2";        [ -f "$UF2" ] || UF2=""
+
+[ -n "$BIN" ] || [ -n "$UF2" ] || { echo "!! nothing publishable in $ZDIR
+   expected zephyr.signed.bin (--sysbuild) or zephyr.uf2 (a UF2 board).
+   build it first:  west build -b <target> -d $(basename "$BUILD_DIR") ." >&2; exit 1; }
 
 # THE BOARD TARGET COMES OUT OF THE BUILD, not off the command line.
 #
@@ -78,8 +95,8 @@ BIN="$BUILD_DIR/extio-zephyr/zephyr/zephyr.signed.bin"
 # simply invisible to every box -- a failure with no error anywhere.
 #
 # -b is still accepted, but now it is CHECKED rather than believed.
-DOTCONFIG="$BUILD_DIR/extio-zephyr/zephyr/.config"
-[ -f "$DOTCONFIG" ] || { echo "!! no $DOTCONFIG -- is $BUILD_DIR a --sysbuild dir?" >&2; exit 1; }
+DOTCONFIG="$ZDIR/.config"
+[ -f "$DOTCONFIG" ] || { echo "!! no $DOTCONFIG -- is $BUILD_DIR a build dir?" >&2; exit 1; }
 BUILT_TARGET=$(sed -n 's/^CONFIG_BOARD_TARGET="\(.*\)"$/\1/p' "$DOTCONFIG")
 [ -n "$BUILT_TARGET" ] || { echo "!! no CONFIG_BOARD_TARGET in $DOTCONFIG" >&2; exit 1; }
 
@@ -102,8 +119,9 @@ if [ -z "$VERSION" ]; then
 fi
 DIRTY=0; case "$VERSION" in *-dirty) DIRTY=1 ;; esac
 
-SIZE=$(wc -c < "$BIN" | tr -d ' ')
-SUM=$(shasum -a 256 "$BIN" 2>/dev/null | cut -d' ' -f1 || sha256sum "$BIN" | cut -d' ' -f1)
+PRIMARY="${BIN:-$UF2}"
+SIZE=$(wc -c < "$PRIMARY" | tr -d ' ')
+SUM=$(shasum -a 256 "$PRIMARY" 2>/dev/null | cut -d' ' -f1 || sha256sum "$PRIMARY" | cut -d' ' -f1)
 
 # THE IMAGE VERSION, READ OUT OF THE IMAGE.
 #
@@ -126,7 +144,7 @@ SUM=$(shasum -a 256 "$BIN" 2>/dev/null | cut -d' ' -f1 || sha256sum "$BIN" | cut
 # flags u32, then sem_ver { major u8, minor u8, revision u16, build_num u32 }
 # at offset 20. Empty output (bad magic, short file, no python3) is not fatal:
 # the field is optional and the shelf simply records nothing.
-IMGVER=$(python3 - "$BIN" 2>/dev/null <<'PY' || true
+IMGVER=$(python3 - "${BIN:-/dev/null}" 2>/dev/null <<'PY' || true
 import struct, sys
 with open(sys.argv[1], 'rb') as f:
     h = f.read(28)
@@ -141,13 +159,24 @@ PY
 echo ">> shelf   $SHELF/api/firmware/extio/$CHANNEL"
 echo ">> build   $BUILD_KEY   (board=$BOARD_ID, from $BOARD_TARGET)"
 echo ">> version $VERSION  (dirty=$DIRTY)"
-echo ">> bin     $BIN"
+[ -n "$BIN" ] && echo ">> bin     $BIN"
+[ -n "$UF2" ] && echo ">> uf2     $UF2"
 echo ">>          $SIZE bytes  sha256=$SUM"
 if [ -n "$IMGVER" ]; then
   echo ">> imgver  $IMGVER  (from the MCUboot header -- what the box will report as fw_ver)"
 else
   echo ">> imgver  (none -- no MCUboot header in this image; shelf records nothing)"
 fi
+
+# `ota` means "the FRAMED cmd/ota/* path works on this box", which needs an
+# MCUboot A/B pair -- not merely "this image can be installed somehow". A UF2
+# board is updated by rebooting into its bootloader and copying the file
+# (extio_uf2_push), which is a different mechanism, so claiming ota=1 for it
+# would make the fleet page offer a button that cannot work.
+OTA=0; [ -n "$BIN" ] && OTA=1
+BIN_ARG=""; [ -n "$BIN" ] && BIN_ARG="-F bin=@$BIN"
+UF2_ARG=""; [ -n "$UF2" ] && UF2_ARG="-F uf2=@$UF2"
+echo ">> ota     $OTA  ($([ "$OTA" = 1 ] && echo 'framed cmd/ota/* usable' || echo 'UF2 only -- use extio_uf2_push'))"
 
 [ "$DRY" = 1 ] && { echo ">> dry run, nothing sent"; exit 0; }
 
@@ -160,7 +189,7 @@ CODE=$(curl -sS -o "$RESP" -w '%{http_code}' \
   -H "Authorization: Bearer $DSERV_AGENT_FIRMWARE_TOKEN" \
   -F "version=$VERSION" -F "build=$BUILD_KEY" -F "board=$BOARD_ID" \
   -F "variant=$BUILD_KEY" -F "dirty=$DIRTY" -F "imgver=$IMGVER" \
-  -F "ota=1" -F "bin=@$BIN" \
+  -F "ota=$OTA" $BIN_ARG $UF2_ARG \
   "$SHELF/api/firmware/extio/$CHANNEL") \
   || { echo "!! push failed (curl error)" >&2; rm -f "$RESP"; exit 1; }
 
