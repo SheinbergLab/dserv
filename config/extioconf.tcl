@@ -2621,6 +2621,19 @@ proc extio_cfg_dirty {box} {
 #   2. its bootloader mounts as a USB drive; copy the .uf2 onto it.
 #   3. it flashes, resets, and re-enumerates.
 #
+# THE BOX MUST BE PLUGGED INTO **THIS** HOST, and that is the real limit of this
+# path rather than a detail. Step 1 travels any route dserv can reach the box by
+# -- including over the radio to a BLE peripheral, via its central. Step 2 does
+# NOT: it is a file copy onto USB mass storage, so the box has to be attached to
+# the machine doing the copying.
+#
+# A peripheral on a battery in someone's hand can therefore be told to enter its
+# bootloader and then never handed anything -- which is WORSE than refusing,
+# because it is now sitting in DFU waiting for a file that is not coming. In
+# practice this updates the dongles, and any peripheral currently on a cable.
+# For a sealed battery peripheral the answer is SMP/MCUmgr over BLE, a different
+# mechanism needing MCUboot slots the XIAO layout does not have.
+#
 # Host-mediated rather than box-mediated, and that is fine: the box cannot pull
 # its own image (it is in a bootloader with no network), but the host can.
 #
