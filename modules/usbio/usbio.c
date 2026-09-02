@@ -89,6 +89,31 @@ typedef struct usbio_info_s
   uint64_t rx_var;    /* '}' variable-length frames parsed */
 } usbio_info_t;
 
+/* ---- N DEVICES, NOT ONE ----
+ *
+ * Every field a device needs was already inside usbio_info_t -- fd, reader
+ * thread, framer, wired patterns, counters -- so multiplexing is an ARRAY of
+ * those, not a redesign. What changes is only how a command finds its device:
+ * ClientData is now the module, and each command takes a HANDLE.
+ *
+ * WHY: dserv could bridge exactly one USB box. extio_find_data_port() picked a
+ * single port and extio_service() opened a single fd, so a second box -- a
+ * second BLE central, say -- ran perfectly and was invisible to dserv. That is
+ * a host-side ceiling with nothing to do with the boxes or the radio, and it is
+ * what blocks a two-central rig. Ethernet boxes were never affected: they
+ * connect back to dserv themselves, so the host never had to enumerate them.
+ *
+ * 8 slots because CONFIG_BT_MAX_CONN is 8 and a rig with more than eight USB
+ * boxes on one host has a different problem. Each slot costs a thread only when
+ * OPEN -- closed slots are just zeroed structs. */
+#define USBIO_MAXDEV 8
+
+typedef struct usbio_mod_s
+{
+  usbio_info_t dev[USBIO_MAXDEV];
+  tclserver_t *tclserver;
+} usbio_mod_t;
+
 /* NB: state is PER-INTERP (allocated in Init, passed as command ClientData) -- this
  * module is loaded into multiple subprocess interps (essconf + extioconf) that share
  * one address space, so a single static struct would be clobbered/raced across them. */
@@ -281,6 +306,55 @@ static void usbio_stop(usbio_info_t *info)
   info->usbio_fd = -1;
 }
 
+/* ---- handle <-> device ----
+ *
+ * A handle is the literal string "usbioN" for slot N. Deliberately opaque-ish
+ * and NOT the port path: the path is what you OPENED, the handle is what you
+ * HOLD, and on a hot-swap the same path can come back as a different device.
+ * Callers that want the path keep their own dict (extioconf does).
+ *
+ * Every command takes the handle FIRST and MANDATORY. No "current device", no
+ * defaulting to slot 0 -- a default is exactly how a two-box rig silently
+ * writes every frame to whichever box happened to open first, which is the
+ * failure this whole change exists to remove. */
+static usbio_info_t *usbio_slot(usbio_mod_t *mod, Tcl_Interp *interp, Tcl_Obj *o)
+{
+  const char *h = Tcl_GetString(o);
+  int n = -1;
+
+  if (strncmp(h, "usbio", 5) == 0) {
+    char *end = NULL;
+    long v = strtol(h + 5, &end, 10);
+    if (end && *end == '\0' && v >= 0 && v < USBIO_MAXDEV) n = (int) v;
+  }
+  if (n < 0) {
+    char b[8]; snprintf(b, sizeof b, "%d", USBIO_MAXDEV - 1);
+    Tcl_AppendResult(interp, "usbio: bad handle \"", h,
+                     "\" (expected usbio0..usbio", b, ")", NULL);
+    return NULL;
+  }
+  return &mod->dev[n];
+}
+
+/* ...and the same, but the device must actually be OPEN.
+ *
+ * An explicit error rather than a silent no-op: a closed handle means the
+ * caller's map is stale, and quietly dropping its frames is how a box becomes
+ * unreachable with nothing anywhere to show for it. usbioAlive and usbioStats
+ * deliberately use usbio_slot instead -- "is it alive" and "what did it count"
+ * are exactly the questions you ask about a device that has gone away. */
+static usbio_info_t *usbio_dev(usbio_mod_t *mod, Tcl_Interp *interp, Tcl_Obj *o)
+{
+  usbio_info_t *info = usbio_slot(mod, interp, o);
+
+  if (info && info->usbio_fd < 0) {
+    Tcl_AppendResult(interp, "usbio: handle \"", Tcl_GetString(o),
+                     "\" is not open", NULL);
+    return NULL;
+  }
+  return info;
+}
+
 static int configure_serial_port(int fd)
 {
   struct termios ser;
@@ -335,8 +409,10 @@ static int write_result(Tcl_Interp *interp, const char *who, int w, int expect)
 /* usbioSend <text>  -- write a raw text command + newline (legacy/CLI helper). */
 static int usbio_send_command(ClientData data, Tcl_Interp *interp, int objc, Tcl_Obj *objv[])
 {
-  usbio_info_t *info = (usbio_info_t *) data;
-  if (objc < 2) { Tcl_WrongNumArgs(interp, 1, objv, "command"); return TCL_ERROR; }
+  usbio_mod_t *mod = (usbio_mod_t *) data;
+  if (objc < 3) { Tcl_WrongNumArgs(interp, 1, objv, "handle command"); return TCL_ERROR; }
+  usbio_info_t *info = usbio_dev(mod, interp, objv[1]);
+  if (!info) return TCL_ERROR;
   if (info->usbio_fd < 0) return TCL_OK;
 
   Tcl_Size clen;
@@ -356,8 +432,10 @@ static int usbio_send_command(ClientData data, Tcl_Interp *interp, int objc, Tcl
  * ess/in_obs edge anchors the box clock correctly. */
 static int usbio_sendframe_command(ClientData data, Tcl_Interp *interp, int objc, Tcl_Obj *objv[])
 {
-  usbio_info_t *info = (usbio_info_t *) data;
-  if (objc < 4) { Tcl_WrongNumArgs(interp, 1, objv, "name timestamp value"); return TCL_ERROR; }
+  usbio_mod_t *mod = (usbio_mod_t *) data;
+  if (objc < 5) { Tcl_WrongNumArgs(interp, 1, objv, "handle name timestamp value"); return TCL_ERROR; }
+  usbio_info_t *info = usbio_dev(mod, interp, objv[1]);
+  if (!info) return TCL_ERROR;
   if (info->usbio_fd < 0) return TCL_OK;
 
   char *name = Tcl_GetString(objv[1]);
@@ -422,8 +500,10 @@ static uint32_t usbio_crc32(const unsigned char *p, uint32_t n)
 #define USBIO_OTA_DATA_MAX (DPOINT_BINARY_FIXED_LENGTH - USBIO_OTA_DATA_OFF)   /* 117 */
 static int usbio_sendchunk_command(ClientData data, Tcl_Interp *interp, int objc, Tcl_Obj *objv[])
 {
-  usbio_info_t *info = (usbio_info_t *) data;
-  if (objc < 3) { Tcl_WrongNumArgs(interp, 1, objv, "seq_off bytes"); return TCL_ERROR; }
+  usbio_mod_t *mod = (usbio_mod_t *) data;
+  if (objc < 4) { Tcl_WrongNumArgs(interp, 1, objv, "handle seq_off bytes"); return TCL_ERROR; }
+  usbio_info_t *info = usbio_dev(mod, interp, objv[1]);
+  if (!info) return TCL_ERROR;
   if (info->usbio_fd < 0) return TCL_OK;
 
   Tcl_WideInt seq;
@@ -455,8 +535,10 @@ static int usbio_sendchunk_command(ClientData data, Tcl_Interp *interp, int objc
  * misses it; a supervisor polls this to reopen. */
 static int usbio_alive_command(ClientData data, Tcl_Interp *interp, int objc, Tcl_Obj *objv[])
 {
-  (void) objc; (void) objv;
-  usbio_info_t *info = (usbio_info_t *) data;
+  usbio_mod_t *mod = (usbio_mod_t *) data;
+  if (objc < 2) { Tcl_WrongNumArgs(interp, 1, objv, "handle"); return TCL_ERROR; }
+  usbio_info_t *info = usbio_slot(mod, interp, objv[1]);
+  if (!info) return TCL_ERROR;
   Tcl_SetObjResult(interp, Tcl_NewIntObj((info->usbio_fd >= 0 && info->running) ? 1 : 0));
   return TCL_OK;
 }
@@ -466,8 +548,10 @@ static int usbio_alive_command(ClientData data, Tcl_Interp *interp, int objc, Tc
  * alive = reader thread up on an open fd (0 with fd >= 0 => reader died, see usbioAlive). */
 static int usbio_stats_command(ClientData data, Tcl_Interp *interp, int objc, Tcl_Obj *objv[])
 {
-  (void) objc; (void) objv;
-  usbio_info_t *info = (usbio_info_t *) data;
+  usbio_mod_t *mod = (usbio_mod_t *) data;
+  if (objc < 2) { Tcl_WrongNumArgs(interp, 1, objv, "handle"); return TCL_ERROR; }
+  usbio_info_t *info = usbio_slot(mod, interp, objv[1]);
+  if (!info) return TCL_ERROR;
   char buf[160];
   snprintf(buf, sizeof buf, "rx_bin %llu rx_var %llu rx_bad %llu rx_txt %llu fd %d alive %d",
            (unsigned long long) info->rx_bin, (unsigned long long) info->rx_var,
@@ -478,10 +562,82 @@ static int usbio_stats_command(ClientData data, Tcl_Interp *interp, int objc, Tc
   return TCL_OK;
 }
 
+/* usbioDevices  -- handles of every OPEN device, in slot order.
+ *
+ * The supervisor's inventory: what it should be polling, and what to close when
+ * a port vanishes. */
+static int usbio_devices_command(ClientData data, Tcl_Interp *interp, int objc, Tcl_Obj *objv[])
+{
+  (void) objc; (void) objv;
+  usbio_mod_t *mod = (usbio_mod_t *) data;
+  Tcl_Obj *l = Tcl_NewListObj(0, NULL);
+
+  for (int i = 0; i < USBIO_MAXDEV; i++) {
+    if (mod->dev[i].usbio_fd >= 0) {
+      char h[16];
+      snprintf(h, sizeof h, "usbio%d", i);
+      Tcl_ListObjAppendElement(interp, l, Tcl_NewStringObj(h, -1));
+    }
+  }
+  Tcl_SetObjResult(interp, l);
+  return TCL_OK;
+}
+
+/* usbioWired <handle>  -- the %match patterns THIS box has registered.
+ *
+ * THE ROUTING KEY, and the reason multiplexing needs no new protocol. A box
+ * announces the datapoints it wants forwarded ("%match extio/dongle2/cmd/... 1"),
+ * the framer already de-dups them into info->wired[], and the box NAME is right
+ * there in the pattern. So the host can learn which box sits behind which
+ * handle by asking, instead of guessing from tty names -- which is what it had
+ * to do before, and which is why it could only ever manage one.
+ *
+ * Empty until the box has sent its registration: a freshly opened port has no
+ * identity yet, and the caller must treat that as "not known yet" rather than
+ * "no box". */
+static int usbio_wired_command(ClientData data, Tcl_Interp *interp, int objc, Tcl_Obj *objv[])
+{
+  usbio_mod_t *mod = (usbio_mod_t *) data;
+  if (objc < 2) { Tcl_WrongNumArgs(interp, 1, objv, "handle"); return TCL_ERROR; }
+  usbio_info_t *info = usbio_slot(mod, interp, objv[1]);
+  if (!info) return TCL_ERROR;
+
+  Tcl_Obj *l = Tcl_NewListObj(0, NULL);
+  for (int i = 0; i < info->nwired; i++) {
+    Tcl_ListObjAppendElement(interp, l, Tcl_NewStringObj(info->wired[i], -1));
+  }
+  Tcl_SetObjResult(interp, l);
+  return TCL_OK;
+}
+
 static int usbio_open_command(ClientData data, Tcl_Interp *interp, int objc, Tcl_Obj *objv[])
 {
-  usbio_info_t *info = (usbio_info_t *) data;
-  if (objc < 2) { Tcl_WrongNumArgs(interp, 1, objv, "port"); return TCL_ERROR; }
+  usbio_mod_t *mod = (usbio_mod_t *) data;
+  if (objc < 2) { Tcl_WrongNumArgs(interp, 1, objv, "port ?handle?"); return TCL_ERROR; }
+
+  /* Pick the slot. With an explicit handle this REOPENS that slot -- which is
+   * how extio_service recovers a reader that died while the port stayed put
+   * (the wake-from-sleep POLLHUP), without disturbing any other box. Without
+   * one, take the first free slot. */
+  usbio_info_t *info;
+  int slot = -1;
+
+  if (objc >= 3) {
+    info = usbio_slot(mod, interp, objv[2]);
+    if (!info) return TCL_ERROR;
+    slot = (int) (info - mod->dev);
+  } else {
+    for (int i = 0; i < USBIO_MAXDEV; i++) {
+      if (mod->dev[i].usbio_fd < 0) { slot = i; break; }
+    }
+    if (slot < 0) {
+      Tcl_AppendResult(interp, Tcl_GetString(objv[0]),
+                       ": all device slots are in use", NULL);
+      return TCL_ERROR;
+    }
+    info = &mod->dev[slot];
+  }
+  info->tclserver = mod->tclserver;
 
   usbio_stop(info);                              /* cleanly stop any prior reader */
 
@@ -502,14 +658,25 @@ static int usbio_open_command(ClientData data, Tcl_Interp *interp, int objc, Tcl
     Tcl_AppendResult(interp, Tcl_GetString(objv[0]), ": worker thread failed", NULL);
     return TCL_ERROR;
   }
-  Tcl_SetObjResult(interp, Tcl_NewIntObj(ret));
+  /* Returns the HANDLE, not configure_serial_port's return code -- the caller
+   * needs the handle for every subsequent command, and a non-zero `ret` never
+   * meant "failed" (the fd is open and usable either way). Kept in the error
+   * text below so a misbehaving tty still says so. */
+  (void) ret;
+  char h[16];
+  snprintf(h, sizeof h, "usbio%d", slot);
+  Tcl_SetObjResult(interp, Tcl_NewStringObj(h, -1));
   return TCL_OK;
 }
 
 static int usbio_close_command(ClientData data, Tcl_Interp *interp, int objc, Tcl_Obj *objv[])
 {
-  (void) interp; (void) objc; (void) objv;
-  usbio_stop((usbio_info_t *) data);
+  usbio_mod_t *mod = (usbio_mod_t *) data;
+  if (objc < 2) { Tcl_WrongNumArgs(interp, 1, objv, "handle"); return TCL_ERROR; }
+  usbio_info_t *info = usbio_slot(mod, interp, objv[1]);
+  if (!info) return TCL_ERROR;
+  usbio_stop(info);
+  var_reset(info);          /* a truncated '}' in flight would leak its vbuf */
   return TCL_OK;
 }
 
@@ -536,10 +703,15 @@ EXPORT(int,Dserv_usbio_Init) (Tcl_Interp *interp)
   }
   /* per-interp state (see note at g_usbioInfo removal): each Init gets its own
    * instance so essconf's usbio and extioconf's usbio don't share one struct. */
-  usbio_info_t *info = (usbio_info_t *) calloc(1, sizeof *info);
+  usbio_mod_t *info = (usbio_mod_t *) calloc(1, sizeof *info);
   if (!info) return TCL_ERROR;
-  info->usbio_fd = -1;
   info->tclserver = tclserver_get_from_interp(interp);
+  /* EVERY slot starts closed, and -1 is not what calloc leaves. Miss this and
+   * slot 0 looks open on a fd of 0 -- which is stdin. */
+  for (int i = 0; i < USBIO_MAXDEV; i++) {
+    info->dev[i].usbio_fd = -1;
+    info->dev[i].tclserver = info->tclserver;
+  }
   /* running / fr_mode / fr_have / nwired / rx_* are zero-initialised by calloc */
 
   Tcl_CreateObjCommand(interp, "usbioOpen",
@@ -556,5 +728,9 @@ EXPORT(int,Dserv_usbio_Init) (Tcl_Interp *interp)
                        (Tcl_ObjCmdProc *) usbio_stats_command, (ClientData) info, NULL);
   Tcl_CreateObjCommand(interp, "usbioAlive",
                        (Tcl_ObjCmdProc *) usbio_alive_command, (ClientData) info, NULL);
+  Tcl_CreateObjCommand(interp, "usbioDevices",
+                       (Tcl_ObjCmdProc *) usbio_devices_command, (ClientData) info, NULL);
+  Tcl_CreateObjCommand(interp, "usbioWired",
+                       (Tcl_ObjCmdProc *) usbio_wired_command, (ClientData) info, NULL);
   return TCL_OK;
 }

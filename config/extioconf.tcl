@@ -282,7 +282,7 @@ settingsdb::init [file join $dspath db settings.db]
 # which udev builds from those descriptors. The old "highest ttyACM/usbmodem"
 # heuristic remains only as a fallback (older firmware, or if by-id is absent).
 # Override in local/extio.tcl if needed.
-proc extio_find_data_port {} {
+proc extio_scan_data_ports {} {
     if { $::tcl_platform(os) eq "Darwin" } {
         # macOS has no /dev/serial/by-id. IDENTITY-FIRST via ioreg (2026-07-17:
         # the BLE handheld's dead data CDC outsorted the receiver's in the old
@@ -347,20 +347,25 @@ proc extio_find_data_port {} {
         set ::extio_port_cache ""
 
         if { ![catch { exec ioreg -r -c IOUSBHostDevice -l -w0 } out] } {
-            set product ""; set best ""
+            set product ""; set found {}
             foreach line [split $out \n] {
                 if { [regexp {"USB Product Name" = "([^"]+)"} $line -> p] } {
                     set product $p
                 } elseif { [regexp {"IODialinDevice" = "(/dev/tty\.usbmodem[^"]+)"} $line -> tty] } {
                     # ioreg reports the tty.* name; we open the cu.* twin
                     if { $product eq "extio USB box" && [string match {*3} $tty] } {
-                        set best [string map {tty. cu.} $tty]
+                        # LAPPEND, not set. This used to keep only the LAST match,
+                        # which is why dserv could bridge exactly one USB box: a
+                        # second one ran perfectly and was invisible here. Whichever
+                        # ioreg happened to report last won, so which box you got was
+                        # not even stable across replugs.
+                        lappend found [string map {tty. cu.} $tty]
                     }
                 }
             }
-            if { $best ne "" } {
-                set ::extio_port_cache $best
-                return $best
+            if { [llength $found] } {
+                set ::extio_port_cache $found
+                return $found
             }
         }
         # An ioreg that failed or identified nothing leaves the cache "" for
@@ -399,23 +404,105 @@ proc extio_find_data_port {} {
     # USB box (two openers on one serial port -> stolen replies + corrupted
     # dispense -> dserv wedge + runaway juice, 2026-07-09). A box whose identity
     # is somehow absent: pin its port by redefining this proc in local/extio.tcl.
+    set found {}
     foreach link [lsort [glob -nocomplain /dev/serial/by-id/*extio*if02*]] {
         if { ![catch { file readlink $link } tgt] } {
-            return [file normalize [file join [file dirname $link] $tgt]]
+            lappend found [file normalize [file join [file dirname $link] $tgt]]
+        }
+    }
+    return $found
+}
+
+# The documented per-rig escape hatch, now a HOOK rather than the scanner.
+#
+# The comments above have long told anyone whose box lacks a USB identity to
+# "pin its port by redefining this proc in local/extio.tcl". That still works:
+# whatever it returns is added to the discovered set. It returns nothing by
+# default, so the ordinary path costs no extra ioreg -- which matters, because
+# that exec is the 67 ms stall the caching above exists to avoid.
+proc extio_find_data_port {} { return "" }
+
+# Every data port to bridge: what identity found, plus anything a rig pinned.
+proc extio_find_data_ports {} {
+    set ports [extio_scan_data_ports]
+    set pin [extio_find_data_port]
+    if { $pin ne "" && [lsearch -exact $ports $pin] < 0 } {
+        set ports [linsert $ports 0 $pin]
+    }
+    return $ports
+}
+
+# ---- forwarding (wired once; survives hot-swap re-opens since usbioSendFrame uses
+#      whatever fd is currently open) ----
+# ---- WHICH BOX IS BEHIND WHICH HANDLE ----
+#
+# The boxes already answer this and always did. Each one periodically emits its
+# own "%match extio/<name>/cmd/... 1" registration lines down the CDC, the usbio
+# framer de-dups them into its per-device wired[] table, and usbioWired hands
+# that back. So identity comes from what the box SAYS, not from tty names or
+# enumeration order -- which is what made a second box unroutable before.
+#
+# Cached because usbio_forward is a hot path (every config/cmd push, and the obs
+# edge, which is timing-critical). extio_usb_forget drops the cache whenever the
+# device set changes; a box that has not yet sent its registration simply is not
+# in the map, and a frame for it is dropped exactly as it was when no port was
+# open at all.
+array set ::extio_box_h {}
+
+proc extio_usb_forget {} { array unset ::extio_box_h }
+
+proc extio_usb_handle {box} {
+    if { [info exists ::extio_box_h($box)] } { return $::extio_box_h($box) }
+    foreach h [usbioDevices] {
+        foreach pat [usbioWired $h] {
+            if { [string match "extio/$box/*" $pat] } {
+                set ::extio_box_h($box) $h
+                return $h
+            }
         }
     }
     return ""
 }
 
-# ---- forwarding (wired once; survives hot-swap re-opens since usbioSendFrame uses
-#      whatever fd is currently open) ----
 proc usbio_forward {dp data} {
     # cmd/ota/pull is HOST-side (a network client asks us to pull from the shelf),
     # not a box command -- route it to the trigger instead of forwarding to the box.
     # (extio_forward_box wires cmd/* here per box, which would otherwise shadow the
     # global extio/*/cmd/ota/pull dpointSetScript.)
     if { [string match extio/*/cmd/ota/pull $dp] } { extio_ota_pull_trigger $dp $data; return }
-    catch { usbioSendFrame $dp [dservTimestamp $dp] $data }
+
+    set ts [dservTimestamp $dp]
+
+    # ADDRESSED to a box we can place -> that box only. Sending it to every open
+    # port would be wrong rather than merely wasteful: a `cmd/factory` or an OTA
+    # `begin` meant for one box would land on all of them.
+    if { [regexp {^extio/([^/]+)/} $dp -> box] } {
+        set h [extio_usb_handle $box]
+        if { $h ne "" } { catch { usbioSendFrame $h $dp $ts $data } ; return }
+        # UNPLACEABLE, and that is NORMAL for a RELAYED box. A BLE peripheral
+        # has no USB port of its own -- its frames travel to whichever central
+        # holds it, and only that central knows which one that is. usbioWired
+        # only ever names boxes that registered over USB themselves, so
+        # extio/xiao1/config/... resolves to nothing here.
+        #
+        # Broadcasting is the safe answer and NOT a guess: the firmware already
+        # rejects a name it does not own. box_ble_forward() returns 0 when no
+        # connected peer answers to that prefix, and dserv_dispatch gates on the
+        # box's own name, so a central that does not hold that peripheral drops
+        # the frame exactly as it drops any frame addressed elsewhere. The one
+        # central that does hold it forwards it.
+        #
+        # Targeting this properly needs the usbio reader to record WHICH device
+        # a relayed datapoint arrived on -- worth doing, and not needed to make
+        # two centrals work.
+    }
+    # Unaddressed (ess/in_obs, the rig-wide obs edge) or unplaceable. Every box
+    # needs the obs edge:
+    # it is each box's clock anchor and its obs-mirror source, so a box that
+    # misses it cannot obs-sync at all (extioconf wires exactly this one key).
+    foreach h [usbioDevices] {
+        catch { usbioSendFrame $h $dp $ts $data }
+    }
 }
 ;# catch: a vanished device makes sends error (or short-write); forwards just drop --
 ;# same semantics as fd-not-open -- until extio_service's supervision reopens/clears.
@@ -788,7 +875,8 @@ proc extio_ota_push_usb {box file sha size} {
     # USB; a push against the dead fd wedged this subprocess -- and with it dserv's
     # whole command port -- for the length of the blast). Every write below is now
     # checked; any failure aborts the push in ~a second instead of grinding on.
-    if { ![usbioAlive] } { error "extio_ota_push: usb device not connected (usbioAlive=0)" }
+    set uh [extio_usb_handle_req $box "extio_ota_push"]
+    if { ![usbioAlive $uh] } { error "extio_ota_push: usb device not connected (usbioAlive=0)" }
 
     set fp [open $file rb]; fconfigure $fp -translation binary
     set ::extio_ota_img($box)  [read $fp]; close $fp
@@ -804,7 +892,7 @@ proc extio_ota_push_usb {box file sha size} {
     # begin DIRECT (usbio_forward is event-loop deferred; a dservSet wouldn't reach
     # the box until this command returns -- after the blast). Synchronous = box
     # stages before the 'D' frames.
-    if { ![extio_ota_usb_write128 { usbioSendFrame extio/$box/cmd/ota/begin 0 "$sha $size" }] } {
+    if { ![extio_ota_usb_write128 { usbioSendFrame $uh extio/$box/cmd/ota/begin 0 "$sha $size" }] } {
         extio_ota_usb_fail $box "cmd/ota/begin write failed (device gone?)"
         error "extio_ota_push: begin write failed -- aborted (state/ota/result=host_io)"
     }
@@ -821,6 +909,25 @@ proc extio_ota_push_usb {box file sha size} {
 # throws on a hard write error (device detached), the old one returns a short
 # count on any failure. Either way != 128 means the frame did not go. Runs the
 # send in the CALLER's frame so $box/$sha/$size resolve.
+# The USB handle to reach $box, for a TARGETED operation. Errors rather than
+# guessing: an OTA aimed at the wrong box would flash the wrong box. (Ordinary
+# forwards are different -- see usbio_forward, where broadcasting is safe
+# because the firmware rejects a name it does not own.)
+proc extio_usb_handle_req {box who} {
+    set h [extio_usb_handle $box]
+    if { $h eq "" } {
+        set open [usbioDevices]
+        # EXACTLY ONE box bridged and it has not identified itself yet: that is
+        # the pre-multiplex situation, and the old code's behaviour. Safe,
+        # because there is nothing else it could mean.
+        if { [llength $open] == 1 } { return [lindex $open 0] }
+        error "$who: cannot tell which USB port reaches '$box'\
+ ([llength $open] bridged: $open). It has not registered its %match patterns\
+ yet, or it is a relayed BLE box, which has no USB port of its own."
+    }
+    return $h
+}
+
 proc extio_ota_usb_write128 {sendcmd} {
     if { [catch { uplevel 1 $sendcmd } w] } { return 0 }
     return [expr {$w == 128}]
@@ -828,19 +935,20 @@ proc extio_ota_usb_write128 {sendcmd} {
 
 proc extio_ota_usb_blast {box from} {                  ;# write every chunk from $from to EOF; backpressure paces us
     if { ![info exists ::extio_ota_img($box)] } return
+    set uh [extio_usb_handle_req $box "extio_ota_usb_blast"]
     set data $::extio_ota_img($box); set size $::extio_ota_size($box); set chunk $::extio_ota_chunk
     set fails 0
     for { set off $from } { $off < $size } { incr off $chunk } {
         set end [expr {min($off + $chunk, $size)}]
-        if { [extio_ota_usb_write128 { usbioSendChunk $off [string range $data $off [expr {$end - 1}]] }] } {
+        if { [extio_ota_usb_write128 { usbioSendChunk $uh $off [string range $data $off [expr {$end - 1}]] }] } {
             set fails 0
             continue
         }
         # Failed chunk: reader death = device gone (abort NOW); otherwise allow a
         # couple of retries for a transient >400ms stall (box mid-sector-erase),
         # then abort. Bound: worst case ~3 x 400ms parked, never the whole image.
-        if { ![usbioAlive] || [incr fails] >= 3 } {
-            extio_ota_usb_fail $box "chunk write failed at $off/$size (fails=$fails alive=[usbioAlive])"
+        if { ![usbioAlive $uh] || [incr fails] >= 3 } {
+            extio_ota_usb_fail $box "chunk write failed at $off/$size (fails=$fails alive=[usbioAlive $uh])"
             return
         }
         incr off -$chunk                               ;# retry this chunk
@@ -1569,7 +1677,8 @@ proc extio_ota_push_docked {box file sha size port} {
     # begin SYNCHRONOUSLY over the radio relay: usbioSendFrame -> receiver ->
     # (CFG_NONE) relay -> handheld. A dservSet would defer to the event loop
     # (i.e. until after this blocking command returns).
-    usbioSendFrame extio/$box/cmd/ota/begin 0 "$sha $size"
+    usbioSendFrame [extio_usb_handle_req $box "extio_ota_push_docked"] \
+        extio/$box/cmd/ota/begin 0 "$sha $size"
     exec sleep 2                                       ;# box stages the inactive slot (~0.1s) + radio hop
 
     set chunk $::extio_ota_chunk
@@ -2997,30 +3106,48 @@ proc extio_obs_pin_track {box} {
 # ---- hot-swap + discovery: runs every 2 s. (Re)open when the box's data port
 #      (re)appears, close when it vanishes, or when the reader thread has died while the
 #      port stayed put; then pick up any newly-seen box. ----
-set ::extio_port ""
+# path -> usbio handle, for every USB box currently bridged. Was a single
+# ::extio_port, which is precisely why only one box could ever be reached.
+array set ::extio_ports {}
+
 proc extio_service {} {
-    set want [extio_find_data_port]
-    if { $::extio_port ne "" && ![file exists $::extio_port] } {
-        catch { usbioClose }
-        puts "extio: USB box disconnected ($::extio_port)"
-        set ::extio_port ""
+    set want [extio_find_data_ports]
+
+    # 1. GONE: the port file vanished (unplugged).
+    foreach path [array names ::extio_ports] {
+        if { ![file exists $path] } {
+            catch { usbioClose $::extio_ports($path) }
+            puts "extio: USB box disconnected ($path)"
+            unset ::extio_ports($path)
+            extio_usb_forget
+        }
     }
-    # A host sleep/wake can kill the reader thread with a transient POLLHUP while the
-    # write fd stays valid -- so the port file never vanishes and the check above misses
-    # it (obs_pin keeps toggling, but nothing is read back). Detect the dead reader and
-    # reopen the same port. usbioOpen stops+joins any prior worker first, so this is safe.
-    set reader_dead [expr { $::extio_port ne "" && ![usbioAlive] }]
-    if { $want ne "" && ($want ne $::extio_port || $reader_dead) } {
-        if { $reader_dead } {
-            puts "extio: reader stopped on $::extio_port -- reopening (wake-from-sleep recovery)"
+    # 2. DEAD READER on a port that is still present. A host sleep/wake can kill
+    #    the reader thread with a transient POLLHUP while the write fd stays
+    #    valid -- so the file never vanishes and step 1 misses it (obs_pin keeps
+    #    toggling, but nothing is read back). Reopen THAT SLOT, which leaves
+    #    every other box undisturbed; usbioOpen stops+joins its prior worker.
+    foreach path [array names ::extio_ports] {
+        set h $::extio_ports($path)
+        if { [usbioAlive $h] } continue
+        puts "extio: reader stopped on $path -- reopening (wake-from-sleep recovery)"
+        if { [catch { usbioOpen $path $h } err] } {
+            puts stderr "extio: reopen $path failed: $err"
+            catch { usbioClose $h }
+            unset ::extio_ports($path)
+            extio_usb_forget
         }
-        if { [catch { usbioOpen $want } err] } {
-            puts stderr "extio: open $want failed: $err"
-            set ::extio_port ""
-        } else {
-            set ::extio_port $want
-            puts "extio: USB box connected on $want"
+    }
+    # 3. NEW: identified, not yet open.
+    foreach path $want {
+        if { [info exists ::extio_ports($path)] } continue
+        if { [catch { usbioOpen $path } h] } {
+            puts stderr "extio: open $path failed: $h"
+            continue
         }
+        set ::extio_ports($path) $h
+        puts "extio: USB box connected on $path ($h)"
+        extio_usb_forget
     }
     extio_discover
 }
