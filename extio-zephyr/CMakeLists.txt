@@ -106,8 +106,12 @@ endif()
 #
 # A property of the BOOTLOADER THE BOARD SHIPS WITH, which is why this is a
 # board list and not a Kconfig: nothing we build decides it, and no symbol
-# Zephyr defines reports it. Both boards below were confirmed by reading
-# INFO_UF2.TXT off the mounted volume (familyID 0xADA52840).
+# Zephyr defines reports it. Every board below was confirmed by reading
+# INFO_UF2.TXT off its mounted volume -- and NOTE THE FAMILY IDS DIFFER: the
+# XIAO and the MDK dongle stamp 0xADA52840, the Raytac MDBT50Q-RX stamps
+# 0x239a010b (its own VID/PID). Family ids are per-BOARD here, not per-SoC, so
+# a .uf2 built with another board's number is simply the wrong file. Read the
+# file on the device.
 #
 # It matters most on the dongle, which is SEALED and lives in a USB port behind
 # a machine: without this, every reflash needs someone to hold its button while
@@ -120,7 +124,8 @@ endif()
 # by reset_usb_boot()), and writing 0x57 to a Nordic retention register would do
 # nothing there. This define means specifically "Adafruit's nRF52 bootloader,
 # triggered by GPREGRET".
-if(CONFIG_BOARD_XIAO_BLE OR CONFIG_BOARD_NRF52840_MDK_USB_DONGLE)
+if(CONFIG_BOARD_XIAO_BLE OR CONFIG_BOARD_NRF52840_MDK_USB_DONGLE
+   OR CONFIG_BOARD_RAYTAC_MDBT50Q_CX_40_DONGLE)
 	target_compile_definitions(app PRIVATE BOX_HAVE_UF2_BOOTLOADER=1)
 endif()
 

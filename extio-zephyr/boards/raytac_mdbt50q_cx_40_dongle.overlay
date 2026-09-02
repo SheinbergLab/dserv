@@ -1,0 +1,91 @@
+/*
+ * extio-zephyr on a Raytac nRF52840 USB dongle — a second BLE CENTRAL, so two
+ * sets of peripherals can be kept apart (BLE_AFFINITY.md).
+ *
+ * WHICH SKU THIS IS, and why that is written down. Zephyr's board target is
+ * `raytac_mdbt50q_cx_40_dongle` (module MDBT50Q-P1M); the unit on the bench is
+ * sold as **MDBT50Q-RX**. Same module family and USB dongle form factor, and
+ * the radio/USB paths do not care — but the LED and button PADS below come from
+ * Zephyr's DTS for the CX-40, and nobody has checked them against an RX
+ * silkscreen. The failure mode if they differ is cosmetic and obvious: the boot
+ * heartbeat blinks nothing, or the wrong LED. Not a reason to hold up the
+ * bring-up; a reason not to trust `pin 2` as a button until someone presses it.
+ *
+ * BETTER OFF THAN THE MDK DONGLE on both counts that matter for a stick:
+ *   - TWO LEDs, so a future central status palette has more than one colour;
+ *   - a REAL user button (SW1 on gpio1.6, distinct from the nRESET pad the
+ *     UICR claims), which the makerdiary dongle simply does not have.
+ * It also has two external oscillators, so the 32.768 kHz LF crystal is
+ * confirmed rather than assumed — see central.conf on why that matters for the
+ * echo estimator.
+ *
+ * As on the MDK dongle, this board is a RADIO BRIDGE and its pin map says so:
+ * three entries, no invented field pads. Add pads when someone has the pinout
+ * and a meter.
+ */
+
+#include <zephyr/dt-bindings/gpio/gpio.h>
+
+/ {
+	zephyr,user {
+		/* Both LEDs are ACTIVE_LOW on this board; the flag is what makes
+		 * 1 = lit here as everywhere else. LED_PIN lands on box pin 0
+		 * (main.c), which keeps the Teensy #else trap away from a board
+		 * that has no D3 to blink. */
+		box-gpios = <&gpio0 6 GPIO_ACTIVE_LOW>,                   /* 0 = LED D1 */
+			    <&gpio0 8 GPIO_ACTIVE_LOW>,                   /* 1 = LED D2 */
+			    <&gpio1 6 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;  /* 2 = SW1    */
+
+		box-pin-silk = "D1","D2","SW1";
+
+		/* NO box-status-rgb: box_status_led.c only claims pins under
+		 * CONFIG_BOX_BLE_PERIPHERAL and there is no central palette yet.
+		 * Two LEDs on a sealed stick is a better canvas than the MDK
+		 * dongle's RGB-in-a-case, so this board is the one to revisit when
+		 * scanning / linked / fleet-full / adopted becomes worth showing.
+		 *
+		 * NO box-ain-pins: no analog pads confirmed, CONFIG_ADC stays off. */
+	};
+};
+
+/*
+ * ---- USB: console FIRST, data SECOND ----
+ *
+ * Instance order sets USB interface numbering and box_net_usb.c static-asserts
+ * it. This board carries BOTH halves of the trap the XIAO and the MDK dongle
+ * hit, for the same two reasons:
+ *
+ *   1. its .dts ends with `#include <cdc_acm_serial.dtsi>`, which adds
+ *      `board_cdc_acm_uart` under zephyr_udc0 and points five chosen entries at
+ *      it — taking DT instance 0, so our data pipe would land at 2 and the
+ *      static assert fires (correctly);
+ *   2. its Kconfig.defconfig sources Kconfig.cdc_acm_serial.defconfig, which
+ *      stands up a SECOND usbd context competing with box_usbd.c for the one
+ *      USB peripheral (see the .conf).
+ *
+ * Both fixes are required. Either alone leaves a box that reports
+ * `active uplink: usb`, answers on its console, and has no frame pipe — check
+ * the enumerated node COUNT, not the box. Two cu.usbmodem* = right.
+ */
+/ {
+	chosen {
+		zephyr,console     = &cdc_acm_console;
+		zephyr,shell-uart  = &cdc_acm_console;
+		zephyr,uart-mcumgr = &cdc_acm_console;
+		zephyr,bt-mon-uart = &cdc_acm_console;
+		zephyr,bt-c2h-uart = &cdc_acm_console;
+	};
+};
+
+&zephyr_udc0 {
+	/delete-node/ board_cdc_acm_uart;
+
+	cdc_acm_console: cdc_acm_uart0 {
+		compatible = "zephyr,cdc-acm-uart";
+	};
+	cdc_acm_data: cdc_acm_uart1 {
+		compatible = "zephyr,cdc-acm-uart";
+		rx-fifo-size = <8192>;
+		tx-fifo-size = <8192>;
+	};
+};

@@ -79,6 +79,15 @@ check mdkdongle -b nrf52840_mdk_usb_dongle -d build-check-mdkdongle "$HERE"
 check mdkdongle-central -b nrf52840_mdk_usb_dongle -d build-check-mdkdongle-central "$HERE" -- \
       -DEXTRA_CONF_FILE=central.conf
 
+# The Raytac nRF52840 dongle -- the SECOND central, so two sets of peripherals
+# can be kept apart. Both forms for the same reason as the MDK dongle: the
+# plain line builds none of the radio role. Its factory bootloader is the Nordic
+# Open Bootloader rather than a UF2 loader, so it gets no BOX_HAVE_UF2_BOOTLOADER
+# and no -ota sibling yet (see boards/raytac_mdbt50q_cx_40_dongle.conf).
+check raytac -b raytac_mdbt50q_cx_40_dongle -d build-check-raytac "$HERE"
+check raytac-central -b raytac_mdbt50q_cx_40_dongle -d build-check-raytac-central "$HERE" -- \
+      -DEXTRA_CONF_FILE=central.conf
+
 # The teensy40 in its OTA form, which is a DIFFERENT BUILD, not a variant: it
 # pulls in MCUboot as a second image, relinks the app to slot0, and compiles in
 # box_ota_flash.c plus the whole arm/confirm path that the plain build never

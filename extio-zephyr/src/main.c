@@ -1103,6 +1103,17 @@ static void groups_resync(void)
  * someone's signal wire, which is the trap the branches above exist to avoid. */
 #define LED_PIN  11   /* LED red = P0.26, ACTIVE_LOW in the pin map    */
 #define BTN_PIN  14   /* no user button on this module -- unmapped     */
+#elif defined(CONFIG_BOARD_RAYTAC_MDBT50Q_CX_40_DONGLE)
+/* A BLE central in a USB stick, like the MDK dongle -- but with two LEDs and a
+ * REAL user button, which that board does not have. Map is three entries (see
+ * the overlay for why nothing else is declared).
+ *
+ * BTN_PIN IS A GENUINE INPUT HERE. SW1 is on gpio1.6, distinct from the pad the
+ * UICR turns into nRESET, so unlike the MDK dongle (whose only button IS the
+ * reset) this box can actually be prodded. Unverified against an MDBT50Q-RX
+ * silkscreen though -- these pads come from Zephyr's CX-40 DTS. */
+#define LED_PIN  0    /* LED D1 = P0.06, ACTIVE_LOW in the pin map    */
+#define BTN_PIN  2    /* SW1    = P1.06, active low, pull-up          */
 #elif defined(CONFIG_BOARD_NRF52840_MDK_USB_DONGLE)
 /* The BLE central in a USB stick. Its whole pin map is three LEDs (the overlay
  * explains why nothing else is declared), so box pin 0 IS the red LED.
