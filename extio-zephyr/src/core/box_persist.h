@@ -23,7 +23,11 @@
 #include <string.h>
 
 #define BOX_PERSIST_MAGIC    0x57494F31u   /* "WIO1" */
-#define BOX_PERSIST_VERSION  28  /* v28: ain_label[] (per-analog-channel role
+#define BOX_PERSIST_VERSION  29  /* v29: ble_pair_* (which peripherals a BLE
+                                  * central will connect to; empty = promiscuous,
+                                  * which is what keeps deployed pairs working
+                                  * across the upgrade -- BLE_AFFINITY.md).
+                                  * v28: ain_label[] (per-analog-channel role
                                   * labels, so logged blocks are self-describing).
                                   * v27: ain_clk_ppm (measured CTIMER source
                                   * deviation; makes a requested rate the delivered one).

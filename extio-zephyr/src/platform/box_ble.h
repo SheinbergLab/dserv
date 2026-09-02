@@ -115,9 +115,9 @@ int box_ble_scanning(void);
  * because the controller refused", which is a fault. */
 int box_ble_scan_err(void);
 
-/* Advertisements seen at all, those carrying our service UUID, and those
- * matched but SKIPPED because that address is already a connected peer. Any
- * pointer may be NULL.
+/* Advertisements seen at all, those carrying our service UUID, those matched
+ * but SKIPPED as an address already connected, and those REFUSED as not
+ * adopted. Any pointer may be NULL.
  *
  * seen/matched split the two causes of a scanning central with no peers: seen=0
  * means nothing is advertising in range (or we are not really scanning); seen>0
@@ -129,8 +129,48 @@ int box_ble_scan_err(void);
  * (measured 204/204 with create_err 197, on a fleet that was otherwise
  * healthy). dup rising while create_err stays flat is that churn being
  * suppressed; create_err rising ANYWAY means the refusals never came from
- * duplicate addresses and the fix addressed the wrong thing. */
-void box_ble_scan_counts(uint32_t *seen, uint32_t *matched, uint32_t *dup);
+ * duplicate addresses and the fix addressed the wrong thing.
+ *
+ * `unadopted` counts matched advertisers refused because they are not in this
+ * central's allowlist (BLE_AFFINITY.md). Counted rather than silently skipped:
+ * an un-adopted peripheral in range is otherwise indistinguishable from a
+ * broken one, and this is the reading that says "it is there, adopt it" instead
+ * of "it is dead". Always 0 on a promiscuous central (empty allowlist). */
+void box_ble_scan_counts(uint32_t *seen, uint32_t *matched, uint32_t *dup,
+			 uint32_t *unadopted);
+
+/* ---- ADOPTION (BLE_AFFINITY.md) ----
+ *
+ * An EMPTY allowlist means connect to anything, which is what keeps every
+ * already-deployed pair working across this upgrade; the first adopt is what
+ * switches a central into selective mode.
+ *
+ * Open an adoption window for `secs`. While it is open the central connects to
+ * any matching peripheral AND records it, which is the only moment address and
+ * name can be bound together -- a name is learned from published frames, so it
+ * does not exist until after the first connection. 0 closes the window. */
+void box_ble_pair_open(box_config_t *cfg, int secs);
+
+/* Call once per service pass, from the MAIN LOOP. While the window is open this
+ * records {address, name} for every connected peer that has identified itself.
+ * Writes config, which is why it is here and not in learn_name() on the BT
+ * thread. No-op with the window closed. */
+void box_ble_pair_service(box_config_t *cfg);
+
+/* Seconds left on the window, 0 when closed. */
+int box_ble_pair_remaining(void);
+
+/* Drop `name` from the allowlist and DISCONNECT it -- the owner's half of a
+ * handoff. Returns 1 if it was adopted, 0 if not found. The peripheral goes
+ * back to advertising and becomes adoptable by anyone; nothing else can take it
+ * until this has been done, which is the whole safety property (a connected
+ * peripheral stops advertising and holds its only connection slot). */
+int box_ble_pair_release(box_config_t *cfg, const char *name);
+
+/* Adopted entry `idx` (0..BOX_BLE_MAX_PAIR-1): its label into `name`, and 1 if
+ * that slot is in use. The label may be "" for a peripheral adopted before it
+ * ever published, so treat an empty name as "adopted, not yet identified". */
+int box_ble_pair_entry(const box_config_t *cfg, int idx, char *name, int len);
 
 /* Why a matched advertisement did not become a peer. tries counts create
  * attempts; create_err the controller refusing outright; est_err a connection

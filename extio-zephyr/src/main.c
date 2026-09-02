@@ -3512,6 +3512,7 @@ int main(void)
 		/* Keep the per-peer clock estimators fed (echo REQ every 300 ms). */
 		loop_phase(LP_BLE);
 		box_ble_service(&cfg);
+		box_ble_pair_service(&cfg);   /* bind address<->name while adopting */
 
 		/* BLE ingress. Each peripheral's frame is source-stamped on ITS OWN
 		 * clock; box_ble has already done hop one of BLE.md's "translate
@@ -3844,15 +3845,16 @@ int main(void)
 				 *                     range, battery, or a resetting peer
 				 */
 				{
-					uint32_t sn = 0, mt = 0, dp = 0;
+					uint32_t sn = 0, mt = 0, dp = 0, un = 0;
 					uint32_t tr = 0, ce = 0, ee = 0, dr = 0;
 					int le = 0;
 
-					box_ble_scan_counts(&sn, &mt, &dp);
+					box_ble_scan_counts(&sn, &mt, &dp, &un);
 					box_ble_conn_counts(&tr, &ce, &ee, &dr, &le);
 					pub_periodic("ble/adv_seen",       sn);
 					pub_periodic("ble/adv_matched",    mt);
 					pub_periodic("ble/adv_dup",        dp);
+					pub_periodic("ble/adv_unadopted",  un);
 					pub_periodic("ble/conn_try",       tr);
 					pub_periodic("ble/conn_create_err", ce);
 					pub_periodic("ble/conn_est_err",   ee);

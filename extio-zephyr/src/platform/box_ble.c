@@ -145,7 +145,7 @@ static bool scanning;
  * advertising within range, or something is and we are rejecting it (wrong
  * service UUID, wrong adv type, fleet full). One counter each turns a guess
  * into a reading. */
-static uint32_t adv_seen, adv_matched, adv_dup;
+static uint32_t adv_seen, adv_matched, adv_dup, adv_unadopted;
 
 /* Connection ledger, for the same reason as the advertisement one. "matched but
  * never connected" has at least three causes -- the controller refusing the
@@ -177,6 +177,59 @@ static struct peer *peer_by_addr(const bt_addr_le_t *addr)
 		}
 	}
 	return NULL;
+}
+
+/* ---- ADOPTION: which peripherals this central will connect to ----
+ * BLE_AFFINITY.md. The allowlist lives on the CENTRAL because that is where
+ * recovery is cheap: a peripheral that refused all but a remembered central
+ * would be bricked when that central died -- no console worth reaching on a
+ * device in someone's hand, no LAN, no second radio.
+ *
+ * The pairing WINDOW is what binds address to name. A central cannot adopt by
+ * name before it has ever connected, because learn_name() reads the name from
+ * frames the peripheral publishes; the window is when the two are met and
+ * recorded together. */
+static int64_t pair_until_ms;          /* 0 = closed */
+
+/* The live config, for scan_cb -- which is a bare Zephyr callback and is handed
+ * nothing. Set from box_ble_service() each pass rather than at init, because
+ * box_ble_init() takes no config and the scan starts there. NULL until the
+ * first service pass, and pair_allows() treats that as promiscuous: refusing
+ * every peripheral for the first few milliseconds after boot would be a worse
+ * answer than the one the empty list already gives. */
+static const box_config_t *ble_cfg;
+
+static int addr_eq(const uint8_t *a, const bt_addr_le_t *b)
+{
+	return a[0] == b->type && !memcmp(a + 1, b->a.val, 6);
+}
+
+/* -1 when not adopted. */
+static int pair_find(const box_config_t *cfg, const bt_addr_le_t *addr)
+{
+	for (int i = 0; i < cfg->ble_pair_n && i < BOX_BLE_MAX_PAIR; i++) {
+		if (addr_eq(cfg->ble_pair_addr[i], addr)) {
+			return i;
+		}
+	}
+	return -1;
+}
+
+/* May we connect to this advertiser?
+ *
+ * EMPTY LIST = YES, TO ANYTHING. Every pair deployed today was adopted by
+ * nobody, so a selective-by-default central would stop talking to its own
+ * peripherals the moment it was upgraded. The first adopt is what switches a
+ * central into selective mode. */
+static int pair_allows(const box_config_t *cfg, const bt_addr_le_t *addr)
+{
+	if (!cfg || cfg->ble_pair_n == 0) {
+		return 1;
+	}
+	if (pair_until_ms && k_uptime_get() < pair_until_ms) {
+		return 1;                       /* adoption window is open */
+	}
+	return pair_find(cfg, addr) >= 0;
 }
 
 static struct peer *peer_alloc(struct bt_conn *c)
@@ -553,6 +606,15 @@ static void scan_cb(const bt_addr_le_t *addr, int8_t rssi, uint8_t adv_type,
 		return;
 	}
 
+	/* NOT OURS. Counted, never silently ignored: an un-adopted peripheral in
+	 * range is indistinguishable from a broken one unless something says so,
+	 * and every BLE bug this year was found by reading a counter rather than
+	 * by reading code. */
+	if (!pair_allows(ble_cfg, addr)) {
+		adv_unadopted++;
+		return;
+	}
+
 	if (bt_le_scan_stop() == 0) {
 		scanning = false;
 	}
@@ -759,6 +821,7 @@ static void latency_service(struct peer *p, const box_config_t *cfg, uint32_t no
 
 void box_ble_service(const box_config_t *cfg)
 {
+	ble_cfg = cfg;      /* scan_cb has no other way to reach it */
 	uint32_t now_ms;
 
 	if (!ble_up || !cfg) {
@@ -826,11 +889,148 @@ int box_ble_peer_info(int idx, box_ble_peer_info_t *out)
 	return 1;
 }
 
-void box_ble_scan_counts(uint32_t *seen, uint32_t *matched, uint32_t *dup)
+/* ---- ADOPTION verbs (BLE_AFFINITY.md; see box_ble.h for the contract) ---- */
+
+/* Bind address to name for anything connected while the window is open.
+ *
+ * NOT done in learn_name(), though that is where the name arrives. learn_name
+ * runs on the BT RX thread and this WRITES CONFIG, which the main loop reads
+ * and box_persist serialises; doing it here keeps config single-threaded. The
+ * cost is up to one service pass of delay, which is nothing against a window
+ * measured in seconds.
+ *
+ * This is the only moment the two identities can be joined: the allowlist keys
+ * on ADDRESS (stable, and what scan_cb sees), while people and the fleet page
+ * speak NAMES -- and a name does not exist until the peripheral has published a
+ * frame under it. That is what a pairing window is FOR. */
+void box_ble_pair_service(box_config_t *cfg)
 {
-	if (seen)    *seen = adv_seen;
-	if (matched) *matched = adv_matched;
-	if (dup)     *dup = adv_dup;
+	static uint8_t was_open;
+	int open = box_ble_pair_remaining() > 0;
+
+	if (!cfg) {
+		return;
+	}
+	if (was_open && !open) {
+		was_open = 0;
+		pair_until_ms = 0;
+		LOG_INF("adoption window closed -- %u adopted", cfg->ble_pair_n);
+	}
+	if (!open) {
+		return;
+	}
+	was_open = 1;
+
+	for (int i = 0; i < CONFIG_BT_MAX_CONN; i++) {
+		struct peer *p = &peers[i];
+		const bt_addr_le_t *a;
+		const char *nm;
+
+		if (!p->conn || !p->named) {
+			continue;      /* not identified yet -- nothing to bind */
+		}
+		a = bt_conn_get_dst(p->conn);
+		if (pair_find(cfg, a) >= 0) {
+			continue;
+		}
+		if (cfg->ble_pair_n >= BOX_BLE_MAX_PAIR) {
+			LOG_WRN("allowlist full (%d) -- not adopting %s",
+				BOX_BLE_MAX_PAIR, p->pfx);
+			continue;
+		}
+		/* Store the BOX name, not the published prefix: "extio/xiao1" is how
+		 * it appears on the wire, "xiao1" is what every host verb and the
+		 * fleet page say. */
+		nm = strchr(p->pfx, '/');
+		nm = nm ? nm + 1 : p->pfx;
+
+		cfg->ble_pair_addr[cfg->ble_pair_n][0] = a->type;
+		memcpy(cfg->ble_pair_addr[cfg->ble_pair_n] + 1, a->a.val, 6);
+		snprintf(cfg->ble_pair_name[cfg->ble_pair_n], BOX_NAME_MAX, "%s", nm);
+		cfg->ble_pair_n++;
+		LOG_INF("adopted %s (%u/%d)", nm, cfg->ble_pair_n, BOX_BLE_MAX_PAIR);
+	}
+}
+
+void box_ble_pair_open(box_config_t *cfg, int secs)
+{
+	ble_cfg = cfg;
+	pair_until_ms = (secs > 0) ? (k_uptime_get() + (int64_t) secs * 1000) : 0;
+	LOG_INF("adoption window %s", secs > 0 ? "OPEN" : "closed");
+}
+
+int box_ble_pair_remaining(void)
+{
+	int64_t left;
+
+	if (!pair_until_ms) {
+		return 0;
+	}
+	left = pair_until_ms - k_uptime_get();
+	return left > 0 ? (int) ((left + 999) / 1000) : 0;
+}
+
+int box_ble_pair_entry(const box_config_t *cfg, int idx, char *name, int len)
+{
+	if (!cfg || idx < 0 || idx >= cfg->ble_pair_n || idx >= BOX_BLE_MAX_PAIR) {
+		return 0;
+	}
+	if (name && len > 0) {
+		snprintf(name, (size_t) len, "%s", cfg->ble_pair_name[idx]);
+	}
+	return 1;
+}
+
+int box_ble_pair_release(box_config_t *cfg, const char *name)
+{
+	int i;
+
+	if (!cfg || !name || !*name) {
+		return 0;
+	}
+	for (i = 0; i < cfg->ble_pair_n && i < BOX_BLE_MAX_PAIR; i++) {
+		if (!strcmp(cfg->ble_pair_name[i], name)) {
+			break;
+		}
+	}
+	if (i >= cfg->ble_pair_n || i >= BOX_BLE_MAX_PAIR) {
+		return 0;
+	}
+
+	/* DISCONNECT FIRST, while we still know the address. A released peripheral
+	 * that stayed connected would be the worst of both: not in the allowlist,
+	 * so never reconnected after any drop, yet still held right now -- and
+	 * still not advertising, so nobody else could adopt it either. Release has
+	 * to mean LET GO. */
+	for (int p = 0; p < CONFIG_BT_MAX_CONN; p++) {
+		if (peers[p].conn &&
+		    addr_eq(cfg->ble_pair_addr[i], bt_conn_get_dst(peers[p].conn))) {
+			bt_conn_disconnect(peers[p].conn,
+					   BT_HCI_ERR_REMOTE_USER_TERM_CONN);
+			break;
+		}
+	}
+
+	/* Compact, so ble_pair_n stays the count of entries in use and slot order
+	 * carries no meaning anyone could come to rely on. */
+	for (int j = i; j + 1 < cfg->ble_pair_n; j++) {
+		memcpy(cfg->ble_pair_addr[j], cfg->ble_pair_addr[j + 1], 7);
+		memcpy(cfg->ble_pair_name[j], cfg->ble_pair_name[j + 1], BOX_NAME_MAX);
+	}
+	cfg->ble_pair_n--;
+	memset(cfg->ble_pair_addr[cfg->ble_pair_n], 0, 7);
+	memset(cfg->ble_pair_name[cfg->ble_pair_n], 0, BOX_NAME_MAX);
+	LOG_INF("released %s (%u adopted)", name, cfg->ble_pair_n);
+	return 1;
+}
+
+void box_ble_scan_counts(uint32_t *seen, uint32_t *matched, uint32_t *dup,
+			 uint32_t *unadopted)
+{
+	if (seen)      *seen = adv_seen;
+	if (matched)   *matched = adv_matched;
+	if (dup)       *dup = adv_dup;
+	if (unadopted) *unadopted = adv_unadopted;
 }
 
 void box_ble_conn_counts(uint32_t *tries, uint32_t *create_err,

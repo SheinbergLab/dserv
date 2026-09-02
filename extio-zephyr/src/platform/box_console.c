@@ -413,23 +413,111 @@ static void run_line(box_config_t *cfg, const char *line)
 	 * central undebuggable: radio down; radio up but not scanning (fleet full,
 	 * or the controller refused -- box_ble_scan_err tells which); radio up and
 	 * scanning. "Nothing connected" means something different in each. */
+	/* `ble pair [secs]` / `ble release <name>` -- adoption (BLE_AFFINITY.md).
+	 *
+	 * Console-first, matching the Pico tier's `ble pair 60` (BLE.md), and it is
+	 * the right first surface: adoption is a deliberate physical act -- you are
+	 * standing next to the peripheral you mean to claim -- and the window makes
+	 * "which one did I just adopt" answerable by walking up to it. Host verbs
+	 * follow; they do not replace this, because the console still works when
+	 * the uplink does not.
+	 *
+	 * NOT saved automatically, deliberately, and the wired boxes settled this:
+	 * "an unsaved adopt returns the box to its old owner on reboot" is the
+	 * property that makes lending one for an hour safe. `save` when you mean it. */
+	if (strncmp(line, "ble pair", 8) == 0) {
+		int secs = 60;
+
+		if (line[8] == ' ') {
+			secs = atoi(line + 9);
+		} else if (line[8] != '\0') {
+			box_console_printf("ERR try `ble pair [secs]`\n");
+			return;
+		}
+		box_ble_pair_open((box_config_t *) cfg, secs);
+		if (secs > 0) {
+			box_console_printf("adoption window OPEN for %d s -- any"
+					   " d5e7000x peripheral that connects and"
+					   " names itself is adopted. `save` to keep it.\n",
+					   secs);
+		} else {
+			box_console_printf("adoption window closed\n");
+		}
+		return;
+	}
+	if (strncmp(line, "ble release ", 12) == 0) {
+		const char *nm = line + 12;
+
+		if (box_ble_pair_release((box_config_t *) cfg, nm)) {
+			box_console_printf("released %s -- disconnected and dropped;"
+					   " it is advertising again and anyone may"
+					   " adopt it. `save` to keep it released.\n", nm);
+			/* SAY THE SURPRISING PART. Releasing the LAST adopted
+			 * peripheral empties the allowlist, and empty means
+			 * PROMISCUOUS -- so this central reconnects to it within
+			 * seconds and the release looks like it did nothing.
+			 * MEASURED on the first live release: dropped 1, then
+			 * conn_try 2 and the same peer back, SYNCED.
+			 *
+			 * It is the right behaviour (a central with no adoptions
+			 * is one that has not been told to be fussy, which is
+			 * what every box upgrades into), but it is not what
+			 * "release" leads anyone to expect. To hand a peripheral
+			 * over, adopt it on the OTHER central inside its window
+			 * while this one is out of range or switched off. */
+			if (!box_ble_pair_entry(cfg, 0, NULL, 0)) {
+				box_console_printf("NOTE this was the last one, so"
+						   " this central is PROMISCUOUS again"
+						   " and will reconnect to it. Adopt it"
+						   " elsewhere to hand it over.\n");
+			}
+		} else {
+			box_console_printf("ERR '%s' is not adopted by this box"
+					   " (see `ble`)\n", nm);
+		}
+		return;
+	}
+
 	if (strcmp(line, "ble") == 0) {
 		if (!box_ble_active()) {
 			box_console_printf("ble: radio DOWN (`ble enable 1` -- live)\n");
 			return;
 		}
 		{
-			uint32_t seen = 0, matched = 0, dup = 0;
+			uint32_t seen = 0, matched = 0, dup = 0, unadopted = 0;
 
-			box_ble_scan_counts(&seen, &matched, &dup);
+			box_ble_scan_counts(&seen, &matched, &dup, &unadopted);
 			uint32_t tr = 0, ce = 0, ee = 0, dr = 0;
 			int le = 0;
 
 			box_ble_conn_counts(&tr, &ce, &ee, &dr, &le);
-			box_console_printf("ble: radio up, conns %d/%d, adv seen=%u matched=%u dup=%u\n"
+			box_console_printf("ble: radio up, conns %d/%d, adv seen=%u matched=%u dup=%u unadopted=%u\n"
 					   "  conn try=%u create_err=%u est_err=%u dropped=%u last=%d\n",
 					   box_ble_conn_count(), CONFIG_BT_MAX_CONN,
-					   seen, matched, dup, tr, ce, ee, dr, le);
+					   seen, matched, dup, unadopted, tr, ce, ee, dr, le);
+		}
+		{
+			/* The allowlist, and what it MEANS -- empty is not "none
+			 * adopted, nothing works", it is "connect to anything",
+			 * which is the state every box upgrades into. Saying so
+			 * here stops that reading as a fault. */
+			int n = 0;
+			char nm[BOX_NAME_MAX];
+
+			box_console_printf("  adopted:");
+			for (int i = 0; box_ble_pair_entry(cfg, i, nm, sizeof nm); i++) {
+				box_console_printf(" %s", nm[0] ? nm : "(unnamed)");
+				n++;
+			}
+			if (!n) {
+				box_console_printf(" none -- PROMISCUOUS,"
+						   " connects to any peripheral");
+			}
+			if (box_ble_pair_remaining()) {
+				box_console_printf("   [adoption window %d s]",
+						   box_ble_pair_remaining());
+			}
+			box_console_printf("\n");
 		}
 		if (box_ble_scanning()) {
 			box_console_printf("  scanning for d5e7000x peripherals\n");

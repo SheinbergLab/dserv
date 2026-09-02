@@ -55,6 +55,12 @@
 
 #define BOX_NPINS     30
 #define BOX_NAME_MAX  16
+
+/* Peripherals one BLE central can have adopted. Matched to CONFIG_BT_MAX_CONN
+ * (8): a central that can HOLD eight should be able to REMEMBER eight, or a
+ * full fleet could not survive a reboot. Costs 8 * 23 bytes of persisted
+ * config. */
+#define BOX_BLE_MAX_PAIR 8
 #define BOX_NGROUPS   4     /* DI chord groups (atomic bitmask publishing)   */
 #define BOX_NAGROUPS  4     /* analog (MCP3204) groups: named channel sets   */
 #define BOX_LABEL_MAX 16    /* per-pin / per-group role labels               */
@@ -303,6 +309,36 @@ typedef struct {
      * box pin -- and they are exactly the ones carrying eye and stick.
      * Inheritance would work for 2-5 and silently not for the two that matter. */
     char     ain_label[AIN_MAX_CH][BOX_LABEL_MAX];
+
+    /* ---- BLE ADOPTION: which peripherals this central will connect to ----
+     * (BLE_AFFINITY.md; the Pico tier's equivalent is BLE.md "Pairing".)
+     *
+     * APPENDED AT THE END ON PURPOSE. box_persist_deserialize zero-defaults
+     * fields a saved blob predates, so flashing this over a deployed box keeps
+     * its name/net/pins and arrives with an EMPTY list -- which is exactly the
+     * migration this needs, because empty means PROMISCUOUS (see below). Move
+     * these and every saved config on every box loads garbage.
+     *
+     * EMPTY = CONNECT TO ANYTHING, and that is not laziness: every pair
+     * deployed today was adopted by nobody, so a selective-by-default central
+     * would silently stop talking to its own peripherals the moment it was
+     * upgraded. The first adopt is what switches a central into selective mode.
+     *
+     * KEYED ON ADDRESS, never on name. A central learns a peripheral's name
+     * only AFTER connecting -- box_ble.c's learn_name() reads it from the
+     * frames the peripheral publishes, because the advertised GAP name is not
+     * trusted for routing -- and a factory-reset peripheral comes back as
+     * "box" on the SAME address. So the address is the identity and the name is
+     * a label, refreshed on every learn_name(). Routing on a remembered name
+     * alone would follow the wrong box home.
+     *
+     * Raw bytes rather than a bt_addr_le_t: src/core/ is shared verbatim with
+     * the RP2350 tree and must not include Zephyr headers. Layout is
+     * [0] = address type, [1..6] = the address, little-endian, matching
+     * bt_addr_le_t exactly so the platform layer can memcpy both ways. */
+    uint8_t  ble_pair_n;                       /* entries in use, 0 = promiscuous */
+    uint8_t  ble_pair_addr[BOX_BLE_MAX_PAIR][7];
+    char     ble_pair_name[BOX_BLE_MAX_PAIR][BOX_NAME_MAX];  /* label, may be "" */
 } box_config_t;
 
 /* Max int16 samples in one analog block: 12B header + 48B of samples, and a
