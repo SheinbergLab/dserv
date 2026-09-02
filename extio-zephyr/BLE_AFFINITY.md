@@ -1,8 +1,28 @@
 # BLE_AFFINITY.md — which central owns which peripheral
 
-**Status: PLAN, no code started (2026-09-01).** Written after two centrals and
-two peripherals ran on one USB-only host for the first time, which is the
-configuration that makes this necessary.
+**Status: BUILT AND RIG-VERIFIED (2026-09-01).** Sections 1-5 are implemented
+(b6f43099 firmware + console, bf067204 host verbs + roster) and every claim below
+was checked on hardware. Remaining: the fleet-page states in §3, which now have
+everything they need (`state/ble/paired` plus `usbioBoxes`).
+
+VERIFIED, dongle1 with xiao2 adopted and a second peripheral advertising:
+
+    adv_matched     81 -> 96 -> 109    (+15, +13)   it IS advertising
+    adv_unadopted   78 -> 93 -> 106    (+15, +13)   refused, in lockstep
+    conn_try         3 ->  3 ->   3    FLAT         never even attempted
+
+conn_try staying flat is what proves it is the allowlist and not a failed
+connection. Then opening a window: conns 1->2 within 7 s, `paired` became
+`xiao2,box` at 14 s once the name was learned, and dserv saw the new box at
+21 s. The gap between connecting and being adopted is the one-service-pass delay
+from binding on the main loop rather than the BT thread (§4).
+
+Also verified: empty list stays PROMISCUOUS across an upgrade (the migration in
+§7), adoption survives `save` + reboot (persist v29), and an UNSAVED adoption
+reverts on reboot.
+
+Originally written after two centrals and two peripherals ran on one USB-only
+host for the first time, which is the configuration that made this necessary.
 
 Two documents stay canonical and are not re-litigated here:
 
