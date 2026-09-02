@@ -1110,10 +1110,16 @@ static void groups_resync(void)
  *
  * BTN_PIN IS A GENUINE INPUT HERE. SW1 is on gpio1.6, distinct from the pad the
  * UICR turns into nRESET, so unlike the MDK dongle (whose only button IS the
- * reset) this box can actually be prodded. Unverified against an MDBT50Q-RX
- * silkscreen though -- these pads come from Zephyr's CX-40 DTS. */
-#define LED_PIN  0    /* LED D1 = P0.06, ACTIVE_LOW in the pin map    */
-#define BTN_PIN  2    /* SW1    = P1.06, active low, pull-up          */
+ * reset) this box can actually be prodded.
+ *
+ * LED_PIN LIGHTS NOTHING ON THIS BOARD, and that is measured rather than
+ * assumed: both candidate pads were driven in both polarities and the dongle
+ * stayed dark (see the overlay). Zephyr's CX-40 LED map does not describe an
+ * MDBT50Q-RX. Pin 0 is kept as LED_PIN so the heartbeat has a defined, harmless
+ * home instead of falling into the Teensy #else -- but "no blink" is NOT a
+ * diagnosis on this board. */
+#define LED_PIN  0    /* pad P0.08 -- no LED confirmed; see above     */
+#define BTN_PIN  2    /* SW1 = P1.06, active low, pull-up             */
 #elif defined(CONFIG_BOARD_NRF52840_MDK_USB_DONGLE)
 /* The BLE central in a USB stick. Its whole pin map is three LEDs (the overlay
  * explains why nothing else is declared), so box pin 0 IS the red LED.

@@ -11,8 +11,7 @@
  * heartbeat blinks nothing, or the wrong LED. Not a reason to hold up the
  * bring-up; a reason not to trust `pin 2` as a button until someone presses it.
  *
- * BETTER OFF THAN THE MDK DONGLE on both counts that matter for a stick:
- *   - TWO LEDs, so a future central status palette has more than one colour;
+ * BETTER OFF THAN THE MDK DONGLE on the count that matters for a stick:
  *   - a REAL user button (SW1 on gpio1.6, distinct from the nRESET pad the
  *     UICR claims), which the makerdiary dongle simply does not have.
  * It also has two external oscillators, so the 32.768 kHz LF crystal is
@@ -28,15 +27,34 @@
 
 / {
 	zephyr,user {
-		/* Both LEDs are ACTIVE_LOW on this board; the flag is what makes
-		 * 1 = lit here as everywhere else. LED_PIN lands on box pin 0
-		 * (main.c), which keeps the Teensy #else trap away from a board
-		 * that has no D3 to blink. */
-		box-gpios = <&gpio0 6 GPIO_ACTIVE_LOW>,                   /* 0 = LED D1 */
-			    <&gpio0 8 GPIO_ACTIVE_LOW>,                   /* 1 = LED D2 */
-			    <&gpio1 6 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;  /* 2 = SW1    */
+		/* NO LED IS CONFIRMED ON THIS SKU. Both pads were DRIVEN, both
+		 * polarities, and nothing lit.
+		 *
+		 * Zephyr's board files contradict each other to begin with: the doc
+		 * says LED0 = P0.8 and LED1 = P0.6 "No pasted components by
+		 * default", while the DTS names them the other way round, so
+		 * `DT_ALIAS(led0)` points at the pad the doc calls unpopulated.
+		 * Neither turns out to describe an MDBT50Q-RX: with P0.6 high and
+		 * P0.8 low, then P0.6 low and P0.8 high -- all four combinations --
+		 * the dongle stayed dark.
+		 *
+		 * So these are two REAL, REACHABLE GPIO pads and nothing more. They
+		 * are kept because they are the only pins this sealed stick exposes
+		 * at all, and named for what they are rather than what a CX-40
+		 * would have. LED_PIN lands on pin 0 and the boot heartbeat is
+		 * therefore SILENT on this board -- harmless, and better than the
+		 * Teensy #else picking a random pad, but do not read "no blink" as
+		 * "did not boot" here.
+		 *
+		 * The Adafruit UF2 bootloader DOES blink during DFU, so this board
+		 * has an LED somewhere and its bootloader knows the pin. Whoever
+		 * needs a central status light should get it from there, or from
+		 * Raytac's RX schematic, rather than from Zephyr's CX-40 files. */
+		box-gpios = <&gpio0 8 GPIO_ACTIVE_LOW>,                   /* 0 = pad P0.08 */
+			    <&gpio0 6 GPIO_ACTIVE_LOW>,                   /* 1 = pad P0.06 */
+			    <&gpio1 6 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;  /* 2 = SW1       */
 
-		box-pin-silk = "D1","D2","SW1";
+		box-pin-silk = "P0.08","P0.06","SW1";
 
 		/* NO box-status-rgb: box_status_led.c only claims pins under
 		 * CONFIG_BOX_BLE_PERIPHERAL and there is no central palette yet.
