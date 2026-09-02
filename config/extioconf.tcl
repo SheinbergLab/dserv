@@ -494,7 +494,7 @@ proc usbio_forward {dp data} {
     # `begin` meant for one box would land on all of them.
     if { [regexp {^extio/([^/]+)/} $dp -> box] } {
         set h [extio_usb_handle $box]
-        if { $h ne "" } { catch { usbioSendFrame $h $dp $ts $data } ; return }
+        if { $h ne "" } { extio_fwd_send $h $dp $ts $data ; return }
         # NOT PLACEABLE YET -- which now means only "that box has not published
         # anything since this port opened". usbioBoxes learns identity from
         # arriving traffic, so a box becomes routable on its first frame, and a
@@ -512,7 +512,30 @@ proc usbio_forward {dp data} {
     # it is each box's clock anchor and its obs-mirror source, so a box that
     # misses it cannot obs-sync at all (extioconf wires exactly this one key).
     foreach h [usbioDevices] {
-        catch { usbioSendFrame $h $dp $ts $data }
+        extio_fwd_send $h $dp $ts $data
+    }
+}
+
+# One forward, with the failure COUNTED instead of swallowed.
+#
+# A bare `catch` here is right in the normal case -- a vanished device makes
+# sends error, and forwards should drop rather than throw, same as when no port
+# is open. But it is also indistinguishable from a broken call, and that is not
+# hypothetical: the multiplexing change shifted usbioSendFrame's arguments and
+# EVERY forward errored for a whole debugging cycle while the rig looked merely
+# quiet -- cmds_rx 0 on both boxes, nothing in any log, the boxes themselves
+# perfectly healthy.
+#
+# So count them, and say the first one out loud. Same rule the firmware learned
+# today: a fault you can only see by attaching a debugger is not observable.
+set ::extio_fwd_err 0
+proc extio_fwd_send {h dp ts data} {
+    if { [catch { usbioSendFrame $h $dp $ts $data } err] } {
+        if { $::extio_fwd_err == 0 } {
+            puts stderr "extio: forward FAILED ($dp -> $h): $err"
+        }
+        incr ::extio_fwd_err
+        dservSet extio/dbg/fwd_err $::extio_fwd_err
     }
 }
 ;# catch: a vanished device makes sends error (or short-write); forwards just drop --

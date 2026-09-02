@@ -467,7 +467,7 @@ static int usbio_send_command(ClientData data, Tcl_Interp *interp, int objc, Tcl
   if (info->usbio_fd < 0) return TCL_OK;
 
   Tcl_Size clen;
-  char *cmd = Tcl_GetStringFromObj(objv[1], &clen);
+  char *cmd = Tcl_GetStringFromObj(objv[2], &clen);   /* [1] is the handle */
   unsigned char line[512];
   int n = (int) clen; if (n > (int) sizeof line - 1) n = (int) sizeof line - 1;
   memcpy(line, cmd, n); line[n] = '\n';
@@ -489,9 +489,9 @@ static int usbio_sendframe_command(ClientData data, Tcl_Interp *interp, int objc
   if (!info) return TCL_ERROR;
   if (info->usbio_fd < 0) return TCL_OK;
 
-  char *name = Tcl_GetString(objv[1]);
+  char *name = Tcl_GetString(objv[2]);   /* [1] is the handle */
   Tcl_WideInt ts;
-  if (Tcl_GetWideIntFromObj(interp, objv[2], &ts) != TCL_OK) return TCL_ERROR;
+  if (Tcl_GetWideIntFromObj(interp, objv[3], &ts) != TCL_OK) return TCL_ERROR;
 
   /* Preserve BINARY payloads. A pure byte-array value (no string rep -- what
    * the dpoint bridge hands the forward script for a DSERV_BYTE datapoint,
@@ -505,11 +505,11 @@ static int usbio_sendframe_command(ClientData data, Tcl_Interp *interp, int objc
   Tcl_Size vlen;
   unsigned char *val;
   int dtype;
-  if (!Tcl_HasStringRep(objv[3]) &&
-      (val = Tcl_GetBytesFromObj(NULL, objv[3], &vlen)) != NULL) {
+  if (!Tcl_HasStringRep(objv[4]) &&
+      (val = Tcl_GetBytesFromObj(NULL, objv[4], &vlen)) != NULL) {
     dtype = DSERV_BYTE;
   } else {
-    val = (unsigned char *) Tcl_GetStringFromObj(objv[3], &vlen);
+    val = (unsigned char *) Tcl_GetStringFromObj(objv[4], &vlen);
     dtype = DSERV_STRING;
   }
 
@@ -558,9 +558,9 @@ static int usbio_sendchunk_command(ClientData data, Tcl_Interp *interp, int objc
   if (info->usbio_fd < 0) return TCL_OK;
 
   Tcl_WideInt seq;
-  if (Tcl_GetWideIntFromObj(interp, objv[1], &seq) != TCL_OK) return TCL_ERROR;
+  if (Tcl_GetWideIntFromObj(interp, objv[2], &seq) != TCL_OK) return TCL_ERROR;   /* [1] is the handle */
   Tcl_Size dlen;
-  unsigned char *dat = Tcl_GetByteArrayFromObj(objv[2], &dlen);
+  unsigned char *dat = Tcl_GetByteArrayFromObj(objv[3], &dlen);
   if (dlen <= 0 || dlen > USBIO_OTA_DATA_MAX) {
     Tcl_AppendResult(interp, "usbioSendChunk: payload must be 1..117 bytes", NULL);
     return TCL_ERROR;
