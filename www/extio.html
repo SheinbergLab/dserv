@@ -383,6 +383,14 @@ function onExtio(msg) {
                leaf === 'fw_ver' || leaf === 'ip' || leaf === 'dserv' ||
                leaf === 'board' || leaf === 'pins/silk' || leaf === 'ain/silk') {
         b.ident[leaf] = String(v);
+    } else if (leaf === 'ble/paired') {
+        /* A BLE CENTRAL's adoption roster, comma-separated. String, not array,
+         * and NOT normalised to null when empty -- '' means "adopted nobody,
+         * therefore PROMISCUOUS, connects to anything", which is a real state
+         * a rig lives in, while UNDEFINED means this box is not a central or
+         * its firmware predates the key. Absent != empty; collapsing them would
+         * paint every wired box as a promiscuous central. */
+        b.blePaired = String(v);
     } else if (leaf === 'obs_leader') {
         b.obsLeader = num == 1;      /* +31: announced obs-onset authority */
     } else if (leaf === 'ota/trial') {
@@ -497,6 +505,35 @@ function cardHtml(b) {
         ? `<span class="chip ${id.transport === 'usb' ? 'usb' : 'eth'}">${esc(id.transport)}</span>` : '';
     const bchip = id.boot
         ? `<span class="chip ${id.boot === 'watchdog' ? 'wdg' : ''}">boot: ${esc(id.boot)}</span>` : '';
+    /* ---- BLE ADOPTION (BLE_AFFINITY.md) ----
+     *
+     * Two cards, two different questions, and they must not be merged:
+     *
+     *   a CENTRAL  -- who have I adopted? An empty roster is PROMISCUOUS, which
+     *                 is a real and common state (every box upgrades into it),
+     *                 not an error and not "none found".
+     *   a PERIPHERAL -- who has adopted ME? Answered by searching every
+     *                 central's roster, because a peripheral cannot say; it has
+     *                 no idea it is adopted. That asymmetry is the design (the
+     *                 allowlist lives on the central), so the page has to do
+     *                 the join.
+     *
+     * A peripheral in NOBODY's roster is not broken -- it is unclaimed, and on
+     * a rig with a promiscuous central it may well be connected right now. So
+     * the chip says "not adopted", never "free", which would imply idle. */
+    const isCentral = b.blePaired !== undefined;
+    const achip = isCentral
+        ? (b.blePaired
+             ? `<span class="chip" title="peripherals this central will connect to; others are refused (see ble/adv_unadopted)">adopted: ${esc(b.blePaired)}</span>`
+             : `<span class="chip free" title="empty allowlist: connects to ANY d5e7000x peripheral it sees. This is what a box upgrades into, and what the first adopt ends.">promiscuous</span>`)
+        : '';
+    const owner = bleOwnerOf(name);
+    const ochip = (id.transport === 'ble')
+        ? (owner
+             ? `<span class="chip" title="adopted by ${esc(owner)} -- it will reconnect to this peripheral and refuse the ones it has not adopted">held by ${esc(owner)}</span>`
+             : `<span class="chip" title="in no central's allowlist. Not an error: a promiscuous central may still be holding it. Pair a central to claim it.">not adopted</span>`)
+        : '';
+
     /* +31: the announced obs-onset authority -- the box a paradigm's
      * `obs_schedule_bind auto` will resolve. One per rig by contract. */
     const lchip = b.obsLeader
@@ -708,6 +745,17 @@ function cardHtml(b) {
      * state/ota/trial. Confirm rides extio_ota_confirm, the same request-layer
      * path the lifecycle and the CLI (dservctl extio "extio_ota_confirm <box>")
      * use; the box publishes trial=0 on success and the bar clears itself. */
+    /* Actions sit on the card whose OWNER can perform them, which is the same
+     * rule the wired adopt/release follows: only the holder can let go, and
+     * only a central can claim. Pair is offered on any central; Release is
+     * offered on a peripheral and addressed to the central that holds it. */
+    const pairBtn = isCentral
+        ? ` <button title="Open a 60s adoption window on ${esc(b.name)}"` +
+          ` onclick="blePair('${esc(b.name)}', 60)">Pair 60s</button>` : '';
+    const relBtn = (id.transport === 'ble' && owner)
+        ? ` <button title="Release ${esc(b.name)} from ${esc(owner)}"` +
+          ` onclick="bleRelease('${esc(owner)}', '${esc(b.name)}')">Release</button>` : '';
+
     const trial = b.trial
         ? `<div class="trialbar"><b>TRIAL — unconfirmed.</b> ${esc(fwv || '?')} reverts on any reset.` +
           `<button title='Make the running image permanent (extio_ota_confirm ${esc(b.name)})'` +
@@ -715,7 +763,7 @@ function cardHtml(b) {
         : '';
 
     return `<div class="title"><span class="live ${alive ? 'on' : ''}"></span>` +
-           `<span class="name">${esc(b.name)}</span>${obs}${xchip}${fw}${bchip}${lchip}${ip}${forget}` +
+           `<span class="name">${esc(b.name)}</span>${obs}${xchip}${achip}${ochip}${fw}${bchip}${lchip}${ip}${forget}${pairBtn}${relBtn}` +
            `</div>` + trial + desc +
            `<div class="meta"><b>up</b> ${upStr} · <b>seen</b> ${fmtAge(age)}${connSeg}${target}${sync}${bat}</div>` +
            di + groups + dout + aingrps + ain;
@@ -758,6 +806,49 @@ async function confirmTrial(name) {
  * address the box will be told to use: `via` is the address that reaches this
  * dserv FROM THAT BOX, and on a multi-homed host it is not the one a person
  * would have typed. Showing it is what makes the action checkable. */
+/* Which central has adopted `peripheral`, or null.
+ *
+ * A search rather than a lookup because the fact lives on the OTHER end: the
+ * allowlist is the central's, and a peripheral is never told it was adopted.
+ * At most one central can hold a given peripheral at a time -- a connected
+ * peripheral stops advertising and holds its only connection slot -- so the
+ * first match is the answer, not a guess. */
+function bleOwnerOf(peripheral) {
+  for (const [cname, cb] of boxes) {
+    if (!cb.blePaired) continue;              /* '' (promiscuous) or undefined */
+    if (cb.blePaired.split(',').includes(peripheral)) return cname;
+  }
+  return null;
+}
+
+/* Open an adoption window on a central. The window is what binds a
+ * peripheral's ADDRESS to its NAME -- a central only learns the name after
+ * connecting -- so this is the moment a claim can be made at all. */
+async function blePair(central, secs) {
+  if (!confirm(`Open a ${secs}s adoption window on "${central}"?\n\n`
+             + `Any d5e7000x peripheral that connects and names itself during `
+             + `the window is adopted by ${central}.\n\n`
+             + `Not saved to flash — it reverts on reboot until you save it `
+             + `from the central's config page.`)) return;
+  try {
+    const r = await conn.send(`extio_ble_pair ${central} ${secs}`, 'extio');
+    console.log('ble pair:', r);
+  } catch (e) { alert(`pair failed: ${e.message || e}`); }
+}
+
+/* Release a peripheral from the central that holds it. */
+async function bleRelease(central, peripheral) {
+  if (!confirm(`Release "${peripheral}" from "${central}"?\n\n`
+             + `It is disconnected and starts advertising again.\n\n`
+             + `If this was ${central}'s LAST adoption it becomes PROMISCUOUS `
+             + `and will simply reconnect to it. To hand the peripheral over, `
+             + `open a window on the other central first.`)) return;
+  try {
+    const r = await conn.send(`extio_ble_release ${central} ${peripheral}`, 'extio');
+    console.log('ble release:', r);
+  } catch (e) { alert(`release failed: ${e.message || e}`); }
+}
+
 async function adoptBox(ip, name, via) {
   if (!via) { alert('no route to that box from here — cannot adopt'); return; }
   if (!confirm(`Adopt "${name}" (${ip})?\n\n`
