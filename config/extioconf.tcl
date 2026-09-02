@@ -1493,7 +1493,29 @@ proc extio_fw_check {box} {
     if { [dservExists extio/$box/state/fw_ver] } {
         set boxver [dservGet extio/$box/state/fw_ver]
     }
-    set cmp [expr {($imgver eq "" || $boxver eq "") ? "" : [extio_imgver_cmp $imgver $boxver]}]
+    # WHICH SHELF FIELD TO COMPARE AGAINST depends on how this box installs.
+    #
+    #   ota  imgVersion, the semver in the MCUboot header -- and the box reports
+    #        the semver out of the header it actually booted. Ordered, so
+    #        "shelf is older" is a real answer.
+    #   uf2  the shelf's `version`, a git describe -- and the box now reports
+    #        BOX_VERSION, produced by the SAME `git describe` at build time
+    #        (cmake/gen_box_version.cmake). Comparable because they come from
+    #        one command, not two conventions that resemble each other.
+    #
+    # A git describe is NOT ordered by string compare (tags, commit counts and
+    # -dirty do not sort), so the UF2 arm answers only equal / different. That
+    # is the honest limit: "you are not running this image" is exactly what an
+    # operator needs, and claiming a direction we cannot derive would be the
+    # same overstatement "cannot distinguish" exists to avoid.
+    if { $method eq "uf2" } {
+        set shelfver [dict get $pick version]
+        set cmp [expr {($shelfver eq "" || $boxver eq "") ? ""
+                       : ($shelfver eq $boxver ? 0 : 1)}]
+    } else {
+        set shelfver $imgver
+        set cmp [expr {($imgver eq "" || $boxver eq "") ? "" : [extio_imgver_cmp $imgver $boxver]}]
+    }
 
     set when $pub
     if { $when ne "" && ![catch { clock scan $pub -format {%Y-%m-%dT%H:%M:%SZ} -gmt 1 } t] } {
@@ -1521,11 +1543,30 @@ proc extio_fw_check {box} {
     # shelf image is the one already running -- MCUboot rejects a swap to the
     # same image", which talks an operator OUT of a perfectly good update.
     switch -- $cmp {
-        1       { set verdict "update available" ; set detail "$imgver · you have $boxver" }
+        1       {
+            set verdict "update available"
+            if { $method eq "uf2" } {
+                # STAYING INSIDE THE FIVE-PHRASE CONTRACT (extio-config.html
+                # colors the row by the text before the first " · "), so the
+                # honesty goes in the detail: a git describe cannot be ordered,
+                # so this arm knows the two DIFFER and not which is newer. It
+                # would read "update available" for a box running something
+                # NEWER than the shelf, which is a normal state right after a
+                # local flash.
+                set detail "$shelfver · you have $boxver · these differ;\
+ a git describe cannot be ordered, so this does not say which is newer"
+            } else {
+                set detail "$shelfver · you have $boxver"
+            }
+        }
         0       {
-            if { [extio_imgver_discriminates [dict get $pick manifest] $bbuild] } {
+            # A git describe names one commit, so two equal ones ARE the same
+            # image -- the ambiguity extio_imgver_discriminates guards against
+            # is specific to imgVersion, which nothing bumps between commits.
+            if { $method eq "uf2" ||
+                 [extio_imgver_discriminates [dict get $pick manifest] $bbuild] } {
                 set verdict "up to date"
-                set detail  $imgver
+                set detail  $shelfver
             } else {
                 set verdict "cannot distinguish"
                 set detail  "both stamped $imgver · several shelf versions for build\
@@ -1537,12 +1578,13 @@ proc extio_fw_check {box} {
                                                                updating would DOWNGRADE" }
         default {
             set verdict "cannot compare"
-            if { $imgver eq "" } {
-                set detail "shelf entry has no image version"
+            if { $shelfver eq "" } {
+                set detail "shelf entry has no [expr {$method eq "uf2" ? "version" : "image version"}]"
             } elseif { $boxver eq "" } {
-                set detail "box has not reported fw_ver"
+                set detail "box has not reported fw_ver\
+ (firmware older than the baked-in build version)"
             } else {
-                set detail "unreadable versions (shelf $imgver, box $boxver)"
+                set detail "unreadable versions (shelf $shelfver, box $boxver)"
             }
         }
     }

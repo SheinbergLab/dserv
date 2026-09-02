@@ -195,6 +195,29 @@ elseif(CONFIG_BT)
 	target_compile_definitions(app PRIVATE BOX_BLE_CENTRAL=1)
 endif()
 
+# ---- the build version, baked in ----
+#
+# So a box can say WHICH IMAGE it is running. An MCUboot box reads that out of
+# its own image header at runtime; a UF2 box has no header, so without this it
+# reports no version at all and "is this dongle up to date?" is unanswerable --
+# which is exactly where the nRF52840 dongles were.
+#
+# Regenerated as a BUILD step rather than at configure time, because a version
+# captured when CMake last ran goes stale the moment you commit, and a box
+# confidently reporting an image it is not running is worse than one reporting
+# nothing. The script rewrites the header only when the string changes, so an
+# unchanged tree does not relink.
+set(BOX_VERSION_H ${ZEPHYR_BINARY_DIR}/include/generated/box_version.h)
+add_custom_target(box_version_h ALL
+  BYPRODUCTS ${BOX_VERSION_H}
+  COMMAND ${CMAKE_COMMAND}
+          -DSRC_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+          -DOUT=${BOX_VERSION_H}
+          -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/gen_box_version.cmake
+  COMMENT "box_version.h (git describe)"
+  VERBATIM)
+add_dependencies(app box_version_h)
+
 # The portable core (forked from wiznet-io, pico_* -> box_*) plus the RW612/Zephyr
 # platform layer, added building-block by building-block.
 target_include_directories(app PRIVATE src src/core src/platform)

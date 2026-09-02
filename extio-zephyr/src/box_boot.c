@@ -2,6 +2,7 @@
  * box_boot.c -- see box_boot.h.
  */
 #include "box_boot.h"
+#include <box_version.h>   /* BOX_VERSION: generated per build, see CMakeLists */
 
 #include <zephyr/kernel.h>
 #include <zephyr/drivers/hwinfo.h>
@@ -235,7 +236,26 @@ const char *box_boot_img_ver(void)
 #if defined(CONFIG_MCUBOOT_IMG_MANAGER)
 	return img_ver;
 #else
-	return NULL;      /* also means "the OTA fields below are meaningless here" */
+	/* NO MCUBOOT HEADER TO READ, so report what the BUILD baked in.
+	 *
+	 * Returning NULL here is what left the UF2 boards (the nRF52840 dongles,
+	 * the XIAO) publishing no version at all: nothing on the box and nothing on
+	 * the shelf entry to compare, so "is this dongle up to date?" had no answer
+	 * and extio_fw_check could only say "cannot compare".
+	 *
+	 * BOX_VERSION is `git describe` regenerated on every build
+	 * (cmake/gen_box_version.cmake) -- deliberately the SAME command publish.sh
+	 * uses for the shelf's version, so the two are comparable strings from one
+	 * source rather than two conventions that merely look alike.
+	 *
+	 * The FORMAT therefore differs by board, and that is intended: an MCUboot
+	 * box reports the semver from the header it actually booted, a UF2 box
+	 * reports its build. Each is compared against the matching shelf field
+	 * (imgVersion for one, version for the other), so like meets like. What
+	 * both have in common is the only property that matters -- it is what the
+	 * RUNNING IMAGE says about itself, and it travels with the image across an
+	 * update rather than being asserted by whoever last flashed it. */
+	return BOX_VERSION;
 #endif
 }
 
