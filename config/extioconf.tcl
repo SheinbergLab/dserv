@@ -436,11 +436,17 @@ proc extio_find_data_ports {} {
 #      whatever fd is currently open) ----
 # ---- WHICH BOX IS BEHIND WHICH HANDLE ----
 #
-# The boxes already answer this and always did. Each one periodically emits its
-# own "%match extio/<name>/cmd/... 1" registration lines down the CDC, the usbio
-# framer de-dups them into its per-device wired[] table, and usbioWired hands
-# that back. So identity comes from what the box SAYS, not from tty names or
-# enumeration order -- which is what made a second box unroutable before.
+# From the datapoint names actually arriving on each device (usbioBoxes), not
+# from tty names or enumeration order -- which is what made a second box
+# unroutable before.
+#
+# The first attempt used the "%match" registration lines instead, via
+# usbioWired. That was wrong and the two-dongle rig said so immediately: both
+# handles open and carrying frames, usbioWired EMPTY on both, because %match is
+# an RP2350 feature (BOX_USB_FORWARD_REGISTER) and extio-zephyr's
+# u_usb_register is a deliberate no-op. Traffic always exists; registration is
+# optional. usbioWired is still consulted second, for an RP2350 box that has
+# registered but not yet published.
 #
 # Cached because usbio_forward is a hot path (every config/cmd push, and the obs
 # edge, which is timing-critical). extio_usb_forget drops the cache whenever the
@@ -454,6 +460,16 @@ proc extio_usb_forget {} { array unset ::extio_box_h }
 proc extio_usb_handle {box} {
     if { [info exists ::extio_box_h($box)] } { return $::extio_box_h($box) }
     foreach h [usbioDevices] {
+        # What has actually PUBLISHED on this device. Covers Zephyr boxes (which
+        # never send %match), RP2350 boxes, and BLE peripherals relayed by a
+        # central -- a relayed box's frames arrive on its central's port, which
+        # is exactly where a frame for it should go back out.
+        if { [lsearch -exact [usbioBoxes $h] "extio/$box"] >= 0 } {
+            set ::extio_box_h($box) $h
+            return $h
+        }
+        # ...and the %match patterns, for an RP2350 box that has registered but
+        # not yet published.
         foreach pat [usbioWired $h] {
             if { [string match "extio/$box/*" $pat] } {
                 set ::extio_box_h($box) $h
@@ -479,22 +495,17 @@ proc usbio_forward {dp data} {
     if { [regexp {^extio/([^/]+)/} $dp -> box] } {
         set h [extio_usb_handle $box]
         if { $h ne "" } { catch { usbioSendFrame $h $dp $ts $data } ; return }
-        # UNPLACEABLE, and that is NORMAL for a RELAYED box. A BLE peripheral
-        # has no USB port of its own -- its frames travel to whichever central
-        # holds it, and only that central knows which one that is. usbioWired
-        # only ever names boxes that registered over USB themselves, so
-        # extio/xiao1/config/... resolves to nothing here.
+        # NOT PLACEABLE YET -- which now means only "that box has not published
+        # anything since this port opened". usbioBoxes learns identity from
+        # arriving traffic, so a box becomes routable on its first frame, and a
+        # RELAYED peripheral is placed too (its frames arrive on its central's
+        # port, which is where its downlink belongs).
         #
-        # Broadcasting is the safe answer and NOT a guess: the firmware already
-        # rejects a name it does not own. box_ble_forward() returns 0 when no
-        # connected peer answers to that prefix, and dserv_dispatch gates on the
-        # box's own name, so a central that does not hold that peripheral drops
-        # the frame exactly as it drops any frame addressed elsewhere. The one
-        # central that does hold it forwards it.
-        #
-        # Targeting this properly needs the usbio reader to record WHICH device
-        # a relayed datapoint arrived on -- worth doing, and not needed to make
-        # two centrals work.
+        # Broadcasting is the safe answer for that window, and NOT a guess: the
+        # firmware rejects a name it does not own. box_ble_forward() returns 0
+        # when no connected peer answers to that prefix, and dserv_dispatch
+        # gates on the box's own name, so a box that is not the addressee drops
+        # the frame exactly as it drops any frame addressed elsewhere.
     }
     # Unaddressed (ess/in_obs, the rig-wide obs edge) or unplaceable. Every box
     # needs the obs edge:

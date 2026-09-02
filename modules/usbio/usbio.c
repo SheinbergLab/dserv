@@ -43,7 +43,10 @@
 #include "Datapoint.h"
 #include "tclserver_api.h"
 
-#define USBIO_MAXWIRE 12             /* de-dup table for auto-registered forward patterns */
+#define USBIO_MAXWIRE 12
+/* Distinct box prefixes one device may carry. A BLE central relays for its
+ * whole fleet, so this is "one central + its peripherals", not one box. */
+#define USBIO_MAXSEEN 12             /* de-dup table for auto-registered forward patterns */
 
 /* ---- '}' variable-length frames ----
  * dserv's TCP handler accepts a length-prefixed datapoint push with no size cap
@@ -82,6 +85,10 @@ typedef struct usbio_info_s
   /* auto-registration: patterns the box has asked us to forward (from its %match) */
   int  nwired;
   char wired[USBIO_MAXWIRE][96];
+  /* WHICH BOXES PUBLISH ON THIS DEVICE -- "extio/dongle1", learned from the
+   * datapoint names actually arriving. See usbio_note_box(). */
+  int  nseen;
+  char seen[USBIO_MAXSEEN][48];
   /* rx instrumentation (queried via usbioStats -- no datapoint injection) */
   uint64_t rx_bin;    /* binary frames parsed + handed to tclserver_set_point */
   uint64_t rx_bad;    /* frames failing the bounds check (framer desync) */
@@ -121,6 +128,48 @@ typedef struct usbio_mod_s
 /* One 128-byte binary frame ('>' + payload, zero-padded) -> datapoint. Mirrors the
  * parse in Dataserver.cpp's '>' handler; bounds every length so a malformed frame
  * can never read past the 128-byte buffer. */
+/* Learn which box a datapoint came from, and therefore which box this DEVICE
+ * carries: the first two segments of the name, "extio/dongle1".
+ *
+ * THIS IS THE ROUTING KEY, and it had to be traffic rather than registration.
+ * The obvious source -- the "%match" lines a box emits -- exists only on RP2350
+ * firmware built with BOX_USB_FORWARD_REGISTER; extio-zephyr's u_usb_register
+ * is a deliberate no-op ("host module owns forwarding"), so wired[] stays EMPTY
+ * for every Zephyr box and a map built from it knows nothing. Measured exactly
+ * that on the first two-dongle run: both handles open and carrying frames,
+ * usbioWired empty on both.
+ *
+ * Names on the wire cannot be empty, so this always works, and it is the same
+ * trick box_ble.c's learn_name() uses at the radio boundary: identity comes
+ * from what a thing PUBLISHES, not from what it was supposed to announce.
+ *
+ * It also fixes relayed boxes for free. A BLE peripheral has no USB port, but
+ * its frames arrive on its central's port -- so extio/xiao1 maps to that
+ * central's handle, which is exactly where a frame for xiao1 should go.
+ *
+ * Append-only, and nseen is incremented AFTER the string is written: the Tcl
+ * side reads this from another thread, so it either sees the old count and
+ * misses a brand-new box for one poll, or sees a fully-written entry. Never a
+ * torn name. */
+static void usbio_note_box(usbio_info_t *info, const char *name)
+{
+  const char *slash = strchr(name, '/');
+  size_t n;
+
+  if (!slash) return;
+  slash = strchr(slash + 1, '/');
+  n = slash ? (size_t) (slash - name) : strlen(name);
+  if (n == 0 || n >= sizeof info->seen[0]) return;
+
+  for (int i = 0; i < info->nseen; i++) {
+    if (!strncmp(info->seen[i], name, n) && info->seen[i][n] == '\0') return;
+  }
+  if (info->nseen >= USBIO_MAXSEEN) return;
+  memcpy(info->seen[info->nseen], name, n);
+  info->seen[info->nseen][n] = '\0';
+  info->nseen++;                      /* publish only after the string is whole */
+}
+
 static void process_binary_frame(usbio_info_t *info, const uint8_t *frame)
 {
   const uint8_t *p = frame + 1;                 /* skip '>' */
@@ -136,6 +185,7 @@ static void process_binary_frame(usbio_info_t *info, const uint8_t *frame)
   if (dlen > 109 || (uint32_t) varlen + dlen > 109) { info->rx_bad++; return; }
 
   info->rx_bin++;
+  usbio_note_box(info, name);
   if (!ts) ts = tclserver_now(info->tclserver);
   ds_datapoint_t *dp = dpoint_new(name, ts, (ds_datatype_t) dtype, dlen, (unsigned char *) p);
   if (dp) tclserver_set_point(info->tclserver, dp);
@@ -151,6 +201,7 @@ static void process_var_frame(usbio_info_t *info)
   name[info->vvarlen] = '\0';
 
   info->rx_var++;
+  usbio_note_box(info, name);
   uint64_t ts = info->vts ? info->vts : tclserver_now(info->tclserver);
   ds_datapoint_t *dp = dpoint_new(name, ts, (ds_datatype_t) info->vdtype,
                                   info->vdlen, info->vbuf + info->vvarlen);
@@ -585,16 +636,17 @@ static int usbio_devices_command(ClientData data, Tcl_Interp *interp, int objc, 
 
 /* usbioWired <handle>  -- the %match patterns THIS box has registered.
  *
- * THE ROUTING KEY, and the reason multiplexing needs no new protocol. A box
+ * A SECONDARY routing key -- usbioBoxes is the primary one, because %match is
+ * optional and traffic is not (see usbio_note_box). A box that implements it
  * announces the datapoints it wants forwarded ("%match extio/dongle2/cmd/... 1"),
  * the framer already de-dups them into info->wired[], and the box NAME is right
  * there in the pattern. So the host can learn which box sits behind which
  * handle by asking, instead of guessing from tty names -- which is what it had
  * to do before, and which is why it could only ever manage one.
  *
- * Empty until the box has sent its registration: a freshly opened port has no
- * identity yet, and the caller must treat that as "not known yet" rather than
- * "no box". */
+ * Empty until the box has sent its registration -- and PERMANENTLY empty for
+ * extio-zephyr boxes, whose u_usb_register is a no-op. Treat empty as "not
+ * known yet" rather than "no box"; ask usbioBoxes first. */
 static int usbio_wired_command(ClientData data, Tcl_Interp *interp, int objc, Tcl_Obj *objv[])
 {
   usbio_mod_t *mod = (usbio_mod_t *) data;
@@ -605,6 +657,29 @@ static int usbio_wired_command(ClientData data, Tcl_Interp *interp, int objc, Tc
   Tcl_Obj *l = Tcl_NewListObj(0, NULL);
   for (int i = 0; i < info->nwired; i++) {
     Tcl_ListObjAppendElement(interp, l, Tcl_NewStringObj(info->wired[i], -1));
+  }
+  Tcl_SetObjResult(interp, l);
+  return TCL_OK;
+}
+
+/* usbioBoxes <handle>  -- the box prefixes seen publishing on this device,
+ * e.g. {extio/dongle1 extio/xiao1 extio/xiao2} for a BLE central and its fleet.
+ *
+ * The routing map's source. Unlike usbioWired this needs no cooperation from
+ * the box beyond publishing at all, so it works on Zephyr firmware, on RP2350
+ * firmware, and on boxes relayed over the radio. Empty only until the first
+ * frame arrives -- treat that as "not known yet", never as "no box". */
+static int usbio_boxes_command(ClientData data, Tcl_Interp *interp, int objc, Tcl_Obj *objv[])
+{
+  usbio_mod_t *mod = (usbio_mod_t *) data;
+  if (objc < 2) { Tcl_WrongNumArgs(interp, 1, objv, "handle"); return TCL_ERROR; }
+  usbio_info_t *info = usbio_slot(mod, interp, objv[1]);
+  if (!info) return TCL_ERROR;
+
+  Tcl_Obj *l = Tcl_NewListObj(0, NULL);
+  int n = info->nseen;                 /* sample once; the reader may append */
+  for (int i = 0; i < n; i++) {
+    Tcl_ListObjAppendElement(interp, l, Tcl_NewStringObj(info->seen[i], -1));
   }
   Tcl_SetObjResult(interp, l);
   return TCL_OK;
@@ -651,6 +726,7 @@ static int usbio_open_command(ClientData data, Tcl_Interp *interp, int objc, Tcl
   info->usbio_fd = fd;
   info->fr_mode = 0; info->fr_have = 0;           /* fresh framer per open */
   info->nwired = 0;                               /* re-learn forwards from the box */
+  info->nseen  = 0;                               /* ...and which boxes it carries */
   info->rx_bin = info->rx_bad = info->rx_txt = 0; /* fresh rx counters */
   info->running = 1;
   if (pthread_create(&info->worker, NULL, workerThread, info) != 0) {
@@ -730,6 +806,8 @@ EXPORT(int,Dserv_usbio_Init) (Tcl_Interp *interp)
                        (Tcl_ObjCmdProc *) usbio_alive_command, (ClientData) info, NULL);
   Tcl_CreateObjCommand(interp, "usbioDevices",
                        (Tcl_ObjCmdProc *) usbio_devices_command, (ClientData) info, NULL);
+  Tcl_CreateObjCommand(interp, "usbioBoxes",
+                       (Tcl_ObjCmdProc *) usbio_boxes_command, (ClientData) info, NULL);
   Tcl_CreateObjCommand(interp, "usbioWired",
                        (Tcl_ObjCmdProc *) usbio_wired_command, (ClientData) info, NULL);
   return TCL_OK;
