@@ -174,8 +174,26 @@ fi
 # (extio_uf2_push), which is a different mechanism, so claiming ota=1 for it
 # would make the fleet page offer a button that cannot work.
 OTA=0; [ -n "$BIN" ] && OTA=1
-BIN_ARG=""; [ -n "$BIN" ] && BIN_ARG="-F bin=@$BIN"
-UF2_ARG=""; [ -n "$UF2" ] && UF2_ARG="-F uf2=@$UF2"
+# UPLOAD UNDER A BOARD-QUALIFIED FILENAME, not zephyr.uf2 / zephyr.signed.bin.
+#
+# The shelf addresses a file as /firmware/extio/<channel>/<version>/<filename>
+# -- no build key anywhere in the path -- while EVERY Zephyr board produces
+# artifacts with the SAME two names. So two boards published at one version
+# collide: the second upload wins and the first board's manifest entry points at
+# the other board's bytes.
+#
+# MEASURED the first time two boards were published together (2026-09-02): the
+# manifest listed both dongles with their correct, different sha256s, and the
+# URL for either returned the Raytac's file. extio_uf2_push's pre-flight sha
+# check caught it and refused to touch the box, which is exactly the case that
+# check exists for -- the wrong board's firmware is worse than a truncated
+# download, and nothing else in the chain would have noticed.
+#
+# curl's ;filename= sets the multipart name the agent stores, so this needs no
+# temp copy. Old entries keep their old names and keep working; this only makes
+# new publishes unambiguous.
+BIN_ARG=""; [ -n "$BIN" ] && BIN_ARG="-F bin=@$BIN;filename=$BUILD_KEY.bin"
+UF2_ARG=""; [ -n "$UF2" ] && UF2_ARG="-F uf2=@$UF2;filename=$BUILD_KEY.uf2"
 echo ">> ota     $OTA  ($([ "$OTA" = 1 ] && echo 'framed cmd/ota/* usable' || echo 'UF2 only -- use extio_uf2_push'))"
 
 [ "$DRY" = 1 ] && { echo ">> dry run, nothing sent"; exit 0; }

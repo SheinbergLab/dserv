@@ -1294,7 +1294,16 @@ proc extio_ota_clear {box} {
 #
 # Relies on the shelf listing `versions` newest-first, which is the order the
 # agent writes and the API returns.
-proc extio_shelf_pick {channel bbuild {version ""}} {
+# `artifact` is which FILE the image must carry to count as a candidate: `bin`
+# for the framed MCUboot OTA path (the default, and every historical caller), or
+# `uf2` for the boards that have no MCUboot at all and are updated by rebooting
+# into their bootloader and copying (extio_uf2_push).
+#
+# It has to be a parameter rather than "any image will do": a UF2-only entry is
+# useless to extio_ota_push_shelf and a bin-only entry is useless to
+# extio_uf2_push, so picking the newest version that has EITHER would hand each
+# path a file it cannot use -- and the failure would land on the box.
+proc extio_shelf_pick {channel bbuild {version ""} {artifact bin}} {
     package require yajltcl
     set base $::extio_fw_shelf_url
     set url "$base/api/firmware/extio/$channel"
@@ -1311,7 +1320,7 @@ proc extio_shelf_pick {channel bbuild {version ""}} {
         if { $pinned && $vv ne $version } continue
         foreach im [dict get $v images] {
             if { ![dict exists $im build] || [dict get $im build] ne $bbuild } continue
-            if { ![dict exists $im bin] || [dict get $im bin] eq "" } continue
+            if { ![dict exists $im $artifact] || [dict get $im $artifact] eq "" } continue
             set img $im; set version $vv; set entry $v; break
         }
         if { $img ne "" } break
@@ -1320,10 +1329,10 @@ proc extio_shelf_pick {channel bbuild {version ""}} {
     }
     if { $img eq "" } {
         if { $pinned } {
-            error "extio_shelf_pick: no OTA (.bin) image for build '$bbuild' in\
+            error "extio_shelf_pick: no .$artifact image for build '$bbuild' in\
                    $channel/$version (version was pinned explicitly)"
         }
-        error "extio_shelf_pick: no OTA (.bin) image for build '$bbuild' anywhere in\
+        error "extio_shelf_pick: no .$artifact image for build '$bbuild' anywhere in\
                channel '$channel' -- searched [llength $tried] version(s): [join $tried {, }].\
                Has an image for this build ever been published? Check\
                $base/api/firmware/extio/$channel"
@@ -2614,16 +2623,22 @@ proc extio_uf2_push {box {channel ""} {version ""}} {
             if { $c ne "" } { set channel $c }
         }
     }
-    set pick [extio_shelf_pick $channel $bbuild $version]
+    # `file`, NOT `uf2`. The shelf's schema has two artifact slots per image:
+    # `bin`/`binSha256` for the MCUboot signed image, and `file`/`sha256` for
+    # the UF2 -- a name inherited from the RP2350 boxes, whose .uf2 has always
+    # lived there. publish.sh's `-F uf2=@...` lands in `file`. Verified against
+    # the live manifest rather than guessed; asking for a `uf2` key found
+    # nothing on an image that was sitting right there.
+    set pick [extio_shelf_pick $channel $bbuild $version file]
     set d    [dict get $pick manifest]
     set img  [dict get $pick img]
     set ver  [dict get $pick version]
-    if { ![dict exists $img uf2] || [dict get $img uf2] eq "" } {
-        error "extio_uf2_push: shelf image $channel/$ver for '$bbuild' has no uf2\
- (published before publish.sh learned to ship one, or an MCUboot-only board --\
- use extio_ota_push_shelf for those)"
+    if { ![dict exists $img file] || [dict get $img file] eq "" } {
+        error "extio_uf2_push: shelf image $channel/$ver for '$bbuild' carries no\
+ UF2 (published before publish.sh learned to ship one, or an MCUboot-only board\
+ -- use extio_ota_push_shelf for those)"
     }
-    set file [dict get $img uf2]
+    set file [dict get $img file]
     set url  "$::extio_fw_shelf_url/firmware/extio/$channel/$ver/$file"
     set tmp  [file join /tmp "extio_uf2_${box}_${ver}.uf2"]
     if { [catch { https_get $url -outfile $tmp -timeout 60000 } n] } {
@@ -2632,11 +2647,11 @@ proc extio_uf2_push {box {channel ""} {version ""}} {
     }
     # Verify BEFORE touching the box. A truncated download copied onto a
     # bootloader is an unrecoverable-without-hands flash of garbage.
-    if { [dict exists $img uf2Sha256] && [dict get $img uf2Sha256] ne "" } {
+    if { [dict exists $img sha256] && [dict get $img sha256] ne "" } {
         set got [sha256 -file $tmp]
-        if { ![string equal -nocase $got [dict get $img uf2Sha256]] } {
+        if { ![string equal -nocase $got [dict get $img sha256]] } {
             catch { file delete $tmp }
-            error "extio_uf2_push: sha mismatch -- shelf [dict get $img uf2Sha256], got $got"
+            error "extio_uf2_push: sha mismatch -- shelf [dict get $img sha256], got $got"
         }
     }
     puts "extio uf2\[$box\]: $channel/$ver $file ([file size $tmp] B) -- rebooting into the bootloader"
