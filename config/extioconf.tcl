@@ -2535,6 +2535,62 @@ proc extio_cfg_dirty {box} {
 # and NOTHING is published, so a UI keeps showing the old value -- which is
 # indistinguishable from the write having failed, and is exactly the kind of
 # silent staleness this tree keeps paying for.
+# ---- BLE ADOPTION (BLE_AFFINITY.md) ----
+#
+# `central` is a BLE CENTRAL box (a dongle); `peripheral` is what it holds.
+# Both are ordinary extio boxes, so these are ordinary cmd/* pushes -- the
+# routing that gets them to the right dongle is usbio_forward's, which places a
+# box by the port its frames arrive on.
+#
+# NOT SAVED, deliberately, matching the wired adopt: an unsaved adoption returns
+# the peripheral to its previous central on reboot, which is what makes "lend me
+# this handheld for an hour" safe. extio_cfg_save when you mean to keep it.
+
+proc extio_ble_pair {central {secs 60}} {
+    dservSet extio/$central/cmd/ble/pair $secs
+    return "adoption window open $secs s on $central -- any peripheral that\
+ connects and names itself is adopted"
+}
+
+proc extio_ble_release {central peripheral} {
+    dservSet extio/$central/cmd/ble/release $peripheral
+    return "released $peripheral from $central"
+}
+
+# Who has adopted what. Returns a dict central -> {names}, from
+# state/ble/paired -- which is published EVEN WHEN EMPTY, so "" means
+# PROMISCUOUS (adopted nobody, connects to anything) while a MISSING key means
+# firmware too old to say. Absent is not empty; do not collapse them.
+proc extio_ble_adoptions {} {
+    set out {}
+    foreach k [dservKeys extio/*/state/ble/paired] {
+        if { ![regexp {^extio/([^/]+)/} $k -> box] } continue
+        dict set out $box [split [dservGet $k] ,]
+    }
+    return $out
+}
+
+# THE HANDOFF, in the order that works. Same constraint as the wired
+# %unreg-after-retarget: do it the other way round and the release can no longer
+# be delivered.
+#
+# 1. the CURRENT owner releases -- it disconnects, and the peripheral starts
+#    advertising again. Only the owner can do this; nothing else can take a
+#    peripheral that is connected, because it holds its one slot and is not
+#    advertising. That is the safety property, and it is in the radio.
+# 2. the NEW central opens a window and picks it up.
+#
+# The gap between them is the only moment the peripheral is unclaimed. If the
+# old central is still promiscuous (it just released its LAST peripheral, so its
+# allowlist is empty) it will race for it and usually win, being already
+# scanning -- so adopt the new central FIRST when the old one is going
+# promiscuous, or take the old one out of range.
+proc extio_ble_handoff {peripheral from to {secs 30}} {
+    extio_ble_pair $to $secs
+    extio_ble_release $from $peripheral
+    return "handoff: $peripheral $from -> $to (window $secs s on $to)"
+}
+
 proc extio_cfg_announce {box} {
     dservSet extio/$box/cmd/announce 1
     return "announce requested from $box"

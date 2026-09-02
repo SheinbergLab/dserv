@@ -528,6 +528,43 @@ static void pub_dbg(const char *leaf, uint32_t v)
 #define FACT_IN_OBS    (-2)
 #define FACT_NO_STORE  (-3)
 
+#if defined(BOX_BLE_CENTRAL)
+/* state/ble/paired -- the adoption roster, comma-separated, as a STRING.
+ *
+ * PUBLISHED EVEN WHEN EMPTY, and that is the whole point rather than tidiness.
+ * "This central has adopted nobody" is a real and important statement -- it
+ * means PROMISCUOUS, connect to anything -- and an absent key cannot make it.
+ * The group roster learned this the hard way (ghost groups surviving a factory
+ * reset, because a tombstone keyed on names the box had already forgotten), and
+ * the rule it produced applies unchanged: ABSENT != EMPTY. Firmware without
+ * this key publishes nothing at all, so a host must treat missing as "unknown,
+ * fall back", never as "none adopted".
+ *
+ * Not routed through pub_periodic: an adopt or release must be visible AT ONCE,
+ * and pub_periodic would suppress a roster that happened to match the last one
+ * sent -- which is exactly what an adopt-then-release round trip produces. */
+static void pub_ble_paired(void)
+{
+	char list[BOX_BLE_MAX_PAIR * (BOX_NAME_MAX + 1)];
+	char nm[BOX_NAME_MAX];
+	uint8_t f[DSERV_MSG_LEN];
+	char name[80];
+	int n = 0;
+
+	list[0] = '\0';
+	for (int i = 0; box_ble_pair_entry(&cfg, i, nm, sizeof nm); i++) {
+		if (n) {
+			strncat(list, ",", sizeof list - strlen(list) - 1);
+		}
+		strncat(list, nm[0] ? nm : "?", sizeof list - strlen(list) - 1);
+		n++;
+	}
+	dserv_state_name(&cfg, name, sizeof name, "ble/paired");
+	dserv_msg_string(f, name, 0, list);
+	box_pub_bulk(f);
+}
+#endif
+
 static void pub_receipt(const char *leaf, int32_t v)
 {
 	uint8_t pf[DSERV_MSG_LEN];
@@ -1615,6 +1652,44 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 		return;
 	}
 #endif
+
+#if defined(BOX_BLE_CENTRAL)
+	/* <prefix>/cmd/ble/pair <secs>  and  <prefix>/cmd/ble/release <name>
+	 * -- BLE adoption from the host (BLE_AFFINITY.md).
+	 *
+	 * Handled HERE, not in dserv_cfg__cmd(): src/core is shared verbatim with
+	 * the RP2350 fleet, and only a Zephyr central has this allowlist. Same
+	 * reasoning that keeps cmd/dac and cmd/ain/calibrate in the platform layer.
+	 *
+	 * LIVE, NOT SAVED, like every other config write -- an unsaved adoption
+	 * returns the peripheral to its previous central on reboot, which is the
+	 * property that makes lending one safe. The wired boxes settled this.
+	 *
+	 * The roster is republished immediately rather than waiting for the 1 Hz
+	 * beat: a host that just adopted needs to SEE it, and a UI that has to
+	 * wait a second to confirm its own click reads as broken. */
+	if (leaf && strcmp(leaf, "cmd/ble/pair") == 0) {
+		int secs = (int) dserv_msg_as_long(&m);
+
+		box_ble_pair_open(&cfg, secs);
+		box_console_printf("cmd/ble/pair -> adoption window %d s\n", secs);
+		pub_ble_paired();
+		return;
+	}
+	if (leaf && strcmp(leaf, "cmd/ble/release") == 0) {
+		char nm[BOX_NAME_MAX];
+
+		dserv_msg_copy_cstr(&m, nm, sizeof nm);
+		if (box_ble_pair_release(&cfg, nm)) {
+			box_console_printf("cmd/ble/release -> released %s\n", nm);
+		} else {
+			box_console_printf("cmd/ble/release -> '%s' not adopted\n", nm);
+		}
+		pub_ble_paired();
+		return;
+	}
+#endif
+
 
 #if defined(CONFIG_PTP_CLOCK)
 	/* <prefix>/cmd/ptp/offset <us> -- the host's PHC->dserv constant.
@@ -3810,6 +3885,7 @@ int main(void)
 				uint32_t mn = 0, etx = 0, erx = 0;
 				int syn = 0, nsync = 0;
 
+				pub_ble_paired();
 				pub_periodic("ble/conns",    (uint32_t) box_ble_conn_count());
 				pub_periodic("ble/scanning", (uint32_t) box_ble_scanning());
 
