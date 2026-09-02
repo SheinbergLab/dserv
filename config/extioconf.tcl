@@ -621,6 +621,33 @@ proc extio_discover {} {
                 set ::extio_known($name) 1
                 extio_forward_box $name
                 puts "extio: box '$name' present -- forwarding config/cmd"
+                # ...and ASK IT TO DESCRIBE ITSELF. Must follow
+                # extio_forward_box, which is what wires cmd/* to the box.
+                #
+                # A box announces its manifest ONCE, on the event that opened
+                # its pipe. dserv restarting is not that event -- and for a USB
+                # box it happens to look like one, because reopening the port
+                # raises DTR and the box sees it. A BLE PERIPHERAL sees nothing:
+                # its announce fires on the ready edge of its own radio link to
+                # its central, which a host restart does not disturb. So its
+                # one-shot keys (board, transport, groups/all, pins/silk) were
+                # simply GONE from the table while its watchdog ticked happily
+                # on -- a box present in extio/boxes that nothing could
+                # describe.
+                #
+                # OBSERVED as "I have to open xiao1's config page before its
+                # configuration comes back", and the page was the accidental
+                # cure: it calls extio_cfg_announce on load. Doing it here makes
+                # that automatic and covers reconnects and box reboots too --
+                # discovery is exactly the moment the table's knowledge is
+                # stale.
+                #
+                # Fifth instance today of one-shot state not surviving an event
+                # its publisher cannot see (connect->subscribe, the silk frame,
+                # BLE rename, USB rename, and now a host restart). The rule
+                # keeps being the same: anything published once needs an
+                # explicit trigger tied to the event that invalidates it.
+                catch { extio_cfg_announce $name }
             }
         } elseif { [info exists ::extio_known($name)] } {
             incr ::extio_stale($name)                           ;# a live box's watchdog froze this tick
