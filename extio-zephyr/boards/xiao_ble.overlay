@@ -226,13 +226,34 @@ box_adc: &adc {
 	 * times the real pad voltage. Measured on 2026-09-03: raw 791 came back as
 	 * 2549 mV instead of 637.
 	 *
-	 * ADC_REF_VDD_1_4 with VDD = 3.3 V is a 825 mV reference; with gain 1/4 that
-	 * is the same 3.3 V full scale as its neighbours. Safe to differ precisely
-	 * because this channel is `disabled` and therefore never enumerated by
-	 * box_adc.c -- box_adc_vref_mv() cannot see it. */
+	 * THE INTERNAL 0.6 V BAND GAP, NOT ADC_REF_VDD_1_4 LIKE ITS NEIGHBOURS, and
+	 * this one decides whether the discharge curve is usable.
+	 *
+	 * A VDD/4 reference makes the reading RATIOMETRIC TO VDD, while vref-mv here
+	 * is a compile-time constant that assumes VDD is exactly 3.3 V. That holds
+	 * while the LDO regulates -- and stops holding precisely when this
+	 * measurement matters. As the cell drains toward the regulator's dropout,
+	 * VDD sags, the reference sags with it, and the same pad voltage yields MORE
+	 * counts against an unchanged constant: the reported cell voltage reads
+	 * progressively HIGH exactly at the end of the discharge, flattering the
+	 * number the whole module exists to produce. A curve measured against a
+	 * drifting reference cannot be corrected afterwards, which is why this is a
+	 * board-file decision and not a calibration one.
+	 *
+	 * The band gap does not move with VDD. With gain 1/4 the full scale is
+	 * 0.6/(1/4) = 2.4 V against a pad that tops out near 1.42 V at a full cell
+	 * -- 59% of range, ample headroom -- and the resolution improves as a side
+	 * effect: 0.586 mV per count at the pad, 1.73 mV at the cell, against 2.39
+	 * under the old 3.3 V full scale.
+	 *
+	 * The six field channels above KEEP ADC_REF_VDD_1_4 deliberately. They are
+	 * ratiometric by nature (a pot or a sensor fed from the same rail divides
+	 * VDD, so a VDD-referenced reading cancels the error) and they publish
+	 * counts, not volts. Only an absolute measurement of something that is NOT
+	 * derived from VDD -- the cell -- needs an absolute reference. */
 	channel@6 { reg = <6>; status = "disabled";
 		zephyr,gain = "ADC_GAIN_1_4";
-		zephyr,reference = "ADC_REF_VDD_1_4"; zephyr,vref-mv = <825>;
+		zephyr,reference = "ADC_REF_INTERNAL"; zephyr,vref-mv = <600>;
 		zephyr,acquisition-time = <ADC_ACQ_TIME(ADC_ACQ_TIME_MICROSECONDS, 40)>;
 		zephyr,resolution = <12>; zephyr,input-positive = <NRF_SAADC_AIN7>; };
 };
