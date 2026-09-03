@@ -131,8 +131,9 @@ int box_battery_init(void)
 
 int box_battery_present(void) { return ready; }
 
-/* The read. Runs on the system workqueue -- see box_battery.h on why not the
- * service loop. */
+/* The read. Runs on this module's OWN workqueue -- see the queue definition
+ * above on why not the system one, and box_battery.h on why not the service
+ * loop. */
 static void batt_work_fn(struct k_work *w)
 {
 	int16_t  buf = 0;
@@ -207,6 +208,78 @@ static void batt_work_fn(struct k_work *w)
 	atomic_inc(&n_reads);
 }
 
+/* One conversion with the enable pin held in `on` (logical, so DT polarity
+ * applies). Caller owns the borrow. Returns raw counts or negative errno. */
+static int probe_once(int on)
+{
+	int16_t buf = 0;
+	struct adc_sequence seq = { .buffer = &buf, .buffer_size = sizeof buf };
+	int rc;
+
+	if (vbatt_pwr.port) {
+		gpio_pin_set_dt(&vbatt_pwr, on);
+		k_msleep(SETTLE_MS);
+	} else if (!on) {
+		return -ENOTSUP;         /* nothing to switch: no "off" state exists */
+	}
+
+	rc = adc_sequence_init_dt(&vbatt.port, &seq);
+	if (rc == 0) {
+		rc = adc_read(vbatt.port.dev, &seq);
+	}
+	if (rc) {
+		return rc;
+	}
+	return (buf < 0) ? 0 : (int) buf;
+}
+
+/* ---- THE BRING-UP PROBE ----
+ *
+ * Answers the ONE question a single reading cannot: is the divider actually
+ * connected when we convert? A wrong ratio and a disconnected divider both
+ * produce a plausible-looking number, and they need opposite fixes -- one is two
+ * constants in the overlay, the other is the wrong pin or the wrong polarity.
+ *
+ * Reads with the enable ASSERTED and DEASSERTED. If those differ, the pin really
+ * is gating something and the resistors are the remaining question. If they are
+ * the same, the pin is doing nothing: either it is not the enable, or the DT
+ * polarity is inverted, and the pad being converted is floating.
+ *
+ * Exists because on 2026-09-03 the first hardware reading put the pad at 637 mV
+ * -- too low for a 3.7-4.2 V cell behind ANY sane divider -- and nothing in a
+ * single sample could say which of those two it was. */
+int box_battery_probe(uint16_t *on, uint16_t *off)
+{
+	int rc, r_on, r_off;
+
+	if (!ready) {
+		return -ENODEV;
+	}
+	rc = box_ain_borrow(BORROW_MS);
+	if (rc) {
+		return rc;
+	}
+
+	r_on  = probe_once(1);
+	r_off = probe_once(0);
+
+	if (vbatt_pwr.port) {
+		gpio_pin_set_dt(&vbatt_pwr, 0);      /* leave it switched off */
+	}
+	box_ain_return();
+
+	if (r_on < 0) {
+		return r_on;
+	}
+	if (on) {
+		*on = (uint16_t) r_on;
+	}
+	if (off) {
+		*off = (r_off < 0) ? 0xFFFF : (uint16_t) r_off;
+	}
+	return 0;
+}
+
 void box_battery_service(uint32_t now_ms)
 {
 	if (!ready) {
@@ -262,6 +335,11 @@ void box_battery_service(uint32_t now_ms)         { ARG_UNUSED(now_ms); }
 int  box_battery_get(uint32_t *mv, uint16_t *raw)
 {
 	ARG_UNUSED(mv); ARG_UNUSED(raw);
+	return -ENODEV;
+}
+int  box_battery_probe(uint16_t *on, uint16_t *off)
+{
+	ARG_UNUSED(on); ARG_UNUSED(off);
 	return -ENODEV;
 }
 void box_battery_stats(uint32_t *reads, uint32_t *busy)

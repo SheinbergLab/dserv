@@ -215,9 +215,24 @@ box_adc: &adc {
 	 * few percent, and with nothing on the wire to say so. Exactly the failure
 	 * this tree keeps paying for, so it is bought off here for 30 us once a
 	 * minute. */
+	/* vref-mv = 825, NOT the 3300 every channel above uses, and the difference
+	 * is a genuine clash of conventions rather than a typo.
+	 *
+	 * box_adc.h documents box_adc_vref_mv() as "full-scale in mV, for counts ->
+	 * volts", and 3300 is right for that: those channels publish COUNTS and
+	 * anyone converting does counts * 3300 / 4096. Zephyr's
+	 * adc_raw_to_millivolts_dt() reads the SAME property as the REFERENCE and
+	 * then inverts the gain itself -- x4 here -- so handing it 3300 yields four
+	 * times the real pad voltage. Measured on 2026-09-03: raw 791 came back as
+	 * 2549 mV instead of 637.
+	 *
+	 * ADC_REF_VDD_1_4 with VDD = 3.3 V is a 825 mV reference; with gain 1/4 that
+	 * is the same 3.3 V full scale as its neighbours. Safe to differ precisely
+	 * because this channel is `disabled` and therefore never enumerated by
+	 * box_adc.c -- box_adc_vref_mv() cannot see it. */
 	channel@6 { reg = <6>; status = "disabled";
 		zephyr,gain = "ADC_GAIN_1_4";
-		zephyr,reference = "ADC_REF_VDD_1_4"; zephyr,vref-mv = <3300>;
+		zephyr,reference = "ADC_REF_VDD_1_4"; zephyr,vref-mv = <825>;
 		zephyr,acquisition-time = <ADC_ACQ_TIME(ADC_ACQ_TIME_MICROSECONDS, 40)>;
 		zephyr,resolution = <12>; zephyr,input-positive = <NRF_SAADC_AIN7>; };
 };
@@ -230,14 +245,28 @@ box_adc: &adc {
  * board facts belong in the board file, and the divider ratio and its enable pin
  * ARE board facts. Same shape the thingy52 uses for its cell.
  *
- * !! THESE THREE NUMBERS ARE UNVERIFIED !!
+ * WHERE THESE CAME FROM, AND WHAT THE HARDWARE HAS SINCE SAID. Zephyr's
+ * xiao_ble board files say NOTHING about the battery path -- no vbatt node, no
+ * divider, no enable pin (grepped, 2026-09-03) -- so unlike every other pad in
+ * this file these did not come from seeed_xiao_connector.dtsi. They come from
+ * Seeed's Arduino variant: AIN7/P0.31 behind 1 M/510 k, enabled by driving P0.14
+ * LOW.
  *
- * Zephyr's xiao_ble board files say NOTHING about the battery path -- no vbatt
- * node, no divider, no enable pin (grepped, 2026-09-03) -- so unlike every other
- * pad in this file these did not come from seeed_xiao_connector.dtsi. They come
- * from Seeed's Arduino variant for this module: AIN7/P0.31 behind 1 M/510 k,
- * enabled by driving P0.14 LOW. Plausible and widely repeated, but not read off
- * a schematic by anyone here.
+ * `batt probe` on the bench, 2026-09-03, says all three are RIGHT:
+ *
+ *     enabled  raw 1539     disabled raw 4095 (railed)
+ *
+ * The rail is the informative half. P0.14 switches the divider's LOW side, so
+ * opening it leaves the pad pulled up to VBAT through the top resistor -- above
+ * the 3.3 V full scale, hence 4095. A pin that gated nothing would have read the
+ * SAME both ways. So the pin, and the ACTIVE_LOW polarity above, are confirmed.
+ *
+ * The ratio then follows: 1533 counts -> 1240 mV at the pad -> 3.656 V at the
+ * cell, squarely in the Li-ion band. A wrong ratio here would have to be wrong
+ * by a factor that still landed in that band, which 1 M/510 k does and its
+ * plausible neighbours (1 M/1 M -> 2.48 V, 510 k/1 M -> 1.87 V) do not.
+ * NOT yet checked against a meter, which is the only thing that would turn
+ * "consistent" into "calibrated".
  *
  * SO THE BOX PUBLISHES state/batt/raw NEXT TO state/batt/mv. If the ratio is
  * wrong, mv is wrong by a constant factor and raw is still the truth: one meter

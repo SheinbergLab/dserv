@@ -78,6 +78,19 @@ int box_battery_get(uint32_t *mv, uint16_t *raw);
  * which is the whole reason this module was built. */
 uint8_t box_battery_pct(uint32_t mv);
 
+/* BRING-UP ONLY: convert once with the divider's enable pin ASSERTED and once
+ * DEASSERTED, returning both raw counts.
+ *
+ * The one measurement that separates "the resistor values are wrong" from "the
+ * divider was never switched on" -- both of which yield a believable number from
+ * a single read, and which need opposite fixes. Differing counts mean the pin
+ * gates something and only the ratio is in question; identical counts mean the
+ * pin does nothing and the pad is floating.
+ *
+ * Borrows the converter like an ordinary read, so it can return -EBUSY. Leaves
+ * the divider switched off. */
+int box_battery_probe(uint16_t *on, uint16_t *off);
+
 /* How many reads have completed, and how many were refused because the sampler
  * would not release the converter. A pct that never moves with `reads` climbing
  * is a stuck divider; `busy` climbing instead is analog contention, and the two

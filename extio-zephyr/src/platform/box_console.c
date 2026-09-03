@@ -695,13 +695,50 @@ static void run_line(box_config_t *cfg, const char *line)
 	 * Platform-local rather than in box_cli.h, same reason as `led` and
 	 * `adccal`: that grammar is shared verbatim with the RP2350 boxes, and none
 	 * of them has a cell. */
-	if (strcmp(line, "batt") == 0) {
+	if (strcmp(line, "batt") == 0 || strcmp(line, "batt probe") == 0) {
 		uint32_t mv = 0, reads = 0, busy = 0;
 		uint16_t raw = 0;
 		int rc;
 
 		if (!box_battery_present()) {
 			box_console_printf("batt: no cell declared on this board\n");
+			return;
+		}
+
+		/* `batt probe` -- the bring-up measurement, not the gauge.
+		 *
+		 * Converts with the divider's enable pin asserted and deasserted. Two
+		 * different counts mean the pin gates something real and only the
+		 * resistor values are open; two identical counts mean it gates nothing
+		 * and the pad is floating, which is a wrong pin or an inverted polarity
+		 * rather than a wrong ratio. Those need opposite fixes and a single
+		 * reading cannot tell them apart. */
+		if (line[4] == ' ') {
+			uint16_t on = 0, off = 0;
+
+			rc = box_battery_probe(&on, &off);
+			if (rc) {
+				box_console_printf("batt probe: ERR %d%s\n", rc,
+						   rc == -EBUSY ? " (sampler would not"
+								  " release the ADC)" : "");
+				return;
+			}
+			box_console_printf("batt probe: enabled raw=%u   disabled raw=%u\n",
+					   on, off);
+			if (off == 0xFFFF) {
+				box_console_printf("  no power-gpios on this board --"
+						   " the divider is always connected\n");
+			} else if (on == off) {
+				box_console_printf("  IDENTICAL: the enable pin gates nothing."
+						   " Wrong pin or inverted polarity --\n"
+						   "  the pad being converted is floating, so mV"
+						   " is meaningless. Fix power-gpios.\n");
+			} else {
+				box_console_printf("  they differ, so the pin works. Any error"
+						   " left is the RATIO:\n"
+						   "  meter the cell, then set output-ohms/full-ohms"
+						   " so mv matches.\n");
+			}
 			return;
 		}
 		box_battery_stats(&reads, &busy);
