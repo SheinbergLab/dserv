@@ -1038,6 +1038,45 @@ const sparse = (str) => {
 };
 const csvNums = (str) => String(str || '').split(',').filter(x => x !== '').map(Number);
 
+/* THE BOX COULD NOT FIT A VALUE IN ONE FRAME.
+ *
+ * dserv_msg_build() refuses a frame whose name plus body exceeds 109 bytes, and
+ * the firmware's pub_str() then publishes this literal in place of the value.
+ * Worth naming here rather than treating as data: it came back as a pin called
+ * NaN on 2026-09-03 (a box named `rig1-iobox` overflowed pins/all by ONE byte),
+ * and every minute spent on that was spent because the page rendered the
+ * sentinel instead of reading it. */
+const TOOLONG = '!toolong';
+
+/* Pin sets, accepting BOTH shapes the firmware has published.
+ *
+ * Ranges ("0-29") are what a current box sends -- the pin set is contiguous, and
+ * 4 bytes instead of 79 is what keeps the frame inside its budget at any legal
+ * box name. Plain CSV ("0,1,2,...") is what older firmware sends, and mixed runs
+ * ("0-5,8,10-29") are accepted so a future sparse map needs no page change.
+ *
+ * Returns null -- distinct from [] -- when the box reported TOOLONG, so the
+ * caller can say WHY the map is missing instead of drawing a row for NaN. */
+const pinSet = (str) => {
+  const raw = String(str == null ? '' : str).trim();
+  if (raw === TOOLONG) return null;
+  const out = [];
+  for (const tok of raw.split(',')) {
+    const t = tok.trim();
+    if (t === '') continue;
+    const m = /^(\d+)\s*-\s*(\d+)$/.exec(t);
+    if (m) {
+      const a = +m[1], b = +m[2];
+      /* Guard the loop rather than trusting the box: a reversed or absurd
+       * range from a corrupted frame must not hang the page. */
+      if (b >= a && b - a < 256) { for (let i = a; i <= b; i++) out.push(i); }
+    } else if (/^\d+$/.test(t)) {
+      out.push(+t);
+    }
+  }
+  return out;
+};
+
 function woField(box, cfgLeaf, wide) {
   return `<input class="${wide ? 'w8' : 'w4'} wo" placeholder="write-only" title="The box accepts this setting but does not report it, so its current value cannot be shown."
             data-ctl="${esc(box)}|${cfgLeaf}"
@@ -1579,10 +1618,11 @@ function buildPanel(b) {
   /* pins/all is the BOARD's pin set. Falling back to the active lists keeps the
    * page working against a box on older firmware -- it just cannot then show a
    * pin that is currently `off`, which is exactly the gap pins/all closes. */
-  const all = csvNums(get(b, 'pins/all'));
-  const pins = (all.length ? all
+  const all = pinSet(get(b, 'pins/all'));
+  const allTooLong = all === null;          /* the box could not fit the frame */
+  const pins = ((all && all.length) ? all
                 : [...new Set([...pinsIn, ...pinsOut])]).sort((x, y) => x - y);
-  const havePinsAll = all.length > 0;
+  const havePinsAll = !!(all && all.length);
 
   const modeOf = p => rsv.has(p) ? 'reserved'
                     : pinsAin.includes(p) ? 'ain'
@@ -1853,7 +1893,9 @@ function buildPanel(b) {
 
     <h2>pins</h2>
     <table><tr><th>pin</th><th>mode</th><th>level</th><th>label</th><th>debounce ms</th><th>pulse µs</th><th>act low</th></tr>${pinRows}</table>
-    <p class="note">${havePinsAll
+    <p class="note">${allTooLong
+       ? '<b>This box could not announce its pin map.</b> It replied <code>!toolong</code>, meaning the datapoint name plus the value would not fit one 128-byte frame — almost always because the BOX NAME is too long. Shorten it (the pin map needs the name under ~9 characters on firmware that sends <code>pins/all</code> as a list; newer firmware sends a range and has room for any legal name) and the manifest re-announces on rename. Only ACTIVE pins are shown below until then.'
+       : havePinsAll
        ? 'Every pin the board maps, from <code>pins/all</code>; reserved pins are shown but refused by the box. Blank debounce/pulse means the default (0) — the manifest sends only pins that differ.'
        : 'This box predates <code>pins/all</code>, so only ACTIVE pins appear and a pin set to <code>off</code> cannot be shown or re-enabled. Update its firmware to configure the full map.'}${
        (sk && !sk.announced) ? ' Pin numbers ARE the silkscreen: box pin <i>n</i> is Arduino D<i>n</i>, and pins 14–17 are the A2–A5 positions.'

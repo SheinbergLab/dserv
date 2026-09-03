@@ -364,6 +364,39 @@ void box_announce_manifest(const box_config_t *c)
 	pub_str(c, "pins/in",  in_csv);
 	pub_str(c, "pins/out", out_csv);
 
+	/* ---- THE FRAME BUDGET, CHECKED BY THE COMPILER ----
+	 *
+	 * dserv_msg_build() refuses any frame whose name plus body exceeds
+	 * DSERV_MSG_MAX_PAYLOAD, and pub_str() then publishes the literal string
+	 * "!toolong" in place of the value. That is a reasonable last resort and a
+	 * terrible thing to discover on a rig: the box keeps running, keeps
+	 * answering, and simply stops announcing part of itself. It cost an evening
+	 * on 2026-09-03, where the visible symptom was a pin named NaN on a config
+	 * page and the cause was a box name one character too long.
+	 *
+	 * The real defect was that two layers disagreed in silence -- BOX_NAME_MAX
+	 * permits 15 characters, while the CSV form of pins/all left room for 9 --
+	 * so the fix is not a naming convention but this assert. It fails the BUILD
+	 * for whoever adds a manifest leaf that cannot fit at the longest name the
+	 * config layer will accept, instead of failing a rig months later.
+	 *
+	 * Covers the FIXED-size bodies only. The sparse leaves (debounce, pulse,
+	 * active_low) grow with configuration rather than with the board, and a
+	 * fully-populated one can exceed the budget on ANY name -- that is a real
+	 * remaining hole, and the reason the page must still render "!toolong"
+	 * legibly rather than trusting this assert to have prevented it. */
+#define MANIFEST_LEAF_WORST (sizeof "pins/debounce_ms" - 1)      /* longest leaf here */
+#define MANIFEST_NAME_WORST (sizeof BOX_CLASS - 1 + 1 +          /* "extio" + "/"     */ \
+			     (BOX_NAME_MAX - 1) +                /* the box's own name */ \
+			     (sizeof "/state/" - 1) +                                    \
+			     MANIFEST_LEAF_WORST)
+#define PINS_ALL_BODY_WORST (sizeof "0-" - 1 + 3)                /* "0-<BOX_NPINS-1>" */
+
+	BUILD_ASSERT(MANIFEST_NAME_WORST + PINS_ALL_BODY_WORST <= DSERV_MSG_MAX_PAYLOAD,
+		     "a manifest frame cannot fit at BOX_NAME_MAX -- shorten a leaf, "
+		     "compact a body, or lower BOX_NAME_MAX; do NOT rely on operators "
+		     "choosing short names");
+
 	/* ---- what the board HAS, not just what is currently switched on ----
 	 *
 	 * pins/in and pins/out above describe the ACTIVE map, which is what a
@@ -383,16 +416,39 @@ void box_announce_manifest(const box_config_t *c)
 	 * frames carry the same information, and only pins that differ from the
 	 * default appear at all. */
 	{
-		int ka = 0, kl = 0, kr = 0, kd = 0, kp = 0, kA = 0, kP = 0;
-		char all_csv[96], ain_csv[64], rsv_csv[64];
+		int kl = 0, kr = 0, kd = 0, kp = 0, kA = 0, kP = 0;
+		char all_csv[16], ain_csv[64], rsv_csv[64];
 		char deb_csv[96], pul_csv[96], alo_csv[64], pup_csv[64];
 		uint32_t rmask = box_gpio_reserved_mask();
 
 		all_csv[0] = ain_csv[0] = rsv_csv[0] = '\0';
 		deb_csv[0] = pul_csv[0] = alo_csv[0] = pup_csv[0] = '\0';
 
+		/* ---- A RANGE, NOT 79 BYTES OF CSV ----
+		 *
+		 * This used to enumerate "0,1,2,...,29", which is 79 bytes, and
+		 * dserv_msg_build() refuses a frame whose name plus body exceeds
+		 * DSERV_MSG_MAX_PAYLOAD (109). The name is
+		 * "extio/<name>/state/pins/all" = 21 + strlen(name), so the CSV form
+		 * fit only while the box name was <= 9 characters -- while
+		 * BOX_NAME_MAX has always allowed 15.
+		 *
+		 * A box named `rig1-iobox` therefore overflowed by ONE byte, pub_str
+		 * substituted the literal "!toolong", and the config page rendered a
+		 * single pin called NaN. Nothing on the box complained: it accepted
+		 * the name, kept working, and simply stopped being configurable.
+		 * Found 2026-09-03; the two layers had disagreed since pins/all
+		 * existed.
+		 *
+		 * The set is CONTIGUOUS BY CONSTRUCTION -- this loop adds every index
+		 * below BOX_NPINS unconditionally, and pins the board does not map are
+		 * reported through pins/reserved rather than by omission here -- so a
+		 * range says exactly the same thing in 4 bytes. If that ever stops
+		 * being true, emit comma-separated runs ("0-5,8,10-29"); the page's
+		 * parser already accepts that shape. */
+		snprintf(all_csv, sizeof all_csv, "0-%d", BOX_NPINS - 1);
+
 		for (int i = 0; i < BOX_NPINS; i++) {
-			ka += snprintf(all_csv + ka, sizeof all_csv - ka, "%s%d", ka ? "," : "", i);
 			if ((rmask >> i) & 1u) {
 				kr += snprintf(rsv_csv + kr, sizeof rsv_csv - kr, "%s%d", kr ? "," : "", i);
 			}
