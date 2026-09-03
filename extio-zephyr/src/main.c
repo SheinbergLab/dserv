@@ -62,6 +62,7 @@
 #include "box_ble_periph.h"
 #endif
 #include "box_status_led.h"   /* stubs itself out on a board with no status LED */
+#include "box_battery.h"      /* stubs itself out on a board that declares no cell */
 #if defined(BOX_HAVE_OTA_SLOT)
 #include "box_ota_flash.h"
 #include "box_ota.h"
@@ -3038,6 +3039,12 @@ int main(void)
 	box_console_set_ain_channels((int) box_adc_channels());
 #endif
 
+	/* MUST FOLLOW box_ain_init(), which is what brings the converter up: this
+	 * borrows that same device. Outside the BOX_HAVE_ADC guard because the
+	 * module stubs itself on a board with no cell, which is every board but the
+	 * XIAO -- and a stub is cheaper to read than a second guard. */
+	(void) box_battery_init();
+
 	/* Pins this board refuses -- unmapped indices plus anything in
 	 * `box-reserved` (the PHY's MDIO pin, and any pad handed to the ADC). */
 	box_console_set_reserved_pins(box_gpio_reserved_mask());
@@ -3325,6 +3332,11 @@ int main(void)
 		box_console_service(&cfg);        /* two-way CLI (non-blocking, bounded) */
 		loop_phase(LP_LED);
 		box_status_led_service();         /* the handheld's local UI (no-op wired) */
+
+		/* Submits work at most once a minute and never blocks -- the ADC borrow
+		 * it needs can park a caller for a whole sampling period, so the read
+		 * itself runs on the system workqueue (box_battery.h). */
+		box_battery_service(k_uptime_get_32());
 
 		/* AFTER uplink_service so the health it reports is this pass's, and
 		 * outside every dserv-target gate on purpose: a box with no target is
@@ -3708,6 +3720,41 @@ int main(void)
 				dserv_state_name(&cfg, wn, sizeof wn, "watchdog");
 				dserv_msg_int(wf, wn, 0, watchdog++);
 				box_pub_bulk(wf);
+			}
+
+			/* ---- the cell ----
+			 *
+			 * HEALTH, not FULL, and that is the one judgement here. dbg_level
+			 * `health` is meant to answer "is this box alive and is it losing
+			 * data"; on a box with no cable, how long it will REMAIN alive is
+			 * the same question. A battery gauge nobody turned on is a box that
+			 * dies silently.
+			 *
+			 * Costs three leaves of PUB_PERIODIC_MAX (96, ~66 used) and almost
+			 * no wire: changed-only suppression means a cell drifting a few mV
+			 * an hour publishes a handful of frames a day, and the reading
+			 * itself only happens once a minute.
+			 *
+			 * raw NEXT TO mv on purpose -- the XIAO's divider ratio is copied
+			 * from Seeed's Arduino variant rather than read off a schematic, so
+			 * until somebody puts a meter across the cell, raw is the honest
+			 * number and mv is the one with an assumption in it. */
+			if (box_battery_present()) {
+				uint32_t bmv;
+				uint16_t braw;
+
+				if (box_battery_get(&bmv, &braw) == 0) {
+					pub_periodic("batt/mv",  bmv);
+					pub_periodic("batt/raw", braw);
+					pub_periodic("batt/pct", box_battery_pct(bmv));
+				}
+				{
+					uint32_t br, bb;
+
+					box_battery_stats(&br, &bb);
+					pub_dbg("batt/dbg/reads", br);
+					pub_dbg("batt/dbg/busy",  bb);
+				}
 			}
 			{
 				/* USB caller cost + TX-ring drops. Published on EVERY

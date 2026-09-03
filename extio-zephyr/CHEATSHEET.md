@@ -186,6 +186,20 @@ construction and the box reports `revert` in `state/ota/*`.
   build-time constant and can NOT show an OTA taking effect.)
 * Staged-but-not-armed: `state/ota/staged_ver`, published by `cmd/ota/verify`.
 
+## Battery (BLE peripherals — XIAO nRF52840 only)
+
+* `batt` on the console, or `state/batt/mv` / `batt/pct` / `batt/raw` from dserv
+  (one reading a minute, `health` level, changed-only). The fleet card shows
+  `batt 3.87 V (62%)` with its age.
+* **`pct` is a nominal curve, `mv` is the measurement, `raw` is the truth.** The
+  divider values in `boards/xiao_ble.overlay` came from Seeed's Arduino variant,
+  NOT a schematic — verify against a meter before trusting mV, then fix
+  `output-ohms`/`full-ohms`. A wrong ratio moves mV and leaves `raw` alone; a
+  wrong enable polarity rails `raw`.
+* **On USB you are reading the charger, not a resting cell.** Right for
+  calibration (the meter sees the same node), useless as a gauge.
+* Why it exists, and what it means for `ble latency`: `wiznet-io/BLE.md` §Power.
+
 ## DAC (v0.4.0+18, MCXN947 only)
 
 The wire-contract face of the DAC that `adccal` exercises from the console:

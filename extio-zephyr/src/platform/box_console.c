@@ -18,6 +18,7 @@
 #include "dserv_ble.h"        /* DSERV_BLE_MTU_MIN: the whole-frame floor */
 #endif
 #include "box_status_led.h"
+#include "box_battery.h"      /* the `batt` verb; stubs where no cell is declared */
 #include "box_boot.h"         /* box_boot_enter_uf2(): the `bootsel` verb */
 #if defined(CONFIG_NETWORKING)
 #include "box_net_eth.h"
@@ -674,6 +675,51 @@ static void run_line(box_config_t *cfg, const char *line)
 			box_status_led_override(0, m);
 			box_console_printf("OK led %s (forced; `led auto` to release)\n", a);
 		}
+		return;
+	}
+
+	/* `batt` -- the cell, now, instead of waiting out the minute.
+	 *
+	 * EXISTS FOR ONE JOB: checking the divider against a meter. The overlay's
+	 * ratio is copied from Seeed's Arduino variant rather than read off a
+	 * schematic, so the millivolts below are a CLAIM until someone compares
+	 * them. Raw counts print alongside for exactly that -- a wrong ratio moves
+	 * mv and leaves raw untouched, a wrong enable polarity rails raw instead.
+	 *
+	 * WHAT THIS SHOWS ON A CABLE IS A CHARGING CELL. The divider sits across the
+	 * battery and USB has the charger holding that node up toward 4.2 V, so
+	 * `pct` read over the console says more about the charger than about the
+	 * battery. Still the right way to CALIBRATE -- a meter sees the same node --
+	 * but it is not a fuel gauge with a cable in.
+	 *
+	 * Platform-local rather than in box_cli.h, same reason as `led` and
+	 * `adccal`: that grammar is shared verbatim with the RP2350 boxes, and none
+	 * of them has a cell. */
+	if (strcmp(line, "batt") == 0) {
+		uint32_t mv = 0, reads = 0, busy = 0;
+		uint16_t raw = 0;
+		int rc;
+
+		if (!box_battery_present()) {
+			box_console_printf("batt: no cell declared on this board\n");
+			return;
+		}
+		box_battery_stats(&reads, &busy);
+		rc = box_battery_get(&mv, &raw);
+		if (rc == -EAGAIN) {
+			box_console_printf("batt: no reading yet"
+					   " (reads=%u busy=%u)\n",
+					   reads, busy);
+			return;
+		}
+		if (rc) {
+			box_console_printf("batt: ERR %d\n", rc);
+			return;
+		}
+		box_console_printf("batt: %u mV  ~%u%%  raw=%u  reads=%u busy=%u\n",
+				   mv, box_battery_pct(mv), raw, reads, busy);
+		box_console_printf("  pct is a NOMINAL Li-ion curve, and on USB this is"
+				   " the charger rather than a resting cell\n");
 		return;
 	}
 

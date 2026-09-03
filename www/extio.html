@@ -212,7 +212,8 @@ function boxModel(name) {
               pinsIn: null, pinsOut: null,   /* announced active sets; null = old fw -> derive from di/do */
               inObs: null, obsPin: -1, syncPin: -1,           /* obs mirror + TTL sync input */
               syncSource: null, syncTransport: null, syncRate: null, syncAt: 0,
-              battery: null, uptimeUs: null, uptimeAt: 0, wd: null, wdAt: 0,
+              battMv: null, battPct: null, battRaw: null, battAt: 0,
+              uptimeUs: null, uptimeAt: 0, wd: null, wdAt: 0,
               connects: null, connectLast: null,   /* host-counted announce bursts */
               lastSeen: 0, ready: false };
         boxes.set(name, b);
@@ -377,8 +378,18 @@ function onExtio(msg) {
         /* VALUE = seconds since boot (firmware adds missed beats back in);
          * with its arrival time this anchors "up since" -- see upParts(). */
         b.wd = num; b.wdAt = Date.now();
-    } else if (leaf === 'battery') {
-        b.battery = num;
+    } else if (leaf === 'batt/mv') {
+        /* THE MEASUREMENT. mv is what the box actually converted (scaled back
+         * through the board's divider); pct below is a curve fitted to it, and
+         * raw is the ADC count that produced it. Keeping all three is what makes
+         * a mis-declared divider ratio diagnosable from here rather than only
+         * with a meter -- see the vbatt node in boards/xiao_ble.overlay, whose
+         * resistor values came from Seeed's Arduino variant, not a schematic. */
+        b.battMv = num; b.battAt = Date.now();
+    } else if (leaf === 'batt/pct') {
+        b.battPct = num;
+    } else if (leaf === 'batt/raw') {
+        b.battRaw = num;
     } else if (leaf === 'transport' || leaf === 'boot' || leaf === 'fw' ||
                leaf === 'fw_ver' || leaf === 'ip' || leaf === 'dserv' ||
                leaf === 'board' || leaf === 'pins/silk' || leaf === 'ain/silk') {
@@ -721,7 +732,27 @@ function cardHtml(b) {
         const val = unsynced ? `<span class="unsync">${parts.join(' ')}</span>` : parts.join(' ');
         sync = ` · <b title="${esc(stip)}">sync</b> ${val} (${fmtAge(Date.now() - b.syncAt)})`;
     }
-    const bat = b.battery != null ? ` · <b>batt</b> ${b.battery}%` : '';
+    /* THE CELL. Volts lead, percent follows in parentheses -- deliberately that
+     * way round. Percent is the number everyone reads and the one least worth
+     * trusting: a lithium cell is nearly flat from 3.7 to 3.9 V, so the middle
+     * of the curve is confident and wrong, and only the knees mean much. Volts
+     * are what the box measured.
+     *
+     * The reading STOPS at ~60 s intervals, so it carries its own age -- a card
+     * still showing 4.05 V an hour after the box went quiet would otherwise read
+     * as a healthy battery rather than as a stale number. */
+    let bat = '';
+    if (b.battMv != null) {
+        const v   = (b.battMv / 1000).toFixed(2);
+        const pct = b.battPct != null ? ` (${b.battPct}%)` : '';
+        const low = b.battPct != null && b.battPct <= 15;
+        const tip = `cell ${b.battMv} mV, raw ADC ${b.battRaw != null ? b.battRaw : '?'}`
+                  + ` — percent is a NOMINAL Li-ion curve, not a measurement;`
+                  + ` on USB this reads the charger rather than a resting cell`;
+        bat = ` · <b title="${esc(tip)}">batt</b> `
+            + `<span class="${low ? 'unsync' : ''}">${v} V${pct}</span>`
+            + ` (${fmtAge(Date.now() - b.battAt)})`;
+    }
     /* host-counted uplink connects since THIS dserv started: a steady box
      * reads #1; anything higher after the first hour is reconnect churn
      * (box reboot, cable/PHY event, peer-not-draining cycle, or an

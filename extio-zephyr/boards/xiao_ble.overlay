@@ -191,4 +191,68 @@ box_adc: &adc {
 		zephyr,reference = "ADC_REF_VDD_1_4"; zephyr,vref-mv = <3300>;
 		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
 		zephyr,resolution = <12>; zephyr,input-positive = <NRF_SAADC_AIN5>; };
+
+	/* ---- AIN7 / P0.31: THE BATTERY DIVIDER, NOT A FIELD CHANNEL ----
+	 *
+	 * `status = "disabled"` is doing real work here and is not a leftover.
+	 * box_adc.c enumerates its channels with DT_FOREACH_CHILD_STATUS_OKAY, and
+	 * `nch` is that count -- so an okay channel@6 would become ain channel 6,
+	 * whose box_adc_pin_of() is -1 (past box-ain-pins), which box_adc.c reads as
+	 * "dedicated pad, therefore ALWAYS analog". The sampler would sweep the
+	 * battery divider on every pass and publish it as state/ain/<label>, i.e. a
+	 * field input that is really a 1.4 V reading of the cell. Disabling the node
+	 * keeps it out of that enumeration while leaving every DT macro readable,
+	 * which is all VOLTAGE_DIVIDER_DT_SPEC_GET needs; box_battery.c calls
+	 * adc_channel_setup_dt() for it at init instead.
+	 *
+	 * 40 us ACQUISITION, not the DEFAULT 10 us the six channels above use, and
+	 * this one is electrical rather than stylistic. Those channels are driven by
+	 * whatever is wired to a D pad; THIS one sits behind a 1 M / 510 k divider,
+	 * ~338 kOhm Thevenin. The nRF52840 SAADC charges its sampling capacitor
+	 * through that impedance, and Nordic's table asks for 40 us at anything above
+	 * ~250 kOhm. At 10 us the cap never finishes charging and every reading comes
+	 * back LOW -- a plausible number, monotonic with the real voltage, wrong by a
+	 * few percent, and with nothing on the wire to say so. Exactly the failure
+	 * this tree keeps paying for, so it is bought off here for 30 us once a
+	 * minute. */
+	channel@6 { reg = <6>; status = "disabled";
+		zephyr,gain = "ADC_GAIN_1_4";
+		zephyr,reference = "ADC_REF_VDD_1_4"; zephyr,vref-mv = <3300>;
+		zephyr,acquisition-time = <ADC_ACQ_TIME(ADC_ACQ_TIME_MICROSECONDS, 40)>;
+		zephyr,resolution = <12>; zephyr,input-positive = <NRF_SAADC_AIN7>; };
+};
+
+/*
+ * ---- THE CELL, as a Zephyr voltage-divider ----
+ *
+ * Zephyr's own binding (dts/bindings/iio/afe/voltage-divider.yaml) rather than
+ * three hand-rolled constants in C, for the reason the RW612 port settled on:
+ * board facts belong in the board file, and the divider ratio and its enable pin
+ * ARE board facts. Same shape the thingy52 uses for its cell.
+ *
+ * !! THESE THREE NUMBERS ARE UNVERIFIED !!
+ *
+ * Zephyr's xiao_ble board files say NOTHING about the battery path -- no vbatt
+ * node, no divider, no enable pin (grepped, 2026-09-03) -- so unlike every other
+ * pad in this file these did not come from seeed_xiao_connector.dtsi. They come
+ * from Seeed's Arduino variant for this module: AIN7/P0.31 behind 1 M/510 k,
+ * enabled by driving P0.14 LOW. Plausible and widely repeated, but not read off
+ * a schematic by anyone here.
+ *
+ * SO THE BOX PUBLISHES state/batt/raw NEXT TO state/batt/mv. If the ratio is
+ * wrong, mv is wrong by a constant factor and raw is still the truth: one meter
+ * reading across the cell against one published pair fixes `output-ohms` /
+ * `full-ohms` for good. If the ENABLE POLARITY is wrong instead, raw reads ~0 or
+ * rails, which is a different and equally obvious signature. Neither can pass as
+ * a working battery gauge, which is the point -- an unverified constant is fine
+ * as long as being wrong is LOUD.
+ */
+/ {
+	vbatt: vbatt {
+		compatible = "voltage-divider";
+		io-channels = <&box_adc 6>;
+		output-ohms = <510000>;
+		full-ohms   = <(1000000 + 510000)>;
+		power-gpios = <&gpio0 14 GPIO_ACTIVE_LOW>;
+	};
 };

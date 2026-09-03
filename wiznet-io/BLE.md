@@ -209,6 +209,51 @@ core-0 manager). When `n > 0`:
 - `ble` status now prints `lat=<applied>/<target> synced=<n>`; a latency change
   logs `peripheral latency -> N (idle power-save | sync burst)`.
 
+### Battery telemetry — SHIPPED 2026-09-03 (extio-zephyr XIAO; the measurement this section has been waiting for)
+
+The windows above have been "pending real battery-life measurement" since
+2026-07-18, and the reason they stayed that way is that no bench-powered board
+can produce one. The peripheral now reports its own cell:
+
+    state/batt/mv    the cell, scaled back through the board's divider
+    state/batt/pct   a NOMINAL Li-ion curve over that — not a measurement
+    state/batt/raw   the ADC count, so a wrong divider ratio is visible
+    state/batt/dbg/{reads,busy}   at dbg_level full
+
+One reading a minute, at **health** level (a battery gauge nobody switched on is
+a box that dies silently), changed-only, so a cell drifting a few mV an hour
+costs a handful of frames a day. Console verb `batt`. Zephyr side only —
+`box_battery.c` + a `voltage-divider` node; the RP2350 handhelds are not wired.
+
+**VERIFY THE DIVIDER BEFORE BELIEVING mV.** The XIAO's resistor values and enable
+pin come from Seeed's Arduino variant, not a schematic — Zephyr's own board files
+say nothing about the battery path. Put a meter across the cell, run `batt`, and
+compare; a wrong ratio moves mV and leaves `raw` alone, a wrong enable polarity
+rails `raw` instead. Correct `output-ohms`/`full-ohms` in the overlay if needed.
+Reading over USB measures a **charging** cell — fine for calibration, useless as
+a gauge.
+
+**Two things found while building it, which bear on tuning these windows:**
+
+- **The sync burst sets a floor.** 3 s at latency 0 in every 33 s is 9% duty
+  whatever `n` is, so radio current cannot fall below ~9% of always-listen
+  (~0.09 mA on nRF52840). Past `n` ≈ 15–20 the gain is gone and the **1 kHz
+  service-loop wake dominates** — raising latency further optimises the wrong
+  term. Shorten `LAT_IDLE_MS` or the loop wait instead.
+- **The coast spends the accuracy the 7.5 ms interval bought.** Across a 30 s
+  idle window a ±20–40 ppm crystal drifts 0.6–1.2 ms — the whole error budget
+  that pinning 7.5 ms exists to protect (measured bias +1.12 ms at 7.5 vs
+  +5.39 ms at 15). If the LF source is the RC fallback (nRF52 default ±500 ppm)
+  it is ~15 ms and hopeless. **Nobody has confirmed a 32.768 kHz crystal on the
+  XIAO**; the board DTS declares no `lfxo` either way, and Zephyr's unoverridden
+  default asks for `K32SRC_XTAL`. Settle that before trusting `ble latency > 0`
+  on a box whose timestamps matter.
+
+Estimate this replaces, for comparison against the first real curve: ~1.1 mA at
+latency 0 (0.9 mA of it connection events at 7.5 ms), ~440 mAh usable of a
+500 mAh cell, so **~2 weeks** — arithmetic over a datasheet event charge, not a
+measurement.
+
 ### Status LED (handheld) — SHIPPED 2026-07-18 (Thing Plus only, bench-pending)
 
 The Thing Plus has one WS2812 on **GP14** (`PICO_DEFAULT_WS2812_PIN`) and no
