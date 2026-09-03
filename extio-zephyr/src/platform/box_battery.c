@@ -13,6 +13,22 @@
 
 LOG_MODULE_REGISTER(box_battery, LOG_LEVEL_INF);
 
+/* VBUS lives on the SoC, not on the divider, so it is deliberately outside the
+ * vbatt guard below: a board with no cell can still say whether it is on
+ * external power. */
+#if defined(CONFIG_SOC_FAMILY_NORDIC_NRF)
+#include <hal/nrf_power.h>
+#endif
+
+int box_battery_vbus(void)
+{
+#if defined(CONFIG_SOC_FAMILY_NORDIC_NRF) && defined(NRF_POWER_HAS_USBREG) && NRF_POWER_HAS_USBREG
+	return nrf_power_usbregstatus_vbusdet_get(NRF_POWER) ? 1 : 0;
+#else
+	return -ENOTSUP;
+#endif
+}
+
 #define VBATT_NODE DT_NODELABEL(vbatt)
 
 #if DT_NODE_EXISTS(VBATT_NODE) && defined(BOX_HAVE_ADC)

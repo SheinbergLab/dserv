@@ -91,6 +91,26 @@ uint8_t box_battery_pct(uint32_t mv);
  * the divider switched off. */
 int box_battery_probe(uint16_t *on, uint16_t *off);
 
+/* Is external power present? 1 = VBUS, 0 = running on the cell, -ENOTSUP where
+ * the SoC cannot tell.
+ *
+ * THE POINT IS THAT A WALL CHARGER NEVER ENUMERATES. Asking the USB stack "are
+ * we connected" answers no on a dumb charger, and `transport` stays whatever the
+ * uplink is -- ble, on a peripheral -- so neither can distinguish "on the
+ * charger" from "on the battery". The nRF52840 settles it in silicon, one
+ * register read of POWER->USBREGSTATUS, with no added circuitry and nothing to
+ * wire.
+ *
+ * WHAT IT IS NOT: a charge-complete signal. VBUS says power is available, not
+ * that the charger is still pushing current, so "charging" vs "full" is the mV
+ * TREND on top of this -- rising, then flat near 4.2 V. Reporting the bit and
+ * letting the trend say the rest is the honest split; a box cannot see the
+ * charger's own status pin.
+ *
+ * Independent of whether a cell is declared -- a board with no vbatt node can
+ * still answer, which is why this is not gated on box_battery_present(). */
+int box_battery_vbus(void);
+
 /* How many reads have completed, and how many were refused because the sampler
  * would not release the converter. A pct that never moves with `reads` climbing
  * is a stuck divider; `busy` climbing instead is analog contention, and the two

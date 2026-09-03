@@ -753,10 +753,18 @@ static void run_line(box_config_t *cfg, const char *line)
 			box_console_printf("batt: ERR %d\n", rc);
 			return;
 		}
-		box_console_printf("batt: %u mV  ~%u%%  raw=%u  reads=%u busy=%u\n",
-				   mv, box_battery_pct(mv), raw, reads, busy);
-		box_console_printf("  pct is a NOMINAL Li-ion curve, and on USB this is"
-				   " the charger rather than a resting cell\n");
+		{
+			int vb = box_battery_vbus();
+
+			box_console_printf("batt: %u mV  ~%u%%  raw=%u  reads=%u busy=%u\n",
+					   mv, box_battery_pct(mv), raw, reads, busy);
+			box_console_printf("  power: %s\n",
+					   vb < 0 ? "unknown (this SoC cannot see VBUS)" :
+					   vb     ? "EXTERNAL (VBUS) -- pct reads high while"
+						    " charging; watch mV rise, then flatten"
+						    " near 4.2 V"
+						  : "battery (no VBUS) -- pct is meaningful here");
+		}
 		return;
 	}
 

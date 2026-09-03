@@ -212,7 +212,7 @@ function boxModel(name) {
               pinsIn: null, pinsOut: null,   /* announced active sets; null = old fw -> derive from di/do */
               inObs: null, obsPin: -1, syncPin: -1,           /* obs mirror + TTL sync input */
               syncSource: null, syncTransport: null, syncRate: null, syncAt: 0,
-              battMv: null, battPct: null, battRaw: null, battAt: 0,
+              battMv: null, battPct: null, battRaw: null, battAt: 0, battVbus: null,
               uptimeUs: null, uptimeAt: 0, wd: null, wdAt: 0,
               connects: null, connectLast: null,   /* host-counted announce bursts */
               lastSeen: 0, ready: false };
@@ -390,6 +390,13 @@ function onExtio(msg) {
         b.battPct = num;
     } else if (leaf === 'batt/raw') {
         b.battRaw = num;
+    } else if (leaf === 'batt/vbus') {
+        /* EXTERNAL POWER. Needed because a wall charger supplies VBUS and never
+         * enumerates: `transport` reads `ble` on a peripheral whether it is on a
+         * charger or on its cell, so nothing else here can tell them apart.
+         * NOT charge-complete -- see the render, which says "charging" only as
+         * shorthand for "on external power" and leans on mV for the rest. */
+        b.battVbus = num == 1;
     } else if (leaf === 'transport' || leaf === 'boot' || leaf === 'fw' ||
                leaf === 'fw_ver' || leaf === 'ip' || leaf === 'dserv' ||
                leaf === 'board' || leaf === 'pins/silk' || leaf === 'ain/silk') {
@@ -743,14 +750,27 @@ function cardHtml(b) {
      * as a healthy battery rather than as a stale number. */
     let bat = '';
     if (b.battMv != null) {
-        const v   = (b.battMv / 1000).toFixed(2);
-        const pct = b.battPct != null ? ` (${b.battPct}%)` : '';
-        const low = b.battPct != null && b.battPct <= 15;
+        const v = (b.battMv / 1000).toFixed(2);
+        /* PERCENT ONLY OFF THE CHARGER. A cell being charged sits well above the
+         * voltage its state of charge implies, so the curve reads high and the
+         * number would be confidently wrong exactly when someone is watching it.
+         * On external power the honest thing to show is the volts and the fact
+         * that it is charging; the trend is what says how far along it is. */
+        const onExt = b.battVbus === true;
+        const pct   = (!onExt && b.battPct != null) ? ` (${b.battPct}%)` : '';
+        const low   = !onExt && b.battPct != null && b.battPct <= 15;
+        const power = b.battVbus == null ? ''
+                    : onExt ? ' <span class="chip">charging</span>' : '';
         const tip = `cell ${b.battMv} mV, raw ADC ${b.battRaw != null ? b.battRaw : '?'}`
-                  + ` — percent is a NOMINAL Li-ion curve, not a measurement;`
-                  + ` on USB this reads the charger rather than a resting cell`;
+                  + (b.battVbus == null ? '' : onExt
+                        ? ' — on EXTERNAL power (VBUS). Percent is hidden because a'
+                          + ' charging cell reads high; watch mV rise then flatten'
+                          + ' near 4.2 V. VBUS means power is available, NOT that'
+                          + ' charging is still in progress.'
+                        : ' — on battery (no VBUS)')
+                  + ' — percent is a NOMINAL Li-ion curve, not a measurement';
         bat = ` · <b title="${esc(tip)}">batt</b> `
-            + `<span class="${low ? 'unsync' : ''}">${v} V${pct}</span>`
+            + `<span class="${low ? 'unsync' : ''}">${v} V${pct}</span>${power}`
             + ` (${fmtAge(Date.now() - b.battAt)})`;
     }
     /* host-counted uplink connects since THIS dserv started: a steady box

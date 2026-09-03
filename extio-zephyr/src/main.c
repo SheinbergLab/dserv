@@ -3742,7 +3742,23 @@ int main(void)
 			if (box_battery_present()) {
 				uint32_t bmv;
 				uint16_t braw;
+				int      bvb = box_battery_vbus();
 
+				/* EXTERNAL POWER, published whenever the SoC can tell.
+				 *
+				 * The bit a wall charger makes necessary: it supplies VBUS
+				 * and never enumerates, so neither the USB stack nor
+				 * `transport` can distinguish "on the charger" from "on the
+				 * cell" -- a peripheral reads `ble` either way. Without this
+				 * a rising mV curve and a healthy resting cell look alike.
+				 *
+				 * NOT a charge-complete signal, and the page must not
+				 * present it as one: VBUS says power is available, not that
+				 * current is still flowing. Charging vs full is the mV trend
+				 * on top of it. */
+				if (bvb >= 0) {
+					pub_periodic("batt/vbus", (uint32_t) bvb);
+				}
 				if (box_battery_get(&bmv, &braw) == 0) {
 					pub_periodic("batt/mv",  bmv);
 					pub_periodic("batt/raw", braw);
