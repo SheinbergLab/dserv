@@ -2837,6 +2837,73 @@ proc extio_ble_handoff {peripheral from to {secs 30}} {
     return "handoff: $peripheral $from -> $to (window $secs s on $to)"
 }
 
+# ---- BATTERY DISCHARGE LOG ----------------------------------------------
+#
+# WHY A FILE AND NOT JUST THE DATAPOINT. dserv keeps the LATEST value of
+# extio/<box>/state/batt/mv and nothing else, so a fortnight of discharge
+# collapses into whatever the cell happened to read when somebody looked. The
+# number this module exists to produce is a CURVE -- box_ble.c's adaptive-latency
+# windows have been waiting on it since 2026-07-18 -- and a curve has to be
+# accumulated while it happens or not at all.
+#
+# APPEND-ONLY CSV, one row per published change. The box publishes changed-only
+# at ~1/min, so a flat stretch costs nothing and a moving cell records itself; a
+# lithium cell always drifts a few mV, so silence here means the BOX went quiet,
+# not that the voltage held. Both times are recorded for exactly that reason:
+# `t` is the host clock (absolute, survives reboots, what a plot wants) and the
+# gap between consecutive rows is the honest measure of coverage.
+#
+# vbus RIDES ALONG so a plot can tell discharge from charge without a second
+# source. A row with vbus=1 is not part of a discharge run.
+#
+# Registered per box, and re-registered idempotently -- dservAddMatch on a
+# pattern that is already matched is harmless, and dpointSetScript replaces
+# rather than stacks.
+set ::extio_batt_log_file ""
+
+proc extio_batt_log_start { {path ""} } {
+    if { $path eq "" } { set path "/usr/local/dserv/logs/extio_battery.csv" }
+    file mkdir [file dirname $path]
+    if { ![file exists $path] } {
+        set f [open $path a]
+        puts $f "t,iso,box,mv,raw,pct,vbus"
+        close $f
+    }
+    set ::extio_batt_log_file $path
+    dservAddMatch   extio/*/state/batt/mv
+    dpointSetScript extio/*/state/batt/mv extio_batt_log_row
+    return "battery log -> $path"
+}
+
+proc extio_batt_log_stop {} {
+    catch { dpointSetScript extio/*/state/batt/mv {} }
+    catch { dservRemoveMatch extio/*/state/batt/mv }
+    set ::extio_batt_log_file ""
+    return "battery log stopped"
+}
+
+# mv is the TRIGGER; raw/pct/vbus are read alongside it rather than logged on
+# their own changes. One row per mv change keeps the file one-sample-per-line
+# instead of three partial rows whenever the derived values move together.
+proc extio_batt_log_row {dp data} {
+    if { $::extio_batt_log_file eq "" } return
+    if { ![regexp {^extio/([^/]+)/state/batt/mv$} $dp -> box] } return
+    set raw  "" ; set pct "" ; set vbus ""
+    catch { set raw  [dservGet extio/$box/state/batt/raw]  }
+    catch { set pct  [dservGet extio/$box/state/batt/pct]  }
+    catch { set vbus [dservGet extio/$box/state/batt/vbus] }
+    set now [clock seconds]
+    if { [catch {
+        set f [open $::extio_batt_log_file a]
+        puts $f "$now,[clock format $now -format %Y-%m-%dT%H:%M:%S],$box,$data,$raw,$pct,$vbus"
+        close $f
+    } err] } {
+        # A logger that kills the callback would take the forwarding path with
+        # it -- this script shares the dpoint dispatch with usbio_forward.
+        puts "extio: battery log write failed: $err"
+    }
+}
+
 proc extio_cfg_announce {box} {
     dservSet extio/$box/cmd/announce 1
     return "announce requested from $box"

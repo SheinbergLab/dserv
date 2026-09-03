@@ -200,6 +200,23 @@ construction and the box reports `revert` in `state/ota/*`.
   calibration (the meter sees the same node), useless as a gauge.
 * Why it exists, and what it means for `ble latency`: `wiznet-io/BLE.md` §Power.
 
+### Recording a discharge run
+
+    essctrl -c 'send extio {extio_batt_log_start}'      # -> /usr/local/dserv/logs/extio_battery.csv
+    essctrl -c 'send extio {extio_batt_log_stop}'
+
+Appends `t,iso,box,mv,raw,pct,vbus`, one row per published change. Filter a
+discharge run with `vbus == 0`; rows with `vbus == 1` are charging.
+
+* **START IT BEFORE UNPLUGGING.** The vbus 1->0 edge is t0 and the samples just
+  after it set the top of the curve; a logger that is not running across the
+  transition cannot reconstruct either.
+* **NOT auto-started** -- re-run `extio_batt_log_start` after every dserv
+  restart. A multi-day run that silently stopped at a restart looks exactly like
+  a cell that held its voltage.
+* Gaps between rows mean the BOX went quiet, not that the voltage held: a
+  lithium cell always drifts a few mV, and publishing is changed-only.
+
 ## DAC (v0.4.0+18, MCXN947 only)
 
 The wire-contract face of the DAC that `adccal` exercises from the console:
