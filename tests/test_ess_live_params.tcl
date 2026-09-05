@@ -44,6 +44,10 @@ namespace eval sys {
         variable P
         set P($name) [list $val 1 $ptype 1 $apply]
     }
+    proc add_param { name val ptype } {
+        variable P
+        set P($name) [list $val 1 $ptype 0]
+    }
     proc set_param { name val } {
         variable P
         set e $P($name)
@@ -66,16 +70,23 @@ namespace eval sys {
 proc sysobj { m args } { return [::sys::$m {*}$args] }
 set ::ess::current(state_system) sysobj
 
-# pull set_live_param from the real source
+# pull the real store-path procs from the source: set_param is THE store
+# path (it dispatches live params), set_params and set_live_param sit on
+# top of it
 set fh [open [file join $::REPO lib ess-2.0.tm]]
 set src [read $fh]
 close $fh
-set start [string first "\n    proc set_live_param " $src]
-if { $start < 0 } { puts "FAIL: could not find set_live_param"; exit 1 }
-set end [string first "\n    \}\n" $src $start]
-set nl  [string first "\n" $src [expr {$start + 1}]]
-proc ::ess::set_live_param {param val} \
-    [string range $src [expr {$nl + 1}] [expr {$end - 1}]]
+proc pull_proc { name arglist } {
+    set start [string first "\n    proc $name " $::src]
+    if { $start < 0 } { puts "FAIL: could not find $name"; exit 1 }
+    set end [string first "\n    \}\n" $::src $start]
+    set nl  [string first "\n" $::src [expr {$start + 1}]]
+    proc ::ess::$name $arglist \
+        [string range $::src [expr {$nl + 1}] [expr {$end - 1}]]
+}
+pull_proc set_live_param {param val}
+pull_proc set_param      {param val}
+pull_proc set_params     {args}
 
 set FAIL 0
 proc check { label got want } {
@@ -178,6 +189,40 @@ check "not left in-flight"          [info exists ::ess::live_apply_inflight(risk
 
 puts "\nnon-live params are still refused:"
 check "errors" [catch { ::ess::set_live_param nosuch 1 }] 1
+
+# --- the plain store path dispatches too --------------------------------
+#
+# A saved config restores its params through ess::set_param, one per
+# entry. That path used to store without applying, so a config's
+# cursor_rate reached the variable, the event log and ess/params -- and
+# never the roam. set_param is now THE store path and dispatches itself.
+puts "\nset_param (the config-load path) applies a live param:"
+set ::applied {}
+set ::ess::events {}
+::sys::add_live_param cfg_rate 8.0 float {record rate}
+::ess::set_param cfg_rate 12.0
+check "stored"          [::sys::get cfg_rate] 12.0
+check "applied"         $::applied {{rate 12.0}}
+check "logged as LIVE"  [lsearch -index 1 $::ess::events LIVE] 2
+check "logged ONCE"     [llength [lsearch -all -index 1 $::ess::events VAL]] 1
+
+puts "\nset_param on a NON-live param just stores, as before:"
+set ::applied {}
+set ::ess::events {}
+::sys::add_param plain_cfg 1 int
+::ess::set_param plain_cfg 5
+check "stored"        [::sys::get plain_cfg] 5
+check "nothing ran"   $::applied {}
+check "no LIVE event" [lsearch -index 1 $::ess::events LIVE] -1
+
+puts "\nset_params (the variant-params path) goes through the same door:"
+set ::applied {}
+set ::ess::events {}
+::ess::set_params cfg_rate 16.0 plain_cfg 7
+check "live one applied"      $::applied {{rate 16.0}}
+check "both stored"           [list [::sys::get cfg_rate] [::sys::get plain_cfg]] {16.0 7}
+check "one VAL event each"    [llength [lsearch -all -index 1 $::ess::events VAL]] 2
+check "one LIVE event, total" [llength [lsearch -all -index 1 $::ess::events LIVE]] 1
 
 puts ""
 if { $FAIL } { puts "FAILED"; exit 1 } else { puts "all checks passed" }

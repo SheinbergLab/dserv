@@ -291,6 +291,8 @@ class ESSControl {
                     <div class="ess-setup-subsection" id="ess-params-section" style="display: none;">
                         <div class="ess-subsection-header">
                             <span class="ess-subsection-title">Parameters</span>
+                            <button id="ess-btn-params-manage" class="ess-mini-btn ess-params-gear"
+                                    type="button" title="All parameters: search, and choose which live params sit in Live Controls">⚙</button>
                         </div>
                         <div id="ess-params-container" class="ess-params-container"></div>
                     </div>
@@ -562,6 +564,7 @@ class ESSControl {
             reloadOptionsBtn: this.container.querySelector('#ess-reload-options-btn'),
             paramsSection: this.container.querySelector('#ess-params-section'),
             paramsContainer: this.container.querySelector('#ess-params-container'),
+            btnParamsManage: this.container.querySelector('#ess-btn-params-manage'),
             // Live Controls panel lives in the middle column, outside this.container.
             liveParamsPanel: document.querySelector('#ess-live-params-panel'),
             liveParamsContainer: document.querySelector('#ess-live-params-container'),
@@ -693,6 +696,7 @@ class ESSControl {
         // Juice button
         this.elements.btnJuice.addEventListener('click', () => this.giveJuice());
         this.elements.btnJuiceSettings.addEventListener('click', () => this.showJuicerSettingsModal());
+        this.elements.btnParamsManage.addEventListener('click', () => this.showParamsModal());
 
         // Two separate single-purpose controls: a mute button (task sounds)
         // and a volume button that opens a vertical master-level slider popup.
@@ -1063,6 +1067,10 @@ class ESSControl {
             this.updateSelectValue(this.elements.protocolSelect, data.value);
             this.updateIdentityHeader();
             this.updateConfigStatusBar();
+            // the Live Controls pin set is keyed on system:protocol
+            if (Object.keys(this.state.params || {}).length) {
+                this._renderParamPanels();
+            }
         });
         
         this.dpManager.subscribe('ess/variants', (data) => {
@@ -1612,15 +1620,21 @@ updateConfigRunButtons() {
 
     // Mirror the backend gate on config params:
     //   ess::set_param is blocked when running OR file open.
-    // Live params (in liveParamsContainer) are intentionally NOT gated —
-    // they're the whole point of the Live Controls panel.
+    // Live params are intentionally NOT gated — they're the whole point of
+    // the Live Controls panel, and one the operator has un-pinned into the
+    // setup section is still live (row class `live`), so it is skipped
+    // here too: hiding a knob must not also lock it.
     _applyParamGating() {
-        const editable =
-            this.state.essStatus === 'stopped' && !this.state.currentDatafile;
+        const editable = this._paramsEditable();
         if (!this.elements.paramsContainer) return;
         const inputs = this.elements.paramsContainer
-            .querySelectorAll('input, select');
+            .querySelectorAll('.ess-param-row:not(.live) input, .ess-param-row:not(.live) select');
         inputs.forEach(el => { el.disabled = !editable; });
+
+        // the parameters modal renders its own gate; every path that
+        // changes it (status, datafile, a fresh param set) comes through
+        // here, so this is the one place to rebuild it
+        if (this._paramsModalRefresh) this._paramsModalRefresh();
     }
     
     updateVariantInfo(data) {
@@ -1735,31 +1749,7 @@ updateConfigRunButtons() {
         try {
             const params = TclParser.parseParamSettings(data);
             this.state.params = params;
-
-            // Split by the live flag so the two panels can be sized
-            // and shown/hidden independently.
-            const configParams = {};
-            const liveParams = {};
-            for (const [name, info] of Object.entries(params)) {
-                if (info.live) {
-                    liveParams[name] = info;
-                } else {
-                    configParams[name] = info;
-                }
-            }
-
-            this.renderParams(configParams);
-            this.elements.paramsSection.style.display =
-                Object.keys(configParams).length === 0 ? 'none' : 'block';
-
-            this.renderLiveParams(liveParams);
-            if (this.elements.liveParamsPanel) {
-                this.elements.liveParamsPanel.style.display =
-                    Object.keys(liveParams).length === 0 ? 'none' : '';
-            }
-
-            // freshly-rendered inputs need the current gating state
-            this._applyParamGating();
+            this._renderParamPanels();
 
         } catch (e) {
             console.error('Failed to parse params:', e);
@@ -1770,16 +1760,239 @@ updateConfigRunButtons() {
         }
     }
 
+    // ---- which live params sit in the Live Controls panel ----------------
+    //
+    // The Tcl side declares CAPABILITY: add_live_param says a param is safe
+    // to change mid-recording and what pushes it. That is the author's
+    // claim and the page cannot promote a param to it. Which of those
+    // live-capable params an operator wants in front of them during a
+    // session is a PREFERENCE, so it lives here, per system:protocol, in
+    // this browser. A live param the operator has un-pinned renders in the
+    // setup section instead -- still live (same verb, same protection
+    // level, never gated), just out of the way.
+    //
+    // Stored as the EXCEPTIONS (hidden names), so a live param a system
+    // grows later shows up in the panel by default.
+    _liveHiddenKey() {
+        const sys = this.state.currentSystem || '';
+        const proto = this.state.currentProtocol || '';
+        return `ess_live_hidden:${sys}:${proto}`;
+    }
+
+    _loadLiveHidden() {
+        try {
+            const raw = localStorage.getItem(this._liveHiddenKey());
+            const arr = raw ? JSON.parse(raw) : [];
+            return new Set(Array.isArray(arr) ? arr : []);
+        } catch (e) {
+            return new Set();
+        }
+    }
+
+    _saveLiveHidden(hidden) {
+        try {
+            const key = this._liveHiddenKey();
+            if (hidden.size === 0) localStorage.removeItem(key);
+            else localStorage.setItem(key, JSON.stringify([...hidden]));
+        } catch (e) {
+            // storage unavailable: the toggle still works for this page load
+        }
+    }
+
+    setLiveExposure(name, shown) {
+        const info = this.state.params[name];
+        if (!info || !info.live) return;
+        const hidden = this._loadLiveHidden();
+        if (shown) hidden.delete(name); else hidden.add(name);
+        this._saveLiveHidden(hidden);
+        this._renderParamPanels();
+    }
+
+    toggleLiveExposure(name) {
+        this.setLiveExposure(name, this._loadLiveHidden().has(name));
+    }
+
+    /**
+     * Parameters modal (the gear beside the Parameters heading): every
+     * param of the loaded system in one searchable list -- name, kind,
+     * type, current value -- and, for live params, whether it sits in the
+     * Live Controls panel. Read-only on values for now; the two panels
+     * are where values get edited.
+     */
+    showParamsModal() {
+        const modal = document.createElement('div');
+        modal.className = 'ess-modal-overlay';
+        modal.innerHTML = `
+            <div class="ess-modal ess-modal-wide ess-params-modal">
+                <div class="ess-modal-header">
+                    <span class="ess-modal-title">Parameters</span>
+                    <button class="ess-modal-close" type="button">×</button>
+                </div>
+                <div class="ess-modal-body">
+                    <div class="ess-params-modal-toolbar">
+                        <input type="text" class="ess-modal-input ess-params-modal-search"
+                               placeholder="Filter by name…" autocomplete="off" spellcheck="false">
+                        <span class="ess-params-modal-count"></span>
+                    </div>
+                    <div class="ess-params-modal-row ess-params-modal-head">
+                        <span>name</span><span>kind</span><span>type</span><span>value</span>
+                        <span title="Shown in the Live Controls panel">live panel</span>
+                    </div>
+                    <div class="ess-params-modal-list"></div>
+                </div>
+                <div class="ess-modal-footer">
+                    <span class="ess-params-modal-hint">Live params can be edited while recording. Untick one to move it into the setup section; it stays live.</span>
+                    <button class="ess-modal-btn cancel" type="button">Close</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(modal);
+
+        const listEl = modal.querySelector('.ess-params-modal-list');
+        const searchEl = modal.querySelector('.ess-params-modal-search');
+        const countEl = modal.querySelector('.ess-params-modal-count');
+        const canPin = !!this.elements.liveParamsContainer;
+
+        const kindOf = (info) => info.live ? 'live' : (info.varType === '1' ? 'time' : 'variable');
+
+        const render = () => {
+            const q = searchEl.value.trim().toLowerCase();
+            const hidden = this._loadLiveHidden();
+            const params = this.state.params || {};
+            const editable = this._paramsEditable();
+            listEl.innerHTML = '';
+            let shown = 0;
+            for (const [name, info] of Object.entries(params)) {
+                if (q && !name.toLowerCase().includes(q)) continue;
+                shown++;
+                const row = document.createElement('div');
+                row.className = 'ess-params-modal-row';
+                const kind = kindOf(info);
+
+                const nameEl = document.createElement('span');
+                nameEl.className = `ess-params-modal-name ${kind}`;
+                nameEl.textContent = name;
+                nameEl.title = name;
+
+                const kindEl = document.createElement('span');
+                kindEl.className = `ess-params-modal-kind ${kind}`;
+                kindEl.textContent = kind;
+
+                const typeEl = document.createElement('span');
+                typeEl.className = 'ess-params-modal-type';
+                typeEl.textContent = info.dataType || '';
+                typeEl.title = info.dataType || '';
+
+                // the same control the panels use, gated the same way
+                const valEl = document.createElement('span');
+                valEl.className = 'ess-params-modal-value';
+                const ctl = this._buildParamInput(name, info);
+                if (!info.live) ctl.disabled = !editable;
+                valEl.appendChild(ctl);
+
+                const liveEl = document.createElement('span');
+                liveEl.className = 'ess-params-modal-live';
+                if (info.live && canPin) {
+                    const cb = document.createElement('input');
+                    cb.type = 'checkbox';
+                    cb.checked = !hidden.has(name);
+                    cb.title = cb.checked
+                        ? 'In Live Controls. Untick to move it to the setup section (stays live).'
+                        : 'In the setup section. Tick to show it in Live Controls.';
+                    cb.addEventListener('change', (e) => {
+                        this.setLiveExposure(name, e.target.checked);
+                    });
+                    liveEl.appendChild(cb);
+                } else {
+                    liveEl.textContent = '';
+                }
+
+                row.append(nameEl, kindEl, typeEl, valEl, liveEl);
+                listEl.appendChild(row);
+            }
+            const total = Object.keys(params).length;
+            countEl.textContent = total === 0 ? 'no params'
+                : (shown === total ? `${total}` : `${shown} of ${total}`);
+            if (total === 0) {
+                listEl.innerHTML = '<div class="ess-modal-empty">No system loaded</div>';
+            }
+        };
+
+        // Keep the list current while it is open. STRUCTURE (the param set,
+        // on a (re)load) and GATING (run state, file open) rebuild it
+        // through this hook; VALUES flow into the standing controls in
+        // place via updateParamValue, which finds them by data-param-name
+        // in the modal list like in either panel -- so a value arriving
+        // while the operator is typing in another row does not wipe the
+        // row under their hands.
+        this._paramsModalRefresh = render;
+        this._paramsModalList = listEl;
+
+        const closeModal = () => {
+            this._paramsModalRefresh = null;
+            this._paramsModalList = null;
+            document.removeEventListener('keydown', onKeyDown);
+            modal.remove();
+        };
+        const onKeyDown = (e) => { if (e.key === 'Escape') closeModal(); };
+        document.addEventListener('keydown', onKeyDown);
+        modal.querySelector('.ess-modal-close').addEventListener('click', closeModal);
+        modal.querySelector('.ess-modal-btn.cancel').addEventListener('click', closeModal);
+        modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
+        searchEl.addEventListener('input', render);
+
+        render();
+        searchEl.focus();
+    }
+
+    // Split this.state.params across the two panels and render both.
+    // Called on every ess/param_settings, on a toggle, and when the
+    // system:protocol changes (the hidden set is keyed on it).
+    _renderParamPanels() {
+        const params = this.state.params || {};
+        const hidden = this.elements.liveParamsContainer
+            ? this._loadLiveHidden() : new Set();
+
+        const configParams = {};
+        const liveParams = {};
+        for (const [name, info] of Object.entries(params)) {
+            if (info.live && !hidden.has(name)) {
+                liveParams[name] = info;
+            } else {
+                configParams[name] = info;
+            }
+        }
+
+        this.renderParams(configParams);
+        this.elements.paramsSection.style.display =
+            Object.keys(configParams).length === 0 ? 'none' : 'block';
+
+        this.renderLiveParams(liveParams);
+        if (this.elements.liveParamsPanel) {
+            this.elements.liveParamsPanel.style.display =
+                Object.keys(liveParams).length === 0 ? 'none' : '';
+        }
+
+        // freshly-rendered inputs need the current gating state; this
+        // also rebuilds the parameters modal if it is open
+        this._applyParamGating();
+    }
+
     renderLiveParams(params) {
         if (!this.elements.liveParamsContainer) return;
-        this._renderParamsInto(this.elements.liveParamsContainer, params);
+        this._renderParamsInto(this.elements.liveParamsContainer, params, 'live');
     }
 
     renderParams(params) {
-        this._renderParamsInto(this.elements.paramsContainer, params);
+        this._renderParamsInto(this.elements.paramsContainer, params, 'setup');
     }
 
-    _renderParamsInto(container, params) {
+    // panel: 'live' (the Live Controls panel) or 'setup' (the setup
+    // section). Moving a live param between them is done from the
+    // parameters modal (the gear beside the Parameters heading), not from
+    // the row: the setup column is narrow, and a per-row control at the
+    // far end of the row was routinely off the right edge.
+    _renderParamsInto(container, params, panel) {
         container.innerHTML = '';
 
         for (const [name, info] of Object.entries(params)) {
@@ -1793,6 +2006,7 @@ updateConfigRunButtons() {
 
             if (info.live) {
                 label.classList.add('live');
+                row.classList.add('live');
             } else if (info.varType === '1') {
                 label.classList.add('time');
             } else {
@@ -1800,91 +2014,103 @@ updateConfigRunButtons() {
             }
 
             row.appendChild(label);
-            
-            // Choices form: dataType is a multi-token list like "none left right".
-            // Tcl side: add_live_param forced_side none {none left right}
-            const choices = (info.dataType && /\s/.test(info.dataType))
-                ? info.dataType.trim().split(/\s+/)
-                : null;
-
-            if (choices) {
-                const select = document.createElement('select');
-                select.className = 'ess-param-input ess-param-select';
-                select.dataset.paramName = name;
-                select.dataset.dataType = 'choices';
-                for (const c of choices) {
-                    const opt = document.createElement('option');
-                    opt.value = c;
-                    opt.textContent = c;
-                    if (c === info.value) opt.selected = true;
-                    select.appendChild(opt);
-                }
-                select.addEventListener('change', (e) => {
-                    this.onParamChange(name, e.target.value);
-                });
-                row.appendChild(select);
-            } else if (info.dataType === 'bool' || info.dataType === 'boolean') {
-                const checkbox = document.createElement('input');
-                checkbox.type = 'checkbox';
-                checkbox.className = 'ess-param-checkbox';
-                checkbox.checked = info.value === '1' || info.value === 'true' || info.value === true || info.value === 1;
-                checkbox.dataset.paramName = name;
-                checkbox.dataset.dataType = info.dataType;
-
-                checkbox.addEventListener('change', (e) => {
-                    this.onParamChange(name, e.target.checked ? '1' : '0');
-                });
-
-                row.appendChild(checkbox);
-            } else {
-                const input = document.createElement('input');
-                input.type = 'text';
-                input.className = 'ess-param-input';
-                input.value = info.value || '';
-                input.dataset.paramName = name;
-                input.dataset.dataType = info.dataType;
-                
-                if (info.dataType === 'int') {
-                    input.inputMode = 'numeric';
-                    input.addEventListener('input', (e) => {
-                        e.target.value = e.target.value.replace(/[^0-9-]/g, '');
-                        if (e.target.value.indexOf('-') > 0) {
-                            e.target.value = e.target.value.replace(/-/g, '');
-                        }
-                    });
-                } else if (info.dataType === 'float') {
-                    input.inputMode = 'decimal';
-                    input.addEventListener('input', (e) => {
-                        let val = e.target.value.replace(/[^0-9.-]/g, '');
-                        const parts = val.split('.');
-                        if (parts.length > 2) {
-                            val = parts[0] + '.' + parts.slice(1).join('');
-                        }
-                        if (val.indexOf('-') > 0) {
-                            val = val.charAt(0) + val.slice(1).replace(/-/g, '');
-                        }
-                        e.target.value = val;
-                    });
-                }
-                
-                input.addEventListener('change', (e) => {
-                    this.onParamChange(name, e.target.value);
-                });
-                
-                input.addEventListener('keydown', (e) => {
-                    if (e.key === 'Enter') {
-                        this.onParamChange(name, e.target.value);
-                        e.target.blur();
-                    }
-                });
-                
-                row.appendChild(input);
-            }
-            
+            row.appendChild(this._buildParamInput(name, info));
             container.appendChild(row);
         }
     }
-    
+
+    // The ONE builder for a param's editing control, used by both panels
+    // and by the parameters modal. Every control carries data-param-name,
+    // which is how updateParamValue finds it wherever it lives, and every
+    // change goes through onParamChange, which picks the verb from the
+    // live flag.
+    _buildParamInput(name, info) {
+        // Choices form: dataType is a multi-token list like "none left right".
+        // Tcl side: add_live_param forced_side none {none left right}
+        const choices = (info.dataType && /\s/.test(info.dataType))
+            ? info.dataType.trim().split(/\s+/)
+            : null;
+
+        if (choices) {
+            const select = document.createElement('select');
+            select.className = 'ess-param-input ess-param-select';
+            select.dataset.paramName = name;
+            select.dataset.dataType = 'choices';
+            for (const c of choices) {
+                const opt = document.createElement('option');
+                opt.value = c;
+                opt.textContent = c;
+                if (c === info.value) opt.selected = true;
+                select.appendChild(opt);
+            }
+            select.addEventListener('change', (e) => {
+                this.onParamChange(name, e.target.value);
+            });
+            return select;
+        }
+
+        if (info.dataType === 'bool' || info.dataType === 'boolean') {
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.className = 'ess-param-checkbox';
+            checkbox.checked = info.value === '1' || info.value === 'true' || info.value === true || info.value === 1;
+            checkbox.dataset.paramName = name;
+            checkbox.dataset.dataType = info.dataType;
+            checkbox.addEventListener('change', (e) => {
+                this.onParamChange(name, e.target.checked ? '1' : '0');
+            });
+            return checkbox;
+        }
+
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'ess-param-input';
+        input.value = info.value || '';
+        input.dataset.paramName = name;
+        input.dataset.dataType = info.dataType;
+
+        if (info.dataType === 'int') {
+            input.inputMode = 'numeric';
+            input.addEventListener('input', (e) => {
+                e.target.value = e.target.value.replace(/[^0-9-]/g, '');
+                if (e.target.value.indexOf('-') > 0) {
+                    e.target.value = e.target.value.replace(/-/g, '');
+                }
+            });
+        } else if (info.dataType === 'float') {
+            input.inputMode = 'decimal';
+            input.addEventListener('input', (e) => {
+                let val = e.target.value.replace(/[^0-9.-]/g, '');
+                const parts = val.split('.');
+                if (parts.length > 2) {
+                    val = parts[0] + '.' + parts.slice(1).join('');
+                }
+                if (val.indexOf('-') > 0) {
+                    val = val.charAt(0) + val.slice(1).replace(/-/g, '');
+                }
+                e.target.value = val;
+            });
+        }
+
+        input.addEventListener('change', (e) => {
+            this.onParamChange(name, e.target.value);
+        });
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                this.onParamChange(name, e.target.value);
+                e.target.blur();
+            }
+        });
+        return input;
+    }
+
+    // The gate the backend applies to a non-live param: ess::set_param is
+    // refused while running or with a file open. Live params are never
+    // gated -- that is what live means.
+    _paramsEditable() {
+        return this.state.essStatus === 'stopped' && !this.state.currentDatafile;
+    }
+
     onParamChange(name, value) {
         const info = this.state.params[name];
         const verb = (info && info.live) ? 'set_live_param' : 'set_param';
@@ -1895,21 +2121,41 @@ updateConfigRunButtons() {
     
     updateParamValue(data) {
         const updates = TclParser.parseKeyValue(data);
-        
+
+        // A param's control can live in up to THREE places at once: the
+        // setup section (config params), the Live Controls panel (live
+        // params), and the parameters modal while it is open. ess/params
+        // carries every value change, including the ones a config load
+        // makes to live params, so all of them are updated -- searching
+        // only the setup section once left the live panel showing the
+        // variant's number after a config restored a different one.
+        const containers = [this.elements.paramsContainer,
+                            this.elements.liveParamsContainer,
+                            this._paramsModalList].filter(Boolean);
+
         for (const [name, value] of Object.entries(updates)) {
             if (this.state.params[name]) {
                 this.state.params[name].value = value;
             }
-            
-            const input = this.elements.paramsContainer.querySelector(
-                `input[data-param-name="${name}"]`
-            );
-            if (input && document.activeElement !== input) {
-                if (input.type === 'checkbox') {
-                    input.checked = value === '1' || value === 'true' || value === true || value === 1;
-                } else {
-                    input.value = value;
-                }
+
+            for (const c of containers) {
+                const controls = c.querySelectorAll(
+                    `input[data-param-name="${name}"], select[data-param-name="${name}"]`);
+                controls.forEach(ctl => {
+                    // Never overwrite what the operator is mid-typing --
+                    // but ONLY for a text field. A checkbox or select
+                    // keeps focus after a click (on every browser on
+                    // Windows, and Chrome anywhere), and a focus guard on
+                    // those means a control that was clicked once never
+                    // follows the datapoint again. See www/CLAUDE.md on
+                    // focus gating.
+                    if (ctl.type === 'text' && document.activeElement === ctl) return;
+                    if (ctl.type === 'checkbox') {
+                        ctl.checked = value === '1' || value === 'true' || value === true || value === 1;
+                    } else {
+                        ctl.value = value;
+                    }
+                });
             }
         }
     }

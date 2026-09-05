@@ -1600,6 +1600,116 @@ body.ess-app {
     color: #e89a3c;
 }
 
+/* Gear beside the Parameters heading: opens the parameters modal. */
+.ess-params-gear {
+    margin-left: auto;
+    padding: 1px 6px;
+    font-size: 11px;
+    line-height: 1.4;
+}
+
+/* Parameters modal: one searchable list of every param, with the
+   Live Controls membership toggle for live ones. */
+.ess-modal.ess-modal-wide {
+    width: 620px;
+}
+
+.ess-params-modal-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 10px;
+}
+
+.ess-params-modal-toolbar .ess-params-modal-search {
+    flex: 1;
+}
+
+.ess-params-modal-count {
+    font-size: 10px;
+    color: var(--ess-text-muted);
+    white-space: nowrap;
+}
+
+.ess-params-modal-list {
+    max-height: 50vh;
+    overflow-y: auto;
+}
+
+.ess-params-modal-row {
+    display: grid;
+    grid-template-columns: minmax(0, 2fr) 60px 70px minmax(0, 1.4fr) 64px;
+    align-items: center;
+    gap: 10px;
+    padding: 5px 4px;
+    font-size: 11px;
+    border-bottom: 1px solid var(--ess-border);
+}
+
+.ess-params-modal-row > span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ess-params-modal-head {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--ess-text-muted);
+    padding-bottom: 6px;
+}
+
+.ess-params-modal-name.live  { color: #e89a3c; }
+.ess-params-modal-name.time  { color: #c9a870; }
+.ess-params-modal-name.variable { color: var(--ess-text-primary); }
+
+.ess-params-modal-kind {
+    font-size: 10px;
+    color: var(--ess-text-muted);
+}
+.ess-params-modal-kind.live { color: #e89a3c; }
+
+.ess-params-modal-type {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--ess-text-secondary);
+}
+
+/* the value cell holds the same control the panels use */
+.ess-params-modal-value {
+    display: flex;
+    align-items: center;
+}
+
+.ess-params-modal-value .ess-param-input {
+    width: 100%;
+    box-sizing: border-box;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.ess-params-modal-live {
+    text-align: center;
+}
+
+.ess-params-modal-live input[type="checkbox"] {
+    accent-color: #e89a3c;
+    cursor: pointer;
+}
+
+.ess-params-modal .ess-modal-footer {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.ess-params-modal-hint {
+    flex: 1;
+    font-size: 10px;
+    color: var(--ess-text-muted);
+    line-height: 1.3;
+}
+
 /* Live Controls panel — amber accent marks it as runtime-twiddleable. */
 .ess-panel-live {
     border-left: 3px solid #e89a3c;

@@ -1597,12 +1597,12 @@ namespace eval ess {
         apply_pending_config_args
         
         set_loading_progress "variant_init" "Initializing variant: $current(variant)" 80
-        # Initialize the loaders
+        # Initialize the loaders. A config's params are applied INSIDE
+        # variant_init, as the third layer of its parameters stage, so that
+        # everything published from there (ess/param_settings, the
+        # snapshot) already reflects them.
         variant_init $current(system) $current(protocol) $current(variant)
 
-        # Apply params from config (if loading via load_config)  
-	 apply_pending_config_params
-	
         # Update various datapoints
         dservSet ess/state_table [get_state_transitions]
         dservSet ess/rmt_cmds [get_rmt_cmds]
@@ -2666,8 +2666,24 @@ namespace eval ess {
         $current(state_system) get_param $p
     }
 
+    # THE store path for a param. Every way a value reaches a param --
+    # an operator's set_param, a variant's `params` block through
+    # set_params, a saved config through apply_pending_config_params --
+    # ends here, and this is where a LIVE param is routed through its
+    # apply chain.
+    #
+    # It used to be that only set_params dispatched to set_live_param, and
+    # a plain set_param just stored. A config load went through the plain
+    # path, so a config saved with cursor_rate 12 reloaded as: variable
+    # says 12, PARAM VAL logs 12, `ess/params` says 12 -- and the roam,
+    # tuned once by the variant's own params, was still travelling at 8.
+    # The event stream, the thing analysis trusts, lied. Dispatching HERE
+    # means there is no second path to forget.
     proc set_param {param val} {
         variable current
+        if { [$current(state_system) is_live_param $param] } {
+            tailcall set_live_param $param $val
+        }
         $current(state_system) set_param $param $val
         ::ess::evt_put PARAM NAME [now] $param
         ::ess::evt_put PARAM VAL [now] $val
@@ -2754,35 +2770,14 @@ namespace eval ess {
 	    set pname [lindex $args $i]
 	    set pval  [lindex [lindex $args [expr {$i + 1}]] 0]
 
-	    # A LIVE param exists precisely so that setting it PUSHES the
-	    # value into whatever subsystem already consumed it. Storing it
-	    # here and skipping the apply chain left the variable and the
-	    # subsystem disagreeing, silently and in the direction that looks
-	    # correct: `ess::get_params` reports the new value, the running
-	    # dial (or whatever) is still on the old one.
-	    #
-	    # This path is how a VARIANT configures itself
-	    # (params_defaults, then the variant's own `params`), so the
-	    # casualty was exactly the case live params were added for -- a
-	    # variant that says `params {cursor_rate 12.0}` got a cursor
-	    # still travelling at 8. Which is also why a variant could not
-	    # simply select a different dial source: the param moved and
-	    # nothing acted on it.
-	    #
-	    # set_live_param does its own store, log and publish, so this
-	    # delegates rather than doing both -- calling both would log the
-	    # change twice into the event stream.
-	    if { [$current(state_system) is_live_param $pname] } {
-		set_live_param $pname $pval
-		continue
-	    }
-
-	    $current(state_system) set_param $pname $pval
-	    ::ess::evt_put PARAM NAME [now] $pname
-	    ::ess::evt_put PARAM VAL [now] $pval
-
-	    # set param datapoint for clients
-	    dservSet ess/params [get_param_vals]
+	    # This path is how a VARIANT configures itself (params_defaults,
+	    # then the variant's own `params`). A LIVE param exists precisely
+	    # so that setting it PUSHES the value into whatever subsystem
+	    # already consumed it -- a variant that says `params {cursor_rate
+	    # 12.0}` must get a cursor travelling at 12, not one still at 8
+	    # with `ess::get_params` insisting otherwise. set_param owns that
+	    # dispatch, so this is a loop and nothing more.
+	    set_param $pname $pval
         }
     }
 
@@ -6218,7 +6213,14 @@ namespace eval ess {
             set param_settings [dict get $vinfo params]
             ::ess::set_params {*}$param_settings
         }
-        
+
+        # and, when loading a saved config, ITS params on top: the third
+        # layer of one stage (protocol defaults, variant, config), applied
+        # here rather than after variant_init returns so the variant's
+        # own _init, ess/param_settings, reset and the snapshot below all
+        # see the values the config asked for. A no-op outside load_config.
+        apply_pending_config_params
+
         # call a specific init function for this variant
         set vinit_method ${variant}_init
         if {[lsearch [info object methods $s] $vinit_method] != -1} {
@@ -6838,7 +6840,9 @@ namespace eval ess {
     #      - load_system calls reset_variant_args (clears to empty)
     #      - load_system calls apply_pending_config_args (sets our args)
     #      - load_system calls variant_init (loader runs with our args)
-    #      - load_system calls apply_pending_config_params (sets our params)
+    #      - variant_init calls apply_pending_config_params (sets our
+    #        params, after the protocol defaults and the variant's own,
+    #        and before anything downstream of them is published)
     #   5. Done - system is loaded with config's exact settings
     #
     # Arguments:
@@ -6983,9 +6987,11 @@ namespace eval ess {
     #=========================================================================
     # apply_pending_config_params
     #
-    # Hook called by load_system after variant_init.
+    # Hook called by variant_init_body right after the variant's own params.
     # If we're loading from a config, applies the config's param values.
-    # These override any defaults set by the variant.
+    # These override any defaults set by the variant. It goes through
+    # set_param, which routes a LIVE param through its apply chain -- so a
+    # config's cursor_rate reaches the roam, not just the variable.
     #=========================================================================
     
     proc apply_pending_config_params {} {
