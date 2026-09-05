@@ -337,6 +337,108 @@ dl_set $g:correct_x [dl_add [dl_mult $left  $left_x] \
 | `a.ndim`                           | `dl_depth $a`                                     |
 | `np.unique(a)`                     | `dl_unique $a`                                    |
 
+## dlsh ↔ Awkward Array Rosetta
+
+NumPy stops matching dlsh the moment a list is ragged: a `dl_lengths` that
+is not constant has no NumPy shape, and pandas parks each sublist as an
+opaque object in a cell, so every per-sublist question becomes a Python
+loop (`df.apply(lambda r: ..., axis=1)`). [Awkward
+Array](https://awkward-array.org) is the Python library with the dlsh
+mental model — nesting is part of the type, arithmetic happens at the
+leaves, reductions name the depth they collapse — so it is the target
+for anything a `*_extract.tcl` does that a student wants to redo or
+extend in Python.
+
+Getting a trials file there is one call (dgread ≥ 1.2.0):
+
+```python
+import dgread, awkward as ak, numpy as np
+a = dgread.to_awkward(files)           # path, dict, or list of paths
+# a.roam_x has type  N * var * float32  — the `var` is the ragged axis
+```
+
+`a` is one record per trial, so `a[a.correct == 1]` filters every column
+at once (the dg keeps columns aligned by convention; awkward enforces it).
+
+| dlsh                                     | Awkward                                            |
+|------------------------------------------|----------------------------------------------------|
+| `$g:col`                                 | `a.col`                                            |
+| `dl_length $l`                           | `len(a)`                                           |
+| `dl_lengths $l`                          | `ak.num(a, axis=1)`                                |
+| `dl_depth $l`                            | `a.ndim` (see `ak.type(a)` for the full shape)     |
+| `dl_add $a $b` etc. (leafwise, broadcast)| `a + b` — NumPy ufuncs work, ragged axes broadcast |
+| `dl_gt $l $k`, `dl_and`, `dl_not`        | `a > k`, `&`, `~`                                  |
+| `dl_select $l $mask` (per-sublist)       | `a[mask]` with a same-shape ragged boolean          |
+| `dl_select $l $mask` (whole sublists)    | `a[mask]` with a flat boolean of length `len(a)`   |
+| `dl_choose $l $idx`                      | `a[:, idx]` / `a[idx]`                             |
+| `dl_get $l $i $j`                        | `a[i, j]`                                          |
+| `dl_first` / `dl_last` per sublist       | `ak.firsts(a)` / `ak.firsts(a[:, -1:])`            |
+| `dl_indices` per sublist                 | `ak.local_index(a)`                                |
+| `dl_reverse` per sublist                 | `a[:, ::-1]`                                       |
+| `dl_diff $l`                             | `a[:, 1:] - a[:, :-1]`                             |
+| `dl_sum $l` (everything)                 | `ak.sum(a, axis=None)`                             |
+| `dl_sums` / `dl_means` / `dl_maxs $l`    | `ak.sum(a, axis=1)` / `ak.mean` / `ak.max`         |
+| `dl_bmaxs`-style argmax per sublist      | `ak.argmax(a, axis=1)`                             |
+| `dl_sort` per sublist                    | `ak.sort(a, axis=1)`                               |
+| `dl_sum [dl_gt $l $k]` per sublist       | `ak.count_nonzero(a > k, axis=1)`                  |
+| any / all per sublist                    | `ak.any(m, axis=1)` / `ak.all(m, axis=1)`          |
+| `dl_collapse` / `dl_unpack`              | `ak.flatten(a, axis=1)`                            |
+| `dl_restructure $flat $tmpl`             | `ak.unflatten(flat, ak.num(tmpl, axis=1))`         |
+| `dl_pack $l`                             | `ak.singletons(a)` (or `a[:, np.newaxis]`)         |
+| `dl_zip $a $b`                           | `ak.zip({"x": a, "y": b})`  → `.x`, `.y`           |
+| `dl_concat $a $b` (sublist-wise)         | `ak.concatenate([a, b], axis=1)`                   |
+| `dl_concat $a $b` (append rows)          | `ak.concatenate([a, b])`                           |
+| `dl_cross $a $b` (two parallel lists)    | `ak.unzip(ak.cartesian([a, b]))` (pairs w/o unzip) |
+| `np.where`-style pick                    | `ak.where(mask, x, y)`                             |
+| run-length groups                        | `ak.run_lengths(a)`                                |
+| pad to rectangular                       | `ak.fill_none(ak.pad_none(a, n, axis=1), v)`       |
+| ragged → NumPy (all lengths equal)       | `ak.to_numpy(a)` / `ak.to_regular(a, axis=1)`      |
+
+The `dl_sums` ↔ `dl_sum` split becomes the `axis` argument: one
+function, and you say which axis collapses. That is the single habit
+change.
+
+### Where the two differ
+
+- **Empty selections vs `None`.** In dlsh, selecting nothing from a
+  sublist leaves an empty sublist and you check `dl_lengths` before taking
+  a first element. Awkward has a first-class missing value: `ak.firsts`
+  of an empty sublist is `None`, it propagates through arithmetic, and
+  `ak.is_none(x)` / `ak.fill_none(x, -1)` handle it at the end. Cleaner
+  for "trials that never crossed the threshold".
+- **Records are native.** A per-trial scalar broadcasts against its own
+  trial's samples with no alignment step:
+  `np.hypot(a.roam_x - a.target_x[:, 0], a.roam_y - a.target_y[:, 0])`.
+- **No ragged cumsum.** `ak.cumsum` does not exist; a running sum inside
+  each sublist needs `ak.flatten` → `np.cumsum` → subtract each sublist's
+  starting offset → `ak.unflatten`.
+- **No `dl_sortByList`, no graphics.** Grouping and plotting go back
+  through pandas: compute the per-trial scalar in awkward, then
+  `df["peak"] = ak.to_numpy(peak)` and carry on with `groupby`.
+
+### The recipe that comes up most
+
+Recompute a per-trial scalar from the samples, then join it to the
+trial table:
+
+```python
+m  = a[a.n_samples > 2]
+dx = m.roam_x[:, 1:] - m.roam_x[:, :-1]
+dy = m.roam_y[:, 1:] - m.roam_y[:, :-1]
+dt = m.roam_t[:, 1:] - m.roam_t[:, :-1]
+peak = ak.max(np.hypot(dx, dy) / dt * 1000, axis=1)        # deg/s, one per trial
+
+ecc     = np.hypot(m.roam_x, m.roam_y)
+t_cross = ak.firsts(m.roam_t[ecc > 2])                     # None if never
+
+df = dgread.to_pandas(files)
+df.loc[df.n_samples > 2, "peak_speed"] = ak.to_numpy(peak)
+```
+
+Same algorithm as the `dl_*` lines in the extractor that produced
+`path_efficiency`; different syntax. A student who reads one can read the
+other.
+
 ## Debugging tips
 
 - `dl_tcllist $list` — dump to plain Tcl list for `puts` inspection.
