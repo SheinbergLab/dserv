@@ -1578,6 +1578,14 @@ body.ess-app {
     gap: 8px;
 }
 
+/* The last row's margin used to sit on top of the panel body's padding,
+   leaving 18px under the final input against 12px above the first -- at
+   row height that reads as a short blank entry at the bottom of Live
+   Controls. */
+.ess-params-container .ess-param-row:last-child {
+    margin-bottom: 0;
+}
+
 .ess-param-label {
     font-size: 11px;
     color: var(--ess-text-secondary);
