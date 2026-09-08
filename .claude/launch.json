@@ -8,6 +8,12 @@
       "port": 8137
     },
     {
+      "name": "live-params-harness",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "8093", "-d", "/private/tmp/claude-501/-Users-sheinb-src-dserv/95a23f8a-87d8-40f3-b06b-a5f209edd610/scratchpad/harness"],
+      "port": 8093
+    },
+    {
       "name": "www-dev",
       "runtimeExecutable": "python3",
       "runtimeArgs": ["-m", "http.server", "8091", "--directory", "www"],
