@@ -850,13 +850,41 @@
                  this.cursorAngle = this.pointer
                      ? Math.atan2(this.pointer.y, this.pointer.x)
                      : null;
-                 this.angleValue.textContent = this.cursorAngle === null
-                     ? '\u2014'
-                     : `${Math.round(((this.cursorAngle * 180 / Math.PI) + 360) % 360)}\u00b0`;
-                 this.draw();
+                 // COALESCED. This channel is the roam's/dial's live cursor
+                 // and it arrives at the display's refresh rate -- 125 Hz on
+                 // a 120 Hz rig -- so redrawing the canvas and writing the
+                 // DOM inline here spent the whole update budget on a readout
+                 // no one can read at that rate. State is applied every time;
+                 // only the paint is deferred, and the panel still settles on
+                 // the newest value because drawPointerSoon always draws
+                 // whatever `this.pointer` holds when the frame runs.
+                 this.drawPointerSoon();
              });
 
 
+         }
+
+         // One paint per animation frame, however fast the cursor publishes.
+         // The angle readout rides along with it: it is the same information
+         // as the drawn dot, and updating text 125 times a second forces
+         // layout just as often for a number that changes faster than it can
+         // be read.
+         drawPointerSoon() {
+             if (this._pointerFrame) return;
+             const schedule = (typeof requestAnimationFrame === 'function')
+                 ? requestAnimationFrame
+                 : (cb) => setTimeout(cb, 16);
+             this._pointerFrame = true;
+             schedule(() => {
+                 this._pointerFrame = false;
+                 const t = this.cursorAngle === null
+                     ? '\u2014'
+                     : `${Math.round(((this.cursorAngle * 180 / Math.PI) + 360) % 360)}\u00b0`;
+                 if (this.angleValue && this.angleValue.textContent !== t) {
+                     this.angleValue.textContent = t;
+                 }
+                 this.draw();
+             });
          }
 
          // "dpad \u2014 set by protocol (rig binds: mouse touch)"

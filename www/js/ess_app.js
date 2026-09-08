@@ -129,6 +129,14 @@ async function init() {
  * Request initial values for all ESS-related datapoints
  * Uses dservTouch to cause server to republish current values
  * Sends as a single foreach command for efficiency
+ *
+ * A `subscribe` does NOT deliver the datapoint's current value -- TclServer
+ * registers the match and answers with an ack, nothing more -- so anything
+ * absent from this list stays blank on a fresh page until it next changes.
+ * That is why graphics/stimulus belongs here: a viz only publishes when it
+ * DRAWS, so between trials, or with the system stopped, a reloaded panel had
+ * nothing to show and no reason to expect anything, which reads as a hung
+ * viz rather than an empty one.
  */
 function requestInitialData() {
     // Guard against sending on closed/closing socket
@@ -159,6 +167,7 @@ function requestInitialData() {
           ess/dial_active ess/dial/geometry ess/dial/sources
           ess/dial/source_origin ess/dial/bound ess/dial/pointer
           ess/session_stats
+          graphics/stimulus
           em/settings em/source_active mesh/peers
           openephys/status
           ess/rmt_connected ess/rmt_host ess/stim_required

@@ -63,6 +63,10 @@ class GraphicsRenderer {
         
         // Last data for redrawing
         this.lastCommandData = null;
+
+        // rAF coalescing (see handleDatapointUpdate)
+        this._pendingFrame = null;
+        this._frameRequested = false;
         
         // Image cache (stores HTMLImageElement objects by ID)
         this.imageCache = new Map();
@@ -98,33 +102,55 @@ class GraphicsRenderer {
                 this.handleDatapointUpdate(data);
             }
         );
-        
+
         console.log(`GraphicsRenderer subscribed to: ${this.options.streamId}`);
     }
-    
+
     /**
      * Handle datapoint update
+     *
+     * COALESCED, not rendered inline. A viz publishes at whatever rate its
+     * protocol runs at -- joystick/forage redraws off a 125 Hz cursor -- and
+     * parsing plus stroking a scene synchronously in the socket callback
+     * makes this canvas cost exactly what the producer chose. Past the point
+     * where that exceeds one frame's budget the tab never returns to idle:
+     * the panel freezes, and (measured on forage) the socket's 24 MB
+     * backpressure allowance fills in seconds, after which dserv DROPS sends
+     * and never retries them -- so the panel stays frozen on a stale frame
+     * even after the load goes away, and only a reload recovers it.
+     *
+     * Only the LATEST frame is ever drawn. Intermediate frames of a stimulus
+     * display are worth nothing once a newer one has arrived -- this is a
+     * view of current state, not a record -- so dropping them is free, and
+     * it caps this canvas at one render per animation frame no matter what
+     * the producer does. Parsing is deferred with the draw on purpose: it is
+     * the larger half of the cost on a big scene.
      */
     handleDatapointUpdate(data) {
-        try {
-            let commandData;
-            
-            // Parse if string
-            if (typeof data.value === 'string') {
-                commandData = JSON.parse(data.value);
-            } else if (typeof data.data === 'string') {
-                commandData = JSON.parse(data.data);
-            } else {
-                commandData = data.value || data.data;
+        this._pendingFrame =
+            (typeof data.value === 'string') ? data.value :
+            (typeof data.data === 'string')  ? data.data  :
+            (data.value || data.data);
+
+        if (this._frameRequested) return;
+        this._frameRequested = true;
+        const schedule = (typeof requestAnimationFrame === 'function')
+            ? requestAnimationFrame
+            : (cb) => setTimeout(cb, 16);
+        schedule(() => {
+            this._frameRequested = false;
+            const raw = this._pendingFrame;
+            this._pendingFrame = null;
+            if (raw == null) return;
+            try {
+                const commandData = (typeof raw === 'string') ? JSON.parse(raw) : raw;
+                if (commandData && commandData.commands) {
+                    this.renderCommands(commandData);
+                }
+            } catch (e) {
+                console.error('Failed to process graphics data:', e);
             }
-            
-            // Render commands
-            if (commandData && commandData.commands) {
-                this.renderCommands(commandData);
-            }
-        } catch (e) {
-            console.error('Failed to process graphics data:', e);
-        }
+        });
     }
     
     /**
