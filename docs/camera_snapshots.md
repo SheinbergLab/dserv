@@ -8,8 +8,11 @@ in `.ess` files, obs dgz files, and trials extraction.
 
 The sensor free-runs at `stream_fps` (30) whenever it is **streaming**
 (`camera/status` is `continuous`, after `start`). That is not the same
-as the `camera enabled` boot/gear setting (default 0), which only
-auto-starts the sensor at dserv boot.
+as the `camera enabled` setting (default 0), which starts the camera at
+boot and again whenever it is flipped in the gear (`apply_enabled`). A
+rig can also be streaming with `enabled` still 0 — a bare `send camera
+start`, or the file-open pattern below. `camera/status` is the thing to
+read; `enabled` only says who was asked to start it.
 
 The preview cadence (`camera rate_hz`, default 1/s to `camera/preview`) is
 a *watching* knob only — grabs do not depend on it, so there is no reason
@@ -114,10 +117,20 @@ gear already `send`s to the camera interp; from Tcl the same put is:
 send camera {settings::put camera look_behind 1 -persist}
 ```
 
-Bare `settings::put` in ESS fails (`not declared in this interp`). The
-declaration lives in the camera subprocess. Do this **before** `start`:
-the pool is sized at configure, and flipping later restarts the stream.
-The protocol does not re-apply look_behind.
+The `send` is not decoration — the declaration lives in the camera
+subprocess, and only the declaring interp can act on a put. A bare
+`settings::put camera look_behind 1 -persist` from the ess interp does
+**not** error: `settings::_validate` waves through any subsystem this
+interp never declared, so the put succeeds, writes the line to
+`local/rig.tcl`, and publishes `settings/camera/look_behind 1` — while
+the camera's `-apply` never fires and the camera interp's already-loaded
+file values never see it. The gear reads on, the ring is not parked, and
+every `camera_grab_before` comes back `ok:0` until dserv restarts. (The
+`not declared in this interp` error belongs to `settings::get` /
+`interp_of` / `clear`, never to `put`.)
+
+Do this **before** `start`: the pool is sized at configure, and flipping
+later restarts the stream. The protocol does not re-apply look_behind.
 
 The setting parks every stream-rate frame's DMA buffer in the 16-slot
 ring — **~500 ms of look-back at 30 fps** — with no per-frame copies or
@@ -163,10 +176,18 @@ close — and it stops **only what it started**, so a gear-enabled
 `rotation` are rig declarations (settings gear), not the protocol's
 business: look-back snaps need `camera look_behind 1` **before** this
 `start`. `stream_fps` must be set before `start` if the default 30
-isn't wanted. Wrap `send camera start` in `catch` — `::ess::file_open`
-does not catch the protocol callback, and a missing camera interp
-throws (a present camera whose `start` fails sets `camera/status` and
-returns).
+isn't wanted.
+
+Wrap `send camera start` in `catch`. `::ess::file_open` calls the
+protocol callback uncaught, so a throw there aborts file_open *after*
+`dservLoggerOpen` but before `dservLoggerResume` and the `TIME OPEN` /
+`ID` events — a datafile that exists on disk and records nothing. Know
+what the catch covers, though: `send` raises a Tcl error only for local
+failures (no `camera` subprocess on this rig, send-to-self, a send
+cycle, the 120 s timeout). A failure on the *camera* side comes back as
+a `!TCL_ERROR ...` **string** with a normal return, and cameraconf's own
+`start` catches its errors internally anyway — which is why the example
+below re-reads `camera/status` instead of trusting what `send` returned.
 
 Worked example — a `search`-style system snaps ~100 ms before target
 selection. The system's one-shot `response` action calls a no-op hook;
@@ -235,8 +256,10 @@ unconditionally (a match nothing publishes costs nothing) and **not
 obs-limited**: the async encode can publish a frame just after ENDOBS, and
 an obs-limited match would silently drop exactly those frames.
 
-Do **not** logger-match `camera/preview`: that is the watching stream and
-would fill the datafile.
+Do **not** logger-match `camera/preview`. Those are 640x360 watching
+frames arriving at whatever cadence someone left `rate_hz` on, and they
+carry no REQUEST/DONE pair — so extraction cannot assign one to a trial
+even in principle. They would only pad the file.
 
 Camera JPEGs are **private**: they go to log files and nowhere else.
 Explorer, `dservGet`, websocket subscribe, and `/camera.html` cannot
@@ -332,9 +355,12 @@ from before `rel_ms` (single-param DONE) pair by the old
 first-frame-at-or-after-request rule, which was exact for next-frame
 grabs.
 
-**Use DF_CHAR, not DF_STRING** for JPEG bytes. String columns go through
-Tcl modified UTF-8; Python `dgread` can abort the whole dgz on overlong
-NUL (`C0 80`). DF_CHAR is a byte vector.
+**Use DF_CHAR, not DF_STRING** for JPEG bytes. The block above already
+does — `camera_frames_in_obs` fills from the `<blob>` column and pads
+with `dl_clist` — so this is a warning for *hand-rolled* extraction. A
+string column is not a byte vector: dgread's binding hands DF_STRING to
+`Py_BuildValue("s", ...)`, which stops at the first NUL and then decodes
+the rest as UTF-8, so JPEG bytes both truncate and raise.
 
 ### Other streams
 
@@ -364,11 +390,14 @@ per grab):
 
 ```python
 d = dgread.dgread('file.trials.dgz')
-arr = d['cam_jpeg'][0][0]   # trial 0, first frame
-jpg = np.asarray(arr, dtype=np.uint8).tobytes()
+arr = d['cam_jpeg'][0][0]   # trial 0, first grab
+jpg = np.asarray(arr, dtype=np.int8).astype(np.uint8).tobytes()
 assert jpg[:3] == b'\xff\xd8\xff' and jpg[-2:] == b'\xff\xd9'
 # also: d['cam_request_t'][trial], d['cam_capture_t'][trial]
 ```
+
+An unresolved grab is an **empty** vector, exactly where `cam_capture_t`
+is `-1` — so filter on that rather than letting the JPEG assert fire.
 
 `UnicodeDecodeError` on load usually means the column was stored as
 DF_STRING instead of DF_CHAR.
