@@ -6,7 +6,14 @@ in `.ess` files, obs dgz files, and trials extraction.
 
 ## The grab contract (runtime)
 
-The sensor free-runs at `stream_fps` (30) whenever the camera is enabled.
+The sensor free-runs at `stream_fps` (30) whenever it is **streaming**
+(`camera/status` is `continuous`, after `start`). That is not the same
+as the `camera enabled` setting (default 0), which starts the camera at
+boot and again whenever it is flipped in the gear (`apply_enabled`). A
+rig can also be streaming with `enabled` still 0 — a bare `send camera
+start`, or the file-open pattern below. `camera/status` is the thing to
+read; `enabled` only says who was asked to start it.
+
 The preview cadence (`camera rate_hz`, default 1/s to `camera/preview`) is
 a *watching* knob only — grabs do not depend on it, so there is no reason
 to raise it for data collection. `rate_hz 0` (or `set_interval never`)
@@ -103,11 +110,32 @@ preview interval stale, no completion meta) for interactive use.
 `camera_grab_before` answers "what did the scene look like 100 ms before
 this event fired?" — e.g. snap the moment of target selection, requested
 from the response action *after* the touch landed. That needs history:
-the **`camera look_behind`** rig setting (settings gear, or
-`settings::put camera look_behind 1 -persist`) parks every stream-rate
-frame's DMA buffer in the 16-slot ring — **~500 ms of look-back at
-30 fps** — with no per-frame copies or CPU. `rate_hz 0` does not starve
-it; preview stays an independent watching knob.
+the **`camera look_behind`** rig setting (default **0**). The settings
+gear already `send`s to the camera interp; from Tcl the same put is:
+
+```tcl
+send camera {settings::put camera look_behind 1 -persist}
+```
+
+The `send` is not decoration — the declaration lives in the camera
+subprocess, and only the declaring interp can act on a put. A bare
+`settings::put camera look_behind 1 -persist` from the ess interp does
+**not** error: `settings::_validate` waves through any subsystem this
+interp never declared, so the put succeeds, writes the line to
+`local/rig.tcl`, and publishes `settings/camera/look_behind 1` — while
+the camera's `-apply` never fires and the camera interp's already-loaded
+file values never see it. The gear reads on, the ring is not parked, and
+every `camera_grab_before` comes back `ok:0` until dserv restarts. (The
+`not declared in this interp` error belongs to `settings::get` /
+`interp_of` / `clear`, never to `put`.)
+
+Do this **before** `start`: the pool is sized at configure, and flipping
+later restarts the stream. The protocol does not re-apply look_behind.
+
+The setting parks every stream-rate frame's DMA buffer in the 16-slot
+ring — **~500 ms of look-back at 30 fps** — with no per-frame copies or
+CPU. `rate_hz 0` does not starve it; preview stays an independent
+watching knob.
 
 The cost is memory, which is why it's a declared setting and not
 always-on: 16 extra ~6 MB DMA buffers per stream at 1080p (~124 MB),
@@ -120,8 +148,7 @@ exceed stock CMA — the camera still runs and `camera/health` appends
 — until `/boot/firmware/config.txt` raises it (e.g.
 `dtoverlay=vc4-kms-v3d,cma-256`, then reboot). `check_ring_buffer`
 reports `hold` (parking active) and `hold_depth` (slots actually
-granted). Flipping the setting restarts the stream, since the pool is
-sized at configure time.
+granted).
 
 Measured on a Pi 5 (imx708, 30 fps): a 100 ms look-back returns a frame
 within half a frame period of the target, a request older than the
@@ -130,11 +157,11 @@ window honestly clamps to the oldest held frame (the meta's
 zero-copy means nothing touches a parked frame until a grab asks for
 it.
 
-With the setting on, a protocol needs nothing else: the ring is already
-parked whenever the camera streams, so `camera_grab_before 100` in a
-response action just works. On a rig without the setting (or without a
-camera), the helper still resolves — `ok:0` meta, `CAMERA FAIL` — so
-enabling a snap param is safe everywhere.
+Once look_behind is already declared on the rig, `start` sizes the ring
+at configure time and `camera_grab_before 100` in a response action just
+works. On a rig without the setting (or without a camera), the helper
+still resolves — `ok:0` meta, `CAMERA FAIL` — so enabling a snap param
+is safe everywhere.
 
 ## Starting the camera with the datafile
 
@@ -147,8 +174,20 @@ blocking `send camera start` at file open, `sendNoReply camera stop` at
 close — and it stops **only what it started**, so a gear-enabled
 `/camera.html` preview is left exactly as found. `look_behind` and
 `rotation` are rig declarations (settings gear), not the protocol's
-business; `stream_fps` must be set before `start` if the default 30
+business: look-back snaps need `camera look_behind 1` **before** this
+`start`. `stream_fps` must be set before `start` if the default 30
 isn't wanted.
+
+Wrap `send camera start` in `catch`. `::ess::file_open` calls the
+protocol callback uncaught, so a throw there aborts file_open *after*
+`dservLoggerOpen` but before `dservLoggerResume` and the `TIME OPEN` /
+`ID` events — a datafile that exists on disk and records nothing. Know
+what the catch covers, though: `send` raises a Tcl error only for local
+failures (no `camera` subprocess on this rig, send-to-self, a send
+cycle, the 120 s timeout). A failure on the *camera* side comes back as
+a `!TCL_ERROR ...` **string** with a normal return, and cameraconf's own
+`start` catches its errors internally anyway — which is why the example
+below re-reads `camera/status` instead of trusting what `send` returned.
 
 Worked example — a `search`-style system snaps ~100 ms before target
 selection. The system's one-shot `response` action calls a no-op hook;
@@ -180,7 +219,9 @@ $s set_file_open_callback {
         set st ""
         catch { set st [dservGet camera/status] }
         if { $st ne "continuous" } {
-            send camera start
+            if { [catch { send camera start } err] } {
+                print "camera start: $err"
+            }
             catch { set st [dservGet camera/status] }
             if { $st eq "continuous" } {
                 set camera_started_for_file 1
@@ -214,6 +255,11 @@ dpoint flipped, a completion flag), insert a one-tick state whose
 unconditionally (a match nothing publishes costs nothing) and **not
 obs-limited**: the async encode can publish a frame just after ENDOBS, and
 an obs-limited match would silently drop exactly those frames.
+
+Do **not** logger-match `camera/preview`. Those are 640x360 watching
+frames arriving at whatever cadence someone left `rate_hz` on, and they
+carry no REQUEST/DONE pair — so extraction cannot assign one to a trial
+even in principle. They would only pad the file.
 
 Camera JPEGs are **private**: they go to log files and nowhere else.
 Explorer, `dservGet`, websocket subscribe, and `/camera.html` cannot
@@ -309,6 +355,13 @@ from before `rel_ms` (single-param DONE) pair by the old
 first-frame-at-or-after-request rule, which was exact for next-frame
 grabs.
 
+**Use DF_CHAR, not DF_STRING** for JPEG bytes. The block above already
+does — `camera_frames_in_obs` fills from the `<blob>` column and pads
+with `dl_clist` — so this is a warning for *hand-rolled* extraction. A
+string column is not a byte vector: dgread's binding hands DF_STRING to
+`Py_BuildValue("s", ...)`, which stops at the first NUL and then decodes
+the rest as UTF-8, so JPEG bytes both truncate and raise.
+
 ### Other streams
 
 ```tcl
@@ -323,7 +376,7 @@ lassign [$f ain_samples_in_obs extio/box02/state/ain/eye] t v
 
 ## Python
 
-`DF_CHAR` reads as int8 in numpy; recover bytes with:
+`DF_CHAR` reads as int8 in numpy. From the raw obs file:
 
 ```python
 import dgread, numpy as np
@@ -332,3 +385,19 @@ jpg = np.asarray(d['<blob>camera/full'][k], dtype=np.int8).astype(np.uint8).toby
 open('frame.jpg', 'wb').write(jpg)
 ```
 
+After `extract_trials`, the same bytes are in `cam_jpeg` (per trial, then
+per grab):
+
+```python
+d = dgread.dgread('file.trials.dgz')
+arr = d['cam_jpeg'][0][0]   # trial 0, first grab
+jpg = np.asarray(arr, dtype=np.int8).astype(np.uint8).tobytes()
+assert jpg[:3] == b'\xff\xd8\xff' and jpg[-2:] == b'\xff\xd9'
+# also: d['cam_request_t'][trial], d['cam_capture_t'][trial]
+```
+
+An unresolved grab is an **empty** vector, exactly where `cam_capture_t`
+is `-1` — so filter on that rather than letting the JPEG assert fire.
+
+`UnicodeDecodeError` on load usually means the column was stored as
+DF_STRING instead of DF_CHAR.
