@@ -108,6 +108,43 @@ namespace eval em {
     variable last_valid_h 0.0
     variable last_valid_v 0.0
 
+    # ---- em/time anchor ---------------------------------------------------
+    #
+    # em/time is published as a double, but the datafile cannot hold one:
+    # dslog narrows every DSERV_DOUBLE to a 4-byte float when it builds the
+    # dg (no double dg type).  A float32 keeps ~7 digits, so the resolution
+    # of a logged time is set by its magnitude: 0.06 ms at 15 min into a
+    # session, 0.24 ms at 1 h, 0.5 ms at 2 h -- and the saccade detector
+    # divides by per-sample timestamp differences (8 ms), so that is a
+    # 1-6% velocity error that grows through the session.  (With no anchor
+    # at all it was 62.5 ms steps on 2026-09-10; see VideoStream commit
+    # 806edd7 for that half of the story.)
+    #
+    # So em/time is published RELATIVE TO THE CURRENT OBSERVATION PERIOD:
+    # the anchor is re-taken from the first frame after every ess/in_obs
+    # rising edge (and after a datafile open), which keeps logged values
+    # under a few seconds, where a float32 step is ~2 us.  Nothing consumes
+    # em/time across obs periods: the extractors' normalize_timestamps
+    # subtracts each trial's first sample anyway, and cross-obs identity is
+    # em/frame_id, which stays session-relative (VideoStream's anchor) for
+    # matching against the video db.
+    #
+    # An upstream clock that runs backwards (VideoStream reset its own
+    # anchor, tracker restarted) is caught in process and re-anchored on
+    # the spot, so a stale anchor can never produce negative or huge times.
+    variable obs_t0 0.0
+    variable obs_rebase_pending 1
+
+    # Called on every ess/in_obs and ess/datafile change: arm a re-anchor
+    # on the next frame for a rising edge / a new datafile.  Falling edges
+    # and closes leave the anchor alone (nothing is logged then anyway).
+    proc rebase_on_next_frame { dpoint data } {
+        variable obs_rebase_pending
+        if { $data ne "" && $data ne "0" } {
+            set obs_rebase_pending 1
+        }
+    }
+
     # ---- which eye source may publish ------------------------------------
     #
     # Every processor here writes the SAME three datapoints
@@ -394,7 +431,16 @@ namespace eval em {
         set frame_id_binary [binary format i [expr {int($frame_id)}]]
         dservSetData em/frame_id $cur_t 5 $frame_id_binary
 
-        set seconds_binary [binary format d $frame_time]
+        # em/time: seconds since the current obs period's first frame (see
+        # the anchor notes above).  A frame time below the anchor means the
+        # tracker's own clock was reset underneath us: re-anchor here too.
+        variable obs_t0
+        variable obs_rebase_pending
+        if { $obs_rebase_pending || $frame_time < $obs_t0 } {
+            set obs_t0 $frame_time
+            set obs_rebase_pending 0
+        }
+        set seconds_binary [binary format d [expr {$frame_time - $obs_t0}]]
         dservSetData em/time $cur_t 3 $seconds_binary
                       
         foreach v "blink p1_detected p4_detected" {
@@ -599,6 +645,12 @@ dpointSetScript    eyetracking/virtual em::process_virtual
 
 dservAddExactMatch eyetracking/results
 dpointSetScript    eyetracking/results em::process
+
+# em/time anchor: re-take it on each obs period start and each datafile open
+dservAddExactMatch ess/in_obs
+dpointSetScript    ess/in_obs    em::rebase_on_next_frame
+dservAddExactMatch ess/datafile
+dpointSetScript    ess/datafile  em::rebase_on_next_frame
 
 # extio MCP3204 analog eye source: an eye tracker's analog out digitized by the
 # box, published as state/ain/<label>. Glob dev follows whatever box is present.
