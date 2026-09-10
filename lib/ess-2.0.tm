@@ -7523,7 +7523,11 @@ namespace eval ess {
     dict set evt_info SAMPLE [list 30 {Sample} long $subtypes]
     dict set evt_info PROBE [list 31 {Probe} long $subtypes]
     dict set evt_info CUE [list 32 {Cue} long $subtypes]
-    dict set evt_info TARGET [list 33 {Target} long $subtypes]
+    # TARGET SET: the target relocated (a step to a new position) during an
+    # ongoing stimulus -- the saccade trigger in a step-following task
+    # (pursuit/steps). Param = step index; the location is stimdg data (the
+    # trial's vertex sequence). Additive: OFF/ON ids are unchanged.
+    dict set evt_info TARGET [list 33 {Target} long [dict create OFF 0 ON 1 SET 2]]
     dict set evt_info DISTRACTOR [list 34 {Distractor} long $subtypes]
     dict set evt_info SOUND [list 35 {Sound Event} long $subtypes]
 
