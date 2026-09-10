@@ -100,6 +100,25 @@ Checked 101 vals."
 )
 
 #
+# Real ess-2.0.tm under the dlsh ess_test harness against a fake stim2: a
+# stim script that fails to source must be reported (warning, or a failed
+# load when stim is required), never logged as "Loaded". Needs dlsh and a
+# systems tree, so it is registered only where both exist (dev machines).
+#
+find_program(DLSH_EXECUTABLE NAMES dlsh)
+if(DLSH_EXECUTABLE AND EXISTS "$ENV{HOME}/systems/ess/remap/doublestep")
+  add_test(
+      NAME ess_stim_source
+      COMMAND ${DLSH_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tests/test_ess_stim_source.tcl"
+  )
+  set_property(TEST ess_stim_source PROPERTY ENVIRONMENT "ESS_TEST_ESS_LIB=${CMAKE_SOURCE_DIR}/lib")
+  set_property(TEST ess_stim_source PROPERTY TIMEOUT 120)
+  set_property(TEST ess_stim_source PROPERTY PASS_REGULAR_EXPRESSION "all checks passed")
+else()
+  message(STATUS "dlsh or ~/systems/ess not found -- skipping ess_stim_source")
+endif()
+
+#
 # Module unit tests -- pure Tcl, dserv STUBBED.
 #
 # Unlike the tests above these need no server, no rig and no hardware: they

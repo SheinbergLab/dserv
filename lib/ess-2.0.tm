@@ -558,11 +558,35 @@ oo::class create System {
         if { ![catch {set f [open $stimfile]}] } {
             set script [read $f]
             close $f
-            rmtSend $script
-            # run the (possibly overridden) stim_init now that the new script
-            # has been sourced; the no-op default applies if it didn't define one.
-            rmtSend { catch { stim_init } }
-            ::ess::ess_info "Loaded stimulus script: $stimfile" "stim"
+            # rmtSend does not throw on a remote failure: it hands back the
+            # error as an "!TCL_ERROR <msg>" string. Sourcing the stim script
+            # is where a version pin (package require traj 1.1 on a stim2
+            # whose dlsh.zip predates it), a missing module, or a plain syntax
+            # error surfaces -- and when it does, the PREVIOUS protocol's stim
+            # is still what stim2 will draw (its objects and same-named procs
+            # such as target_on survive the failed source). Reporting "Loaded"
+            # regardless made that look like a paradigm bug (2026-09-10: a
+            # red square target on a steps run). So: check, publish, and
+            # under stim_required fail the load.
+            set result [rmtSend $script]
+            if { [string match "!TCL_ERROR*" $result] } {
+                set msg [string trim [string range $result 11 end]]
+                set summary "stimulus script [file tail $stimfile] failed to\
+ load on $host: $msg -- stim2 is still showing the previous protocol's stimulus"
+                dservSet ess/stim_script_error $summary
+                if { [::ess::stim_required] } {
+                    error $summary
+                }
+                ::ess::publish_load_report warning configure_stim \
+                    $_systemname $_protocolname $_variantname $summary $msg
+            } else {
+                dservSet ess/stim_script_error {}
+                # run the (possibly overridden) stim_init now that the new
+                # script has been sourced; the no-op default applies if it
+                # didn't define one.
+                rmtSend { catch { stim_init } }
+                ::ess::ess_info "Loaded stimulus script: $stimfile" "stim"
+            }
         } else {
             ::ess::ess_warning "No stimulus script found: $stimfile" "stim"
         }
