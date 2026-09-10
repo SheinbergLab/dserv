@@ -2257,10 +2257,12 @@ static int subprocess_command (ClientData data, Tcl_Interp *interp,
     name = Tcl_GetString(objv[arg_idx++]);
   }
   
-  // Parse remaining args (port and/or script)
+  // Parse remaining args (port and/or script). The int probe gets no interp:
+  // with one, a script argument left "expected integer but got ..." in the
+  // result, and every later error message was appended to that junk.
   if (arg_idx < objc) {
     // Try to parse as port number
-    if (Tcl_GetIntFromObj(interp, objv[arg_idx], &port) == TCL_OK) {
+    if (Tcl_GetIntFromObj(NULL, objv[arg_idx], &port) == TCL_OK) {
       arg_idx++;
       if (arg_idx < objc) {
         script = std::string(Tcl_GetString(objv[arg_idx]));
@@ -2272,8 +2274,14 @@ static int subprocess_command (ClientData data, Tcl_Interp *interp,
   }
   
   if (TclServerRegistry.exists(name)) {
+    // Loud on purpose: a second `subprocess <name> <script>` must never
+    // quietly re-run (or quietly skip) the script -- dsconf relies on the
+    // error, and an idempotent variant would hide exactly the mistake of
+    // re-spawning instead of re-sourcing. Say how to re-source instead.
+    Tcl_ResetResult(interp);
     Tcl_AppendResult(interp, Tcl_GetString(objv[0]), ": child process \"",
-                     name.c_str(), "\" already exists", NULL);
+                     name.c_str(), "\" already exists; to re-source it use: send ",
+                     name.c_str(), " {source <path>}", NULL);
     return TCL_ERROR;
   }
   

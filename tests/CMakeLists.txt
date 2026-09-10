@@ -21,6 +21,15 @@ set_property(TEST send_cycle PROPERTY TIMEOUT 60)
 # strict multi-line match is not robust
 set_property(TEST send_cycle PROPERTY PASS_REGULAR_EXPRESSION "SEND CYCLE TEST: ALL PASS")
 
+# End-to-end: `subprocess` duplicate-name error is loud, clean (no leaked
+# int-parse text) and carries the re-source hint.
+add_test(
+    NAME subprocess_dup
+    COMMAND dserv -c "${CMAKE_SOURCE_DIR}/tests/test_subprocess_dup.tcl"
+)
+set_property(TEST subprocess_dup PROPERTY TIMEOUT 60)
+set_property(TEST subprocess_dup PROPERTY PASS_REGULAR_EXPRESSION "SUBPROCESS DUP TEST: ALL PASS")
+
 add_test(
     NAME not_an_option
     COMMAND dserv --not_an_option
