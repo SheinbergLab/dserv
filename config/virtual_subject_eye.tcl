@@ -177,7 +177,11 @@ vseye::init
 #
 # RUN RECIPE (all from a shell; setup while STOPPED):
 #   1. dservctl -c 'subprocess vsubj_eye "source /usr/local/dserv/config/virtual_subject_eye.tcl"'
-#      (re-source the same way to reprogram a live one; init re-subscribes)
+#      To reprogram a LIVE one:  dservctl vsubj_eye "source <same path>"
+#      (a second `subprocess` with an existing name does NOT re-source it,
+#      so init -- and its `send virtual_eye start` -- never reruns; if the
+#      publisher was stopped, fixation is never seen and every trial aborts.
+#      Check: dservGet eyetracking/virtual_enabled must be 1.)
 #   2. run a config from the MAIN interp:  dservctl -c 'send configs {queue_run_config <name>}'
 #      then Go:                             dservctl ess '::ess::start'
 #      (or load_system + file_open + start by hand)
