@@ -55,6 +55,25 @@ static json listToJsonArray(DYN_LIST* dl) {
             }
             break;
         }
+        case DF_INT64: {
+            int64_t* vals = (int64_t*)DYN_LIST_VALS(dl);
+            for (int i = 0; i < n; i++) {
+                arr.push_back((long long)vals[i]);
+            }
+            break;
+        }
+        case DF_DOUBLE: {
+            double* vals = (double*)DYN_LIST_VALS(dl);
+            for (int i = 0; i < n; i++) {
+                double v = vals[i];
+                if (std::isnan(v) || std::isinf(v)) {
+                    arr.push_back(nullptr);
+                } else {
+                    arr.push_back(v);
+                }
+            }
+            break;
+        }
         case DF_STRING: {
             char** vals = (char**)DYN_LIST_VALS(dl);
             for (int i = 0; i < n; i++) {
@@ -69,8 +88,13 @@ static json listToJsonArray(DYN_LIST* dl) {
             }
             break;
         }
+        default:
+            // An element type this build does not know: emit nulls so the
+            // column keeps its row count instead of vanishing.
+            for (int i = 0; i < n; i++) arr.push_back(nullptr);
+            break;
     }
-    
+
     return arr;
 }
 
@@ -263,6 +287,26 @@ void DgExport::formatValue(char* buf, size_t bufsize, DYN_LIST* dl, int row, int
             snprintf(buf, bufsize, "%d", (int)vals[row]);
             break;
         }
+        case DF_INT64: {
+            int64_t* vals = (int64_t*)DYN_LIST_VALS(dl);
+            snprintf(buf, bufsize, "%lld", (long long)vals[row]);
+            break;
+        }
+        case DF_DOUBLE: {
+            double* vals = (double*)DYN_LIST_VALS(dl);
+            double v = vals[row];
+            if (std::isnan(v)) {
+                snprintf(buf, bufsize, "NaN");
+            } else if (std::isinf(v)) {
+                snprintf(buf, bufsize, v > 0 ? "Inf" : "-Inf");
+            } else {
+                // A double carries up to 17 significant digits; the caller's
+                // precision was chosen for float32, so never truncate below
+                // what round-trips a double.
+                snprintf(buf, bufsize, "%.*g", precision < 17 ? 17 : precision, v);
+            }
+            break;
+        }
         case DF_STRING: {
             char** vals = (char**)DYN_LIST_VALS(dl);
             snprintf(buf, bufsize, "%s", vals[row] ? vals[row] : "");
@@ -274,5 +318,8 @@ void DgExport::formatValue(char* buf, size_t bufsize, DYN_LIST* dl, int row, int
             snprintf(buf, bufsize, "[nested: %d]", nested ? DYN_LIST_N(nested) : 0);
             break;
         }
+        default:
+            snprintf(buf, bufsize, "?");
+            break;
     }
 }

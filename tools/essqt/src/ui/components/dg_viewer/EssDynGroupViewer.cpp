@@ -819,6 +819,14 @@ QString EssDynGroupViewer::formatCellValue(DYN_LIST* dl, int row) const
             char* vals = (char*)DYN_LIST_VALS(dl);
             return QString::number(vals[row]);
         }
+        case DF_INT64: {
+            int64_t* vals = (int64_t*)DYN_LIST_VALS(dl);
+            return QString::number((qlonglong)vals[row]);
+        }
+        case DF_DOUBLE: {
+            double* vals = (double*)DYN_LIST_VALS(dl);
+            return QString::number(vals[row], 'g', 15);
+        }
         case DF_STRING: {
             char** vals = (char**)DYN_LIST_VALS(dl);
             return QString::fromUtf8(vals[row]);
@@ -844,6 +852,8 @@ QString EssDynGroupViewer::getDataTypeString(int dataType) const
         case DF_SHORT: return "short";
         case DF_FLOAT: return "float";
         case DF_CHAR: return "char";
+        case DF_INT64: return "int64";
+        case DF_DOUBLE: return "double";
         case DF_STRING: return "string";
         case DF_LIST: return "list";
         default: return "unknown";
@@ -856,6 +866,8 @@ QIcon EssDynGroupViewer::getTypeIcon(int dataType) const
         case DF_LONG:
         case DF_SHORT:
         case DF_FLOAT:
+        case DF_INT64:
+        case DF_DOUBLE:
             return QIcon::fromTheme("code-variable", QIcon(":/icons/number.png"));
         case DF_STRING:
             return QIcon::fromTheme("text-x-generic", QIcon(":/icons/text.png"));

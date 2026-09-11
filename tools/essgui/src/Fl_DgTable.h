@@ -174,6 +174,18 @@ public:
 	snprintf(valstr, sizeof(valstr), "%d", vals[R]);
       }
       break;
+    case DF_INT64:
+      {
+	int64_t *vals = (int64_t *) DYN_LIST_VALS(dl);
+	snprintf(valstr, sizeof(valstr), "%lld", (long long) vals[R]);
+      }
+      break;
+    case DF_DOUBLE:
+      {
+	double *vals = (double *) DYN_LIST_VALS(dl);
+	snprintf(valstr, sizeof(valstr), "%.15g", vals[R]);
+      }
+      break;
     case DF_STRING:
       {
 	char **vals = (char **) DYN_LIST_VALS(dl);
@@ -189,8 +201,11 @@ public:
 	case DF_SHORT: listtype = "short"; break;
 	case DF_FLOAT: listtype = "float"; break;
 	case DF_CHAR: listtype = "char"; break;
+	case DF_INT64: listtype = "int64"; break;
+	case DF_DOUBLE: listtype = "double"; break;
 	case DF_STRING: listtype = "string"; break;
 	case DF_LIST: listtype = "list"; break;
+	default: listtype = "?"; break;
 	}
 	snprintf(valstr, sizeof(valstr), "%s (%d)", listtype, DYN_LIST_N(vals[R]));
       }

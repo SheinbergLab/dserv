@@ -154,6 +154,23 @@ void DgTable::formatCellValue(char* buf, size_t bufsize, int row, int col) const
             snprintf(buf, bufsize, "%d", (int)vals[row]);
             break;
         }
+        case DF_INT64: {
+            int64_t* vals = (int64_t*)DYN_LIST_VALS(dl);
+            snprintf(buf, bufsize, "%lld", (long long)vals[row]);
+            break;
+        }
+        case DF_DOUBLE: {
+            double* vals = (double*)DYN_LIST_VALS(dl);
+            double v = vals[row];
+            if (v == (long long)v && fabs(v) < 1e15) {
+                snprintf(buf, bufsize, "%.1f", v);
+            } else if (fabs(v) < 0.001 || fabs(v) >= 10000) {
+                snprintf(buf, bufsize, "%.6e", v);
+            } else {
+                snprintf(buf, bufsize, "%.8g", v);
+            }
+            break;
+        }
         case DF_STRING: {
             char** vals = (char**)DYN_LIST_VALS(dl);
             snprintf(buf, bufsize, "%s", vals[row] ? vals[row] : "");
@@ -168,6 +185,8 @@ void DgTable::formatCellValue(char* buf, size_t bufsize, int row, int col) const
                 case DF_SHORT:  typeStr = "short";  break;
                 case DF_FLOAT:  typeStr = "float";  break;
                 case DF_CHAR:   typeStr = "char";   break;
+                case DF_INT64:  typeStr = "int64";  break;
+                case DF_DOUBLE: typeStr = "double"; break;
                 case DF_STRING: typeStr = "string"; break;
                 case DF_LIST:   typeStr = "list";   break;
                 default:        typeStr = "?";      break;
