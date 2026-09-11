@@ -879,7 +879,9 @@ namespace eval df {
         # Datapoint streams per obs (readESS emits three parallel columns
         # per recorded stream):
         #   <ds>NAME   values, concatenated across the obs's records
-        #   <dst>NAME  per-record times, ms from obs onset (e_times' axis)
+        #   <dst>NAME  per-record times, ms from obs onset (e_times' axis);
+        #              whole ms as long, or fractional ms as double when the
+        #              file was read with dslog::wideTypes on
         #   <dsn>NAME  per-record value counts (split <ds> back into records)
         # Returns the three column names {values times counts}; each is a
         # nested list of length n_obs.

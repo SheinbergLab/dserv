@@ -311,10 +311,10 @@ readESS (dlsh `src/lablib/dslog.c`) now emits:
 | column | shape | content |
 |---|---|---|
 | `<ds>NAME` | n_obs × values | decoded values, concatenated per obs (unchanged) |
-| `<dst>NAME` | n_obs × records | per-**record** times, ms from that obs's BEGINOBS (e_times' axis) |
+| `<dst>NAME` | n_obs × records | per-**record** times, ms from that obs's BEGINOBS (e_times' axis); whole ms as `long`, or fractional ms as `double` with `dslog::wideTypes 1` |
 | `<dsn>NAME` | n_obs × records | per-record value counts (split `<ds>` back into records) |
 | `<blob>NAME` | n_records | one DF_CHAR byte vector per JPEG/PPM record, whole file |
-| `<blobt>NAME` | n_records | per-record capture time, ms from the file's first record |
+| `<blobt>NAME` | n_records | per-record capture time, ms from the file's first record (`long`, or fractional-ms `double` with `dslog::wideTypes 1`) |
 | `obs_start_ms` | n_obs | each BEGINOBS, ms from the file's first record |
 
 Blob streams are file-level *on purpose*: log position cannot assign an
