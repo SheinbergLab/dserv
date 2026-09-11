@@ -13,12 +13,15 @@
 
 // Data type constants
 const DF_CHAR = 2, DF_LONG = 3, DF_SHORT = 4, DF_FLOAT = 5, DF_STRING = 7, DF_LIST = 12;
+// 8-byte element types (dg list tags 11 and 12, added 2026)
+const DF_INT64 = 17, DF_DOUBLE = 18;
 const DG_MAGIC = new Uint8Array([0x21, 0x12, 0x36, 0x63]);
 
 // Type name map for display
 const DF_TYPE_NAMES = {
   [DF_CHAR]: 'char', [DF_SHORT]: 'short', [DF_LONG]: 'int32',
-  [DF_FLOAT]: 'float', [DF_STRING]: 'string', [DF_LIST]: 'list'
+  [DF_FLOAT]: 'float', [DF_STRING]: 'string', [DF_LIST]: 'list',
+  [DF_INT64]: 'int64', [DF_DOUBLE]: 'double'
 };
 
 class DynList {
@@ -57,6 +60,8 @@ class BR {
   r32() { const v = this.v.getInt32(this.o, this.le); this.o += 4; return v; }
   r16() { const v = this.v.getInt16(this.o, this.le); this.o += 2; return v; }
   rf() { const v = this.v.getFloat32(this.o, this.le); this.o += 4; return v; }
+  rd() { const v = this.v.getFloat64(this.o, this.le); this.o += 8; return v; }
+  r64() { const v = this.v.getBigInt64(this.o, this.le); this.o += 8; return v; }
   rs(n) {
     const b = this.u8.slice(this.o, this.o + n); this.o += n;
     let e = b.indexOf(0); if (e === -1) e = n;
@@ -65,6 +70,10 @@ class BR {
   ri32(n) { const a = new Int32Array(n); for (let i = 0; i < n; i++) a[i] = this.r32(); return a; }
   ri16(n) { const a = new Int16Array(n); for (let i = 0; i < n; i++) a[i] = this.r16(); return a; }
   rf32(n) { const a = new Float32Array(n); for (let i = 0; i < n; i++) a[i] = this.rf(); return a; }
+  rf64(n) { const a = new Float64Array(n); for (let i = 0; i < n; i++) a[i] = this.rd(); return a; }
+  // int64 as a BigInt64Array: exact, but callers doing arithmetic must
+  // Number() the elements (or the whole array) first.
+  ri64(n) { const a = new BigInt64Array(n); for (let i = 0; i < n; i++) a[i] = this.r64(); return a; }
   ru8(n) { const a = this.u8.slice(this.o, this.o + n); this.o += n; return new Uint8Array(a); }
 }
 
@@ -110,6 +119,8 @@ class DGR {
         case 5: { const n = r.r32(); dl.dataType = DF_SHORT; dl.data = r.ri16(n); break; }
         case 6: { const n = r.r32(); dl.dataType = DF_LONG; dl.data = r.ri32(n); break; }
         case 7: { const n = r.r32(); dl.dataType = DF_FLOAT; dl.data = r.rf32(n); break; }
+        case 11: { const n = r.r32(); dl.dataType = DF_INT64; dl.data = r.ri64(n); break; }
+        case 12: { const n = r.r32(); dl.dataType = DF_DOUBLE; dl.data = r.rf64(n); break; }
         case 3: {
           const n = r.r32(); dl.dataType = DF_STRING;
           const s = []; for (let i = 0; i < n; i++) { const l = r.r32(); s.push(r.rs(l)); }
