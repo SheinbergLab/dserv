@@ -24,6 +24,7 @@ package require em
 tcl::tm::add $dspath/lib
 package require df 2.0
 package require settingsdb
+package require settings
 
 # Same store essconf uses; sqlite handles the cross-subprocess sharing.
 settingsdb::init [file join $dspath db settings.db]
@@ -43,16 +44,6 @@ set current_datafile ""
 # Export configuration
 variable export_destination ""
 variable auto_export_enabled 0
-
-# Wide datafile types (dslog::wideTypes): when on, .ess -> dg conversion
-# keeps DSERV_DOUBLE as double and DSERV_INT64 as int64 instead of
-# narrowing to float/long, and <dst>/<blobt> keep their microsecond
-# fraction.  OFF by default: the resulting .dgz needs dlsh >= 0.17,
-# dgread >= 1.2.2 (Python/R), a rebuilt MATLAB MEX and rebuilt dgview to
-# read, and older readers abort on it.  The .ess keeps full precision
-# regardless, so a file logged with this off can be re-converted later.
-# Set with `dservSet df/wide_datafiles 1`; persisted like the export config.
-variable wide_datafiles 0
 
 # Disable exit
 proc exit {args} { error "exit not available for this subprocess" }
@@ -322,14 +313,6 @@ proc process_export_destination {dpoint data} {
         puts "dfconf: Export destination cleared"
         configure_auto_export "" 0
     }
-}
-
-proc process_wide_datafiles {dpoint data} {
-    if {![string is boolean -strict $data]} {
-        puts "dfconf: ignoring df/wide_datafiles \"$data\" (want 0 or 1)"
-        return
-    }
-    configure_wide_datafiles [expr {!!$data}]
 }
 
 # ============================================================================
@@ -1473,57 +1456,42 @@ proc get_export_config {} {
 }
 
 # ============================================================================
-# Wide Datafile Types
+# Wide Datafile Types (a declared rig setting: shows in the settings gear)
 # ============================================================================
 
-# Turn dslog's wide-type conversion on or off for every subsequent
-# dslog::read / dslog::readESS in this subprocess.  Guarded on the command
-# existing so this config still loads against a dlsh.zip older than 0.17;
-# in that case the setting is recorded but reported as unsupported.
-proc configure_wide_datafiles {enabled} {
-    variable wide_datafiles
-
+# -apply target: turn dslog's wide-type conversion on or off for every
+# subsequent dslog::read / dslog::readESS in this subprocess.  Guarded on
+# the command existing so this config still loads against a dlsh.zip older
+# than 0.17; the knob then reads as set but df/health says it is not in
+# effect.
+proc apply_wide_datafiles {enabled} {
     set enabled [expr {!!$enabled}]
-    set supported [expr {[info commands ::dslog::wideTypes] ne ""}]
-
-    if {$supported} {
+    if {[info commands ::dslog::wideTypes] ne ""} {
         ::dslog::wideTypes $enabled
-        set active $enabled
+        puts "dfconf: Wide datafile types [expr {$enabled ? "enabled" : "disabled"}]"
+        dservSet df/health "ok wide datafile types [expr {$enabled ? "on" : "off"}]"
+    } elseif {$enabled} {
+        puts "dfconf: wide datafiles requested but this dlsh has no\
+              dslog::wideTypes (need dlsh >= 0.17); converting narrow"
+        dservSet df/health "error wide_datafiles is on but this dlsh has no\
+                            dslog::wideTypes (need dlsh >= 0.17); converting narrow"
     } else {
-        set active 0
-        if {$enabled} {
-            puts "dfconf: wide datafiles requested but this dlsh has no\
-                  dslog::wideTypes (need dlsh >= 0.17); converting narrow"
-        }
-    }
-    set wide_datafiles $enabled
-
-    puts "dfconf: Wide datafile types [expr {$active ? "enabled" : "disabled"}]"
-
-    dservSet df/wide_config [dict create \
-        enabled $enabled active $active supported $supported]
-
-    # Persist across dserv restarts, same as the export config.
-    catch {
-        ::settingsdb::save df_wide_datafiles [dict create enabled $enabled]
+        dservSet df/health "ok"
     }
 }
 
-proc get_wide_config {} {
-    variable wide_datafiles
-    set supported [expr {[info commands ::dslog::wideTypes] ne ""}]
-    set active [expr {$supported ? [::dslog::wideTypes] : 0}]
-
-    set json [yajl create #auto]
-    $json map_open
-    $json string "enabled" bool $wide_datafiles
-    $json string "active" bool $active
-    $json string "supported" bool $supported
-    $json map_close
-    set result [$json get]
-    $json delete
-    return $result
-}
+settings::declare df wide_datafiles -default 0 -type bool \
+    -doc "keep 8-byte datapoints at full width when a .ess is converted
+to a dg: DSERV_DOUBLE stays double and DSERV_INT64 stays int64 instead
+of being narrowed to float/long, and <dst>/<blobt> keep their
+microsecond fraction. OFF (the default) writes the classic format that
+every reader opens. On needs every consumer of this rig's .dgz files
+to be current -- dlsh >= 0.17, dgread >= 1.2.2 (Python/R), a rebuilt
+MATLAB MEX, a rebuilt dgview -- because older readers abort on the
+new column types. The .ess itself keeps full precision either way, so
+a file converted narrow can be re-converted wide later. Takes effect
+on the next conversion." \
+    -apply {::apply_wide_datafiles}
 
 
 
@@ -2170,10 +2138,6 @@ dpointSetScript    ess/datafile_path process_ess_datafile
 dservAddExactMatch df/export_destination
 dpointSetScript    df/export_destination process_export_destination
 
-# Subscribe to the wide datafile switch
-dservAddExactMatch df/wide_datafiles
-dpointSetScript    df/wide_datafiles process_wide_datafiles
-
 # Restore the persisted export config (saved by configure_auto_export).
 # Runs before the touches so a retained df/export_destination, when one
 # exists, re-applies on top and stays authoritative.
@@ -2185,22 +2149,19 @@ catch {
     unset -nocomplain _exp
 }
 
-# Restore the persisted wide-type setting (saved by configure_wide_datafiles).
-# Always applied, so the subprocess starts in a known state even when the
-# store is empty (default off).
-catch {
-    set _wide [::settingsdb::load df_wide_datafiles]
-    configure_wide_datafiles \
-        [expr {$_wide ne "" ? [dict get $_wide enabled] : 0}]
-    unset -nocomplain _wide
+# Wide datafile types: settings::get reads local/rig.tcl (a persisted put
+# lands there), and -apply only fires on a CHANGE, so apply the effective
+# value once here to put dslog in a known state at boot.
+if {[catch { apply_wide_datafiles [settings::get df wide_datafiles] } _wide_err]} {
+    puts "dfconf: wide_datafiles setting failed: $_wide_err"
 }
+unset -nocomplain _wide_err
 
 # Touch to get current values
 catch {dservTouch ess/system_path}
 catch {dservTouch ess/project}
 catch {dservTouch ess/data_dir}
 catch {dservTouch df/export_destination}
-catch {dservTouch df/wide_datafiles}
 
 # Clean up old download files
 catch {cleanup_downloads 1}
