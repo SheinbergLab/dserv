@@ -75,6 +75,14 @@ class BR {
   // Number() the elements (or the whole array) first.
   ri64(n) { const a = new BigInt64Array(n); for (let i = 0; i < n; i++) a[i] = this.r64(); return a; }
   ru8(n) { const a = this.u8.slice(this.o, this.o + n); this.o += n; return new Uint8Array(a); }
+  // Extension envelope (dg tag 250): [int32 ext_id][int32 length][payload].
+  // Nothing in the viewers understands any ext_id yet, so step over it; the
+  // point of the envelope is that an unknown one is not a fatal tag.
+  skipExt() {
+    const id = this.r32(); const n = this.r32();
+    if (n < 0 || this.o + n > this.u8.length) throw new Error('corrupt extension ' + id);
+    this.o += n;
+  }
 }
 
 // DG file reader
@@ -92,6 +100,7 @@ class DGR {
         if (v !== 1.0) { v = r.v.getFloat32(r.o, false); if (v !== 1.0) throw new Error('Bad version'); r.le = false; }
         r.o += 4;
       } else if (t === 1) { this._rg(r, dg); }
+      else if (t === 250) r.skipExt();
       else throw new Error('tag ' + t);
     }
     return dg;
@@ -103,6 +112,7 @@ class DGR {
       if (t === 0) { const n = r.r32(); dg.name = r.rs(n); }
       else if (t === 1) r.r32();
       else if (t === 2) { const dl = new DynList(); this._rl(r, dl); dg.lists.push(dl); }
+      else if (t === 250) r.skipExt();
       else throw new Error('gtag ' + t);
     }
   }
@@ -135,6 +145,7 @@ class DGR {
           }
           dl.data = subs; break;
         }
+        case 250: r.skipExt(); break;
         default: throw new Error('ltag ' + t);
       }
     }
