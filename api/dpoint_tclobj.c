@@ -63,7 +63,25 @@ Tcl_Obj *dpoint_to_tclobj(Tcl_Interp *interp,
       elt = Tcl_NewDoubleObj(*p++);
       obj = Tcl_NewListObj(1, &elt);
       for (i = 1; i < n; i++) {
-	elt = Tcl_NewIntObj(*p++);
+	elt = Tcl_NewDoubleObj(*p++);	/* was Tcl_NewIntObj: truncated every
+					   element after the first */
+	Tcl_ListObjAppendElement(interp, obj, elt);
+      }
+    }
+    break;
+  case DSERV_INT64:
+    /* Mirrors src/Dataserver.cpp; this copy had no case, so an INT64
+       datapoint came back as a NULL object. */
+    if (dpoint->data.len == sizeof(int64_t)) {
+      obj = Tcl_NewWideIntObj(*((int64_t *) dpoint->data.buf));
+    }
+    else {
+      int64_t *p = (int64_t *) dpoint->data.buf;
+      n = dpoint->data.len/sizeof(int64_t);
+      elt = Tcl_NewWideIntObj(*p++);
+      obj = Tcl_NewListObj(1, &elt);
+      for (i = 1; i < n; i++) {
+	elt = Tcl_NewWideIntObj(*p++);
 	Tcl_ListObjAppendElement(interp, obj, elt);
       }
     }
@@ -99,6 +117,10 @@ Tcl_Obj *dpoint_to_tclobj(Tcl_Interp *interp,
     }
     break;
   case DSERV_DG:
+  case DSERV_MSGPACK:
+  case DSERV_ARROW:
+  case DSERV_JPEG:
+  case DSERV_PPM:
     obj = Tcl_NewByteArrayObj(dpoint->data.buf, dpoint->data.len);
     break;
   case DSERV_SCRIPT:

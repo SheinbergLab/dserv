@@ -110,9 +110,12 @@ namespace eval em {
 
     # ---- em/time anchor ---------------------------------------------------
     #
-    # em/time is published as a double, but the datafile cannot hold one:
-    # dslog narrows every DSERV_DOUBLE to a 4-byte float when it builds the
-    # dg (no double dg type).  A float32 keeps ~7 digits, so the resolution
+    # em/time is published as a double, but by default the datafile does
+    # not hold one: dslog narrows every DSERV_DOUBLE to a 4-byte float when
+    # it builds the dg unless `dslog::wideTypes 1` is set (dlsh >= 0.17,
+    # which added double/int64 dg types; readers older than that abort on
+    # such a file, so it is opt-in per rig).  A float32 keeps ~7 digits, so
+    # the resolution
     # of a logged time is set by its magnitude: 0.06 ms at 15 min into a
     # session, 0.24 ms at 1 h, 0.5 ms at 2 h -- and the saccade detector
     # divides by per-sample timestamp differences (8 ms), so that is a

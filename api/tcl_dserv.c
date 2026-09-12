@@ -142,9 +142,11 @@ int dserv_send_command(ClientData cd, Tcl_Interp *interp,
     data = (void *) Tcl_GetString(objv[4]);
     len = strlen(data);
   }
-  /* binary types */
+  /* binary types: payload is objv[4]; this used to read the length of
+     objv[2] (the varname) and leave data uninitialized */
   else {
-    if (Tcl_GetByteArrayFromObj(objv[2], &len) != TCL_OK)
+    data = (void *) Tcl_GetByteArrayFromObj(objv[4], &len);
+    if (!data)
       return TCL_ERROR;
   }
 
@@ -181,9 +183,11 @@ int dserv_write_command(ClientData cd, Tcl_Interp *interp,
     data = (void *) Tcl_GetString(objv[4]);
     len = strlen(data);
   }
-  /* binary types */
+  /* binary types: payload is objv[4]; this used to read the length of
+     objv[2] (the varname) and leave data uninitialized */
   else {
-    if (Tcl_GetByteArrayFromObj(objv[2], &len) != TCL_OK)
+    data = (void *) Tcl_GetByteArrayFromObj(objv[4], &len);
+    if (!data)
       return TCL_ERROR;
   }
 
