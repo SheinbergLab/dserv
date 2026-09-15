@@ -353,7 +353,10 @@ namespace eval ess {
     }
 
     # Test the current pose against every active region and publish/wake ONLY
-    # on a change of state. Returns the new bitmask.
+    # on a change of state. Returns 1 if the state CHANGED -- i.e. a wake is
+    # owed -- and 0 otherwise. (It returned the bitmask before; no caller ever
+    # read it, and `defer` below needs an answer to a different question.
+    # roam_regions is the accessor for the mask.)
     #
     # wake 0 SEEDS instead: the states are recomputed and published, but no
     # entry is latched and the state machine is not woken. roam_start uses it
@@ -361,7 +364,12 @@ namespace eval ess {
     # register as an arrival nobody made -- and so that a do_update does not
     # re-enter the state machine from inside the action that called
     # roam_start.
-    proc roam_test_regions { ts { wake 1 } } {
+    #
+    # defer 1 does everything wake 1 does EXCEPT the do_update, and reports
+    # that one is owed so the caller can place it. roam_step needs the states
+    # fresh before it publishes the cursor, and the wake to land after -- see
+    # the note there; deferring is what makes both true at once.
+    proc roam_test_regions { ts { wake 1 } { defer 0 } } {
         variable roam_region
         variable roam_region_states
         variable roam_entered_win
@@ -383,7 +391,7 @@ namespace eval ess {
             if { $in } { set states [expr {$states | (1 << $win)}] }
         }
 
-        if { $states == $roam_region_states && $wake } { return $states }
+        if { $states == $roam_region_states && $wake } { return 0 }
 
         set changed [expr {$states ^ $roam_region_states}]
         set entered [expr {$changed & $states}]
@@ -391,7 +399,7 @@ namespace eval ess {
 
         if { !$wake } {
             dservSet ess/roam/regions "$states,0"
-            return $states
+            return 0
         }
 
         # Latch the first ENTRY of this bout. Lowest window index wins when
@@ -411,8 +419,11 @@ namespace eval ess {
         dservSet ess/roam/regions "$states,$changed"
 
         # THE one place this module wakes the state machine. See the header.
+        # Under `defer` the caller does it instead -- still the only wake,
+        # just placed by whoever needed the ordering.
+        if { $defer } { return 1 }
         do_update
-        return $states
+        return 1
     }
 
     ########################################################################
@@ -460,9 +471,29 @@ namespace eval ess {
         # position is constant, and republishing it at the tick rate would
         # write hundreds of identical samples into the trajectory record.
         if { $moved > 0.0 } { roam_publish_pose $ts }
-        roam_publish_pointer $ts
 
-        roam_test_regions $ts
+        # REGIONS BEFORE THE POINTER, WAKE AFTER IT. The order is the whole
+        # point of this sequence and all three parts are load-bearing.
+        #
+        # roam_publish_pointer reports in_band from roam_region_states, and
+        # roam_test_regions is what recomputes it -- so testing second made
+        # every pointer carry the band of the PREVIOUS position. One tick of
+        # lag is invisible while the agent keeps moving, and permanent when
+        # it does not: on the step that enters a patch, the test wakes the
+        # state machine, the protocol commits the response and stops the
+        # roam, and roam_step returns early ever after. The corrected band=1
+        # publish never happened, so a stim lighting its cursor on capture
+        # never lit it on the capture that ENDED the trial -- the one case
+        # the affordance exists for. (joystick/forage, 2026-09-15.)
+        #
+        # The wake stays last because do_update runs the state machine
+        # SYNCHRONOUSLY: an action may call roam_stop or roam_pointer_hide,
+        # and a publish after that would resurrect a cursor the protocol had
+        # just taken down. Deferring it is what lets the pointer be correct
+        # without giving the state machine the last word on it.
+        set wake [roam_test_regions $ts 1 1]
+        roam_publish_pointer $ts
+        if { $wake } { do_update }
     }
 
     # The trajectory record. DSERV_FLOAT triple {x y t}, degrees and ms,
