@@ -92,8 +92,8 @@ approx "over-draw clamps at v_max"         $vx 16.0 1e-9
 lassign [::ess::sling_velocity 0.0 1.5] vx vy
 approx "half draw up launches DOWN at v_max/2" $vy -8.0 1e-9
 
-# pin to the dlsh sling_sim copy when it is on disk beside this checkout
-set sim [file normalize [file join $::REPO .. dlsh vfs lib sling_sim sling_sim.tcl]]
+# pin to the paradigm's sling_sim (~/systems/ess/lib) when it is on disk
+set sim [file normalize [file join $env(HOME) systems ess lib sling_sim-1.0.tm]]
 catch { source /usr/local/dlsh/dlsh_setup.tcl }
 if { [file exists $sim] && ![catch { package require dlsh }] && ![catch { source $sim } serr] } {
     set spec [dict merge [sling_sim::default_spec] {reach 3.0 v_max 16.0}]

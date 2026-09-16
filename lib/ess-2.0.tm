@@ -91,6 +91,34 @@ namespace eval ess {
     }
 
     #
+    # The source text of a paradigm library from <systems>/<project>/lib,
+    # for shipping to the stim host (configure_stim -libs). Resolves
+    # <name>-<ver>.tm, highest version wins; errors if there is none. A
+    # plain proc (not a method) so a headless harness can check what would
+    # be shipped without a stim connection.
+    #
+    proc stim_lib_script { name } {
+        variable system_path
+        variable project
+        set dir [file join $system_path $project lib]
+        set cands [glob -nocomplain -directory $dir "${name}-*.tm"]
+        if { ![llength $cands] } {
+            error "no ${name}-<version>.tm under $dir"
+        }
+        set best ""; set bestv ""
+        foreach c $cands {
+            set v [string range [file rootname [file tail $c]] [string length "${name}-"] end]
+            if { $best eq "" || [package vcompare $v $bestv] > 0 } {
+                set best $c; set bestv $v
+            }
+        }
+        set f [open $best]
+        set script [read $f]
+        close $f
+        return $script
+    }
+
+    #
     # Strict stim mode accessors. The variable itself, and the ESS_STIM_REQUIRED
     # default behind it, are documented at its declaration further down.
     #
@@ -312,8 +340,26 @@ oo::class create System {
         ::ess::ess_debug "Added variant $name with method $method" "system"
     }
 
-    method configure_stim { host } {
+    # configure_stim host ?-libs {name ...}?
+    #
+    # -libs names PARADIGM LIBRARIES from <systems>/<project>/lib
+    # (<name>-<ver>.tm) that the stim script `package require`s. They are
+    # shipped to the stim host the way the stim script itself is -- read
+    # here, evaluated there -- BEFORE the stim script is sourced, so a
+    # library that lives with its paradigm (physics the stim must run at
+    # trial time, e.g. sling_sim) needs no dlsh.zip rebuild and reaches a
+    # remote stim2 that has no ~/systems at all. Each push forgets the
+    # package first so a re-load carries the edited code. A library that
+    # fails to evaluate is reported exactly as a failing stim script is.
+    method configure_stim { host args } {
         variable current
+        set stim_libs {}
+        foreach { k v } $args {
+            switch -- $k {
+                -libs   { set stim_libs $v }
+                default { error "configure_stim: unknown option '$k'" }
+            }
+        }
         foreach var "screen_halfx screen_halfy screen_w screen_h refresh_rate frame_duration" {
             my add_variable $var
         }
@@ -583,6 +629,32 @@ oo::class create System {
         # idempotent pattern the obs/camera handlers use.
         dservAddExactMatch stim/tagevt
         dpointSetScript stim/tagevt ::ess::stim_tag_evt
+
+        # ship the paradigm libraries the stim script will require (see the
+        # method comment); a failure here is a failed stim load
+        foreach lib $stim_libs {
+            if { [catch { set libscript [::ess::stim_lib_script $lib] } msg] } {
+                set summary "stimulus library $lib for [set ::ess::project]/$_systemname:\
+ $msg -- the stim script will not find it"
+                dservSet ess/stim_script_error $summary
+                if { [::ess::stim_required] } { error $summary }
+                ::ess::publish_load_report warning configure_stim \
+                    $_systemname $_protocolname $_variantname $summary $msg
+                continue
+            }
+            rmtSend "catch {package forget $lib}"
+            set result [rmtSend $libscript]
+            if { [string match "!TCL_ERROR*" $result] } {
+                set msg [string trim [string range $result 11 end]]
+                set summary "stimulus library $lib failed to load on $host: $msg"
+                dservSet ess/stim_script_error $summary
+                if { [::ess::stim_required] } { error $summary }
+                ::ess::publish_load_report warning configure_stim \
+                    $_systemname $_protocolname $_variantname $summary $msg
+            } else {
+                ::ess::ess_info "Shipped stimulus library $lib to $host" "stim"
+            }
+        }
 
         # source this protocol's stim functions
         set stimfile [::ess::resolve_file [file join [set ::ess::project] \
