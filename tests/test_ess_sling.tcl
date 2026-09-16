@@ -34,6 +34,9 @@ set ::UPDATES 0
 
 set ::CLOCK 1000000
 proc now {} { return $::CLOCK }
+# the stim-side bridge switch the touch source flips (rmtSend is ESS's)
+set ::RMT {}
+proc rmtSend { script } { lappend ::RMT $script }
 proc advance_ms { ms } { incr ::CLOCK [expr {int($ms*1000)}] }
 
 # ::ess::stick_gain lives in ess_transports; copied verbatim (as
@@ -283,6 +286,18 @@ check  "commit carries the touch source" $src touch
 approx "committed dx" $dx -2.5 1e-6
 check  "launches up-right" [expr {$vx > 0 && $vy > 0}] 1
 check  "release datapoint names touch" [lindex [split $::DP(ess/sling/release) ,] 5] touch
+
+puts "\n... the touch source switches the stim's drag bridge on, and deinit off:"
+set ::RMT {}
+::ess::sling_init -sources touch -anchor {0 0}
+check "init asks the bridge for drags" [expr {[lsearch -glob $::RMT {*mouse_bridge_drag 1*}] >= 0}] 1
+set ::RMT {}
+::ess::sling_deinit
+check "deinit switches drags off and clears the down flag" \
+    [expr {[lsearch -glob $::RMT {*mouse_bridge_drag 0*mouse_bridge_down 0*}] >= 0}] 1
+set ::RMT {}
+::ess::sling_init -sources mouse
+check "a mouse-only sling never asks the bridge for drags" [lsearch -glob $::RMT {*mouse_bridge_drag 1*}] -1
 
 puts "\n... the range is read at init; a missing screen datapoint is refused, not guessed:"
 unset ::DP(ess/screen_w)

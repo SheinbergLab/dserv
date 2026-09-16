@@ -516,12 +516,25 @@ oo::class create System {
             # mtouch/event with the touchscreen's own event codes (0 PRESS,
             # 1 DRAG, 2 RELEASE), so anything reading the touchscreen --
             # touch windows, the dial's touch source, the sling -- works
-            # unchanged here. DRAG is emitted from stim2's onMouseMove only
-            # while the button is down, at most once per pixel of motion.
+            # unchanged here.
+            #
+            # DRAG is OPT-IN: stim2 calls onMouseMove on every cursor
+            # motion, so the bridge stays inert (one variable test) unless a
+            # consumer that needs drags has set ::mouse_bridge_drag (the
+            # sling's touch source does, and clears it on deinit). Even
+            # then it sends only while the button is down and only when the
+            # pixel changed. The consumer's deinit also clears the down
+            # flag, so a release lost to a focus change cannot leave the
+            # bridge streaming.
             namespace inscope :: {
                 set ::mouse_bridge_down 0
+                set ::mouse_bridge_drag 0
+                set ::mouse_bridge_lx -1
+                set ::mouse_bridge_ly -1
                 proc onMousePress {} {
                     set ::mouse_bridge_down 1
+                    set ::mouse_bridge_lx $::MouseXPos
+                    set ::mouse_bridge_ly $::MouseYPos
                     dl_local coords [dl_create short $::MouseXPos $::MouseYPos 0]
                     dserv_send mtouch/event $coords
                 }
@@ -531,7 +544,10 @@ oo::class create System {
                     dserv_send mtouch/event $coords
                 }
                 proc onMouseMove { x y } {
-                    if { !$::mouse_bridge_down } return
+                    if { !$::mouse_bridge_drag || !$::mouse_bridge_down } return
+                    if { $x == $::mouse_bridge_lx && $y == $::mouse_bridge_ly } return
+                    set ::mouse_bridge_lx $x
+                    set ::mouse_bridge_ly $y
                     dl_local coords [dl_create short $x $y 1]
                     dserv_send mtouch/event $coords
                 }
