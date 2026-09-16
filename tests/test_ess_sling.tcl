@@ -95,6 +95,7 @@ approx "half draw up launches DOWN at v_max/2" $vy -8.0 1e-9
 # pin to the paradigm's sling_sim (~/systems/ess/lib) when it is on disk
 set sim [file normalize [file join $env(HOME) systems ess lib sling_sim-1.0.tm]]
 catch { source /usr/local/dlsh/dlsh_setup.tcl }
+lappend ::auto_path [file join $env(HOME) src dlsh vfs lib b2world]
 if { [file exists $sim] && ![catch { package require dlsh }] && ![catch { source $sim } serr] } {
     set spec [dict merge [sling_sim::default_spec] {reach 3.0 v_max 16.0}]
     set same 1
