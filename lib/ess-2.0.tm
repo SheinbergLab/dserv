@@ -8,6 +8,7 @@ package require dslog
 package require ess_paths
 package require ess_dial
 package require ess_roam   ;# free-locomotion response mode (foraging, search)
+package require ess_sling  ;# slingshot response mode (draw + release -> launch vector)
 package require ess_transports ;# input routing: joystick, buttons, stick shaping, slider
 package require settings   ;# rig-declared input routing (see joystick transport)
 package require qpcs 3.43 ;# stim-event sync w/ flipwall+tag header (evtPack v2), variable-length binary push
@@ -510,13 +511,28 @@ oo::class create System {
                 }
             }
 
+            # The stim window's mouse stands in for a touchscreen (the dev
+            # Mac has no input module): press/drag/release land on
+            # mtouch/event with the touchscreen's own event codes (0 PRESS,
+            # 1 DRAG, 2 RELEASE), so anything reading the touchscreen --
+            # touch windows, the dial's touch source, the sling -- works
+            # unchanged here. DRAG is emitted from stim2's onMouseMove only
+            # while the button is down, at most once per pixel of motion.
             namespace inscope :: {
+                set ::mouse_bridge_down 0
                 proc onMousePress {} {
+                    set ::mouse_bridge_down 1
                     dl_local coords [dl_create short $::MouseXPos $::MouseYPos 0]
                     dserv_send mtouch/event $coords
                 }
                 proc onMouseRelease {} {
+                    set ::mouse_bridge_down 0
                     dl_local coords [dl_create short $::MouseXPos $::MouseYPos 2]
+                    dserv_send mtouch/event $coords
+                }
+                proc onMouseMove { x y } {
+                    if { !$::mouse_bridge_down } return
+                    dl_local coords [dl_create short $x $y 1]
                     dserv_send mtouch/event $coords
                 }
             }
