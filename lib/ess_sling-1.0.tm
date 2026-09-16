@@ -70,11 +70,25 @@
 #                        the one that belongs in the data file
 #
 # The launch mapping is v = -pull/reach * v_max, clamped at full draw. It is
-# duplicated in dlsh's sling_sim (the physics package the loader and stim
-# use), because this file cannot depend on dlsh.zip; tests/test_ess_sling.tcl
-# pins the two copies together.
+# duplicated in the paradigm's sling_sim (~/systems/ess/lib), because this
+# file cannot depend on it; tests/test_ess_sling.tcl pins the two copies
+# together.
+#
+# WHICH SOURCE ANSWERS is the rig's to say, as it is for the dial:
+#
+#     setting sling sources touch
+#     setting sling sources {stick touch}
+#
+# declared on the settings API (`sling sources`, the gear on the Sling
+# panel), validated where it is written, applied live -- a bound sling
+# re-initialises on the new sources without a system reload. A protocol's
+# own -sources still wins over the binding (for a task where the transport
+# IS the experiment); empty means "this rig declares nothing" and the module
+# default (touch) applies. ess/sling/source_origin says which of the three
+# is in effect and ess/sling/bound what the rig declared.
 #
 
+package require settings   ;# rig-declared sling routing (see `setting sling sources`)
 package provide ess_sling 1.0
 
 namespace eval ess {
@@ -82,8 +96,14 @@ namespace eval ess {
     variable sling_pi 3.14159265358979
 
     # --- configuration (sling_init) ---------------------------------------
-    variable sling_sources        {mouse}
+    variable sling_sources        {touch}
     variable sling_valid_sources  {stick mouse touch}
+    # old / device spellings accepted at every door; docs/input_vocabulary.md
+    variable sling_source_aliases
+    array set sling_source_aliases { analog stick  astick stick  touchscreen touch }
+    variable sling_bound_sources  {}       ;# what the rig declared
+    variable sling_source_origin  default  ;# protocol | rig | default
+    variable sling_init_args      {}       ;# the last init, minus -sources, for a live rebind
     variable sling_anchor_x       0.0
     variable sling_anchor_y       0.0
     variable sling_reach          3.0     ;# dva of pull at full draw
@@ -154,6 +174,122 @@ namespace eval ess {
     variable sling_pub_dx         0.0
     variable sling_pub_dy         0.0
     variable sling_shown          0
+
+    ########################################################################
+    # the rig binding, DECLARED (the dial's arrangement, see ess_dial)
+    ########################################################################
+
+    proc sling_source_norm { s } {
+        variable sling_source_aliases
+        return [expr {[info exists sling_source_aliases($s)]
+                      ? $sling_source_aliases($s) : $s}]
+    }
+
+    # Normalize a source list; errors on an unknown word with a message that
+    # teaches. Empty stays empty ("the rig declares nothing").
+    proc sling_sources_norm { v } {
+        variable sling_valid_sources
+        set v [string trim $v]
+        if { $v eq "" } { return "" }
+        set out {}
+        foreach s $v {
+            set s [sling_source_norm $s]
+            if { $s in {rate ring sectors} } {
+                error "sling sources: `$s` is a dial READING of the stick; the\
+                       sling reads the deflection directly -- use `stick`"
+            }
+            if { $s ni $sling_valid_sources } {
+                error "sling sources: unknown source '$s' -- want any of:\
+                       [join $sling_valid_sources { }] (astick/analog = stick)"
+            }
+            if { $s ni $out } { lappend out $s }
+        }
+        return $out
+    }
+
+    # What the rig declared. Called with no arguments it REPORTS.
+    proc sling_bind { args } {
+        variable sling_bound_sources
+        if { [llength $args] == 0 } { return $sling_bound_sources }
+        set sling_bound_sources [sling_sources_norm [lindex $args 0]]
+        dservSet ess/sling/bound $sling_bound_sources
+        return $sling_bound_sources
+    }
+
+    settings::declare sling sources -default "" \
+        -validate ::ess::sling_sources_norm \
+        -candidates sling \
+        -doc "which inputs draw the sling: any of touch (the touchscreen; on\
+              the dev Mac the stim window's mouse), mouse (dserv's mouse\
+              reader), stick (the analog stick's deflection IS the pull;\
+              astick/analog are old names). Applied live. Empty = the rig\
+              declares nothing and the module default (touch) applies. A\
+              protocol's own -sources still wins over this" \
+        -apply {::ess::sling_bind_from_settings}
+
+    # Empty CLEARS the binding (unlike the dial, nothing else here binds by
+    # hand, so clearing the knob must be the undo of setting it), then a
+    # bound sling that is live re-initialises on the new sources.
+    proc sling_bind_from_settings { args } {
+        if { [catch { ::settings::get sling sources } v] } { return }
+        sling_bind [string trim $v]
+        sling_rebind_live
+        return
+    }
+
+    # Re-run the last init on the current binding. A protocol that named its
+    # own sources is left alone. Costs the current draw, if one is in
+    # progress -- changing the input device mid-trial is already a disruption.
+    proc sling_rebind_live {} {
+        variable sling_active
+        variable sling_source_origin
+        variable sling_init_args
+        if { !$sling_active || $sling_source_origin eq "protocol" } { return }
+        sling_init {*}$sling_init_args
+        return
+    }
+
+    # Apply whatever the rig declared, once, at load (`get` lazy-loads the
+    # file). catch: a bare interp with no rig file is a normal way to load.
+    catch { sling_bind_from_settings }
+
+    # What could answer a sling on this rig, right now -- the gear's picker
+    # (::ess::candidates sling). Same shape as dial_source_candidates: each
+    # entry names the datapoint it reads and when that last moved.
+    proc sling_source_candidates {} {
+        set spec [list \
+            [list touch mtouch/event \
+                 "a finger on the ball, dragged back, lifted (the touchscreen;\
+                  on the dev Mac the stim window's mouse)" \
+                 "no touchscreen is publishing (the input subprocess owns it)"] \
+            [list mouse mouse/event \
+                 "press, drag back, release -- dserv's mouse reader" \
+                 "no mouse reader -- a dedicated mouse is opt-in BY NAME\
+                  (see the input settings)"] \
+            [list stick slider/position \
+                 "the deflection IS the pull: push down-left, the ball flies\
+                  up-right; release commits" \
+                 "the slider is not publishing -- a calibrated analog stick\
+                  (slider/full_scale) is needed"]]
+        set out {}
+        foreach e $spec {
+            lassign $e route dp what hint
+            set since ""
+            catch { set since [dial_dp_since $dp] }
+            if { $since eq "" } {
+                set status unresolved
+                set detail "$what -- nothing publishes $dp yet; $hint"
+            } else {
+                set status ok
+                set detail "$what -- $dp, $since"
+            }
+            lappend out [dict create route $route label $route detail $detail \
+                             status $status durable 1 selectable 1 multi 1 \
+                             conflicts {} address $dp \
+                             note "ticked ones draw; the first to let go launches"]
+        }
+        return $out
+    }
 
     ########################################################################
     # the one mapping: pull -> launch velocity
@@ -574,8 +710,19 @@ namespace eval ess {
         variable sling_active
 
         # Defaults on every init (see ess_roam for why every variable
-        # assigned here must be declared above).
-        set sling_sources     {mouse}
+        # assigned here must be declared above). Sources default to the
+        # RIG's binding when it has one, so a protocol need not -- and
+        # should not -- name hardware.
+        variable sling_bound_sources
+        variable sling_source_origin
+        variable sling_init_args
+        if { [llength $sling_bound_sources] } {
+            set sling_sources       $sling_bound_sources
+            set sling_source_origin rig
+        } else {
+            set sling_sources       {touch}
+            set sling_source_origin default
+        }
         set sling_anchor_x    0.0
         set sling_anchor_y    0.0
         set sling_reach       3.0
@@ -597,9 +744,15 @@ namespace eval ess {
         variable sling_pointer_down; set sling_pointer_down 0
 
         set anchor {}
+        # kept for a live rebind (minus -sources, which the binding supplies)
+        set sling_init_args {}
+        foreach { k v } $args {
+            if { $k ne "-sources" } { lappend sling_init_args $k $v }
+        }
         foreach { k v } $args {
             switch -- $k {
-                -sources     { set sling_sources $v }
+                -sources     { set sling_sources [sling_sources_norm $v]
+                               set sling_source_origin protocol }
                 -anchor      { set anchor $v }
                 -reach       { set sling_reach       [expr {double($v)}] }
                 -v_max       { set sling_v_max       [expr {double($v)}] }
@@ -620,25 +773,16 @@ namespace eval ess {
             }
         }
 
-        set sling_sources [lmap s $sling_sources {
-            switch -exact -- $s {
-                astick - rate - ring - sectors {
-                    error "::ess::sling_init: `$s` is a dial/roam reading; the\
-                           sling reads the stick's deflection directly -- use\
-                           `stick`"
-                }
-                analog { set s stick }
-                default { set s }
-            }
-        }]
-        foreach s $sling_sources {
-            if { $s ni $sling_valid_sources } {
-                error "::ess::sling_init: unknown source '$s'\
-                       (want [join $sling_valid_sources |])"
-            }
-        }
         if { ![llength $sling_sources] } {
             error "::ess::sling_init: no sources"
+        }
+        # A stick needs the rig's full-scale deflection to mean anything.
+        # Read it here when the protocol did not say, so a rig that switches
+        # to the stick from the gear works without a protocol change.
+        if { "stick" in $sling_sources && $sling_scale <= 0.0 } {
+            if { [dservExists slider/full_scale] } {
+                catch { set sling_scale [expr {double([dservGet slider/full_scale])}] }
+            }
         }
         if { $sling_release >= $sling_engage } {
             error "::ess::sling_init: -release ($sling_release) must be below\
@@ -680,6 +824,8 @@ namespace eval ess {
         set sling_active 1
         dservSet ess/sling_active  1
         dservSet ess/sling/sources $sling_sources
+        dservSet ess/sling/source_origin $sling_source_origin
+        dservSet ess/sling/bound   $sling_bound_sources
         sling_publish_geometry
         sling_publish_state idle
         sling_pull_hide
@@ -703,6 +849,7 @@ namespace eval ess {
         set sling_active  0
         dservSet ess/sling_active  0
         dservSet ess/sling/sources {}
+        dservSet ess/sling/source_origin {}
         sling_publish_state idle
         sling_pull_hide
         return
@@ -851,6 +998,7 @@ namespace eval ess {
     }
 
     namespace export sling_init sling_deinit sling_arm sling_disarm \
+        sling_bind sling_sources_norm sling_source_candidates \
         sling_set_anchor sling_set_gain sling_velocity sling_tune \
         sling_armed sling_engaged sling_engage_time sling_engage_source \
         sling_committed sling_release_vec sling_release_time \

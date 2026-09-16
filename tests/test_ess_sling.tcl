@@ -52,6 +52,15 @@ namespace eval ess {
     }
 }
 
+# ess_sling declares its routing on the settings API (`setting sling
+# sources`). Stub the package the way test_ess_dial does: declare is a
+# no-op and get errors, which the module treats as "no rig file".
+package provide settings 1.0
+namespace eval settings {
+    proc declare { args } {}
+    proc get { args } { error "no settings in a unit test" }
+}
+
 source [file join $::REPO lib ess_sling-1.0.tm]
 
 set FAIL 0
@@ -407,6 +416,51 @@ check "a drag past pub_ms publishes"     [n_pull_pubs] [expr {$n0 + 1}]
 advance_ms 1 ; ::ess::sling_simulate_mouse release -0.8 0
 check "the release publishes (show change) regardless" [n_pull_pubs] [expr {$n0 + 2}]
 check "and hides the pull" [lindex [pull_dp] 5] 0
+
+###########################################################################
+puts "\nthe rig binding (setting sling sources) and its precedence:"
+###########################################################################
+
+check "norm: old stick names map to stick"  [::ess::sling_sources_norm {astick analog}] stick
+check "norm: touch + mouse kept, deduped"   [::ess::sling_sources_norm {touch mouse touch}] {touch mouse}
+check "norm: empty stays empty"             [::ess::sling_sources_norm {  }] {}
+fails "norm: a dial reading word is refused with a pointer to stick" { ::ess::sling_sources_norm rate }
+fails "norm: an unknown word is refused"                             { ::ess::sling_sources_norm trackball }
+
+::ess::sling_bind {}
+::ess::sling_init
+check "no binding: module default touch"  $::DP(ess/sling/sources) touch
+check "...origin default"                 $::DP(ess/sling/source_origin) default
+
+::ess::sling_bind {astick}
+check "bind normalizes and publishes"     $::DP(ess/sling/bound) stick
+set ::DP(slider/full_scale) 2.5
+::ess::sling_init
+check "bound: init takes the rig's sources" $::DP(ess/sling/sources) stick
+check "...origin rig"                       $::DP(ess/sling/source_origin) rig
+approx "...and reads the stick scale from slider/full_scale" [dict get [::ess::sling_tune] scale] 2.5 1e-9
+::ess::sling_arm
+check "so a bound stick arms without the protocol naming a scale" [::ess::sling_armed] 1
+
+::ess::sling_init -sources mouse
+check "a protocol's -sources wins over the binding" $::DP(ess/sling/sources) mouse
+check "...origin protocol"                          $::DP(ess/sling/source_origin) protocol
+check "...the binding is still reported"            $::DP(ess/sling/bound) stick
+
+puts "\n... a change from the gear re-binds a live sling, but not a protocol-named one:"
+::ess::sling_init -reach 4.0
+check "live on the rig's stick" $::DP(ess/sling/sources) stick
+::ess::sling_bind touch
+::ess::sling_rebind_live
+check "rebound live to touch"          $::DP(ess/sling/sources) touch
+check "still active"                   [::ess::sling_active] 1
+check "the other init options survive" [dict get [::ess::sling_set_gain] reach] 4.0
+::ess::sling_init -sources mouse
+::ess::sling_bind stick
+::ess::sling_rebind_live
+check "protocol-named sources are left alone" $::DP(ess/sling/sources) mouse
+::ess::sling_bind {}
+unset ::DP(slider/full_scale)
 
 ###########################################################################
 puts "\ndisarm + deinit:"

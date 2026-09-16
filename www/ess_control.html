@@ -156,7 +156,7 @@
                             </div>
                             <!-- Sling (shown when sling_init is called) -->
                             <div id="virtual-sling-section" class="ess-input-section" style="display: none;">
-                                <div class="ess-input-section-title">Sling</div>
+                                <div class="ess-input-section-title">Sling<button class="ess-section-gear" type="button" title="rig settings for the sling (which inputs draw it)" onclick="openSettingsModal('sling')">⚙</button></div>
                                 <canvas id="sling-canvas" width="150" height="150"
                                         style="display:block;margin:0 auto;cursor:grab"
                                         title="press, drag back, release to launch (sling_simulate_mouse)"></canvas>
@@ -1034,6 +1034,9 @@
              this.pull = null;        // {dx,dy,vx,vy,frac}, null = hidden
              this.release = null;     // {vx,vy,dx,dy,frac,src} of the last commit
              this.state = '';
+             this.sources = '';       // effective sources
+             this.sourceOrigin = '';  // protocol | rig | default
+             this.boundSources = '';  // what the rig declared
              this.dragging = false;
              this.bindCanvas();
              this.setupSubscriptions();
@@ -1102,9 +1105,20 @@
                  if (active) this.draw();
              });
 
+             // Which inputs draw this sling, and WHY those (a protocol's own
+             // -sources wins over the rig's `sling sources`; saying so is
+             // what stops the gear looking ignored) -- the dial's readout.
              this.dpManager?.subscribe('ess/sling/sources', (data) => {
-                 const s = String(data.value ?? '').trim();
-                 this.sourcesValue.textContent = s || '—';
+                 this.sources = String(data.value ?? '').trim();
+                 this.renderSources();
+             });
+             this.dpManager?.subscribe('ess/sling/source_origin', (data) => {
+                 this.sourceOrigin = String(data.value ?? '').trim();
+                 this.renderSources();
+             });
+             this.dpManager?.subscribe('ess/sling/bound', (data) => {
+                 this.boundSources = String(data.value ?? '').trim();
+                 this.renderSources();
              });
 
              // "anchor_x,anchor_y,reach,v_max,min_frac" -- republished per
@@ -1152,6 +1166,24 @@
                  }
                  this.drawSoon();
              });
+         }
+
+         // "touch — from rig setting" / "stick — set by protocol (rig binds: touch)"
+         renderSources() {
+             const s = this.sources;
+             if (!this.sourcesValue) return;
+             if (!s) { this.sourcesValue.textContent = '—'; return; }
+             let why = '';
+             if (this.sourceOrigin === 'protocol') {
+                 why = this.boundSources && this.boundSources !== s
+                     ? ` — set by protocol (rig binds: ${this.boundSources})`
+                     : ' — set by protocol';
+             } else if (this.sourceOrigin === 'rig') {
+                 why = ' — from rig setting';
+             } else if (this.sourceOrigin === 'default') {
+                 why = ' — default (rig declares none; set it with ⚙)';
+             }
+             this.sourcesValue.textContent = s + why;
          }
 
          drawSoon() {

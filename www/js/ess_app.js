@@ -169,6 +169,7 @@ function requestInitialData() {
           ess/dial_active ess/dial/geometry ess/dial/sources
           ess/dial/source_origin ess/dial/bound ess/dial/pointer
           ess/sling_active ess/sling/geometry ess/sling/sources
+          ess/sling/source_origin ess/sling/bound
           ess/sling/state ess/sling/pull ess/sling/release
           ess/session_stats
           graphics/stimulus
