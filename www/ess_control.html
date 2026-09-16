@@ -154,6 +154,27 @@
                                     <span id="dial-sources-value" class="ess-joystick-readout">&mdash;</span>
                                 </div>
                             </div>
+                            <!-- Sling (shown when sling_init is called) -->
+                            <div id="virtual-sling-section" class="ess-input-section" style="display: none;">
+                                <div class="ess-input-section-title">Sling</div>
+                                <canvas id="sling-canvas" width="150" height="150"
+                                        style="display:block;margin:0 auto;cursor:grab"
+                                        title="press, drag back, release to launch (sling_simulate_mouse)"></canvas>
+                                <div class="ess-input-row">
+                                    <span class="ess-input-label">state</span>
+                                    <span id="sling-state-value" class="ess-joystick-readout">&mdash;</span>
+                                    <span class="ess-input-label">pull</span>
+                                    <span id="sling-pull-value" class="ess-joystick-readout">&mdash;</span>
+                                </div>
+                                <div class="ess-input-row">
+                                    <span class="ess-input-label">launch</span>
+                                    <span id="sling-release-value" class="ess-joystick-readout">&mdash;</span>
+                                </div>
+                                <div class="ess-input-row">
+                                    <span class="ess-input-label">from</span>
+                                    <span id="sling-sources-value" class="ess-joystick-readout">&mdash;</span>
+                                </div>
+                            </div>
                             <!-- Slider Controls (shown when slider_init is called) -->
                             <div id="virtual-slider-section" class="ess-input-section" style="display: none;">
                                 <div class="ess-input-section-title">Slider<button class="ess-section-gear" type="button" title="rig settings for the slider input (source, and where each value came from)" onclick="openSettingsModal('slider')">⚙</button></div>
@@ -973,6 +994,265 @@
                  g.strokeStyle = '#111418';
                  g.lineWidth = 1;
                  g.stroke();
+             }
+         }
+     }
+
+     /*
+      * SlingControls -- the ess_control widget for ::ess::sling.
+      *
+      * The dial's contract, for the third response mode: a gate the state
+      * system publishes (ess/sling_active, set by sling_init and cleared by
+      * sling_deinit / ::ess::input_reset), a live mirror of the draw, and a
+      * way to answer without hardware. The sling is self-describing:
+      * ess/sling/geometry carries "anchor_x,anchor_y,reach,v_max,min_frac",
+      * ess/sling/pull "dx,dy,vx,vy,frac,show" (the seat's displacement from
+      * the anchor and the launch a release NOW would produce), ess/sling/state
+      * idle|armed|engaged|released|aborted, ess/sling/release the commit.
+      * Nothing here knows about buckets or obstacles.
+      *
+      * The canvas is the sling seen from above the anchor: the reach ring is
+      * the full draw, the inner dashed ring is min_frac (a release inside it
+      * is an abort, not a launch), the band and ball follow the pull, and an
+      * arrow shows where the ball would GO. Pressing, dragging and releasing
+      * on the canvas drives ::ess::sling_simulate_mouse -- the same pointer
+      * path a touchscreen or mouse takes, so a simulated draw is gated,
+      * clamped and committed exactly as a real one.
+      */
+     class SlingControls {
+         constructor(dpManager) {
+             this.dpManager = dpManager;
+             this.section = document.getElementById('virtual-sling-section');
+             this.canvas = document.getElementById('sling-canvas');
+             this.stateValue = document.getElementById('sling-state-value');
+             this.pullValue = document.getElementById('sling-pull-value');
+             this.releaseValue = document.getElementById('sling-release-value');
+             this.sourcesValue = document.getElementById('sling-sources-value');
+             this.anchor = { x: 0, y: 0 };
+             this.reach = 0;          // degrees; 0 = no geometry yet
+             this.minFrac = 0;
+             this.pull = null;        // {dx,dy,vx,vy,frac}, null = hidden
+             this.release = null;     // {vx,vy,dx,dy,frac,src} of the last commit
+             this.state = '';
+             this.dragging = false;
+             this.bindCanvas();
+             this.setupSubscriptions();
+             this.draw();
+         }
+
+         sendEssCommand(cmd) {
+             try {
+                 const conn = this.dpManager?.connection;
+                 if (conn && conn.connected && conn.ws) {
+                     conn.ws.send(`send ess {${cmd}}`);
+                 }
+             } catch (error) {
+                 console.error('SlingControls: failed to send command:', error);
+             }
+         }
+
+         // canvas pixel -> screen degrees, the anchor at the canvas centre
+         // and the reach ring at R. Without a reach there is no scale, so
+         // the canvas is inert rather than reporting somewhere wrong.
+         canvasToDeg(e) {
+             if (!(this.reach > 0)) return null;
+             const r = this.canvas.getBoundingClientRect();
+             const cx = r.width / 2, cy = r.height / 2;
+             const R = Math.min(r.width, r.height) / 2 - 12;
+             const s = this.reach / R;
+             return {
+                 x: this.anchor.x + ((e.clientX - r.left) - cx) * s,
+                 y: this.anchor.y + (cy - (e.clientY - r.top)) * s,   // canvas y grows down
+             };
+         }
+
+         bindCanvas() {
+             const c = this.canvas;
+             if (!c) return;
+             const send = (what, e) => {
+                 const p = this.canvasToDeg(e);
+                 if (!p) return;
+                 this.sendEssCommand(`::ess::sling_simulate_mouse ${what} ${p.x.toFixed(4)} ${p.y.toFixed(4)}`);
+             };
+             c.addEventListener('mousedown', (e) => {
+                 if (e.button !== 0) return;
+                 this.dragging = true;
+                 c.style.cursor = 'grabbing';
+                 send('press', e);
+                 e.preventDefault();
+             });
+             c.addEventListener('mousemove', (e) => {
+                 if (!this.dragging) return;
+                 send('drag', e);
+             });
+             const finish = (e) => {
+                 if (!this.dragging) return;
+                 this.dragging = false;
+                 c.style.cursor = 'grab';
+                 send('release', e);
+             };
+             c.addEventListener('mouseup', finish);
+             c.addEventListener('mouseleave', finish);
+         }
+
+         setupSubscriptions() {
+             this.dpManager?.subscribe('ess/sling_active', (data) => {
+                 const active = parseInt(data.value) > 0;   // fail closed
+                 this.section.style.display = active ? '' : 'none';
+                 if (active) this.draw();
+             });
+
+             this.dpManager?.subscribe('ess/sling/sources', (data) => {
+                 const s = String(data.value ?? '').trim();
+                 this.sourcesValue.textContent = s || '—';
+             });
+
+             // "anchor_x,anchor_y,reach,v_max,min_frac" -- republished per
+             // trial (sling_set_anchor / sling_set_gain / sling_arm)
+             this.dpManager?.subscribe('ess/sling/geometry', (data) => {
+                 const v = String(data.value ?? '').split(',').map(Number);
+                 if (v.length < 5 || v.some(isNaN)) return;
+                 this.anchor = { x: v[0], y: v[1] };
+                 this.reach = v[2];
+                 this.minFrac = v[4];
+                 this.draw();
+             });
+
+             this.dpManager?.subscribe('ess/sling/state', (data) => {
+                 this.state = String(data.value ?? '').trim();
+                 // a new draw retires the last launch arrow
+                 if (this.state === 'armed' || this.state === 'engaged') this.release = null;
+                 if (this.stateValue) this.stateValue.textContent = this.state || '—';
+                 this.drawSoon();
+             });
+
+             // "dx,dy,vx,vy,frac,show" -- the live draw, at the display's
+             // rate: state applied every time, the paint coalesced (see the
+             // dial's pointer handler for why)
+             this.dpManager?.subscribe('ess/sling/pull', (data) => {
+                 const p = String(data.value ?? '').split(',').map(Number);
+                 const show = p.length > 5 && p[5] > 0;
+                 this.pull = (show && !p.slice(0, 5).some(isNaN))
+                     ? { dx: p[0], dy: p[1], vx: p[2], vy: p[3], frac: p[4] }
+                     : null;
+                 this.drawSoon();
+             });
+
+             // "vx,vy,dx,dy,frac,source" -- the commit
+             this.dpManager?.subscribe('ess/sling/release', (data) => {
+                 const p = String(data.value ?? '').split(',');
+                 const v = p.slice(0, 5).map(Number);
+                 if (v.length < 5 || v.some(isNaN)) return;
+                 this.release = { vx: v[0], vy: v[1], dx: v[2], dy: v[3], frac: v[4], src: p[5] ?? '' };
+                 if (this.releaseValue) {
+                     const speed = Math.hypot(v[0], v[1]);
+                     const ang = Math.round((Math.atan2(v[1], v[0]) * 180 / Math.PI + 360) % 360);
+                     this.releaseValue.textContent =
+                         `${speed.toFixed(1)}°/s @ ${ang}°, draw ${Math.round(v[4] * 100)}% (${p[5] ?? ''})`;
+                 }
+                 this.drawSoon();
+             });
+         }
+
+         drawSoon() {
+             if (this._frame) return;
+             const schedule = (typeof requestAnimationFrame === 'function')
+                 ? requestAnimationFrame
+                 : (cb) => setTimeout(cb, 16);
+             this._frame = true;
+             schedule(() => {
+                 this._frame = false;
+                 let t = '—';
+                 if (this.pull) {
+                     const ang = Math.round((Math.atan2(-this.pull.dy, -this.pull.dx) * 180 / Math.PI + 360) % 360);
+                     t = `${Math.round(this.pull.frac * 100)}% → ${ang}°`;
+                 }
+                 if (this.pullValue && this.pullValue.textContent !== t) {
+                     this.pullValue.textContent = t;
+                 }
+                 this.draw();
+             });
+         }
+
+         draw() {
+             const c = this.canvas;
+             if (!c) return;
+             const g = c.getContext('2d');
+             const w = c.width, h = c.height;
+             const cx = w / 2, cy = h / 2, R = Math.min(w, h) / 2 - 12;
+             g.clearRect(0, 0, w, h);
+             const s = this.reach > 0 ? R / this.reach : 0;   // px per degree
+             const toX = (dx) => cx + dx * s;
+             const toY = (dy) => cy - dy * s;                 // canvas y grows down
+
+             // the reach ring: a full draw
+             g.strokeStyle = '#3a4048';
+             g.lineWidth = 2;
+             g.beginPath();
+             g.arc(cx, cy, R, 0, 2 * Math.PI);
+             g.stroke();
+
+             // the abort ring: a release inside it settles the ball back
+             if (this.minFrac > 0) {
+                 g.strokeStyle = '#4b5563';
+                 g.lineWidth = 1;
+                 g.setLineDash([3, 3]);
+                 g.beginPath();
+                 g.arc(cx, cy, R * this.minFrac, 0, 2 * Math.PI);
+                 g.stroke();
+                 g.setLineDash([]);
+             }
+
+             // the seat
+             g.fillStyle = '#6b7280';
+             g.beginPath();
+             g.arc(cx, cy, 3, 0, 2 * Math.PI);
+             g.fill();
+
+             const arrow = (x0, y0, x1, y1, color, width) => {
+                 g.strokeStyle = color;
+                 g.fillStyle = color;
+                 g.lineWidth = width;
+                 g.beginPath();
+                 g.moveTo(x0, y0);
+                 g.lineTo(x1, y1);
+                 g.stroke();
+                 const a = Math.atan2(y1 - y0, x1 - x0);
+                 g.beginPath();
+                 g.moveTo(x1, y1);
+                 g.lineTo(x1 - 7 * Math.cos(a - 0.5), y1 - 7 * Math.sin(a - 0.5));
+                 g.lineTo(x1 - 7 * Math.cos(a + 0.5), y1 - 7 * Math.sin(a + 0.5));
+                 g.closePath();
+                 g.fill();
+             };
+
+             // the live draw: band from the seat to the drawn ball, and an
+             // arrow the way the ball would go (length = fraction of full draw)
+             if (this.pull && s > 0) {
+                 const bx = toX(this.pull.dx), by = toY(this.pull.dy);
+                 const armed = this.pull.frac >= this.minFrac;
+                 g.strokeStyle = armed ? '#eab308' : '#6b7280';
+                 g.lineWidth = 3;
+                 g.beginPath();
+                 g.moveTo(cx, cy);
+                 g.lineTo(bx, by);
+                 g.stroke();
+                 g.fillStyle = armed ? '#f5f5f5' : '#9ca3af';
+                 g.beginPath();
+                 g.arc(bx, by, 5, 0, 2 * Math.PI);
+                 g.fill();
+                 if (armed) {
+                     const L = R * this.pull.frac;
+                     const a = Math.atan2(-this.pull.dy, -this.pull.dx);
+                     arrow(cx, cy, cx + L * Math.cos(a), cy - L * Math.sin(a), '#60a5fa', 2);
+                 }
+             }
+
+             // the last launch, until the next draw
+             if (this.release && !this.pull && s > 0) {
+                 const L = R * this.release.frac;
+                 const a = Math.atan2(this.release.vy, this.release.vx);
+                 arrow(cx, cy, cx + L * Math.cos(a), cy - L * Math.sin(a), '#4ade80', 3);
              }
          }
      }

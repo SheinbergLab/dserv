@@ -23,6 +23,7 @@ let eyeSettings = null;
 let buttonControls = null;
 let joystickControls = null;
 let dialControls = null;
+let slingControls = null;
 let sliderControls = null;
 let projectSelector = null;
 let lastKnownHostname = null;
@@ -97,6 +98,7 @@ async function init() {
         initButtonControls();
         initJoystickControls();
         initDialControls();
+        initSlingControls();
         initSliderControls();
 	initProjectSelector();
         initOpenEphysStatus();
@@ -166,6 +168,8 @@ function requestInitialData() {
           ess/joystick_active ess/joystick/dir ess/joystick/response
           ess/dial_active ess/dial/geometry ess/dial/sources
           ess/dial/source_origin ess/dial/bound ess/dial/pointer
+          ess/sling_active ess/sling/geometry ess/sling/sources
+          ess/sling/state ess/sling/pull ess/sling/release
           ess/session_stats
           graphics/stimulus
           em/settings em/source_active mesh/peers
@@ -310,6 +314,16 @@ function initDialControls() {
     if (typeof DialControls !== 'undefined') {
         dialControls = new DialControls(dpManager);
         log('Dial Controls initialized', 'info');
+    }
+}
+
+/**
+ * Initialize the sling panel (shown when a system calls ::ess::sling_init)
+ */
+function initSlingControls() {
+    if (typeof SlingControls !== 'undefined') {
+        slingControls = new SlingControls(dpManager);
+        log('Sling Controls initialized', 'info');
     }
 }
 

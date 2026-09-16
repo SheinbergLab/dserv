@@ -2037,6 +2037,7 @@ namespace eval ess {
         joystick_deinit
         dial_deinit
         roam_deinit
+        sling_deinit
     }
 
     proc do_update {args} {
