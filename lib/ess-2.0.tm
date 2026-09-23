@@ -5604,8 +5604,12 @@ namespace eval ess {
         # initialize the protocol
         ::ess::${system}::${protocol}::protocol_init $current(state_system)
 
-        # initialize this protocol's variants
-        set vinfo [set ${system}::${protocol}::variants]
+        # initialize this protocol's variants. Normalize BEFORE iterating:
+        # the raw dict may carry comment lines between entries, which
+        # set_variants strips for its own copy but which make the literal
+        # dict unparseable here (a quoted word followed by punctuation in a
+        # comment is enough).
+        set vinfo [::ess::normalize_variants [set ${system}::${protocol}::variants]]
         ${s} set_variants $vinfo
 
         dict for { k v } $vinfo {
@@ -6452,7 +6456,9 @@ namespace eval ess {
                 "Failed to load variants for $s/$p:\n[dict get $opts -errorinfo]"
             return -options $opts "Failed to load variants for $s/$p: $err"
         }
-        return [dict keys [set ::ess::${s}::${p}::variants]]
+        # normalized, not raw: a comment block between variant entries is
+        # legal in the file but not in a dict literal
+        return [dict keys [::ess::normalize_variants [set ::ess::${s}::${p}::variants]]]
     }
 
     # The system and protocol getters don't re-"source"
