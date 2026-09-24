@@ -1,8 +1,9 @@
 #!/bin/sh
 # dserv-ptp-select-phc IFACE -- point IFACE's hardware timestamping at the MAC's
 # OWN PHC, and not at some other clock the kernel happens to prefer. Then write
-# the --hwts_filter mode that clock supports to /run/dserv-ptp/IFACE.env, which
-# both ptp4l units read (see "THE FILTER" below).
+# the ptp4l options that depend on this host to /run/dserv-ptp/IFACE.env, which
+# both ptp4l units read: the --hwts_filter mode that clock supports (see "THE
+# FILTER") and the wire-version pin this ptp4l needs (see "THE WIRE VERSION").
 #
 # WHY THIS EXISTS. An interface can expose more than one PTP hardware clock, and
 # since Linux 6.13 the one used for timestamping is a per-interface setting (the
@@ -63,12 +64,25 @@
 # is read after selection because it belongs to the clock, not to the host.
 #
 # When NOT to decide: if the list cannot be read (no ethtool, empty section), or
-# if the MAC clock was wanted and could NOT be selected. The file is then left
-# absent and the units fall back to `full`, today's behaviour. The second case is
+# if the MAC clock was wanted and could NOT be selected. HWTS_FILTER is then left
+# out of the file and the units fall back to `full`, the historical behaviour. The second case is
 # deliberate: on hm-0 a failed switch leaves the PHY clock, which would accept
 # `normal` and then sync -- over MDIO, at 215 us of read delay. A loud FAULTY
 # beats a quiet wrong clock, so a failed selection must never be papered over by
 # downgrading the filter.
+#
+# THE WIRE VERSION. linuxptp 4.x sends PTPv2.1 (minorVersionPTP 1) by default,
+# and Intel X710 (i40e) hardware does not timestamp v2.1 event messages: the
+# tracker, as client of a 4.2 grandmaster, logged "received SYNC without
+# timestamp", sat in UNCALIBRATED, and phc2sys waited for ptp4l forever -- while
+# dserv-ptp-setup reported success. `--ptp_minor_version 0` puts every dserv
+# ptp4l on PTPv2.0, which every peer speaks (linuxptp 3.x, extio boxes, any NIC).
+# But 3.x has no such option and REFUSES to start on it (stim: 3.1.1), so it
+# cannot go in the unit. Ask the binary instead of parsing its version:
+# `ptp4l --ptp_minor_version 0 -v` prints the version and exits 0 only if the
+# option parsed first. Written as PTP4L_COMPAT; absent, the units pass nothing.
+# Both units get it: a v2.1 Delay_Req from a client is just as untimestamped at
+# an X710 grandmaster as a v2.1 Sync is at an X710 client.
 #
 # Idempotent, and a deliberate no-op rather than an error when there is nothing
 # to select: no ethtool, a pre-6.13 kernel with no provider concept (office-stim
@@ -84,10 +98,30 @@ IF=$1
 
 RUNDIR=/run/dserv-ptp
 ENVF=$RUNDIR/$IF.env
-# Clear the previous decision FIRST. Every early exit below then means "no
-# decision -> the unit's default (full)", never a stale answer about a clock
-# that is no longer selected.
+# Clear the previous decision FIRST. An option missing from the new file then
+# means "not decided -> the unit's default", never a stale answer about a clock
+# that is no longer selected or a ptp4l that has since been upgraded.
 rm -f "$ENVF" 2>/dev/null || true
+
+# Every exit after this point goes through finish(), so the file carries
+# whatever WAS decided -- the wire-version pin does not depend on ethtool or on
+# the clock, and must not be lost to an early exit about either.
+ENV_LINES=
+finish() {
+    if [ -n "$ENV_LINES" ]; then
+        mkdir -p "$RUNDIR"
+        printf '%s' "$ENV_LINES" > "$ENVF.tmp" && mv -f "$ENVF.tmp" "$ENVF"
+        echo "$0: wrote $ENVF: $(printf '%s' "$ENV_LINES" | tr '\n' ' ')"
+    fi
+    exit 0
+}
+
+# The unit hard-codes this path, so probe exactly that binary.
+if /usr/sbin/ptp4l --ptp_minor_version 0 -v >/dev/null 2>&1 </dev/null; then
+    ENV_LINES="PTP4L_COMPAT=--ptp_minor_version 0
+"
+    echo "$0: ptp4l $(/usr/sbin/ptp4l -v 2>/dev/null) supports --ptp_minor_version; pinning PTPv2.0"
+fi
 
 ETHTOOL=
 for e in /usr/sbin/ethtool /sbin/ethtool /usr/bin/ethtool; do
@@ -97,7 +131,7 @@ done
 # in /usr/sbin, which is absent from a non-login shell's PATH, so it reports
 # "not found" on a host where it is plainly installed. Cost a wrong diagnosis
 # once already.
-[ -n "$ETHTOOL" ] || { echo "$0: no ethtool; leaving $IF timestamping alone (hwts_filter: unit default, full)"; exit 0; }
+[ -n "$ETHTOOL" ] || { echo "$0: no ethtool; leaving $IF timestamping alone (hwts_filter: unit default, full)"; finish; }
 
 provider_index() {
     "$ETHTOOL" -T "$IF" 2>/dev/null | sed -n 's/.*[Pp]rovider index:[[:space:]]*\([0-9]\{1,\}\).*/\1/p' | head -1
@@ -156,13 +190,13 @@ select_phc() {
 if ! select_phc; then
     echo "$0: NOT choosing a filter for $IF: it is not on its own clock, and a filter" >&2
     echo "$0: that suits the wrong clock would hide that. ptp4l gets the default (full)." >&2
-    exit 0
+    finish
 fi
 
 filters=$(rx_filters)
 if [ -z "$filters" ]; then
     echo "$0: $IF lists no hardware receive filter modes; hwts_filter: unit default (full)"
-    exit 0
+    finish
 fi
 flist=$(echo "$filters" | tr '\n' ' ' | sed 's/ $//')
 if echo "$filters" | grep -qx all; then
@@ -173,7 +207,7 @@ else
         || echo "$0: WARNING: $IF offers neither \`all\` nor any ptpv2 filter ($flist); ptp4l will likely fail either way" >&2
 fi
 
-mkdir -p "$RUNDIR"
-printf 'HWTS_FILTER=%s\n' "$mode" > "$ENVF.tmp" && mv -f "$ENVF.tmp" "$ENVF"
-echo "$0: $IF hwts_filter $mode (rx filters: $flist) -> $ENVF"
-exit 0
+echo "$0: $IF hwts_filter $mode (rx filters: $flist)"
+ENV_LINES="${ENV_LINES}HWTS_FILTER=$mode
+"
+finish

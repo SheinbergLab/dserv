@@ -135,6 +135,30 @@ workaround) is superseded; remove it:
     sudo rm /etc/systemd/system/dserv-ptp4l-client@enp2s0f0np0.service.d/hwts-normal.conf
     sudo systemctl daemon-reload && sudo systemctl restart dserv-ptp4l-client@enp2s0f0np0
 
+### The wire is pinned to PTPv2.0 where ptp4l supports it
+
+linuxptp 4.x sends PTPv2.1 (`minorVersionPTP` 1) by default, and Intel X710
+hardware does not timestamp v2.1 event messages. With the rig's 4.2 grandmaster,
+the tracker logged `received SYNC without timestamp`, sat in UNCALIBRATED, and
+phc2sys waited for ptp4l indefinitely, all while `dserv-ptp-setup client` reported
+success. `--ptp_minor_version 0` fixes it and costs nothing: every peer speaks v2.0.
+
+The option can't go on the command line as-is, because linuxptp 3.x (Debian 12,
+the stim host's 3.1.1) doesn't know it and refuses to start. So
+`dserv-ptp-select-phc` checks the binary (`ptp4l --ptp_minor_version 0 -v`
+succeeds only if the option parses) and writes `PTP4L_COMPAT=--ptp_minor_version 0`
+to the same `/run/dserv-ptp/IFACE.env`. Both units append `$PTP4L_COMPAT`
+(unbraced, so an empty value adds no argument). Clients get it too: a v2.1
+Delay_Req is just as untimestamped at an X710 grandmaster.
+
+This replaces the rig grandmaster's hand-written drop-in, which froze the whole
+`ExecStart=` line along with it; remove it after installing the new unit:
+
+    sudo rm /etc/systemd/system/dserv-ptp4l@eth0.service.d/minor-version.conf
+    sudo systemctl daemon-reload && sudo systemctl restart dserv-ptp4l@eth0
+
+`dserv-ptp-setup status` prints the `wire` line alongside `hwts_filter`.
+
 **`systemctl is-active` does not tell you PTP works.** ptp4l stays running with
 port 1 in FAULTY, timestamping nothing, looking perfectly healthy to systemd.
 `dserv-ptp-setup status` now prints `portState` and the selected clock; that is

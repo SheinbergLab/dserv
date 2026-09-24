@@ -33,6 +33,16 @@
 # A hand-written drop-in overriding ExecStart= with `--hwts_filter normal` (the
 # interim workaround for i40e) is no longer needed: delete it and daemon-reload.
 #
+# $PTP4L_COMPAT pins the wire to PTPv2.0 (`--ptp_minor_version 0`) where this
+# ptp4l supports it. linuxptp 4.x defaults to v2.1, which Intel X710 (i40e)
+# hardware does not timestamp: the tracker, as client of this grandmaster,
+# logged "received SYNC without timestamp" and sat in UNCALIBRATED while setup
+# reported success. The option cannot simply go on the command line -- linuxptp
+# 3.x does not know it and refuses to start -- so ExecStartPre probes the binary
+# and writes it to the same env file. This replaces the rig's hand-written
+# minor-version.conf drop-in, which froze the whole ExecStart= line with it;
+# delete that and daemon-reload.
+#
 # --priority1 127 makes this host the grandmaster. The boxes are slaves and need
 # no configuration; they discipline their ENET 1588 counters to this PHC.
 #
@@ -79,11 +89,15 @@ Type=simple
 #
 # EnvironmentFile= is read after ExecStartPre= has finished (systemd reads it per
 # unit state), so the file the script just wrote is the one ExecStart= sees. The
-# `-` makes it optional; Environment= supplies the default it then overrides.
+# `-` makes it optional; Environment= supplies the defaults it then overrides.
+# $PTP4L_COMPAT is deliberately UNBRACED: systemd splits it into words, and an
+# empty value contributes no argument at all (${PTP4L_COMPAT} would pass one
+# empty string, which ptp4l would reject).
 Environment=HWTS_FILTER=full
+Environment=PTP4L_COMPAT=
 EnvironmentFile=-/run/dserv-ptp/%i.env
 ExecStartPre=-/usr/local/dserv/scripts/dserv-ptp-select-phc %i
-ExecStart=/usr/sbin/ptp4l -i %i -H -m -q --priority1 127 --hwts_filter ${HWTS_FILTER}
+ExecStart=/usr/sbin/ptp4l -i %i -H -m -q --priority1 127 --hwts_filter ${HWTS_FILTER} $PTP4L_COMPAT
 Restart=always
 RestartSec=5
 

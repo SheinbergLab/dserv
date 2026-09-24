@@ -415,7 +415,10 @@ status() {
             # What the running unit was actually started with, not what it would
             # be now: the env file select-phc wrote at the last (re)start.
             _hf=$(sed -n 's/^HWTS_FILTER=//p' "/run/dserv-ptp/$_i.env" 2>/dev/null)
-            echo "  $_i hwts_filter ${_hf:-full (no /run/dserv-ptp/$_i.env; unit default)}"
+            echo "  $_i hwts_filter ${_hf:-full (not in /run/dserv-ptp/$_i.env; unit default)}"
+            # The PTPv2.0 wire pin, probed from the ptp4l binary at unit start.
+            _pc=$(sed -n 's/^PTP4L_COMPAT=//p' "/run/dserv-ptp/$_i.env" 2>/dev/null)
+            echo "  $_i wire ${_pc:+PTPv2.0 ($_pc)}${_pc:-ptp4l default (no --ptp_minor_version; linuxptp 3.x, or not yet probed)}"
             break
         done
     fi

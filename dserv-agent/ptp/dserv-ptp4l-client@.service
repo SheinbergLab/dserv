@@ -34,6 +34,12 @@
 # A hand-written drop-in overriding ExecStart= with `--hwts_filter normal` (the
 # interim i40e workaround on the psychophysics tracker) is superseded by this;
 # delete it and daemon-reload.
+#
+# $PTP4L_COMPAT: the same PTPv2.0 wire pin as the grandmaster unit, probed and
+# written by the same ExecStartPre (empty on linuxptp 3.x, which has no such
+# option and speaks v2.0 anyway). A client needs it too: its Delay_Req is an
+# event message, and a v2.1 one is as untimestamped at an X710 grandmaster as a
+# v2.1 Sync is at an X710 client.
 Description=PTP client (ptp4l slaveOnly) on %i
 Documentation=file:/usr/local/dserv/extio-zephyr/PORTING.md
 Wants=network-online.target
@@ -51,11 +57,14 @@ Type=simple
 # Same clock + filter selection as the grandmaster unit -- a client is if anything more
 # exposed to getting this wrong, since a client on the wrong PHC still elects a
 # master and still prints offsets. See dserv-ptp4l@.service.
-# The filter it chose is read from the env file; see dserv-ptp4l@.service.
+# The filter and wire-version pin it chose are read from the env file; see
+# dserv-ptp4l@.service.
+# $PTP4L_COMPAT stays unbraced so an empty value adds no argument.
 Environment=HWTS_FILTER=full
+Environment=PTP4L_COMPAT=
 EnvironmentFile=-/run/dserv-ptp/%i.env
 ExecStartPre=-/usr/local/dserv/scripts/dserv-ptp-select-phc %i
-ExecStart=/usr/sbin/ptp4l -i %i -H -m -q -s --hwts_filter ${HWTS_FILTER}
+ExecStart=/usr/sbin/ptp4l -i %i -H -m -q -s --hwts_filter ${HWTS_FILTER} $PTP4L_COMPAT
 Restart=always
 RestartSec=5
 
