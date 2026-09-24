@@ -361,7 +361,40 @@ managed_pid() {
     return 1
 }
 
+# Where did THIS copy of the tooling come from, and is it still that copy?
+# The registry's /ptp/setup records an id and a sha256 manifest when it installs
+# (see dserv-agent/ptp_setup.go); a later dserv package upgrade or a hand edit
+# changes files under it, and the manifest is how that stops being invisible --
+# the psychophysics tracker ran hand-staged copies nobody could date.
+TOOLING_INFO=${DSERV_PTP_TOOLING_INFO:-/usr/local/dserv/ptp-tooling.info}
+TOOLING_SUMS=${TOOLING_INFO%.info}.sha256
+
+tooling_status() {
+    if [ -f "$TOOLING_INFO" ]; then
+        _id=$(sed -n 's/^id=//p' "$TOOLING_INFO")
+        _src=$(sed -n 's/^source=//p' "$TOOLING_INFO")
+        _at=$(sed -n 's/^applied=//p' "$TOOLING_INFO")
+        echo "  ${_id:-?} from ${_src:-?} (applied ${_at:-?})"
+        if [ -f "$TOOLING_SUMS" ] && command -v sha256sum >/dev/null 2>&1; then
+            _bad=$(sha256sum -c "$TOOLING_SUMS" 2>/dev/null | sed -n 's/: FAILED.*//p')
+            if [ -z "$_bad" ]; then
+                echo "  files match that install"
+            else
+                echo "  CHANGED since that install (dserv package upgrade, or a hand edit):"
+                for _f in $_bad; do echo "    $_f"; done
+            fi
+        fi
+    elif _v=$(dpkg-query -W -f '${Version}' dserv 2>/dev/null) && [ -n "$_v" ]; then
+        echo "  from the dserv package $_v"
+    else
+        echo "  origin unknown: neither /ptp/setup nor the dserv package installed it"
+        echo "  (update with: curl -sSL https://dserv.net/ptp/setup | sudo bash)"
+    fi
+}
+
 status() {
+    echo "== tooling =="
+    tooling_status
     echo "== units =="
     _any=0
     for _u in $(role_instances); do

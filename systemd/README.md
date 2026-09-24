@@ -250,6 +250,26 @@ Exactly **one** host per site is the grandmaster. Clients need no address for it
 — PTP's BMCA elects the master from its Announce messages, which is the main
 advantage over NTP. The only value that must match is the domain number (0).
 
+### Hosts without the dserv package (a tracker, a console)
+
+The registry serves the same files as a one-line installer, and **re-running it
+is how such a host updates**:
+
+    curl -sSL https://dserv.net/ptp/setup | sudo bash     # or: wget -qO- ... | sudo bash
+    curl -sSL https://dserv.net/ptp/setup | sudo bash -s -- client IFACE
+
+It rewrites only files that changed and restarts any running ptp4l/phc2sys whose
+unit or PHC selector changed. A daemon keeps its old command line until it
+restarts, so without that the update would do nothing until a reboot. That
+restart makes clients re-lock, so run it between sessions (`DSERV_PTP_NO_RESTART=1`
+installs and prints the restart instead). It warns about drop-ins that replace
+`ExecStart=`, and skips linuxptp for `ntp-client`. It records a tooling id and a
+sha256 manifest in `/usr/local/dserv/ptp-tooling.{info,sha256}`; `dserv-ptp-setup
+status` reports them and names any file changed since. What it installs is
+whatever the registry's dserv-agent embeds, so the registry must be rebuilt for
+a change here to reach these hosts. Hand-staged copies are what this replaces:
+the psychophysics tracker ran some nobody could date.
+
 ### The two roles are mirror images, and the NTP rule inverts
 
 |            | grandmaster                        | client                              |

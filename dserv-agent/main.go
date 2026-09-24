@@ -1063,6 +1063,7 @@ func (a *Agent) handleLandingPage(w http.ResponseWriter, r *http.Request) {
               <button class="copy" data-cmd="curl -sSL __BASE__/ptp/setup | sudo bash">Copy</button>
             </div>
             <p class="note">Then <code>dserv-ptp-setup candidates</code>, and one of <code>grandmaster IFACE</code> &middot; <code>client IFACE</code> &middot; <code>ntp-client SERVER</code> &mdash; or append the role to the curl: <code>| sudo bash -s -- client eth0</code>. Whichever way you set it, the role is recorded in <code>box.conf</code>. Provisioning a box from scratch? Declare it in the same step instead &mdash; see &ldquo;Set up a cage box and its clock&rdquo; above.</p>
+            <p class="note"><strong>Re-run the same line to update.</strong> Only changed files are rewritten, and running PTP daemons that changed are restarted so the update takes effect &mdash; clients re-lock (on a grandmaster, the whole segment), so do it between sessions; <code>DSERV_PTP_NO_RESTART=1</code> leaves the restart to you. <code>dserv-ptp-setup status</code> shows which tooling is installed and whether anything has changed since. No curl on the box? <code>wget -qO- __BASE__/ptp/setup | sudo bash</code> does the same.</p>
           </div>
         </div>
 
