@@ -418,7 +418,11 @@ status() {
             echo "  $_i hwts_filter ${_hf:-full (not in /run/dserv-ptp/$_i.env; unit default)}"
             # The PTPv2.0 wire pin, probed from the ptp4l binary at unit start.
             _pc=$(sed -n 's/^PTP4L_COMPAT=//p' "/run/dserv-ptp/$_i.env" 2>/dev/null)
-            echo "  $_i wire ${_pc:+PTPv2.0 ($_pc)}${_pc:-ptp4l default (no --ptp_minor_version; linuxptp 3.x, or not yet probed)}"
+            if [ -n "$_pc" ]; then
+                echo "  $_i wire PTPv2.0 ($_pc)"
+            else
+                echo "  $_i wire ptp4l default (no --ptp_minor_version; linuxptp 3.x, or not yet probed)"
+            fi
             break
         done
     fi
