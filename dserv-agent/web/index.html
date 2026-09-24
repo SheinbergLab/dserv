@@ -1599,7 +1599,13 @@ body.solo .agent-panel {
              // install) and must not promise a "Restart services" step we will
              // not be alive to report on.
              const isSelf = (id === 'dserv-agent');
-             const servicesToStop = isSelf ? [] : this.getServicesToStop(id);
+             // Only services that are running get stopped (and restarted): the
+             // agent skips the rest, e.g. stim2.service on a windowed dev box.
+             // Filter here too so the prompt and steps say what will happen.
+             // Unknown status is kept -- the agent re-checks and is the authority.
+             const svcStatus = this.panelStatus?.services || {};
+             const servicesToStop = isSelf ? [] : this.getServicesToStop(id)
+                   .filter(svc => svcStatus[svc] !== 'inactive');
              const comp = this.panelComponents.find(c => (c.component || c).id === id);
              const compName = comp ? (comp.component || comp).name : id;
 

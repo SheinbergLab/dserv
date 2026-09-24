@@ -2269,6 +2269,41 @@ func (a *Agent) filterAssets(release *ReleaseInfo, comp Component) []string {
 	return assets
 }
 
+// stopForInstall stops the services an install asked for and returns the ones
+// it actually stopped -- exactly the set installComponent restarts afterwards.
+//
+// Only what is RUNNING is stopped, and so only that is restarted. Loaded is not
+// running: on a dev box stim2.service is installed (the stim2 package ships it)
+// but deliberately disabled, because stim2 runs windowed on the desktop. It used
+// to be "stopped" as a no-op, go on the restart list, and have every dlsh or
+// stim2 update START the fullscreen cage unit -- which fails against the running
+// desktop and left the panel reporting "installed, but did not restart:
+// stim2.service" (rpi500). An update restores the prior state; it never starts
+// what someone deliberately left stopped.
+func stopForInstall(services []string) ([]string, error) {
+	var stopped []string
+	for _, svc := range services {
+		// A profile's dependents may name units this box never had (dserv
+		// on a display box). Absent is fine; failing to stop is not.
+		if !unitLoaded(svc) {
+			log.Printf("install: skipping stop of %s (no such unit here)", svc)
+			continue
+		}
+		if !unitActive(svc) {
+			log.Printf("install: %s is not running; leaving it stopped", svc)
+			continue
+		}
+		if err := systemctlDo("stop", svc); err != nil {
+			return stopped, err
+		}
+		if unitActive(svc) {
+			return stopped, fmt.Errorf("Refusing to install: %s is still active after systemctl stop", svc)
+		}
+		stopped = append(stopped, svc)
+	}
+	return stopped, nil
+}
+
 func (a *Agent) installComponent(comp Component, assetName string, stopServices []string) {
 	a.broadcast(WSResponse{Type: "install_progress", Data: map[string]string{"stage": "checking", "component": comp.ID}})
 
@@ -2344,23 +2379,10 @@ func (a *Agent) installComponent(comp Component, assetName string, stopServices 
 	var started []string
 	if len(stopServices) > 0 {
 		a.broadcast(WSResponse{Type: "install_progress", Data: map[string]string{"stage": "stopping"}})
-		for _, svc := range stopServices {
-			// A profile's dependents may name units this box never had (dserv
-			// on a display box). Absent is fine; failing to stop is not.
-			if !unitLoaded(svc) {
-				log.Printf("install: skipping stop of %s (no such unit here)", svc)
-				continue
-			}
-			if err := systemctlDo("stop", svc); err != nil {
-				a.broadcast(WSResponse{Type: "install_error", Error: err.Error()})
-				return
-			}
-			if unitActive(svc) {
-				a.broadcast(WSResponse{Type: "install_error",
-					Error: "Refusing to install: " + svc + " is still active after systemctl stop"})
-				return
-			}
-			started = append(started, svc)
+		var err error
+		if started, err = stopForInstall(stopServices); err != nil {
+			a.broadcast(WSResponse{Type: "install_error", Error: err.Error()})
+			return
 		}
 	}
 
