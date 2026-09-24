@@ -104,11 +104,36 @@ hangs off the MDIO bus and appears under neither. It is a no-op on a pre-6.13
 kernel (office-stim, 6.12, prints the old `PTP Hardware Clock: 0` and has no
 provider to select), on single-clock NICs, and where the setting is already right.
 
-**Do not respond to a FAULTY port by deleting `--hwts_filter full`.** That flag is
-correct for a MAC clock offering `{none, all}`; the ERANGE means you are on the
+**On a CM5, do not respond to a FAULTY port by changing the filter.** `full` is
+correct for the MAC clock offering `{none, all}`; the ERANGE means you are on the
 wrong clock. Run it by hand to see and fix the selection:
 
     dserv-ptp-select-phc eth0
+
+### `--hwts_filter` is chosen per clock
+
+ERANGE → FAULTY has a second, unrelated cause: a NIC whose correct clock simply
+has no `all` filter. Intel X710 (`i40e`, psychophysics tracker `enp2s0f0np0`,
+kernel 6.12) lists only `none` plus the `ptpv2-{l4,l2,}-{event,sync,delay-req}`
+filters, so `full` (`HWTSTAMP_FILTER_ALL`) is rejected and `normal`
+(`PTP_V2_EVENT`) is what works.
+
+So the units no longer hard-code the flag. After selecting the clock,
+`dserv-ptp-select-phc` reads that clock's **Hardware Receive Filter Modes** and
+writes `/run/dserv-ptp/IFACE.env`: `HWTS_FILTER=full` if `all` is listed, else
+`HWTS_FILTER=normal`. The units load it (`EnvironmentFile=-`) and run
+`--hwts_filter ${HWTS_FILTER}`, defaulting to `full` when the file is absent — no
+ethtool, no readable filter list, or a clock switch that failed. That last case
+is deliberate: falling back to `normal` there would let a CM5's PHY clock sync
+quietly over MDIO instead of failing loudly.
+
+`dserv-ptp-setup candidates` shows the mode each interface would get, and
+`status` shows the one the running unit started with. A hand-written drop-in
+that overrides `ExecStart=` with `--hwts_filter normal` (the interim tracker
+workaround) is superseded; remove it:
+
+    sudo rm /etc/systemd/system/dserv-ptp4l-client@enp2s0f0np0.service.d/hwts-normal.conf
+    sudo systemctl daemon-reload && sudo systemctl restart dserv-ptp4l-client@enp2s0f0np0
 
 **`systemctl is-active` does not tell you PTP works.** ptp4l stays running with
 port 1 in FAULTY, timestamping nothing, looking perfectly healthy to systemd.
@@ -118,8 +143,8 @@ the pair to read.
 Look for `PTP Hardware Clock: <n>` (not `none`) plus `hardware-transmit`,
 `hardware-receive`, `hardware-raw-clock`. Also read the **Hardware Receive
 Filter Modes** list: if it shows only `none` and `all`, `--hwts_filter full` is
-required, which is why both units carry it. Both NICs measured so far are like
-that, so treat it as the norm rather than a quirk.
+required; if it has no `all` (X710), `normal` is. The units pick between them
+automatically (above); the list is still the thing to read when a port is FAULTY.
 
 If `/dev/ptpN` is root-only, add a udev rule so unattended tooling (and
 `host/phc_offset`) does not need sudo:

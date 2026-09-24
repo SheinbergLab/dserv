@@ -1,6 +1,8 @@
 #!/bin/sh
 # dserv-ptp-select-phc IFACE -- point IFACE's hardware timestamping at the MAC's
-# OWN PHC, and not at some other clock the kernel happens to prefer.
+# OWN PHC, and not at some other clock the kernel happens to prefer. Then write
+# the --hwts_filter mode that clock supports to /run/dserv-ptp/IFACE.env, which
+# both ptp4l units read (see "THE FILTER" below).
 #
 # WHY THIS EXISTS. An interface can expose more than one PTP hardware clock, and
 # since Linux 6.13 the one used for timestamping is a per-interface setting (the
@@ -15,9 +17,10 @@
 #   ptp4l   the PHY offers RX filters {none, ptpv2-event} and has no
 #           HWTSTAMP_FILTER_ALL, so `--hwts_filter full` fails with
 #           `ioctl SIOCSHWTSTAMP failed: Numerical result out of range` and the
-#           port goes INITIALIZING -> FAULTY. Note this is the OPPOSITE of the
-#           NICs the units were written against ({none, all}), so the reflex
-#           "drop --hwts_filter full" is wrong: the flag is right, the clock was.
+#           port goes INITIALIZING -> FAULTY. The MAC clock offers {none, all},
+#           so the fix there is the CLOCK, not the flag: once the MAC clock is
+#           selected, `full` is right again (and the filter decision below,
+#           which reads the list AFTER selection, says so).
 #   phc2sys PHC reads go over MDIO. Measured 2026-08-03 on hm-0: delay 215463 ns
 #           with offsets swinging +/-30 us, versus delay 55 ns and +/-40 ns on
 #           the MAC clock. That is a 4000x difference that reads as ordinary
@@ -45,16 +48,46 @@
 # kernel's own answer (ethtool -T) as a tiebreak, the way dserv-ptp-setup's
 # iface_phc_kernel() does.
 #
+# THE FILTER. ptp4l's --hwts_filter picks the SIOCSHWTSTAMP rx_filter it asks for:
+#   full    HWTSTAMP_FILTER_ALL. Required on clocks whose Hardware Receive Filter
+#           Modes are only {none, all} (Pi 5 macb, I226-V igc): they never honour
+#           the per-protocol default, so every event message arrives WITHOUT a
+#           timestamp and offsets sit at a confident-looking 0.
+#   normal  HWTSTAMP_FILTER_PTP_V2_EVENT (ptp4l falls back to the L2/L4 variant).
+#           Required on clocks that do not offer `all` at all: Intel X710 (i40e)
+#           lists none + ptpv2-{l4,l2,}-{event,sync,delay-req}, so `full` gets
+#           ERANGE and the port goes FAULTY (psychophysics tracker, enp2s0f0np0,
+#           kernel 6.12) -- the same symptom as the wrong-clock case above, with
+#           the opposite cause.
+# So: `all` in the list of the SELECTED clock -> full, otherwise normal. The list
+# is read after selection because it belongs to the clock, not to the host.
+#
+# When NOT to decide: if the list cannot be read (no ethtool, empty section), or
+# if the MAC clock was wanted and could NOT be selected. The file is then left
+# absent and the units fall back to `full`, today's behaviour. The second case is
+# deliberate: on hm-0 a failed switch leaves the PHY clock, which would accept
+# `normal` and then sync -- over MDIO, at 215 us of read delay. A loud FAULTY
+# beats a quiet wrong clock, so a failed selection must never be papered over by
+# downgrading the filter.
+#
 # Idempotent, and a deliberate no-op rather than an error when there is nothing
-# to do: no ethtool, a pre-6.13 kernel with no provider concept (office-stim on
-# 6.12 prints the old `PTP Hardware Clock: 0` and has no provider line at all),
-# one clock, or the setting already correct. It is wired in as `ExecStartPre=-`,
-# so it must never be the reason PTP fails to start.
+# to select: no ethtool, a pre-6.13 kernel with no provider concept (office-stim
+# on 6.12 prints the old `PTP Hardware Clock: 0` and has no provider line at all),
+# one clock, or the setting already correct -- the filter is still decided in all
+# of those but the first. It is wired in as `ExecStartPre=-`, so it must never be
+# the reason PTP fails to start.
 set -e
 
 IF=$1
 [ -n "$IF" ] || { echo "usage: $0 IFACE" >&2; exit 2; }
 [ -e "/sys/class/net/$IF" ] || { echo "$0: no such interface: $IF" >&2; exit 2; }
+
+RUNDIR=/run/dserv-ptp
+ENVF=$RUNDIR/$IF.env
+# Clear the previous decision FIRST. Every early exit below then means "no
+# decision -> the unit's default (full)", never a stale answer about a clock
+# that is no longer selected.
+rm -f "$ENVF" 2>/dev/null || true
 
 ETHTOOL=
 for e in /usr/sbin/ethtool /sbin/ethtool /usr/bin/ethtool; do
@@ -64,38 +97,83 @@ done
 # in /usr/sbin, which is absent from a non-login shell's PATH, so it reports
 # "not found" on a host where it is plainly installed. Cost a wrong diagnosis
 # once already.
-[ -n "$ETHTOOL" ] || { echo "$0: no ethtool; leaving $IF timestamping alone"; exit 0; }
+[ -n "$ETHTOOL" ] || { echo "$0: no ethtool; leaving $IF timestamping alone (hwts_filter: unit default, full)"; exit 0; }
 
-# The MAC's own PHC, via the netdev. First match wins; both layouts checked.
-want=
-for d in "/sys/class/net/$IF/device/ptp"/ptp* "/sys/class/net/$IF"/ptp*; do
-    [ -e "$d" ] || continue
-    want=$(basename "$d" | sed 's/^ptp//')
-    break
-done
-[ -n "$want" ] || { echo "$0: $IF has no PHC reachable from the netdev (a shared SoC timer, e.g. i.MX95 NETC, sits elsewhere); leaving timestamping alone"; exit 0; }
+provider_index() {
+    "$ETHTOOL" -T "$IF" 2>/dev/null | sed -n 's/.*[Pp]rovider index:[[:space:]]*\([0-9]\{1,\}\).*/\1/p' | head -1
+}
 
-# Pre-6.13 kernels have a single provider and no line to parse. Their ethtool
-# output says `PTP Hardware Clock: N` instead, which is not settable and does not
-# need to be.
-have=$("$ETHTOOL" -T "$IF" 2>/dev/null | sed -n 's/.*[Pp]rovider index:[[:space:]]*\([0-9]\{1,\}\).*/\1/p' | head -1)
-[ -n "$have" ] || { echo "$0: $IF has no selectable timestamp provider (pre-6.13 kernel); nothing to do"; exit 0; }
+# The first word of each line under "Hardware Receive Filter Modes:". Both ethtool
+# formats indent the entries (ioctl: "\tall   (HWTSTAMP_FILTER_ALL)"; netlink:
+# "\tall"), and a clock with NO filters prints " none" on the header line itself,
+# which yields an empty list here rather than a bogus `none` mode.
+rx_filters() {
+    "$ETHTOOL" -T "$IF" 2>/dev/null | awk '
+        /^Hardware Receive Filter Modes:/ { f = 1; next }
+        f && /^[^[:space:]]/             { exit }
+        f && NF                          { print $1 }'
+}
 
-if [ "$have" = "$want" ]; then
-    echo "$0: $IF already timestamping on ptp$want ($(cat "/sys/class/ptp/ptp$want/clock_name" 2>/dev/null))"
+# Select the MAC's own clock. Returns 0 when timestamping is on the right clock
+# (or there is nothing to choose between), 1 when a switch was needed and did not
+# take -- the one case where the filter must NOT be decided (see THE FILTER).
+select_phc() {
+    # The MAC's own PHC, via the netdev. First match wins; both layouts checked.
+    want=
+    for d in "/sys/class/net/$IF/device/ptp"/ptp* "/sys/class/net/$IF"/ptp*; do
+        [ -e "$d" ] || continue
+        want=$(basename "$d" | sed 's/^ptp//')
+        break
+    done
+    [ -n "$want" ] || { echo "$0: $IF has no PHC reachable from the netdev (a shared SoC timer, e.g. i.MX95 NETC, sits elsewhere); leaving timestamping alone"; return 0; }
+
+    # Pre-6.13 kernels have a single provider and no line to parse. Their ethtool
+    # output says `PTP Hardware Clock: N` instead, which is not settable and does
+    # not need to be.
+    have=$(provider_index)
+    [ -n "$have" ] || { echo "$0: $IF has no selectable timestamp provider (pre-6.13 kernel); nothing to select"; return 0; }
+
+    if [ "$have" = "$want" ]; then
+        echo "$0: $IF already timestamping on ptp$want ($(cat "/sys/class/ptp/ptp$want/clock_name" 2>/dev/null))"
+        return 0
+    fi
+
+    echo "$0: $IF timestamping on ptp$have ($(cat "/sys/class/ptp/ptp$have/clock_name" 2>/dev/null)) -> ptp$want ($(cat "/sys/class/ptp/ptp$want/clock_name" 2>/dev/null))"
+    "$ETHTOOL" --set-hwtimestamp-cfg "$IF" index "$want" qualifier precise >/dev/null 2>&1 || {
+        echo "$0: WARNING: could not select ptp$want on $IF (ethtool too old for --set-hwtimestamp-cfg?)." >&2
+        echo "$0:          ptp4l may fail with SIOCSHWTSTAMP ERANGE, or sync against the wrong clock." >&2
+        return 1
+    }
+
+    # Verify rather than assume: the ioctl can be accepted and the provider still
+    # not change, and a silent half-success here is indistinguishable from working
+    # PTP until someone reads a delay figure three orders of magnitude too big.
+    now=$(provider_index)
+    [ "$now" = "$want" ] || { echo "$0: WARNING: asked for ptp$want on $IF but it reports ptp$now" >&2; return 1; }
+    return 0
+}
+
+if ! select_phc; then
+    echo "$0: NOT choosing a filter for $IF: it is not on its own clock, and a filter" >&2
+    echo "$0: that suits the wrong clock would hide that. ptp4l gets the default (full)." >&2
     exit 0
 fi
 
-echo "$0: $IF timestamping on ptp$have ($(cat "/sys/class/ptp/ptp$have/clock_name" 2>/dev/null)) -> ptp$want ($(cat "/sys/class/ptp/ptp$want/clock_name" 2>/dev/null))"
-"$ETHTOOL" --set-hwtimestamp-cfg "$IF" index "$want" qualifier precise >/dev/null 2>&1 || {
-    echo "$0: WARNING: could not select ptp$want on $IF (ethtool too old for --set-hwtimestamp-cfg?)." >&2
-    echo "$0:          ptp4l may fail with SIOCSHWTSTAMP ERANGE, or sync against the wrong clock." >&2
+filters=$(rx_filters)
+if [ -z "$filters" ]; then
+    echo "$0: $IF lists no hardware receive filter modes; hwts_filter: unit default (full)"
     exit 0
-}
+fi
+flist=$(echo "$filters" | tr '\n' ' ' | sed 's/ $//')
+if echo "$filters" | grep -qx all; then
+    mode=full
+else
+    mode=normal
+    echo "$filters" | grep -q '^ptpv2' \
+        || echo "$0: WARNING: $IF offers neither \`all\` nor any ptpv2 filter ($flist); ptp4l will likely fail either way" >&2
+fi
 
-# Verify rather than assume: the ioctl can be accepted and the provider still not
-# change, and a silent half-success here is indistinguishable from working PTP
-# until someone reads a delay figure three orders of magnitude too big.
-now=$("$ETHTOOL" -T "$IF" 2>/dev/null | sed -n 's/.*[Pp]rovider index:[[:space:]]*\([0-9]\{1,\}\).*/\1/p' | head -1)
-[ "$now" = "$want" ] || echo "$0: WARNING: asked for ptp$want on $IF but it reports ptp$now" >&2
+mkdir -p "$RUNDIR"
+printf 'HWTS_FILTER=%s\n' "$mode" > "$ENVF.tmp" && mv -f "$ENVF.tmp" "$ENVF"
+echo "$0: $IF hwts_filter $mode (rx filters: $flist) -> $ENVF"
 exit 0

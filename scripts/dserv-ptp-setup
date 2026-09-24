@@ -258,6 +258,35 @@ iface_capable() {
     iface_phc "$_if" >/dev/null
 }
 
+# The --hwts_filter the ptp4l units will run with on this interface -- the same
+# decision dserv-ptp-select-phc writes to /run/dserv-ptp/IF.env at unit start,
+# made here read-only: `full` if the selected clock lists `all` among its
+# Hardware Receive Filter Modes, else `normal`. Some NICs offer only {none, all}
+# and need `full` (Pi 5 macb, I226-V igc); some offer no `all` and reject it
+# with ERANGE (X710 i40e) and need `normal`.
+#
+# The list belongs to the CLOCK. When the kernel is timestamping on a clock other
+# than the interface's own (hm-0: the PHY), the list read now is the wrong
+# clock's, so say that the answer comes after the switch rather than print it.
+hwts_mode() {
+    _if=$1
+    [ -n "$ETHTOOL" ] || { echo "full (unit default; no ethtool to check)"; return 0; }
+    _want=$(iface_phc "$_if" 2>/dev/null) || _want=
+    _have=$("$ETHTOOL" -T "$_if" 2>/dev/null \
+            | sed -n 's/.*[Pp]rovider index:[[:space:]]*\([0-9]\{1,\}\).*/\1/p' | head -1)
+    if [ -n "$_want" ] && [ -n "$_have" ] && [ "ptp$_have" != "$_want" ]; then
+        echo "decided after switching to $_want"; return 0
+    fi
+    _f=$("$ETHTOOL" -T "$_if" 2>/dev/null | awk '
+            /^Hardware Receive Filter Modes:/ { f = 1; next }
+            f && /^[^[:space:]]/             { exit }
+            f && NF                          { print $1 }')
+    if [ -z "$_f" ]; then echo "full (unit default; no rx filter list)"
+    elif echo "$_f" | grep -qx all; then echo full
+    else echo normal
+    fi
+}
+
 candidates() {
     [ -n "$ETHTOOL" ] || echo "  (ethtool not installed -- checking PHC presence only;" \
                               "\`apt install ethtool\` to also verify hw timestamping)"
@@ -269,7 +298,8 @@ candidates() {
             # Prefer the interface's OWN clock (what we want it to use); fall
             # back to the kernel's answer on hosts where it owns none directly.
             echo "  $_if  ($(iface_phc "$_if" || iface_phc_kernel "$_if" || echo 'phc?'),"\
-                 "link $(cat "$_p/operstate" 2>/dev/null))"
+                 "link $(cat "$_p/operstate" 2>/dev/null),"\
+                 "hwts_filter $(hwts_mode "$_if"))"
             _found=1
         fi
     done
@@ -372,7 +402,7 @@ status() {
               | sed -n 's/.*portState[[:space:]]\{1,\}\([A-Z_]\{1,\}\).*/\1/p' | head -1)
         [ -n "$_st" ] && {
             echo "== port =="
-            echo "  portState $_st$([ "$_st" = FAULTY ] && echo '   <-- timestamping NOTHING; see: dserv-ptp-select-phc')"
+            echo "  portState $_st$([ "$_st" = FAULTY ] && echo '   <-- timestamping NOTHING; wrong clock or wrong hwts_filter, see: dserv-ptp-select-phc')"
         }
     fi
     if [ -n "$ETHTOOL" ]; then
@@ -382,6 +412,10 @@ status() {
             _idx=$("$ETHTOOL" -T "$_i" 2>/dev/null \
                    | sed -n 's/.*[Pp]rovider index:[[:space:]]*\([0-9]\{1,\}\).*/\1/p' | head -1)
             [ -n "$_idx" ] && echo "  $_i timestamping on ptp$_idx ($(cat "/sys/class/ptp/ptp$_idx/clock_name" 2>/dev/null))"
+            # What the running unit was actually started with, not what it would
+            # be now: the env file select-phc wrote at the last (re)start.
+            _hf=$(sed -n 's/^HWTS_FILTER=//p' "/run/dserv-ptp/$_i.env" 2>/dev/null)
+            echo "  $_i hwts_filter ${_hf:-full (no /run/dserv-ptp/$_i.env; unit default)}"
             break
         done
     fi
@@ -648,11 +682,17 @@ enable_pair() {
               | sed -n 's/.*portState[[:space:]]\{1,\}\([A-Z_]\{1,\}\).*/\1/p' | head -1)
         case "$_st" in
           FAULTY) die "${_p}${_if} is running but port 1 is FAULTY -- it is timestamping nothing.
-   Almost always the wrong PTP hardware clock: an interface can expose both a MAC
-   and a PHY PHC, and the PHY typically rejects --hwts_filter full with
-   SIOCSHWTSTAMP ERANGE. Check which clock is selected, and fix it with:
-       $ETHTOOL -T $_if | grep -i 'provider index'
-       dserv-ptp-select-phc $_if && systemctl restart ${_p}${_if}
+   Usually SIOCSHWTSTAMP ERANGE (see the log), which has two causes:
+   1. The WRONG PTP hardware clock: an interface can expose both a MAC and a PHY
+      PHC, and the PHY (hm-0/CM5) rejects --hwts_filter full. Fix the CLOCK:
+          $ETHTOOL -T $_if | grep -i 'provider index'
+          dserv-ptp-select-phc $_if && systemctl restart ${_p}${_if}
+   2. The right clock, but the filter does not match what it offers: \`full\` needs
+      \`all\` in its Hardware Receive Filter Modes (X710/i40e has none, and needs
+      \`normal\`). The unit reads the choice from /run/dserv-ptp/$_if.env, which
+      dserv-ptp-select-phc writes; check for a drop-in overriding ExecStart=:
+          $ETHTOOL -T $_if | sed -n '/Receive Filter/,\$p'
+          cat /run/dserv-ptp/$_if.env; systemctl cat ${_p}${_if}
    Full log: journalctl -u ${_p}${_if}" ;;
           "")     : ;;   # pmc gave no answer; not a reason to fail the setup
           MASTER|SLAVE) echo "port 1 ($_if): $_st" ;;

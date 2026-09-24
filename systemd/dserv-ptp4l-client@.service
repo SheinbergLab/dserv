@@ -18,16 +18,22 @@
 # ptp/d_delta_us exists to detect. slaveOnly makes that impossible rather than
 # unlikely.
 #
-# --hwts_filter full for the same reason as the grandmaster unit: a NIC that
-# advertises only `none` and `all` never honours the default PTP_V2_EVENT
-# filter, and every event message arrives untimestamped while offsets sit at a
-# confident-looking 0. Check `ethtool -T %i` on any new host.
+# --hwts_filter is chosen per clock, as in the grandmaster unit: `full` where
+# the NIC advertises only `none` and `all` (it never honours the default
+# PTP_V2_EVENT filter, and every event message arrives untimestamped while
+# offsets sit at a confident-looking 0), `normal` where it offers no `all` at
+# all (Intel X710/i40e: `full` gets SIOCSHWTSTAMP ERANGE -> port FAULTY).
+# ExecStartPre writes the choice to /run/dserv-ptp/%i.env; absent, it is `full`.
 #
 # And, as there, that filter list belongs to the selected CLOCK: an interface can
 # expose both a MAC and a PHY PHC, and the kernel's default choice can be the one
-# that rejects this flag outright (SIOCSHWTSTAMP ERANGE -> port FAULTY). The
-# ExecStartPre below picks the MAC's own clock; do not "fix" a FAULTY port by
-# deleting --hwts_filter full.
+# that rejects `full` outright. The ExecStartPre below picks the MAC's own clock
+# first and only then reads its filter list, so a FAULTY port on such a host is
+# fixed by the clock selection -- never by forcing the filter down to `normal`.
+#
+# A hand-written drop-in overriding ExecStart= with `--hwts_filter normal` (the
+# interim i40e workaround on the psychophysics tracker) is superseded by this;
+# delete it and daemon-reload.
 Description=PTP client (ptp4l slaveOnly) on %i
 Documentation=file:/usr/local/dserv/extio-zephyr/PORTING.md
 Wants=network-online.target
@@ -42,11 +48,14 @@ Conflicts=dserv-ptp4l@%i.service
 
 [Service]
 Type=simple
-# Same clock selection as the grandmaster unit -- a client is if anything more
+# Same clock + filter selection as the grandmaster unit -- a client is if anything more
 # exposed to getting this wrong, since a client on the wrong PHC still elects a
 # master and still prints offsets. See dserv-ptp4l@.service.
+# The filter it chose is read from the env file; see dserv-ptp4l@.service.
+Environment=HWTS_FILTER=full
+EnvironmentFile=-/run/dserv-ptp/%i.env
 ExecStartPre=-/usr/local/dserv/scripts/dserv-ptp-select-phc %i
-ExecStart=/usr/sbin/ptp4l -i %i -H -m -q -s --hwts_filter full
+ExecStart=/usr/sbin/ptp4l -i %i -H -m -q -s --hwts_filter ${HWTS_FILTER}
 Restart=always
 RestartSec=5
 

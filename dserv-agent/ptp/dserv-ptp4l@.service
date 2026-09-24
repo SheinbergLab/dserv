@@ -6,20 +6,32 @@
 # that name, and silently shadowing or being shadowed by a distro unit is a bad
 # failure for something whose whole job is to be trustworthy.
 #
-# --hwts_filter full is REQUIRED, and not just on one NIC. ptp4l asks for
-# HWTSTAMP_FILTER_PTP_V2_EVENT by default; a NIC that advertises only `none` and
-# `all` never honours it, so every event message arrives WITHOUT a timestamp and
-# mean_delay / offset_from_tt sit at 0 -- a confident-looking, meaningless
-# result. Both NICs measured so far are like this (Pi 5 macb, Intel I226-V igc).
-# Check `ethtool -T <iface>` on any new host before assuming the default works.
+# --hwts_filter is chosen PER CLOCK, not hard-coded. ptp4l asks for
+# HWTSTAMP_FILTER_PTP_V2_EVENT by default (`normal`); a NIC that advertises only
+# `none` and `all` never honours it, so every event message arrives WITHOUT a
+# timestamp and mean_delay / offset_from_tt sit at 0 -- a confident-looking,
+# meaningless result. Those NICs (Pi 5 macb, Intel I226-V igc) need `full`. But
+# other NICs offer no `all` at all -- Intel X710 (i40e) lists only none plus the
+# ptpv2 l4/l2/event/sync/delay-req filters -- and there `full` gets SIOCSHWTSTAMP
+# ERANGE and the port goes FAULTY, while `normal` works. So ExecStartPre reads
+# the Hardware Receive Filter Modes of the selected clock and writes
+# /run/dserv-ptp/%i.env: HWTS_FILTER=full if `all` is listed, else normal. With
+# no file (no ethtool, or the clock switch below failed) the default is `full`,
+# which is what every host ran before this was made per-clock.
 #
-# ...but that filter list is a property of the selected CLOCK, not of the host.
+# ...and that filter list is a property of the selected CLOCK, not of the host.
 # An interface can expose several PHCs (a MAC clock and a PHY clock), and since
 # Linux 6.13 which one is used is a settable per-interface "timestamp provider"
 # whose default can be the wrong one -- on hm-0 (CM5, 6.18) it is the BCM PHY,
-# which offers {none, ptpv2-event}, rejects this flag with SIOCSHWTSTAMP ERANGE,
-# and drives phc2sys over MDIO at 215 us of read delay. If you land on that,
-# DO NOT drop --hwts_filter full: fix the clock. ExecStartPre below does it.
+# which offers {none, ptpv2-event}, rejects `full` with SIOCSHWTSTAMP ERANGE,
+# and drives phc2sys over MDIO at 215 us of read delay. The fix there is the
+# CLOCK, not the filter: the MAC clock offers {none, all}, so once it is
+# selected `full` is right again. dserv-ptp-select-phc does both, in that order,
+# and deliberately does NOT downgrade to `normal` if the switch fails -- that
+# would let the PHY clock sync quietly instead of failing loudly.
+#
+# A hand-written drop-in overriding ExecStart= with `--hwts_filter normal` (the
+# interim workaround for i40e) is no longer needed: delete it and daemon-reload.
 #
 # --priority1 127 makes this host the grandmaster. The boxes are slaves and need
 # no configuration; they discipline their ENET 1588 counters to this PHC.
@@ -59,13 +71,19 @@ Type=simple
 # -2 here silently stops every UDP box from syncing -- and a transport mismatch
 # produces TOTAL SILENCE rather than an error, which is harder to diagnose than the
 # bug it was meant to work around.
-# Point %i at its MAC's own PHC before ptp4l opens it (see the note above). The
-# leading `-` is load-bearing: this is a correction for one class of host, and it
-# must never be the reason PTP fails to start on the others. phc2sys is ordered
-# After= this unit and resolves `-c %i` through the same setting, so fixing it
-# here fixes both daemons.
+# Point %i at its MAC's own PHC before ptp4l opens it, then record the filter
+# that clock supports (see the notes above). The leading `-` is load-bearing:
+# this is a correction for some classes of host, and it must never be the reason
+# PTP fails to start on the others. phc2sys is ordered After= this unit and
+# resolves `-c %i` through the same setting, so fixing it here fixes both daemons.
+#
+# EnvironmentFile= is read after ExecStartPre= has finished (systemd reads it per
+# unit state), so the file the script just wrote is the one ExecStart= sees. The
+# `-` makes it optional; Environment= supplies the default it then overrides.
+Environment=HWTS_FILTER=full
+EnvironmentFile=-/run/dserv-ptp/%i.env
 ExecStartPre=-/usr/local/dserv/scripts/dserv-ptp-select-phc %i
-ExecStart=/usr/sbin/ptp4l -i %i -H -m -q --priority1 127 --hwts_filter full
+ExecStart=/usr/sbin/ptp4l -i %i -H -m -q --priority1 127 --hwts_filter ${HWTS_FILTER}
 Restart=always
 RestartSec=5
 
