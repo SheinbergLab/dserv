@@ -195,31 +195,20 @@
                                         <input type="number" id="slider-range" value="10" min="0.1" max="100" step="0.5">
                                     </div>
                                 </div>
+                                <!-- Source is a readout, set in the gear. A selector here
+                                     made a RUNTIME override (settings::put without
+                                     -persist) that silently reverted at restart, next to
+                                     a gear that persists -- two controls, two lifetimes,
+                                     for one setting. The suffix says where the value comes
+                                     from, so an undeclared `auto` or a live override is
+                                     visible at a glance. -->
                                 <div class="ess-input-row">
-                                    <span class="ess-input-label" title="This session only — reverts at restart to local/slider.tcl">Source*</span>
-                                    <div class="ess-input-group">
-                                        <select id="slider-source" class="ess-input-select">
-                                            <option value="auto">auto</option>
-                                            <option value="ain">ain</option>
-                                            <option value="trackpad">trackpad</option>
-                                            <option value="extio">extio (stick)</option>
-                                            <option value="virtual">virtual</option>
-                                        </select>
-                                    </div>
+                                    <span class="ess-input-label" title="set in the ⚙ gear, which saves it to local/rig.tcl">Source</span>
+                                    <span id="slider-source-value" class="ess-slider-mode-value">—</span>
                                 </div>
                                 <div class="ess-input-row">
                                     <span class="ess-input-label">Mode</span>
                                     <span id="slider-mode-value" class="ess-slider-mode-value">—</span>
-                                </div>
-                                <div class="ess-input-row">
-                                    <!-- The selector calls set_source at RUNTIME and nothing
-                                         persists it, so it reverts at restart to whatever
-                                         local/slider.tcl declares. Saying so is the smallest
-                                         honest fix: without it, testing a source appears to
-                                         work and then silently reverts. -->
-                                    <span class="ess-input-label" style="font-size:11px">
-                                        * session only; local/slider.tcl wins at restart
-                                    </span>
                                 </div>
                             </div>
                             <!-- Eye Tracker Settings -->
@@ -1299,7 +1288,8 @@
              this.engagedIndicator = document.getElementById('slider-engaged-indicator');
              this.modeValue = document.getElementById('slider-mode-value');
              this.rangeInput = document.getElementById('slider-range');
-             this.sourceSelect = document.getElementById('slider-source');
+             this.sourceValue = document.getElementById('slider-source-value');
+             this.sourceOrigin = '';        // settings layer: default | file | runtime
              this.dragging = false;
              this.range = 10.0;
              this.currentX = 0.0;
@@ -1442,19 +1432,18 @@
 
          setupSource() {
              // Reflect settings from the slider subprocess: source drives
-             // UI interactivity (gating drag + virtual_slider stream), mode
-             // is a passive readout of what the current system declared.
+             // UI interactivity (gating drag + virtual_slider stream), and
+             // source and mode are passive readouts. Source is SET in the
+             // gear (openSettingsModal('slider')), which persists it.
              this.dpManager?.subscribe('slider/settings', (data) => {
                  const str = (data.value || '').toString();
                  const parsed = this.parseTclDict(str);
                  if (parsed.source) {
-                     if (this.sourceSelect) {
-                         this.sourceSelect.value = parsed.source;
-                     }
                      if (parsed.source !== this.currentSource) {
                          this.currentSource = parsed.source;
                          this.updateInteractivity();
                      }
+                     this.renderSource();
                  }
                  if (this.modeValue) {
                      const mode = parsed.continuity_mode || '—';
@@ -1465,14 +1454,30 @@
                  }
              });
 
-             // On change, send source to slider subprocess. The matching
-             // slider/settings publish will round-trip through the handler
-             // above and trigger updateInteractivity(), so we don't need
-             // to call it directly here.
-             this.sourceSelect?.addEventListener('change', () => {
-                 const src = this.sourceSelect.value;
-                 this.sendCommand('slider', `slider::set_source ${src}`);
+             // Which settings layer the source comes from -- the same
+             // datapoint the gear shows provenance from.
+             this.dpManager?.subscribe('settings/slider/source/source', (data) => {
+                 this.sourceOrigin = String(data.data ?? data.value ?? '').trim();
+                 this.renderSource();
              });
+         }
+
+         // "extio · rig.tcl", "auto · default", "virtual · this session".
+         // The suffix is the point: an undeclared `auto` is how a rig with
+         // a real stick ends up fighting the panel, and a live override is
+         // how a test leaves a rig on the wrong source until restart.
+         renderSource() {
+             if (!this.sourceValue) return;
+             const where = { file: 'rig.tcl', default: 'default',
+                             runtime: 'this session' }[this.sourceOrigin];
+             const titles = {
+                 file:    'declared by this rig in local/rig.tcl',
+                 default: 'nobody has declared this; set it in the ⚙ gear',
+                 runtime: 'a live override, lost on restart unless persisted in the ⚙ gear'
+             };
+             this.sourceValue.textContent = where
+                 ? `${this.currentSource} · ${where}` : this.currentSource;
+             this.sourceValue.title = titles[this.sourceOrigin] || '';
          }
 
          parseTclDict(str) {

@@ -165,6 +165,7 @@ function requestInitialData() {
           ess/screen_w ess/screen_h ess/screen_halfx ess/screen_halfy
           ess/params ess/datafile ess/sortby_columns ess/block_id
           ess/buttons/channels ess/slider_active slider/settings
+          settings/slider/source/source slider/virtual_enabled
           ess/joystick_active ess/joystick/dir ess/joystick/response
           ess/dial_active ess/dial/geometry ess/dial/sources
           ess/dial/source_origin ess/dial/bound ess/dial/pointer
