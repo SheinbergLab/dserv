@@ -1308,12 +1308,18 @@
              // the slider subprocess's source is one the UI actually drives.
              this.experimentActive = false;
              this.currentSource = 'auto';
-             this.virtualStarted = false;
+             this.virtualStarted = false;   // this page started the stream
+             this.externalStream = false;   // someone else's (a script, a test) is running
              this.setupSubscriptions();
              this.setupDrag();
              this.setupRange();
              this.setupSource();
              this.updateInteractivity();
+             // A stream this page started must not outlive it. Nothing else
+             // would ever send `stop`, and virtual_slider would go on
+             // publishing the parked thumb into slider/position after the tab
+             // is gone. Best effort: the socket may already be closing.
+             window.addEventListener('pagehide', () => this.stopStream());
          }
 
          sendCommand(subprocess, cmd) {
@@ -1353,6 +1359,19 @@
                  }
              });
 
+             // Whether virtual_slider is streaming at all, so this page can
+             // tell its own stream from one a script or test started, and
+             // never stops one it did not start.
+             this.dpManager?.subscribe('slider/virtual_enabled', (data) => {
+                 const on = parseInt(data.value) > 0;
+                 if (!on) {
+                     this.virtualStarted = false;   // stopped, by us or anyone
+                     this.externalStream = false;
+                 } else if (!this.virtualStarted) {
+                     this.externalStream = true;
+                 }
+             });
+
              // Engagement dot: subject's finger on trackpad, or pot-wired,
              // or virtual stream active. Different from ess/slider_active,
              // which is the "is slider_init called" flag.
@@ -1364,26 +1383,50 @@
              });
          }
 
-         // Stream should run and the track should be draggable only when a
-         // protocol is using the slider AND the chosen source is one the UI
-         // can actually drive. `auto` is permissive: the UI participates,
-         // competing inputs (ain, trackpad) override via last-writer-wins.
+         // The track is draggable only when a protocol is using the slider
+         // AND the source is one the UI can drive (virtual or auto). When the
+         // stream runs depends on which:
+         //
+         //   virtual - the panel IS the input, so it streams for as long as
+         //             a protocol uses the slider.
+         //   auto    - every input path publishes slider/position, last
+         //             writer wins. Streaming the parked thumb (100 Hz of
+         //             "0 0" unless dragged) fought any real stick or pot:
+         //             held to one side, the reading flipped between the
+         //             stick's value and 0. So here it streams only WHILE
+         //             the thumb is dragged (see setupDrag), and a real input
+         //             owns slider/position the rest of the time.
          updateInteractivity() {
              const uiCanDrive = (this.currentSource === 'virtual' ||
                                  this.currentSource === 'auto');
-             const needsStream = this.experimentActive && uiCanDrive;
+             const canDrag = this.experimentActive && uiCanDrive;
+             const streamAlways = this.experimentActive &&
+                                  this.currentSource === 'virtual';
 
-             if (needsStream && !this.virtualStarted) {
-                 this.sendCommand('virtual_slider', 'start 10');
-                 this.virtualStarted = true;
-             } else if (!needsStream && this.virtualStarted) {
-                 this.sendCommand('virtual_slider', 'stop');
-                 this.virtualStarted = false;
+             if (streamAlways) {
+                 this.startStream();
+             } else if (!this.dragging || !canDrag) {
+                 this.stopStream();
              }
 
              if (this.track) {
-                 this.track.classList.toggle('readonly', !needsStream);
+                 this.track.classList.toggle('readonly', !canDrag);
              }
+         }
+
+         // Start/stop only ever touch a stream THIS page started -- a
+         // script or test driving virtual_slider (see ess_transports) keeps
+         // its own.
+         startStream() {
+             if (this.virtualStarted || this.externalStream) return;
+             this.sendCommand('virtual_slider', 'start 10');
+             this.virtualStarted = true;
+         }
+
+         stopStream() {
+             if (!this.virtualStarted) return;
+             this.sendCommand('virtual_slider', 'stop');
+             this.virtualStarted = false;
          }
 
          setupRange() {
@@ -1445,7 +1488,10 @@
              const startDrag = (clientX) => {
                  this.dragging = true;
                  this.thumb.classList.add('active');
+                 // position first, so the stream's first sample is where the
+                 // thumb went, not wherever it was parked
                  this.updateFromClientX(clientX);
+                 if (this.currentSource === 'auto') this.startStream();
              };
 
              const moveDrag = (clientX) => {
@@ -1457,7 +1503,11 @@
                  if (!this.dragging) return;
                  this.dragging = false;
                  this.thumb.classList.remove('active');
-                 // Non-centering: thumb stays where released, like real hardware
+                 // Non-centering: thumb stays where released, like real
+                 // hardware. Under auto the stream ends with the drag, and
+                 // slider/position keeps the released value until a real
+                 // input publishes (see updateInteractivity).
+                 if (this.currentSource === 'auto') this.stopStream();
              };
 
              // Mouse events on track (click anywhere to jump)
