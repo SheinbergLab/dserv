@@ -91,6 +91,16 @@ Press the PI's boot button, and the Pi desktop should come up with your customiz
 
 If you configured, say, wifi, then the Pi should connect to your network automatically at startup.
 
+## Next: dserv, stim2, and agent setup
+
+To install dserv, stim2 and dlsh and run systems, follow
+[local_systems_setup](../local_systems_setup/README.md#linux-arm64-raspberry-pi).
+If you'll be developing on this Pi with Claude Code, also do its last
+section,
+[Developing with an AI agent](../local_systems_setup/README.md#developing-with-an-ai-agent-claude-code).
+It clones the source repos and adds the one-line `~/.claude/CLAUDE.md` that
+points every session at dserv's agent notes.
+
 # Real-Time Linux Kernel
 
 With the Pi up and running and a bootable SD card in hand, you can now cross-compile and install a real-time Linux kernel.

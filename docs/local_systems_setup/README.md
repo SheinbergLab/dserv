@@ -331,3 +331,32 @@ Watch the physics simulation play out and see if you guessed right:
 Or if you guessed wrong:
 
 ![Planko stim2 incorrect window](./stim2-planko-3.png)
+
+# Developing with an AI agent (Claude Code)
+
+The packages above are enough to *run* systems. For an agent to *develop*
+them well, clone the source repos too. They carry the docs and tools an
+agent reads (`dserv/CLAUDE.md`, `dserv/docs/`, `dserv/tools/viztest`,
+`dlsh/CLAUDE.md`), and the source is the ground truth when a doc and the
+code disagree:
+
+```
+mkdir -p ~/src && cd ~/src
+git clone --recurse-submodules https://github.com/SheinbergLab/dserv.git
+git clone https://github.com/SheinbergLab/dlsh.git
+git clone https://github.com/SheinbergLab/stim2.git
+```
+
+Claude Code only loads a `CLAUDE.md` from the folder a session starts in
+(and that folder's parents), so a session started in your systems folder,
+or with no folder, would never see dserv's. Point every session on the
+machine at it with a one-line user-level file:
+
+```
+mkdir -p ~/.claude
+echo '@~/src/dserv/CLAUDE.md' >> ~/.claude/CLAUDE.md
+```
+
+The `@` line imports the file, so agents always get the version you have
+checked out, and a `git pull` in `~/src/dserv` keeps it current. If you
+cloned somewhere other than `~/src/dserv`, adjust the path.
