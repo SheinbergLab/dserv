@@ -533,50 +533,76 @@ proc sample_off {} {
 
 ## Visualization Config Pattern
 
-Viz configs run in a **separate process** (vizconf.tcl subprocess) with its own
-Tcl interpreter. They have `dlsh` and `evtSetScript`/`evtSetScriptByName` but
-**not** the `ess` package. The viz config script is published as a string via
-`dservSet ess/viz_config` and evaluated inside `namespace eval ::viz::$system`.
+Viz configs draw the experimenter's view in the ESS GUI's Stimulus Display.
+They run in a **separate process** (the `vizconf.tcl` subprocess), with its
+own Tcl interpreter. They have `dlsh`, `evtSetScript`/`evtSetScriptByName`,
+`vizSubscribe` and the `::viz` helpers, but **not** the `ess` package or
+protocol variables. Per-trial values come from `stimdg`, and live values from
+datapoints (`dservGet ess/params`, `vizSubscribe`). The script is published as
+a string via `dservSet ess/viz_config` and evaluated inside
+`namespace eval ::viz::$system`.
 
-### Using Named Events
+**Full guide: `docs/viz_development.md`.** The rules that matter most:
 
-The `evtSetScriptByName` command (defined in vizconf.tcl) resolves event type
-and subtype names to numeric IDs using lookup tables published by ess to
-`ess/evt_type_ids` and `ess/evt_subtype_ids`.
+- **Frame with `::viz::setup_window`**, never hand-picked `setwindow`. It
+  frames the real display (`ess/screen_halfx|halfy`) at the operator's zoom
+  and returns `{x0 y0 hx hy}`. Call it in `setup` and at the start of every
+  draw. Use `-zoom 1.0` for the whole screen.
+- **`-size` is a DIAMETER**, for `circle` as well as `fcircle`. A stimdg
+  radius column needs `2*r`. Draw stimuli at the size the stim file uses
+  (check its `scaleObj`). Comments saying "`circle` takes a radius" are
+  stale, left over from an old renderer bug.
+- **One drawing proc, from cached state.** Handlers update variables and
+  call it. Events and datapoints arrive in no guaranteed order, so a
+  handler that draws its own version of the scene gets overwritten by the
+  next draw from the other stream.
+- **Define `proc redraw {}`.** The operator's zoom/font controls call it.
+  It must have no side effects beyond drawing.
+- **Live datapoints:** use `vizSubscribe`, never a bare `dpointSetScript`.
+  Throttle redraws to about 16 ms, but never throttle a show/hide or band
+  change.
 
 ```tcl
 $s set_viz_config {
-    proc setup {} {
-        evtSetScriptByName USER RESET       [namespace current]::reset
-        evtSetScriptByName SYSTEM_STATE STOPPED [namespace current]::stop
-        evtSetScriptByName BEGINOBS *        [namespace current]::beginobs
-        evtSetScriptByName ENDOBS *          [namespace current]::endobs
-        evtSetScriptByName STIMTYPE *        [namespace current]::stimtype
-        evtSetScriptByName SAMPLE ON         [namespace current]::sample_on
-        evtSetScriptByName SAMPLE OFF        [namespace current]::sample_off
-        evtSetScriptByName CHOICES ON        [namespace current]::choices_on
-        evtSetScriptByName CHOICES OFF       [namespace current]::choices_off
+    variable trial 0
+    variable showing 0
+    variable outcome -1                ;# -1 pending, 1 correct, 0 wrong
 
+    proc setup {} {
+        evtSetScriptByName USER RESET           [namespace current]::reset
+        evtSetScriptByName SYSTEM_STATE STOPPED [namespace current]::reset
+        evtSetScriptByName STIMTYPE *           [namespace current]::stimtype
+        evtSetScriptByName SAMPLE ON            [namespace current]::sample_on
+        evtSetScriptByName SAMPLE OFF           [namespace current]::sample_off
+        evtSetScriptByName ENDTRIAL *           [namespace current]::endtrial
         clearwin
-        setbackground [dlg_rgbcolor 100 100 100]
-        setwindow -8 -8 8 8
+        setbackground [dlg_rgbcolor 25 25 25]
+        ::viz::setup_window
+        flushwin                       ;# = ::viz::update_display
+    }
+
+    proc draw {} {                     ;# the ONLY proc that draws
+        variable trial; variable showing; variable outcome
+        clearwin
+        lassign [::viz::setup_window] x0 y0 hx hy
+        if { $showing && [dl_exists stimdg:sample_r] } {
+            set x [dl_get stimdg:sample_x $trial]
+            set y [dl_get stimdg:sample_y $trial]
+            set r [dl_get stimdg:sample_r $trial]       ;# a radius
+            set c [expr {$outcome == 1 ? "green" : ($outcome == 0 ? "red" : "white")}]
+            dlg_markers $x $y fcircle -size [expr {2.0*$r}]x -color $c
+            dlg_text -just -1 [expr {$x0+0.5}] [expr {$hy-1.0}] "trial $trial" \
+                -size [::viz::text_size small] -color white
+        }
         flushwin
     }
+    proc redraw {} { draw }
 
-    proc stimtype { type subtype data } {
-        variable trial
-        set trial $data
-        # Cache per-trial values from stimdg
-        variable sample_x [dl_get stimdg:sample_x $trial]
-        ...
-    }
-
-    proc sample_on { type subtype data } {
-        variable sample_x; variable sample_y; variable sample_r
-        clearwin
-        dlg_markers $sample_x $sample_y fsquare -size ${sample_r}x -color white
-        flushwin    ;# this calls ::viz::update_display
-    }
+    proc reset      { t s d } { variable showing 0; draw }
+    proc stimtype   { t s d } { variable trial $d; variable outcome -1 }
+    proc sample_on  { t s d } { variable showing 1; draw }
+    proc sample_off { t s d } { variable showing 0; draw }
+    proc endtrial   { t s d } { variable outcome [expr {$s == 1}]; draw }
 
     setup
 }
@@ -584,16 +610,20 @@ $s set_viz_config {
 
 ### Available in viz context
 
-- `dlg_markers`, `dlg_text`, `dlg_lines` — drawing commands (support named colors)
-- `dlg_rgbcolor r g b` — pack RGB into color index
-- `clearwin`, `setwindow`, `setbackground` — window management
-- `flushwin` — push display to output (aliased to `::viz::update_display`)
-- `evtSetScriptByName TYPE SUBTYPE script` — register event handler by name
-- `dl_get`, `dl_exists`, `dl_length`, etc. — stimdg access
-- Event handler signature: `proc name { type subtype data } { ... }`
-- Use `*` or `-1` for subtype to match all subtypes
+- `dlg_markers`, `dlg_text`, `dlg_lines`: drawing commands (see the cheat
+  sheet below)
+- `clearwin`, `setbackground`, `flushwin`: window management and output
+- `::viz::setup_window ?-zoom z?` and `::viz::text_size small|normal|large|huge`
+- `evtSetScriptByName TYPE SUBTYPE script`: handlers are
+  `proc name { type subtype data }`. Use `*` or `-1` to match all subtypes.
+- `vizSubscribe datapoint script`: handlers are `proc name { dpoint data }`
+- `dl_get`, `dl_exists`, `dl_length`, … for `stimdg`, and
+  `dict get [dservGet ess/params] <param>`
 
 ### Common Event Types for Viz
+
+All of them are in `evt_info` in `lib/ess-2.0.tm`, published as
+`ess/evt_type_ids` and `ess/evt_subtype_ids`.
 
 | Name | ID | Subtypes | Use |
 |------|----|----------|-----|
@@ -602,12 +632,14 @@ $s set_viz_config {
 | BEGINOBS | 19 | * | Observation start |
 | ENDOBS | 20 | COMPLETE=1 | Observation end |
 | STIMTYPE | 29 | STIMID=1 | Trial type (data = stimtype index) |
-| SAMPLE | 30 | OFF=0, ON=1 | Sample display |
 | PATTERN | 28 | OFF=0, ON=1 | Pattern/stimulus display |
-| RESP | 37 | varies | Response (subtype = response code) |
-| ENDTRIAL | 40 | INCORRECT=0, CORRECT=1 | Trial outcome |
-| CHOICES | 50 | OFF=0, ON=1 | Choice display |
+| SAMPLE | 30 | OFF=0, ON=1 | Sample display |
+| TARGET | 33 | OFF=0, ON=1, SET=2 | Target display |
+| RESP | 37 | varies | Response (data = response value) |
+| ENDTRIAL | 40 | INCORRECT=0, CORRECT=1, ABORT=2 | Trial outcome |
 | FEEDBACK | 49 | OFF=0, ON=1 | Feedback display |
+| CHOICES | 50 | OFF=0, ON=1 | Choice display |
+| SWIPE | 51 | ENGAGE=0, RELEASE=1, COMMIT=2, ABORT=3 | Swipe/sling response (data = payload) |
 
 ---
 
@@ -703,7 +735,9 @@ flag errors only at draw time on the rig: `dlg_lines: bad option -lcolor`).
   `circle`/`fcircle`, `triangle`, `diamond`, `plus`, `htick`/`htick_l`/`htick_r`,
   `vtick`/`vtick_u`/`vtick_d`. Given as the 3rd positional or via `-marker`.
 - **`-size` suffix** picks the unit: `2x` = 2 in x-data-units (the usual choice
-  so markers scale with `setwindow`), `s` = scaled by the x-scale, bare = pixels.
+  so markers scale with the window), `s` = scaled by the x-scale, bare = pixels.
+  For circles the size is a **diameter**: `circle` and `fcircle` both draw
+  `-size 2x` 2 units across.
 - **Colors**: any color flag takes a `dlg_rgbcolor r g b` index **or** a named
   color: `white black red green blue yellow cyan magenta orange gray`/`grey`
   `darkgray lightgray pink brown purple`.
@@ -717,28 +751,30 @@ dlg_text -15 8 "label" -size 12 -color white
 
 ### Testing viz / dlg_* code headless
 
-**The real `dl_*` and `dlg_*` commands run in bare `dlsh`/`dlsh -e`** — dlsh
-carries a default (offscreen) cgraph context, so `dlg_lines`/`dlg_markers`/
-`dlg_text`/`dlg_rgbcolor` and `clearwin`/`setwindow`/`setbackground` all execute
-and the **real option parser** validates flag names, arity, color names, and
-marker names (it rejects `dlg_lines -lcolor` for real). So don't stub `dlg_*`
-with no-ops that swallow anything — that is exactly what lets a bad-flag bug
-reach the rig. Instead **run the actual draw procs against the real commands**:
+**The real `dl_*` and `dlg_*` commands run in bare `dlsh` or `tclsh`.** dlsh
+carries a default (offscreen) cgraph context, so the **real option parser**
+validates flag names, arity, color names and marker names (it really does
+reject `dlg_lines -lcolor`). Never stub `dlg_*` with no-ops: that is exactly
+what lets a bad-flag bug reach the rig.
 
-```tcl
-# capture the set_viz_config body (stub the system object's set_viz_config),
-# then instantiate it and fire representative events -- real dlg validates each call
-foreach c { flushwin evtSetScriptByName evtSetScript } { proc ::$c {args} {} }  ;# vizconf-only shims
-rename dlg_lines ::__real_dlg_lines
-proc ::dlg_lines {args} { incr ::nline; ::__real_dlg_lines {*}$args }           ;# real parser + a tally
-namespace eval ::viz::$system $viz_script
-namespace eval ::viz::$system "stimtype 29 1 $row"    ;# errors here == errors on the rig
+`tools/viztest/viztest.tcl` does this for you. It runs a protocol's
+`set_viz_config` against the real dlg commands, the real
+`::viz::setup_window`, and the real event tables, stubbing only the vizconf
+plumbing. It captures every frame as the JSON the panel draws:
+
+```bash
+cd tools/viztest
+tclsh9.0 viztest.tcl -variant <variant> <protocol.tcl>   # real loader stimdg (via ess_test), no rig
+tclsh9.0 viztest.tcl -stimdg live <protocol.tcl>         # the stimdg ess has loaded now
+tclsh9.0 viztest.tcl -html /tmp/viz.html live            # what is running, rendered by GraphicsRenderer
+tclsh9.0 viztest.tcl -scenario examples/motiondir_trial.tcl <protocol.tcl>  # scripted trial + checks
 ```
 
-Only `flushwin` (the live-display push) and the vizconf event hooks
-(`evtSetScriptByName`) aren't in dlsh — stub just those. What still needs the
-real rig: whether the geometry actually *looks* right (positions, overlap,
-legibility) — dlg validates the calls, not the picture.
+Without a scenario it smoke-tests every handler once. A scenario script can
+`fire TARGET ON`, `dpoint ess/dial/pointer 1,2,1,0`, `zoom 1.5`, then
+`check {...} "msg"`. `-html` lets you actually *see* the geometry: positions,
+sizes and overlap, which validating the calls alone can't tell you. See
+`docs/viz_development.md`.
 
 ---
 
