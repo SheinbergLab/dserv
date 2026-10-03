@@ -4,7 +4,7 @@
 
 # these provide information from ess about touch and eye regions
 # should be in the ess namespace but they are not...
-# clients (essgui, essgui-web, essqt) call these
+# clients (essgui, essqt, the www pages) call these
 # they just send a parameter to the underlying ain/touch module
 proc touchGetRegionInfo { reg } {
     send ess touchGetRegionInfo $reg
