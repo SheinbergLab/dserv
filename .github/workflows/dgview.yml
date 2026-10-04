@@ -114,7 +114,11 @@ jobs:
           path: tools/dgview/dgview-macos-x64.dmg
 
   build-macos-arm:
-    runs-on: macos-14  # ARM64 runner
+    runs-on: macos-15
+    # Built on macos-15, but keep everything compiled here (CMake targets and
+    # the configure/make dependencies alike) runnable on macOS 14.
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "14.0"
     
     permissions:
       contents: write
