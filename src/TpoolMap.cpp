@@ -22,6 +22,37 @@
  *   errors    - list of error messages
  *   n_threads - number of threads used
  *
+ * tpool_queue — the same workers, PULLING work instead of being dealt it
+ *
+ *   tpool_queue tasks setup_script work_script ?-threads N? ?-want K?
+ *               ?-args dict? ?-seed 0|1?
+ *
+ * tpool_map divides n units evenly and once, so when units differ widely
+ * in cost most workers finish early and idle while a few grind through
+ * the hard ones. tpool_queue keeps a shared counter over the list
+ * `tasks`: each worker sets up once, then loops -- take the next task,
+ * run the work script on it, hand back the result, take the next -- until
+ * the tasks run out or K results have come in (-want; 0 = no quota).
+ * Every worker is busy for the whole call.
+ *
+ * The work script runs once per task with these variables set:
+ *   $task        - the task (one element of `tasks`, any Tcl value)
+ *   $task_index  - its 0-based index in `tasks`
+ *   $worker_id   - 0-based worker index
+ *   $args_dict   - the value passed via -args (default: "")
+ * An EMPTY result means "nothing made for this task" and is not an error
+ * (a generator whose draw failed returns ""); with -want, only non-empty
+ * results count toward the quota. A task that raises an error is recorded
+ * and the worker carries on.
+ *
+ * Returns a Tcl dict:
+ *   results   - list of {task_index result} pairs, in completion order
+ *               (result is a byte array, as for tpool_map)
+ *   made      - number of non-empty results
+ *   tried     - number of tasks started
+ *   errors    - list of error messages ("task I: ..." or "worker W: ...")
+ *   n_threads - number of threads used
+ *
  * ---------------------------------------------------------------
  * Integration — add to add_tcl_commands() in TclServer.cpp:
  *
@@ -38,6 +69,8 @@
 #include <sstream>
 #include <algorithm>
 #include <iostream>
+#include <atomic>
+#include <mutex>
 
 #ifndef TPOOL_MAP_MAX_THREADS
 #define TPOOL_MAP_MAX_THREADS 64
@@ -58,6 +91,91 @@ struct tpool_worker_t {
 };
 
 /*
+ * Build a worker's interpreter and run its prelude (worker variables +
+ * the caller's setup script). Returns NULL, with `error` set and the
+ * thread's Tcl state finalized, if anything fails.
+ *
+ * Everything that can allocate a Tcl global mutex for the first time runs
+ * under the lock: interpreter construction AND the setup script, because
+ * `package require` is where a package's own Tcl_Mutexes get created and
+ * every worker would otherwise reach the same one simultaneously. See
+ * TclInterpInit.h for why Tcl cannot be trusted with that first touch.
+ *
+ * Serialising the setup costs one package-load per worker in sequence,
+ * once per call. The work script -- the reason the pool exists -- runs
+ * after the lock is dropped, fully in parallel.
+ */
+static Tcl_Interp *tpool_worker_interp(const std::string &prelude,
+                                       std::string &error)
+{
+    std::lock_guard<std::mutex> tcl_init_guard(tcl_interp_init_lock());
+
+    /* Create interpreter */
+    Tcl_Interp *interp = Tcl_CreateInterp();
+    if (!interp) {
+        error = "failed to create Tcl interpreter";
+        return NULL;
+    }
+
+    /* Initialize Tcl core (sets up auto_path etc) */
+    if (Tcl_Init(interp) != TCL_OK) {
+        error = std::string("Tcl_Init failed: ")
+                + Tcl_GetStringResult(interp);
+        Tcl_DeleteInterp(interp);
+        Tcl_FinalizeThread();
+        return NULL;
+    }
+
+    /* Bootstrap auto_path for dlsh packages.
+     * Note: zipfs is already mounted by the main thread at startup;
+     * we just need to set auto_path so the worker can find packages. */
+    const char *bootstrap = R"(
+        set _base [file join [zipfs root] dlsh]
+        set ::auto_path [linsert $::auto_path 0 ${_base}/lib]
+    )";
+    Tcl_Eval(interp, bootstrap);
+
+    /* Worker variables + setup script, still serialised */
+    if (Tcl_Eval(interp, prelude.c_str()) != TCL_OK) {
+        const char *err = Tcl_GetStringResult(interp);
+        error = err ? err : "unknown error";
+        Tcl_DeleteInterp(interp);
+        Tcl_FinalizeThread();
+        return NULL;
+    }
+    return interp;
+}
+
+/*
+ * A script's result as raw bytes: a byte array where it is one (binary
+ * dg_toString data, which Tcl_GetStringResult would corrupt by forcing
+ * UTF-8), the string representation otherwise.
+ */
+static std::string tpool_result_bytes(Tcl_Interp *interp)
+{
+    Tcl_Obj *resultObj = Tcl_GetObjResult(interp);
+    Tcl_Size len;
+    const unsigned char *bytes = Tcl_GetByteArrayFromObj(resultObj, &len);
+    if (bytes && len > 0)
+        return std::string((const char *)bytes, len);
+    const char *res = Tcl_GetStringResult(interp);
+    return res ? res : "";
+}
+
+/* `value` as one Tcl list element, safe to embed after "set name ". */
+static std::string tpool_quote(const std::string &value)
+{
+    Tcl_Obj *tmp = Tcl_NewStringObj(value.c_str(), (Tcl_Size)value.size());
+    Tcl_IncrRefCount(tmp);
+    Tcl_Obj *listed = Tcl_NewListObj(1, &tmp);
+    Tcl_IncrRefCount(listed);
+    std::string out = Tcl_GetString(listed);
+    Tcl_DecrRefCount(listed);
+    Tcl_DecrRefCount(tmp);
+    return out;
+}
+
+/*
  * Worker thread function.
  *
  * Creates a bare Tcl_Interp, initializes just enough for dlsh
@@ -67,74 +185,17 @@ struct tpool_worker_t {
  */
 static void tpool_worker_func(tpool_worker_t *w)
 {
-    /*
-     * Everything that can allocate a Tcl global mutex for the first time runs
-     * under the lock: interpreter construction AND the setup script, because
-     * `package require` is where a package's own Tcl_Mutexes get created and
-     * every worker would otherwise reach the same one simultaneously. See
-     * TclInterpInit.h for why Tcl cannot be trusted with that first touch.
-     *
-     * Serialising the setup costs one package-load per worker in sequence,
-     * once per tpool_map call. The work script -- the reason the pool exists --
-     * runs after the lock is dropped, fully in parallel.
-     */
-    Tcl_Interp *interp = NULL;
-    {
-        std::lock_guard<std::mutex> tcl_init_guard(tcl_interp_init_lock());
-
-        /* Create interpreter */
-        interp = Tcl_CreateInterp();
-        if (!interp) {
-            w->error = "failed to create Tcl interpreter";
-            return;
-        }
-
-        /* Initialize Tcl core (sets up auto_path etc) */
-        if (Tcl_Init(interp) != TCL_OK) {
-            w->error = std::string("Tcl_Init failed: ")
-                       + Tcl_GetStringResult(interp);
-            Tcl_DeleteInterp(interp);
-            Tcl_FinalizeThread();
-            return;
-        }
-
-        /* Bootstrap auto_path for dlsh packages.
-         * Note: zipfs is already mounted by the main thread at startup;
-         * we just need to set auto_path so the worker can find packages. */
-        const char *bootstrap = R"(
-            set _base [file join [zipfs root] dlsh]
-            set ::auto_path [linsert $::auto_path 0 ${_base}/lib]
-        )";
-        Tcl_Eval(interp, bootstrap);
-
-        /* Worker variables + setup script, still serialised */
-        if (Tcl_Eval(interp, w->prelude.c_str()) != TCL_OK) {
-            const char *err = Tcl_GetStringResult(interp);
-            w->error = err ? err : "unknown error";
-            w->result.clear();
-            Tcl_DeleteInterp(interp);
-            Tcl_FinalizeThread();
-            return;
-        }
+    Tcl_Interp *interp = tpool_worker_interp(w->prelude, w->error);
+    if (!interp) {
+        w->result.clear();
+        return;
     }
 
     /* The parallel payload, with no lock held */
     int rc = Tcl_Eval(interp, w->work.c_str());
 
     if (rc == TCL_OK) {
-        /* Get result as byte array to preserve binary dg_toString data.
-         * Tcl_GetStringResult would force UTF-8 conversion and corrupt
-         * binary content. */
-        Tcl_Obj *resultObj = Tcl_GetObjResult(interp);
-        Tcl_Size len;
-        const unsigned char *bytes = Tcl_GetByteArrayFromObj(resultObj, &len);
-        if (bytes && len > 0) {
-            w->result.assign((const char *)bytes, len);
-        } else {
-            /* Fall back to string representation */
-            const char *res = Tcl_GetStringResult(interp);
-            w->result = res ? res : "";
-        }
+        w->result = tpool_result_bytes(interp);
         w->error.clear();
     } else {
         const char *err = Tcl_GetStringResult(interp);
@@ -367,13 +428,225 @@ static int tpool_map_command(ClientData data, Tcl_Interp *interp,
 }
 
 /*
- * Register the tpool_map command.
+ * Shared state of one tpool_queue call.
+ */
+struct tpool_queue_t {
+    std::vector<std::string> tasks;
+    std::string work;                 // the work script, run once per task
+    int         want = 0;             // stop after this many non-empty results (0 = no quota)
+
+    std::atomic<size_t> next{0};      // index of the next task to hand out
+    std::atomic<int>    made{0};      // non-empty results so far
+    std::atomic<bool>   stop{false};
+
+    std::mutex mutex;                 // guards results and errors
+    std::vector<std::pair<size_t, std::string>> results;
+    std::vector<std::string> errors;
+};
+
+struct tpool_queue_worker_t {
+    tpool_queue_t *q;
+    std::string    prelude;
+    int            worker_id;
+};
+
+/*
+ * Queue worker: set up once, then pull tasks until there are none left or
+ * the quota is met.
+ */
+static void tpool_queue_worker_func(tpool_queue_worker_t *w)
+{
+    tpool_queue_t *q = w->q;
+    std::string error;
+    Tcl_Interp *interp = tpool_worker_interp(w->prelude, error);
+    if (!interp) {
+        std::lock_guard<std::mutex> g(q->mutex);
+        q->errors.push_back("worker " + std::to_string(w->worker_id) + ": " + error);
+        return;
+    }
+
+    /* compiled once, evaluated per task */
+    Tcl_Obj *work = Tcl_NewStringObj(q->work.c_str(), (Tcl_Size)q->work.size());
+    Tcl_IncrRefCount(work);
+
+    while (!q->stop.load()) {
+        size_t i = q->next.fetch_add(1);
+        if (i >= q->tasks.size()) break;
+
+        const std::string &task = q->tasks[i];
+        Tcl_SetVar2Ex(interp, "task", NULL,
+                      Tcl_NewStringObj(task.c_str(), (Tcl_Size)task.size()),
+                      TCL_GLOBAL_ONLY);
+        Tcl_SetVar2Ex(interp, "task_index", NULL,
+                      Tcl_NewWideIntObj((Tcl_WideInt)i), TCL_GLOBAL_ONLY);
+
+        int rc = Tcl_EvalObjEx(interp, work, TCL_EVAL_GLOBAL);
+        /* a work script that ends in `return $x` is the usual way to hand
+         * back a value (as tpool_map's callers do) */
+        if (rc == TCL_RETURN) rc = TCL_OK;
+        if (rc == TCL_OK) {
+            std::string res = tpool_result_bytes(interp);
+            if (!res.empty()) {
+                std::lock_guard<std::mutex> g(q->mutex);
+                /* a result that lands after the quota was met is dropped,
+                 * so the caller gets exactly `want` */
+                if (q->want > 0 && q->made.load() >= q->want) {
+                    q->stop.store(true);
+                } else {
+                    q->results.emplace_back(i, std::move(res));
+                    if (q->made.fetch_add(1) + 1 >= q->want && q->want > 0)
+                        q->stop.store(true);
+                }
+            }
+        } else {
+            const char *err = Tcl_GetStringResult(interp);
+            std::lock_guard<std::mutex> g(q->mutex);
+            if (q->errors.size() < 64)
+                q->errors.push_back("task " + std::to_string(i) + ": "
+                                    + (err ? err : "unknown error"));
+        }
+        Tcl_ResetResult(interp);
+    }
+
+    Tcl_DecrRefCount(work);
+    Tcl_DeleteInterp(interp);
+    Tcl_FinalizeThread();
+}
+
+/*
+ * tpool_queue Tcl command implementation.
+ */
+static int tpool_queue_command(ClientData data, Tcl_Interp *interp,
+                               int objc, Tcl_Obj *objv[])
+{
+    if (objc < 4) {
+        Tcl_WrongNumArgs(interp, 1, objv,
+            "tasks setup_script work_script ?-threads N? ?-want K? ?-args dict? ?-seed 0|1?");
+        return TCL_ERROR;
+    }
+
+    Tcl_Size ntasks;
+    Tcl_Obj **taskv;
+    if (Tcl_ListObjGetElements(interp, objv[1], &ntasks, &taskv) != TCL_OK)
+        return TCL_ERROR;
+
+    std::string setup_script = Tcl_GetString(objv[2]);
+
+    tpool_queue_t q;
+    q.work = Tcl_GetString(objv[3]);
+    q.tasks.reserve(ntasks);
+    for (Tcl_Size i = 0; i < ntasks; i++) {
+        Tcl_Size len;
+        const char *str = Tcl_GetStringFromObj(taskv[i], &len);
+        q.tasks.emplace_back(str, len);
+    }
+
+    int num_threads = std::max(1, tpool_detect_cpus() - 1);
+    std::string args_dict;
+    int seed_workers = 1;
+
+    for (int i = 4; i < objc; i += 2) {
+        if (i + 1 >= objc) {
+            Tcl_AppendResult(interp, "option requires a value: ",
+                             Tcl_GetString(objv[i]), NULL);
+            return TCL_ERROR;
+        }
+        std::string opt = Tcl_GetString(objv[i]);
+        if (opt == "-threads") {
+            if (Tcl_GetIntFromObj(interp, objv[i + 1], &num_threads) != TCL_OK)
+                return TCL_ERROR;
+            if (num_threads < 1) num_threads = 1;
+            if (num_threads > TPOOL_MAP_MAX_THREADS)
+                num_threads = TPOOL_MAP_MAX_THREADS;
+        } else if (opt == "-want") {
+            if (Tcl_GetIntFromObj(interp, objv[i + 1], &q.want) != TCL_OK)
+                return TCL_ERROR;
+            if (q.want < 0) q.want = 0;
+        } else if (opt == "-args") {
+            args_dict = Tcl_GetString(objv[i + 1]);
+        } else if (opt == "-seed") {
+            if (Tcl_GetIntFromObj(interp, objv[i + 1], &seed_workers) != TCL_OK)
+                return TCL_ERROR;
+        } else {
+            Tcl_AppendResult(interp, "unknown option: ", opt.c_str(), NULL);
+            return TCL_ERROR;
+        }
+    }
+
+    if ((Tcl_Size)num_threads > ntasks) num_threads = (int)ntasks;
+
+    std::vector<tpool_queue_worker_t> workers(num_threads);
+    for (int i = 0; i < num_threads; i++) {
+        std::ostringstream ss;
+        ss << "set worker_id "    << i            << "\n";
+        ss << "set seed_workers " << seed_workers << "\n";
+        ss << "set args_dict "    << tpool_quote(args_dict) << "\n";
+        ss << setup_script << "\n";
+        if (seed_workers) {
+            ss << "if {![catch {dl_srand 0} _seed]} {\n"
+               << "    expr {srand($_seed)}\n"
+               << "    unset _seed\n"
+               << "}\n";
+        }
+        workers[i].q         = &q;
+        workers[i].prelude   = ss.str();
+        workers[i].worker_id = i;
+    }
+
+    std::vector<std::thread> threads;
+    threads.reserve(num_threads);
+    for (int i = 0; i < num_threads; i++)
+        threads.emplace_back(tpool_queue_worker_func, &workers[i]);
+    for (auto &t : threads)
+        t.join();
+
+    /* --- build return dict (all workers joined: no locking needed) --- */
+    Tcl_Obj *results_list = Tcl_NewListObj(0, NULL);
+    for (auto &r : q.results) {
+        Tcl_Obj *pair[2];
+        pair[0] = Tcl_NewWideIntObj((Tcl_WideInt)r.first);
+        pair[1] = Tcl_NewByteArrayObj((const unsigned char *)r.second.c_str(),
+                                      (Tcl_Size)r.second.size());
+        Tcl_ListObjAppendElement(interp, results_list, Tcl_NewListObj(2, pair));
+    }
+    Tcl_Obj *errors_list = Tcl_NewListObj(0, NULL);
+    for (auto &e : q.errors) {
+        Tcl_ListObjAppendElement(interp, errors_list,
+                                 Tcl_NewStringObj(e.c_str(), -1));
+        std::cerr << "tpool_queue: " << e << std::endl;
+    }
+    size_t tried = std::min(q.next.load(), q.tasks.size());
+
+    Tcl_Obj *dict = Tcl_NewDictObj();
+    Tcl_DictObjPut(interp, dict, Tcl_NewStringObj("results", -1), results_list);
+    Tcl_DictObjPut(interp, dict, Tcl_NewStringObj("made", -1),
+                   Tcl_NewIntObj((int)q.results.size()));
+    Tcl_DictObjPut(interp, dict, Tcl_NewStringObj("tried", -1),
+                   Tcl_NewWideIntObj((Tcl_WideInt)tried));
+    Tcl_DictObjPut(interp, dict, Tcl_NewStringObj("errors", -1), errors_list);
+    Tcl_DictObjPut(interp, dict, Tcl_NewStringObj("n_threads", -1),
+                   Tcl_NewIntObj(num_threads));
+    Tcl_SetObjResult(interp, dict);
+
+    std::cout << "tpool_queue: " << q.results.size() << " made from "
+              << tried << "/" << q.tasks.size() << " tasks ("
+              << num_threads << " threads, " << q.errors.size()
+              << " errors)" << std::endl;
+
+    return TCL_OK;
+}
+
+/*
+ * Register the tpool_map and tpool_queue commands.
  * Call from add_tcl_commands() in TclServer.cpp.
  */
 int TpoolMap_Init(Tcl_Interp *interp, TclServer *tserv)
 {
     Tcl_CreateObjCommand(interp, "tpool_map",
                          (Tcl_ObjCmdProc *)tpool_map_command,
+                         (ClientData)tserv, NULL);
+    Tcl_CreateObjCommand(interp, "tpool_queue",
+                         (Tcl_ObjCmdProc *)tpool_queue_command,
                          (ClientData)tserv, NULL);
     return TCL_OK;
 }

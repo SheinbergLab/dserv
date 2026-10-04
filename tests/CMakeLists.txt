@@ -21,6 +21,16 @@ set_property(TEST send_cycle PROPERTY TIMEOUT 60)
 # strict multi-line match is not robust
 set_property(TEST send_cycle PROPERTY PASS_REGULAR_EXPRESSION "SEND CYCLE TEST: ALL PASS")
 
+# End-to-end: tpool_queue (pull-based worker pool) -- every task done
+# once, empty results not counted, -want quota exact, a failing task does
+# not stop its worker, setup failure reported; and tpool_map unchanged.
+add_test(
+    NAME tpool_queue
+    COMMAND dserv -c "${CMAKE_SOURCE_DIR}/tests/test_tpool_queue.tcl"
+)
+set_property(TEST tpool_queue PROPERTY TIMEOUT 120)
+set_property(TEST tpool_queue PROPERTY PASS_REGULAR_EXPRESSION "TPOOL QUEUE TEST: ALL PASS")
+
 # End-to-end: `subprocess` duplicate-name error is loud, clean (no leaked
 # int-parse text) and carries the re-source hint.
 add_test(
