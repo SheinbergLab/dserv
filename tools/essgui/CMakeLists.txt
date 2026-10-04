@@ -32,7 +32,7 @@ elseif(APPLE)
     find_library(LIBLZ4 NAMES "liblz4.a")
     find_library(LIBFLTK NAMES "libfltk.a")
     find_library(LIBFLTK_ZLIB NAMES "libfltk_z.a")
-    find_library(LIBTCL "tcl9.0")
+    include(${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/tcl9.cmake)
     set(LIBTCLSTUB "libtclstub.a")
     find_library(LIBJANSSON NAMES "libjansson.a")
     set(LIBDLSH "dg")
@@ -46,7 +46,7 @@ else()
     find_library(LIBLZ4 NAMES "liblz4.a")
     find_library(LIBFLTK NAMES "libfltk.a")
     find_library(LIBFLTK_ZLIB NAMES "libfltk_z.a")
-    find_library(LIBTCL "tcl9.0")
+    include(${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/tcl9.cmake)
     set(LIBTCLSTUB "/usr/local/lib/libtclstub.a")
     find_library(LIBJANSSON NAMES "libjansson.a")
     set(LIBDLSH "dg")
@@ -122,8 +122,8 @@ elseif(APPLE)
     if(LIBTCL_DIR)
         # Copy TCL library files into the bundle as well.
         install(
-            DIRECTORY ${LIBTCL_DIR}/tcl9.0/
-            DESTINATION ${APP_BUNDLE}/Contents/lib/tcl9.0
+            DIRECTORY ${LIBTCL_DIR}/tcl${TCL_MM}/
+            DESTINATION ${APP_BUNDLE}/Contents/lib/tcl${TCL_MM}
             COMPONENT essgui
         )
     endif()

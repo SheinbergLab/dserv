@@ -48,10 +48,10 @@ include_directories(${uwebsockets_SOURCE_DIR})
 
 # Platform-specific configuration
 if(APPLE)
-    # libtcl9.0 may be installed from source or by homebrew.
+    # Tcl 9 may be installed from source or by homebrew.
     include_directories("/usr/local/include" "/opt/homebrew/include/tcl-tk")
     link_directories("/usr/local/lib" "/opt/homebrew/lib")
-    find_library(LIBTCL tcl9.0)
+    include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/tcl9.cmake)
     find_library(LIBJANSSON NAMES "libjansson.a")
     find_library(LIBZ z)
     # macOS requires libuv for uSockets
@@ -88,7 +88,7 @@ elseif (WIN32)
     set(WITH_LIBUV 1)
 else()
     include_directories("/usr/local/include")
-    find_library(LIBTCL tcl9.0)
+    include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/tcl9.cmake)
     find_library(LIBJANSSON NAMES "libjansson.a")
     find_library(LIBZ z)
     # Linux doesn't need extra libs for uSockets
@@ -286,10 +286,10 @@ else()
         OpenSSL::Crypto
     )
 
-    # Load the libtcl9.0.so we SHIP, not the distro's.
+    # Load the libtcl9.x.so we SHIP, not the distro's.
     #
-    # The deb installs our own libtcl9.0.so into /usr/local/lib (see
-    # InstallRequiredSystemLibraries below), built from the core-9-0-N tag
+    # The deb installs our own libtcl9.x.so into /usr/local/lib (see
+    # InstallRequiredSystemLibraries below), built from the core-9-N-N tag
     # deps/tcl is pinned to. But on Debian both copies land in the ld cache and
     # the multiarch one is listed first -- /etc/ld.so.conf.d/*.conf is globbed
     # alphabetically, so aarch64-linux-gnu.conf beats libc.conf, which is what
@@ -300,7 +300,11 @@ else()
     # DT_RUNPATH is searched before the cache, so this makes build-time and
     # run-time Tcl the same library again. Note it is deliberately narrow --
     # RUNPATH does not propagate to transitive deps, and modules dlopened later
-    # reuse the libtcl9.0.so already loaded under that SONAME.
+    # reuse the libtcl already loaded under that SONAME.
+    #
+    # Since the move to Tcl 9.1 the SONAMEs differ (ours is libtcl9.1.so, apt's
+    # is libtcl9.0.so), so the two can no longer be confused; the RUNPATH stays
+    # because /usr/local/lib is still where the shipped library lives.
     set_target_properties(dserv PROPERTIES INSTALL_RPATH "/usr/local/lib")
 endif()
 

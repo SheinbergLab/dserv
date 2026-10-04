@@ -6,13 +6,13 @@ on:
       - '*'
 
 # The Tcl version this release is built against. Linux builds it from the
-# deps/tcl submodule, which is pinned to the matching core-9-0-N tag; macOS
+# deps/tcl submodule, which is pinned to the matching core-9-N-N tag; macOS
 # links Homebrew's tcl-tk@9, which has no per-patch formula. The two must agree,
 # so the brew steps below ASSERT this version rather than accept whatever
 # tcl-tk@9 happens to be that day. To move to a new patch release, change this
 # and repoint deps/tcl to the same tag.
 env:
-  TCL_VERSION: "9.0.4"
+  TCL_VERSION: "9.1.0"
 
 jobs:
 
@@ -61,7 +61,7 @@ jobs:
 
     steps:
 
-      - name: Install cmake build tool and tcl9.0 dependency.
+      - name: Install cmake build tool and Tcl 9 dependency.
         run: |
           brew update
           # Remove any existing cmake installation
@@ -71,7 +71,7 @@ jobs:
           installed=$(brew list --versions tcl-tk@9 | awk '{print $2}')
           case "$installed" in
             "$TCL_VERSION"|"$TCL_VERSION"_*) echo "tcl-tk@9 $installed matches pin $TCL_VERSION" ;;
-            *) echo "::error::tcl-tk@9 is $installed but this release is pinned to $TCL_VERSION. Bump TCL_VERSION in this workflow and repoint the deps/tcl submodule to the matching core-9-0-N tag." ; exit 1 ;;
+            *) echo "::error::tcl-tk@9 is $installed but this release is pinned to $TCL_VERSION. Bump TCL_VERSION in this workflow and repoint the deps/tcl submodule to the matching core-9-N-N tag." ; exit 1 ;;
           esac
 
       - name: Check out our code

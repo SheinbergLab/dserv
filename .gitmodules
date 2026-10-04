@@ -1,7 +1,6 @@
 [submodule "deps/tcl"]
 	path = deps/tcl
 	url = https://github.com/tcltk/tcl.git
-	branch = core-9-0-branch
 [submodule "deps/jansson"]
 	path = deps/jansson
 	url = https://github.com/akheron/jansson.git
