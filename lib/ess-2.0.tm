@@ -572,24 +572,59 @@ oo::class create System {
             # pixel changed. The consumer's deinit also clears the down
             # flag, so a release lost to a focus change cannot leave the
             # bridge streaming.
+            #
+            # It ALSO stands in for the input module's mouse, when this
+            # dserv has none: with ::mouse_bridge_mouse set (configure_stim
+            # sets it from whether mouse/event/range already exists), the
+            # same hooks publish the input layer's own contract --
+            # mouse/event {x y type} with 3 MOVE on hover, 0 PRESS, 1 DRAG,
+            # 2 RELEASE, and mouse/event/range {min_x max_x min_y max_y}
+            # once per configure, in the window's pixel units with y
+            # growing downward, exactly as the input module publishes them.
+            # A pointer consumer (the dial's mouse source, planko/bounce's
+            # catcher) then cannot tell a dev machine from a rig, and a stim
+            # script never has to read its own window's mouse. Never on a
+            # machine that has the real mouse: two writers of one datapoint
+            # in two pixel spaces would fight.
             namespace inscope :: {
                 set ::mouse_bridge_down 0
                 set ::mouse_bridge_drag 0
                 set ::mouse_bridge_lx -1
                 set ::mouse_bridge_ly -1
+                if { ![info exists ::mouse_bridge_mouse] } { set ::mouse_bridge_mouse 0 }
+                if { $::mouse_bridge_mouse } {
+                    dl_local range [dl_create long 0 [screen_set WinWidth] \
+                                                   0 [screen_set WinHeight]]
+                    dserv_send mouse/event/range $range
+                    # mark the range as ours: configure_stim reads this on
+                    # the NEXT load so the bridge's own range is not taken
+                    # for a real mouse's and the emulation switched off
+                    dserv_send_string mouse/event/emulated 1
+                }
                 proc onMousePress {} {
                     set ::mouse_bridge_down 1
                     set ::mouse_bridge_lx $::MouseXPos
                     set ::mouse_bridge_ly $::MouseYPos
                     dl_local coords [dl_create short $::MouseXPos $::MouseYPos 0]
                     dserv_send mtouch/event $coords
+                    if { $::mouse_bridge_mouse } { dserv_send mouse/event $coords }
                 }
                 proc onMouseRelease {} {
                     set ::mouse_bridge_down 0
                     dl_local coords [dl_create short $::MouseXPos $::MouseYPos 2]
                     dserv_send mtouch/event $coords
+                    if { $::mouse_bridge_mouse } { dserv_send mouse/event $coords }
                 }
                 proc onMouseMove { x y } {
+                    # stim2 calls this only on real cursor motion, so the
+                    # mouse emulation needs no pixel memory of its own:
+                    # hover is MOVE, with the button down it is DRAG
+                    if { $::mouse_bridge_mouse } {
+                        dl_local mcoords [dl_create short $x $y \
+                                              [expr {$::mouse_bridge_down ? 1 : 3}]]
+                        dserv_send mouse/event $mcoords
+                    }
+                    # the touch bridge, unchanged
                     if { !$::mouse_bridge_drag || !$::mouse_bridge_down } return
                     if { $x == $::mouse_bridge_lx && $y == $::mouse_bridge_ly } return
                     set ::mouse_bridge_lx $x
@@ -620,6 +655,18 @@ oo::class create System {
 			}
         }
 
+        # Window-mouse emulation of the input module's mouse (the bridge
+        # above): only where this dserv has no real one. mouse/event/range
+        # is published once at the input module's open, so its presence is
+        # the rig-level fact "a pointer already answers mouse/event" --
+        # unless the bridge itself published it on an earlier load, which
+        # it marks with mouse/event/emulated. Datapoints outlive a system
+        # load, so without that mark the second load would see its own
+        # range and switch the emulation off.
+        set _emulated 0
+        catch { set _emulated [dservGet mouse/event/emulated] }
+        set _real_mouse [expr {[dservExists mouse/event/range] && !$_emulated}]
+        rmtSend "set ::mouse_bridge_mouse [expr {$_real_mouse ? 0 : 1}]"
         rmtSend $rmtcmd
 
         # Frame-tag events: swapTag payloads arrive from dserv_tag_evt
