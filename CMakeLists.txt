@@ -773,7 +773,10 @@ else()
     # Revisit once the fleet actually carries the dserv-agent package: a hard
     # Depends is the better long-term expression, and is safe to add the moment
     # it can be satisfied everywhere.
-    set(CPACK_DEBIAN_DSERV_PACKAGE_DEPENDS "libevdev2, libpq5, zlib1g, yajl-tools, fluidsynth")
+    # avahi-daemon + its Bonjour shim back modules/mdns (the `_dserv._tcp`
+    # LAN advertisement). Raspberry Pi OS ships avahi already -- it is what
+    # makes <host>.local resolve -- so this only bites on minimal Debian.
+    set(CPACK_DEBIAN_DSERV_PACKAGE_DEPENDS "libevdev2, libpq5, zlib1g, yajl-tools, fluidsynth, avahi-daemon, libavahi-compat-libdnssd1")
     # chrony is RECOMMENDS and deliberately not DEPENDS. Every dserv host needs a
     # correct wall clock -- not for acquisition (timestamps ride CLOCK_MONOTONIC)
     # but because clock_epoch_offset_us() is captured ONCE at startup, so a host

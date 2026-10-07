@@ -43,9 +43,9 @@ var (
 	wsURL = flag.String("ws", "ws://localhost:9000/debug", "WebSocket URL")
 
 	// Discovery
-	discover     = flag.Bool("discover", false, "Enable UDP mesh discovery (auto-discovers servers)")
+	discover     = flag.Bool("discover", false, "Browse the link for dserv instances (mDNS, _dserv._tcp)")
 	discoverOnly = flag.Bool("list", false, "List discovered hosts and exit")
-	discoverWait = flag.Int("wait", 2, "Seconds to wait for discovery before connecting")
+	discoverWait = flag.Int("wait", 2, "Seconds to let the mDNS browse gather answers before connecting")
 
 	// Shorthand flags
 	simulate = flag.Bool("sim", false, "Run in simulation mode (shorthand for -mode=sim)")
@@ -1270,7 +1270,7 @@ func main() {
 	if *discover && mode == ModeTCP {
 		discovery = NewMeshDiscovery()
 		if err := discovery.Start(); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: mesh discovery failed: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Warning: mDNS discovery failed: %v\n", err)
 		}
 	}
 

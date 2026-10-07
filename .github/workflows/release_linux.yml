@@ -60,7 +60,7 @@ jobs:
         run: |
           sudo apt update
           sudo apt install -y git wget ca-certificates build-essential cmake zip unzip
-          sudo apt install -y libevdev-dev zlib1g-dev libssl-dev libfluidsynth-dev pkg-config
+          sudo apt install -y libevdev-dev zlib1g-dev libssl-dev libfluidsynth-dev pkg-config libavahi-compat-libdnssd-dev
 
       - name: Install TCL 9 to the build environment.
         run: |
@@ -261,10 +261,11 @@ jobs:
       - name: Install build dependencies
         # make is explicit: with --no-install-recommends nothing else pulls it
         # in, and cmake configures no generator without it (0.53.3's failure).
-        # alsa + fluidsynth + jansson are configure-time requirements of the
-        # sound and mesh modules — modules/CMakeLists configures every target
-        # even though only camera_capture gets built. Verified in a
-        # debian:trixie arm64 container against this exact step list.
+        # alsa + fluidsynth are configure-time requirements of the sound
+        # module — modules/CMakeLists configures every target even though
+        # only camera_capture gets built (mdns gates itself on dns_sd.h and
+        # just warns when absent). Verified in a debian:trixie arm64
+        # container against this exact step list.
         run: apt-get install -y --no-install-recommends make cmake g++ pkg-config tcl9.0-dev libcamera-dev libjpeg-dev libasound2-dev libfluidsynth-dev libjansson-dev gh
 
       - name: Build camera module only
@@ -369,7 +370,7 @@ jobs:
         run: |
           sudo apt update
           sudo apt install -y git wget ca-certificates build-essential cmake zip unzip
-          sudo apt install -y libevdev-dev zlib1g-dev libssl-dev libfluidsynth-dev pkg-config libjpeg-dev
+          sudo apt install -y libevdev-dev zlib1g-dev libssl-dev libfluidsynth-dev pkg-config libjpeg-dev libavahi-compat-libdnssd-dev
           
           # Check what JPEG libraries are available for packaging
           echo "Available JPEG packages:"

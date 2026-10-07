@@ -4,7 +4,7 @@
 
 dserv is a real-time datapoint server for experimental control and data acquisition. At its core is a shared datapoint store (the "bus") implemented in C/C++ that acts as the central communication hub. Attached subprocesses, each running an isolated Tcl interpreter, can listen to, subscribe to, update, and react to changes in datapoints on the bus. This architecture provides extensive scriptability while retaining high-performance C/C++ internals.
 
-All dserv instances include built-in HTTP and WebSocket support. Clients on connected subnets can discover each using a mesh topology, and web dashboards provide inspection and control of active systems.
+All dserv instances include built-in HTTP and WebSocket support. Each instance advertises itself on its own link as a `_dserv._tcp` DNS-SD service (mDNS, via the OS responder) and heartbeats to a workgroup registry for discovery off-link; see `docs/discovery.md`. Web dashboards provide inspection and control of active systems.
 
 ## Architecture
 
@@ -96,7 +96,7 @@ Available web interfaces can be accessed based on the names above, as in:
 
 A complementary Go service that provides out-of-band management for dserv systems. Key capabilities:
 
-- **Mesh discovery**: find and connect to dserv instances on the network
+- **Mesh registry**: aggregates the heartbeats of every dserv in a workgroup, so instances can be found from off-link (on-link discovery is mDNS, see `docs/discovery.md`)
 - **Script browsing**: browse and manage experiment scripts
 - **Registry mode**: agents can run as registries that store and serve experiment scripts for connected dserv systems
 - **Service management**: start/stop/restart dserv, install updates, and monitor health even when dserv is down

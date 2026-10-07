@@ -1,7 +1,16 @@
 package main
 
+// Host discovery for dserv-term: a DNS-SD browse for `_dserv._tcp`, the
+// record every dserv publishes through its OS mDNS responder (see
+// modules/mdns and docs/discovery.md). Replaces the UDP heartbeat listener
+// this file used to be, whose sender left core dserv in 2025-12.
+//
+// The browse runs for the life of the program: a dserv that starts after
+// us shows up on the next :scan, and one that stops is dropped when its
+// record is withdrawn (or after PEER_TIMEOUT if it just vanished).
+
 import (
-	"encoding/json"
+	"context"
 	"fmt"
 	"net"
 	"sort"
@@ -10,32 +19,35 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/grandcat/zeroconf"
 )
 
 const (
-	MESH_DISCOVERY_PORT = 12346
-	PEER_TIMEOUT_MS     = 30000
+	DSERV_SERVICE_TYPE = "_dserv._tcp"
+	PEER_TIMEOUT_MS    = 120000 // a record the responder never withdrew
 	CLEANUP_INTERVAL_MS = 10000
 )
 
 // MeshPeer represents a discovered dserv instance
 type MeshPeer struct {
-	ApplianceID  string            `json:"applianceId"`
+	ApplianceID  string            `json:"applianceId"` // instance name
 	Name         string            `json:"name"`
 	Status       string            `json:"status"`
 	IPAddress    string            `json:"ipAddress"`
 	WebPort      int               `json:"webPort"`
+	CmdPort      int               `json:"cmdPort"`
 	IsLocal      bool              `json:"isLocal"`
 	LastSeen     int64             `json:"lastSeen"`
-	CustomFields map[string]string `json:"customFields"`
+	CustomFields map[string]string `json:"customFields"` // the TXT record
 }
 
-// MeshDiscovery handles UDP-based server discovery
+// MeshDiscovery browses DNS-SD for dserv instances
 type MeshDiscovery struct {
 	mu       sync.RWMutex
 	peers    map[string]MeshPeer
 	program  *tea.Program
 	stopChan chan struct{}
+	cancel   context.CancelFunc
 }
 
 // Bubble Tea messages for discovery events
@@ -61,26 +73,30 @@ func (m *MeshDiscovery) SetProgram(p *tea.Program) {
 }
 
 func (m *MeshDiscovery) Start() error {
-	addr, err := net.ResolveUDPAddr("udp", fmt.Sprintf(":%d", MESH_DISCOVERY_PORT))
+	resolver, err := zeroconf.NewResolver(nil)
 	if err != nil {
-		return fmt.Errorf("failed to resolve mesh discovery address: %w", err)
+		return fmt.Errorf("mDNS resolver: %w", err)
 	}
 
-	conn, err := net.ListenUDP("udp", addr)
-	if err != nil {
-		return fmt.Errorf("failed to start mesh discovery: %w", err)
+	entries := make(chan *zeroconf.ServiceEntry, 16)
+	ctx, cancel := context.WithCancel(context.Background())
+	m.cancel = cancel
+
+	if err := resolver.Browse(ctx, DSERV_SERVICE_TYPE, "local.", entries); err != nil {
+		cancel()
+		return fmt.Errorf("mDNS browse: %w", err)
 	}
 
-	// Start peer cleanup timer
 	go m.cleanupLoop()
-
-	// Listen for heartbeats
-	go m.listenLoop(conn)
+	go m.browseLoop(entries)
 
 	return nil
 }
 
 func (m *MeshDiscovery) Stop() {
+	if m.cancel != nil {
+		m.cancel()
+	}
 	close(m.stopChan)
 }
 
@@ -101,80 +117,103 @@ func (m *MeshDiscovery) cleanupLoop() {
 	}
 }
 
-func (m *MeshDiscovery) listenLoop(conn *net.UDPConn) {
-	defer conn.Close()
-	buffer := make([]byte, 1024)
-
+func (m *MeshDiscovery) browseLoop(entries <-chan *zeroconf.ServiceEntry) {
 	for {
 		select {
 		case <-m.stopChan:
 			return
-		default:
-		}
-
-		conn.SetReadDeadline(time.Now().Add(1 * time.Second))
-		n, clientAddr, err := conn.ReadFromUDP(buffer)
-		if err != nil {
-			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-				continue
+		case entry, ok := <-entries:
+			if !ok {
+				return
 			}
-			continue
+			m.processEntry(entry)
 		}
-
-		m.processHeartbeat(buffer[:n], clientAddr.IP.String())
 	}
 }
 
-func (m *MeshDiscovery) processHeartbeat(data []byte, senderIP string) {
-	var heartbeat struct {
-		Type        string `json:"type"`
-		ApplianceID string `json:"applianceId"`
-		Data        struct {
-			Name    string `json:"name"`
-			Status  string `json:"status"`
-			WebPort int    `json:"webPort"`
-		} `json:"data"`
+// parseTXT turns the record's "key=value" strings into a map.
+func parseTXT(txt []string) map[string]string {
+	fields := make(map[string]string, len(txt))
+	for _, kv := range txt {
+		if i := strings.IndexByte(kv, '='); i >= 0 {
+			fields[kv[:i]] = kv[i+1:]
+		} else if kv != "" {
+			fields[kv] = ""
+		}
 	}
+	return fields
+}
 
-	if err := json.Unmarshal(data, &heartbeat); err != nil {
+func (m *MeshDiscovery) processEntry(entry *zeroconf.ServiceEntry) {
+	// A withdrawn record arrives with TTL 0.
+	if entry.TTL == 0 {
+		m.mu.Lock()
+		_, existed := m.peers[entry.Instance]
+		delete(m.peers, entry.Instance)
+		m.mu.Unlock()
+		if existed && m.program != nil {
+			m.program.Send(msgPeerLost{applianceID: entry.Instance})
+		}
 		return
 	}
 
-	if heartbeat.Type != "heartbeat" {
-		return
+	// Prefer an IPv4 address; dserv's listeners are reached by v4 in
+	// practice and the web port is advertised the same way.
+	var ip string
+	if len(entry.AddrIPv4) > 0 {
+		ip = entry.AddrIPv4[0].String()
+	} else if len(entry.AddrIPv6) > 0 {
+		ip = entry.AddrIPv6[0].String()
+	} else {
+		return // not resolved yet; zeroconf re-sends once it has the A record
 	}
 
-	// Clean up IPv6-mapped IPv4 addresses
-	cleanIP := senderIP
-	if strings.HasPrefix(cleanIP, "::ffff:") {
-		cleanIP = cleanIP[7:]
-	}
-
-	// Skip localhost variants
-	if cleanIP == "127.0.0.1" || cleanIP == "localhost" {
-		return
-	}
+	fields := parseTXT(entry.Text)
+	webPort := 0
+	fmt.Sscanf(fields["web"], "%d", &webPort)
 
 	peer := MeshPeer{
-		ApplianceID:  heartbeat.ApplianceID,
-		Name:         heartbeat.Data.Name,
-		Status:       heartbeat.Data.Status,
-		IPAddress:    cleanIP,
-		WebPort:      heartbeat.Data.WebPort,
-		IsLocal:      false,
+		ApplianceID:  entry.Instance,
+		Name:         entry.Instance,
+		Status:       fields["wg"],
+		IPAddress:    ip,
+		WebPort:      webPort,
+		CmdPort:      entry.Port,
+		IsLocal:      isLocalAddress(ip),
 		LastSeen:     time.Now().UnixMilli(),
-		CustomFields: make(map[string]string),
+		CustomFields: fields,
 	}
 
 	m.mu.Lock()
-	_, exists := m.peers[heartbeat.ApplianceID]
-	m.peers[heartbeat.ApplianceID] = peer
+	_, exists := m.peers[entry.Instance]
+	m.peers[entry.Instance] = peer
 	m.mu.Unlock()
 
-	// Notify program of new/updated peer
 	if !exists && m.program != nil {
 		m.program.Send(msgPeerDiscovered{peer: peer})
 	}
+}
+
+// isLocalAddress reports whether ip belongs to one of this machine's
+// interfaces, i.e. the advertised dserv is the one running here.
+func isLocalAddress(ip string) bool {
+	target := net.ParseIP(ip)
+	if target == nil {
+		return false
+	}
+	if target.IsLoopback() {
+		return true
+	}
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return false
+	}
+	for _, a := range addrs {
+		if ipn, ok := a.(*net.IPNet); ok && ipn.IP.Equal(target) {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *MeshDiscovery) cleanupExpiredPeers() {
@@ -198,37 +237,40 @@ func (m *MeshDiscovery) cleanupExpiredPeers() {
 	}
 }
 
-// GetAvailableHosts returns all known hosts (local + discovered)
+// GetAvailableHosts returns all known hosts (local + discovered). cmdPort
+// is the port to probe localhost on when no advertisement names it --
+// a dserv built without the mdns module still answers on 2560.
 func (m *MeshDiscovery) GetAvailableHosts(cmdPort int) []MeshPeer {
 	var hosts []MeshPeer
 
-	// Add localhost if available
-	if isLocalhostAvailable(cmdPort) {
+	m.mu.RLock()
+	haveLocal := false
+	for _, peer := range m.peers {
+		hosts = append(hosts, peer)
+		if peer.IsLocal {
+			haveLocal = true
+		}
+	}
+	m.mu.RUnlock()
+
+	// Add localhost if it answers and nothing advertised it
+	if !haveLocal && isLocalhostAvailable(cmdPort) {
 		hosts = append(hosts, MeshPeer{
 			ApplianceID: "localhost",
 			Name:        "localhost",
 			Status:      "local",
 			IPAddress:   "localhost",
+			CmdPort:     cmdPort,
 			IsLocal:     true,
 			LastSeen:    time.Now().UnixMilli(),
 		})
 	}
 
-	// Add discovered mesh peers
-	m.mu.RLock()
-	for _, peer := range m.peers {
-		hosts = append(hosts, peer)
-	}
-	m.mu.RUnlock()
-
 	// Sort by name for consistent ordering
 	sort.Slice(hosts, func(i, j int) bool {
 		// Localhost always first
-		if hosts[i].IsLocal {
-			return true
-		}
-		if hosts[j].IsLocal {
-			return false
+		if hosts[i].IsLocal != hosts[j].IsLocal {
+			return hosts[i].IsLocal
 		}
 		return hosts[i].Name < hosts[j].Name
 	})
@@ -236,7 +278,7 @@ func (m *MeshDiscovery) GetAvailableHosts(cmdPort int) []MeshPeer {
 	return hosts
 }
 
-// GetPeerCount returns number of discovered peers (excluding localhost)
+// GetPeerCount returns number of discovered peers
 func (m *MeshDiscovery) GetPeerCount() int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

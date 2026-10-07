@@ -393,6 +393,9 @@ proc mesh_configure { registry workgroup } {
     # netmon watches the route toward the registry; publish it for them
     catch { dservSet mesh/registry $registry }
     puts "Mesh configured: registry=$registry workgroup=$workgroup"
+    # the workgroup rides in the DNS-SD TXT record too (defined below;
+    # a no-op until the record is up)
+    if { [llength [info commands mesh_mdns_refresh]] } { mesh_mdns_refresh }
 }
 
 proc mesh_set_field { key value } {
@@ -470,6 +473,81 @@ foreach dp $net_dps {
         mesh_net_handler $dp [dservGet $dp]
     }
 }
+
+#################################################################
+# On-link advertisement (DNS-SD / mDNS)
+#################################################################
+#
+# The heartbeat above is how this dserv is found from OFF its link: the
+# registry (dserv.net or a lab one) aggregates the workgroup. ON the link
+# a client browses for `_dserv._tcp` with any mDNS library (dns-sd -B,
+# avahi-browse, python-zeroconf, NWBrowser ...) and needs no registry,
+# no workgroup and no dserv-specific packet format. See docs/discovery.md.
+#
+# dserv does none of the multicast itself. modules/mdns hands ONE record
+# to the OS responder (mDNSResponder on macOS; avahi-daemon on Linux via
+# its Bonjour shim) and sleeps on the IPC socket. The announce / probe /
+# defend traffic belongs to the daemon that already does it for the
+# host's `.local` name.
+#
+# The record: instance = hostname, port = the dserv command port, TXT =
+# the other ports, SSL flag, workgroup and version. Live state (system,
+# subject, status) deliberately stays OUT of TXT: a client asks dserv
+# once connected, and the record never churns. The workgroup DOES go in,
+# so a client can filter a shared subnet.
+#
+# Registered regardless of offline mode -- mDNS is link-local, so it is
+# exactly what an isolated rig should still do. A missing responder
+# (avahi stopped; a container) is reported once under mesh/mdns/state
+# and the box simply is not browsable; the heartbeat path is unaffected.
+# The outcome is also visible in `mdnsInfo` from this interp.
+
+set mdns_port_cmd     2560 ;# message listener: dservctl / essctrl / clients
+set mdns_port_newline 2570 ;# newline listener (telnet-style)
+set mdns_loaded 0
+if { [catch {
+    load ${dspath}/modules/dserv_mdns[info sharedlibextension]
+    set mdns_loaded 1
+} err] } {
+    # Built without the dns_sd shim (modules/CMakeLists gates on it).
+    puts "Mesh: no mdns module -- not advertising on the link ($err)"
+    catch { dservSet mesh/mdns/state "off no mdns module" }
+}
+
+proc mesh_mdns_txt {} {
+    global mesh_webport mesh_ssl mesh_workgroup mdns_port_newline
+    set txt [dict create \
+                 web $mesh_webport \
+                 newline $mdns_port_newline \
+                 ssl [expr {$mesh_ssl ? 1 : 0}]]
+    if { $mesh_workgroup ne "" } { dict set txt wg $mesh_workgroup }
+    if { [dservExists system/version] } {
+        dict set txt ver [dservGet system/version]
+    }
+    return $txt
+}
+
+proc mesh_mdns_register {} {
+    global mdns_loaded mesh_hostname mdns_port_cmd
+    if { !$mdns_loaded } { return }
+    if { [catch {
+        mdnsRegister -name $mesh_hostname -port $mdns_port_cmd \
+            -txt [mesh_mdns_txt] -dpoint mesh/mdns
+    } err] } {
+        puts "Mesh: mDNS advertisement unavailable: $err"
+    }
+}
+
+# A later mesh_configure (local/mesh.tcl, or a settings change) rewrites
+# the workgroup in TXT in place; the registration itself stays up.
+proc mesh_mdns_refresh {} {
+    global mdns_loaded
+    if { !$mdns_loaded } { return }
+    if { ![dict get [mdnsInfo] registered] } { return }
+    catch { mdnsUpdate [mesh_mdns_txt] }
+}
+
+mesh_mdns_register
 
 # Setup timer and start heartbeat
 mesh_setup

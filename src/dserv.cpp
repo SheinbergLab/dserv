@@ -17,7 +17,6 @@
 #include "cxxopts.hpp"
 #include "dserv.h"
 #include "tclserver_api.h"
-#include "mdns_advertise.h"
 
 #include "dservConfig.h"
 

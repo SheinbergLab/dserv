@@ -152,3 +152,28 @@ if(TCLSH_EXECUTABLE)
 else()
   message(STATUS "tclsh not found -- skipping module unit tests")
 endif()
+
+#
+# modules/mdns -- the `_dserv._tcp` DNS-SD advertisement.
+#
+# A C module, not a .tm, and it binds tclserver_* from whatever loads it, so
+# tclsh cannot host it. test_mdns_host is a bare interp exporting inert
+# stand-ins (ENABLE_EXPORTS puts them in the dynamic symbol table, which is
+# where the module's undefined references resolve). The script's live
+# checks need a responder and skip themselves where there is none, so this
+# passes in a CI container as well as on a Mac or a rig.
+#
+if(TARGET mdns)
+  add_executable(test_mdns_host test_mdns_host.c)
+  target_include_directories(test_mdns_host PRIVATE
+      ${CMAKE_SOURCE_DIR}/src ${TCL_H_DIR})
+  target_link_libraries(test_mdns_host PRIVATE ${LIBTCL})
+  set_target_properties(test_mdns_host PROPERTIES ENABLE_EXPORTS ON)
+  add_test(
+      NAME mdns
+      COMMAND test_mdns_host "${CMAKE_SOURCE_DIR}/tests/test_mdns.tcl"
+              $<TARGET_FILE:mdns>
+  )
+  set_property(TEST mdns PROPERTY PASS_REGULAR_EXPRESSION "all checks passed")
+  set_property(TEST mdns PROPERTY TIMEOUT 30)
+endif()

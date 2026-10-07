@@ -18,7 +18,7 @@ This is a simplified, terminal-friendly version of the Tcl debugger console. It'
 - ✅ Command history (arrow keys)
 - ✅ Stack traces (toggle with `:trace`)
 - ✅ TCP and WebSocket backends
-- ✅ Mesh discovery (TCP mode)
+- ✅ mDNS discovery of dserv instances on the link (`_dserv._tcp`, TCP mode)
 
 ## Building
 

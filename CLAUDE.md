@@ -19,6 +19,7 @@ themselves).
 | Registry / dserv.net script sync | `docs/ESS_SYNC_README.md` |
 | Setting up a dev machine | `docs/local_systems_setup/`, `docs/pi_setup/` |
 | Machines with no network | `docs/OFFLINE.md` |
+| How a client finds a dserv (mDNS on-link, registry off-link) | `docs/discovery.md` |
 
 The other files in `docs/` are design notes and plans for specific
 subsystems (input layer, extio, transports, settings). Read them when

@@ -314,29 +314,55 @@ set_target_properties(${MODULE} PROPERTIES PREFIX "dserv_")
 target_link_libraries(${MODULE} ${DLSH} ${TCLLIB} ${EVDEVLIB} ${INPUT_APPLE_FRAMEWORKS} pthread)
 
 ##
-## mesh
+## mdns -- DNS-SD advertisement (`_dserv._tcp`) through the OS responder.
 ##
-set(MODULE mesh)
+## Talks dns_sd.h: part of libSystem on macOS; on Linux it is avahi's Bonjour
+## compatibility shim (build: libavahi-compat-libdnssd-dev, run:
+## libavahi-compat-libdnssd1 + avahi-daemon, both in the .deb Depends).
+## Gated on the header so a Linux host without the shim still configures --
+## it just gets no advertisement, and meshconf.tcl says so at startup.
+##
+set(MODULE mdns)
 project(${MODULE})
-find_library(LIBJANSSON NAMES jansson)
-add_library(${MODULE} MODULE ${MODULE}/${MODULE}.c)
-set_target_properties(${MODULE} PROPERTIES PREFIX "dserv_")
-target_link_libraries(${MODULE} ${DLSH} ${TCLLIB} ${LIBJANSSON} pthread)
+if(APPLE)
+    set(BUILD_MDNS ON)
+    set(LIBDNSSD "")
+    set(DNSSD_INCLUDE_DIR "")
+else()
+    find_path(DNSSD_INCLUDE_DIR dns_sd.h)
+    find_library(LIBDNSSD NAMES dns_sd)
+    if(DNSSD_INCLUDE_DIR AND LIBDNSSD)
+        set(BUILD_MDNS ON)
+    else()
+        set(BUILD_MDNS OFF)
+        message(WARNING "dns_sd.h / libdns_sd not found -- mdns module skipped "
+                        "(apt install libavahi-compat-libdnssd-dev)")
+    endif()
+endif()
+if(BUILD_MDNS)
+    add_library(${MODULE} MODULE ${MODULE}/${MODULE}.c)
+    set_target_properties(${MODULE} PROPERTIES PREFIX "dserv_")
+    if(DNSSD_INCLUDE_DIR)
+        target_include_directories(${MODULE} PRIVATE ${DNSSD_INCLUDE_DIR})
+    endif()
+    target_link_libraries(${MODULE} ${DLSH} ${TCLLIB} ${LIBDNSSD} pthread)
+endif()
 
-# Install targets - conditionally include camera
-# NB: these lists are EXPLICIT, so a new add_library above is built but never
+# Install targets.
+# NB: this list is EXPLICIT, so a new add_library above is built but never
 # installed until its target is named here too. That failure is quiet -- the
 # build succeeds, the file exists in build/modules/, and only a config that
 # loads it notices, on a machine you are not looking at. extiodisc was added
-# and hit exactly this on the next restart.
-if(BUILD_CAMERA)
-    install(TARGETS
-        ain juicer gpio_input gpio_output touch input mesh
-        rmt eventlog sound timer usbio extiodisc ina226 joystick4 camera_capture
-        DESTINATION dserv/modules COMPONENT dserv)
-else()
-    install(TARGETS
-        ain juicer gpio_input gpio_output touch input mesh
-        rmt eventlog sound timer usbio extiodisc ina226 joystick4
-        DESTINATION dserv/modules COMPONENT dserv)
+# and hit exactly this on the next restart. Conditional targets (camera,
+# mdns) append under the same gate that built them.
+set(DSERV_MODULE_TARGETS
+    ain juicer gpio_input gpio_output touch input
+    rmt eventlog sound timer usbio extiodisc ina226 joystick4)
+if(BUILD_MDNS)
+    list(APPEND DSERV_MODULE_TARGETS mdns)
 endif()
+if(BUILD_CAMERA)
+    list(APPEND DSERV_MODULE_TARGETS camera_capture)
+endif()
+install(TARGETS ${DSERV_MODULE_TARGETS}
+        DESTINATION dserv/modules COMPONENT dserv)
