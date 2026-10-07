@@ -1,0 +1,29 @@
+#!/bin/sh
+# Stage a DG-viewer plugin and some trials files for tools/viewtest.
+#
+#   tools/viewtest/stage <path/to/<system>_viewer.js> [file.trials.dgz ...]
+#
+# Copies the plugin to viewers/<system>.js -- the name dg_viewer.html
+# imports, keyed by the dgz's `system` column, exactly as ess_sync's
+# _install_viewers does on a rig -- and symlinks each trials file into
+# data/. Re-run after editing the plugin; neither viewers/ nor data/ is
+# tracked. Then start the "dgviewer-test" server (.claude/launch.json) and
+# open the URL this prints.
+set -e
+here=$(cd "$(dirname "$0")" && pwd)
+viewer=$1
+[ -n "$viewer" ] || { sed -n '2,12p' "$0"; exit 2; }
+[ -f "$viewer" ] || { echo "stage: no such file: $viewer" >&2; exit 1; }
+base=$(basename "$viewer" .js)
+system=${base%_viewer}
+[ "$system" != "$base" ] || { echo "stage: expected <system>_viewer.js, got $(basename "$viewer")" >&2; exit 1; }
+shift
+mkdir -p "$here/viewers" "$here/data"
+cp "$viewer" "$here/viewers/$system.js"
+echo "viewers/$system.js <- $viewer"
+for f in "$@"; do
+    [ -f "$f" ] || { echo "stage: no such file: $f" >&2; exit 1; }
+    abs=$(cd "$(dirname "$f")" && pwd)/$(basename "$f")
+    ln -sfn "$abs" "$here/data/$(basename "$f")"
+    echo "http://localhost:8137/dg_viewer.html?file=data/$(basename "$f")"
+done

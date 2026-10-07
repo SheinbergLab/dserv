@@ -5,11 +5,9 @@
       "name": "dgviewer-test",
       "runtimeExecutable": "python3",
       "runtimeArgs": [
-        "-m",
-        "http.server",
+        "tools/devserver.py",
         "8137",
-        "-d",
-        "/private/tmp/claude-501/-Users-sheinb-src-dserv/c9d686ef-5fc0-4f9b-8e53-80155e1b558f/scratchpad/viewtest"
+        "tools/viewtest"
       ],
       "port": 8137
     },
