@@ -55,9 +55,16 @@
 #include <pthread.h>
 #include <sys/select.h>
 #include <sys/time.h>
+#include <arpa/inet.h>          /* htons: Apple's dns_sd.h pulls it in, Avahi's does not */
 
 #include <dns_sd.h>
 #include <tcl.h>
+
+/* Apple's dns_sd.h names the no-daemon case kDNSServiceErr_ServiceNotRunning
+   (-65563). Avahi's compat header stops short of that constant and its
+   shim reports a missing avahi-daemon as kDNSServiceErr_Unknown, so the
+   startup hint keys on both. */
+#define MDNS_ERR_SERVICE_NOT_RUNNING (-65563)
 
 #include "Datapoint.h"
 #include "tclserver_api.h"
@@ -342,7 +349,7 @@ static int mdns_register_command(ClientData data, Tcl_Interp *interp,
         mdns_publish_state(info, state);
         Tcl_SetObjResult(interp, Tcl_ObjPrintf(
             "mdns: DNSServiceRegister failed (dns_sd error %d)%s", (int) err,
-            err == kDNSServiceErr_ServiceNotRunning
+            (err == MDNS_ERR_SERVICE_NOT_RUNNING || err == kDNSServiceErr_Unknown)
                 ? " -- is the mDNS responder (avahi-daemon) running?" : ""));
         return TCL_ERROR;
     }
