@@ -131,6 +131,23 @@ func (m *MeshDiscovery) browseLoop(entries <-chan *zeroconf.ServiceEntry) {
 	}
 }
 
+// unescapeInstance undoes the DNS presentation escaping zeroconf leaves on
+// an instance name ("MacBook\ Air\ \(2\)" is "MacBook Air (2)").
+func unescapeInstance(s string) string {
+	if !strings.ContainsRune(s, '\\') {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' && i+1 < len(s) {
+			i++
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
+}
+
 // parseTXT turns the record's "key=value" strings into a map.
 func parseTXT(txt []string) map[string]string {
 	fields := make(map[string]string, len(txt))
@@ -145,14 +162,16 @@ func parseTXT(txt []string) map[string]string {
 }
 
 func (m *MeshDiscovery) processEntry(entry *zeroconf.ServiceEntry) {
+	instance := unescapeInstance(entry.Instance)
+
 	// A withdrawn record arrives with TTL 0.
 	if entry.TTL == 0 {
 		m.mu.Lock()
-		_, existed := m.peers[entry.Instance]
-		delete(m.peers, entry.Instance)
+		_, existed := m.peers[instance]
+		delete(m.peers, instance)
 		m.mu.Unlock()
 		if existed && m.program != nil {
-			m.program.Send(msgPeerLost{applianceID: entry.Instance})
+			m.program.Send(msgPeerLost{applianceID: instance})
 		}
 		return
 	}
@@ -173,8 +192,8 @@ func (m *MeshDiscovery) processEntry(entry *zeroconf.ServiceEntry) {
 	fmt.Sscanf(fields["web"], "%d", &webPort)
 
 	peer := MeshPeer{
-		ApplianceID:  entry.Instance,
-		Name:         entry.Instance,
+		ApplianceID:  instance,
+		Name:         instance,
 		Status:       fields["wg"],
 		IPAddress:    ip,
 		WebPort:      webPort,
@@ -185,8 +204,8 @@ func (m *MeshDiscovery) processEntry(entry *zeroconf.ServiceEntry) {
 	}
 
 	m.mu.Lock()
-	_, exists := m.peers[entry.Instance]
-	m.peers[entry.Instance] = peer
+	_, exists := m.peers[instance]
+	m.peers[instance] = peer
 	m.mu.Unlock()
 
 	if !exists && m.program != nil {
