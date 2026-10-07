@@ -876,6 +876,52 @@ namespace eval df {
         }
 
         #
+        # Parameter values at file open. ess::file_open logs every
+        # system/protocol param as a PARAM NAME / PARAM VAL event pair
+        # before the first obs, so a protocol param that never reaches
+        # the stimdg (replay_speed, show_trail, ...) is recoverable here.
+        # Returns a dict name -> value as logged (a string); empty when
+        # the file has no PARAM events. A mid-recording change (PARAM
+        # LIVE, inside an obs) is not reflected: this is the opening value.
+        #
+        method params {} {
+            set result [dict create]
+            if {![dict exists $type_ids PARAM]} { return $result }
+            set t [dict get $type_ids PARAM]
+            set s_name 0
+            set s_val 1
+            if {[dict exists $subtypes $t]} {
+                set sd [dict get $subtypes $t]
+                if {[dict exists $sd NAME]} { set s_name [dict get $sd NAME] }
+                if {[dict exists $sd VAL]}  { set s_val  [dict get $sd VAL] }
+            }
+            dl_local mask [dl_eq $predg:types $t]
+            if {[dl_sum $mask] == 0} { return $result }
+            set subs [dl_tcllist [dl_select $predg:subtypes $mask]]
+            dl_local data [dl_select $predg:data $mask]
+            set pending ""
+            set n [llength $subs]
+            for {set i 0} {$i < $n} {incr i} {
+                set s [lindex $subs $i]
+                # each payload is a one-element string list
+                set v [lindex [dl_tcllist $data:$i] 0]
+                if {$s == $s_name} {
+                    set pending $v
+                } elseif {$s == $s_val && $pending ne ""} {
+                    dict set result $pending $v
+                    set pending ""
+                }
+            }
+            return $result
+        }
+
+        method param {name {default ""}} {
+            set p [my params]
+            if {[dict exists $p $name]} { return [dict get $p $name] }
+            return $default
+        }
+
+        #
         # Datapoint streams per obs (readESS emits three parallel columns
         # per recorded stream):
         #   <ds>NAME   values, concatenated across the obs's records
