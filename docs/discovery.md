@@ -27,6 +27,7 @@ of offline mode.
 | port      | `2560`, the message listener (what `dservctl` / `essctrl` use) |
 | TXT `web` | the HTTP/WebSocket port, `2565`                             |
 | TXT `newline` | the newline listener, `2570`                            |
+| TXT `dp`  | the datapoint pub/sub listener, `4620` (`%reg` / `%match`; what a streaming client such as VideoStream subscribes on) |
 | TXT `ssl` | `1` if the web port is HTTPS                                |
 | TXT `wg`  | the workgroup (absent when none is declared)                |
 | TXT `ver` | dserv version                                               |

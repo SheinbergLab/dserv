@@ -504,6 +504,7 @@ foreach dp $net_dps {
 
 set mdns_port_cmd     2560 ;# message listener: dservctl / essctrl / clients
 set mdns_port_newline 2570 ;# newline listener (telnet-style)
+set mdns_port_dp      4620 ;# datapoint pub/sub listener (%reg / %match)
 set mdns_loaded 0
 if { [catch {
     load ${dspath}/modules/dserv_mdns[info sharedlibextension]
@@ -515,10 +516,11 @@ if { [catch {
 }
 
 proc mesh_mdns_txt {} {
-    global mesh_webport mesh_ssl mesh_workgroup mdns_port_newline
+    global mesh_webport mesh_ssl mesh_workgroup mdns_port_newline mdns_port_dp
     set txt [dict create \
                  web $mesh_webport \
                  newline $mdns_port_newline \
+                 dp $mdns_port_dp \
                  ssl [expr {$mesh_ssl ? 1 : 0}]]
     if { $mesh_workgroup ne "" } { dict set txt wg $mesh_workgroup }
     if { [dservExists system/version] } {

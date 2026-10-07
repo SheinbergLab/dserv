@@ -64,7 +64,7 @@ check "still unregistered after rejects" {![dict get [mdnsInfo] registered]}
 # A private type + a unique instance name, so a test never collides with a
 # real dserv on the same link and two test runs never rename each other.
 set name "dserv-test-[pid]"
-set txt  [dict create web 2565 newline 2570 ssl 0 wg test]
+set txt  [dict create web 2565 newline 2570 dp 4620 ssl 0 wg test]
 if { [catch {
     mdnsRegister -name $name -type _dservtest._tcp -port 2560 -txt $txt
 } err] } {
