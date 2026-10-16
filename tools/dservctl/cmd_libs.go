@@ -17,6 +17,10 @@ func runLibs(cfg *Config, args []string) int {
 		fmt.Fprintf(os.Stderr, "  dservctl libs sync [--dir DIR]                  Pull libs to local directory\n")
 		fmt.Fprintf(os.Stderr, "  dservctl libs push [--dir DIR] [-m MSG]         Push changed libs to registry\n")
 		fmt.Fprintf(os.Stderr, "  dservctl libs status [--dir DIR]                Compare local vs registry\n")
+		fmt.Fprintf(os.Stderr, "  dservctl libs delete [--dry-run] [--yes] [--dir DIR] [--match GLOB]... [NAME]...\n")
+		fmt.Fprintf(os.Stderr, "                                                  Delete libs from the registry (permanent)\n")
+		fmt.Fprintf(os.Stderr, "  dservctl libs prune [--dir DIR] [--dry-run] [--yes]\n")
+		fmt.Fprintf(os.Stderr, "                                                  Move aside synced libs the registry no longer has\n")
 		return 2
 	}
 
@@ -29,8 +33,12 @@ func runLibs(cfg *Config, args []string) int {
 		return runLibsPush(cfg, args[1:])
 	case "status":
 		return runLibsStatus(cfg, args[1:])
+	case "delete":
+		return runLibsDelete(cfg, args[1:])
+	case "prune":
+		return runLibsPrune(cfg, args[1:])
 	default:
-		PrintError("unknown libs subcommand %q (use list, sync, push, or status)", args[0])
+		PrintError("unknown libs subcommand %q (use list, sync, push, status, delete, or prune)", args[0])
 		return 2
 	}
 }

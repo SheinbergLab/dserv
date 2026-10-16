@@ -295,6 +295,17 @@ func (c *AgentClient) SaveLib(workgroup, name, version string, req map[string]in
 	return c.Do("PUT", path, req)
 }
 
+// DeleteLib removes one library version from the registry. The server's
+// delete is permanent (no library history); see `dservctl backup create`.
+func (c *AgentClient) DeleteLib(workgroup, name, version string) (map[string]interface{}, error) {
+	path := fmt.Sprintf("%s/lib/%s/%s/%s",
+		registryBase,
+		url.PathEscape(workgroup),
+		url.PathEscape(name),
+		url.PathEscape(version))
+	return c.Do("DELETE", path, nil)
+}
+
 // ListUsers returns the user roster for a workgroup.
 func (c *AgentClient) ListUsers(workgroup string) ([]map[string]interface{}, error) {
 	result, err := c.Get(registryBase + "/users?workgroup=" + url.QueryEscape(workgroup))

@@ -47,7 +47,7 @@ func init() {
 		{"push", "Push locally modified scripts to registry", runPush},
 		{"diff", "Compare local scripts against registry", runSyncStatus},
 		{"configs", "Manage project configs/queues (list/status/push/pull)", runConfigs},
-		{"libs", "Manage shared libraries (list/sync/push/status)", runLibs},
+		{"libs", "Manage shared libraries (list/sync/push/status/delete/prune)", runLibs},
 		{"users", "Manage workgroup users (list/get/add/remove)", runUsers},
 		{"subjects", "Manage workgroup subjects (list/get/add/remove)", runSubjects},
 		{"viewer", "Manage viewer plugins (list/get/push/delete)", runViewer},
@@ -124,6 +124,8 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, "  dservctl libs list                            List shared libraries\n")
 	fmt.Fprintf(os.Stderr, "  dservctl libs sync --dir ./lib                Pull libs from registry\n")
 	fmt.Fprintf(os.Stderr, "  dservctl libs push --dir ./lib -m \"update\"    Push changed libs\n")
+	fmt.Fprintf(os.Stderr, "  dservctl libs delete -n --match 'old_*'       Preview deleting libs from the registry\n")
+	fmt.Fprintf(os.Stderr, "  dservctl libs prune -n --dir ./lib            Preview removing local copies of deleted libs\n")
 	fmt.Fprintf(os.Stderr, "  dservctl users list                           List users in current workgroup\n")
 	fmt.Fprintf(os.Stderr, "  dservctl users add alice --name \"Alice X\" --role admin   Add a user\n")
 	fmt.Fprintf(os.Stderr, "  dservctl sandbox create sys mybranch          Create sandbox\n")

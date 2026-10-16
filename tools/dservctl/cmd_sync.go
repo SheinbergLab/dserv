@@ -81,6 +81,7 @@ type syncResult struct {
 	pulled    int
 	unchanged int
 	errors    int
+	prunable  int // libs: synced copies the registry has since deleted
 }
 
 // runSyncAll syncs all systems in the workgroup plus shared libs.
@@ -236,14 +237,37 @@ func syncLibsToDir(cfg *Config, client *AgentClient, libDir string, dryRun, forc
 		}
 	}
 
-	// Prune base entries for libs the registry no longer has (libs is
-	// non-empty here — we returned early otherwise — so this is safe).
-	if !dryRun {
-		for k := range manifest.Entries {
-			if !registryLibs[k] {
+	// Libs the registry no longer has (libs is non-empty here — we returned
+	// early otherwise — so this is safe). An entry whose file is still on
+	// disk is kept: it is the only record that the file is a synced copy,
+	// which `libs prune` needs to remove it. Only entries whose file is gone
+	// too are dropped. Same rule as ess_sync's _lib_registry_gone.
+	var prunable []string
+	if cands, stale, err := planLibsPrune(libDir, manifest, registryLibs); err != nil {
+		PrintError("checking for libs deleted from the registry: %v", err)
+		errors++
+	} else {
+		if !dryRun {
+			for _, k := range stale {
 				manifest.unset(k)
 				manifestDirty = true
 			}
+		}
+		var edited []string
+		for _, c := range cands {
+			if c.action == "prune" {
+				prunable = append(prunable, c.filename)
+			} else {
+				edited = append(edited, c.filename)
+			}
+		}
+		if len(prunable) > 0 {
+			fmt.Printf("%d lib(s) deleted from the registry are still in %s: %s\n  remove with: dservctl libs prune --dir %s\n",
+				len(prunable), libDir, strings.Join(prunable, ", "), libDir)
+		}
+		if len(edited) > 0 {
+			fmt.Printf("%d lib(s) deleted from the registry but edited locally (kept): %s\n",
+				len(edited), strings.Join(edited, ", "))
 		}
 	}
 
@@ -261,7 +285,7 @@ func syncLibsToDir(cfg *Config, client *AgentClient, libDir string, dryRun, forc
 		fmt.Println()
 	}
 
-	return syncResult{pulled: pulled, unchanged: unchanged, errors: errors}
+	return syncResult{pulled: pulled, unchanged: unchanged, errors: errors, prunable: len(prunable)}
 }
 
 // noteSyncSkip prints a per-file warning when sync declines to overwrite a

@@ -854,14 +854,28 @@ namespace eval ess {
             }
         }
 
-        # Prune base entries for libs the registry no longer has (guard on a
-        # non-empty lib list so an empty/error response never prunes).
+        # Libs the registry no longer has (guard on a non-empty lib list so
+        # an empty/error response never acts). A base entry whose file is
+        # still here is KEPT: it is the only record that the file is a synced
+        # copy, which `dservctl libs prune` needs to remove it safely. Only
+        # entries whose file is gone too are dropped. Unchanged copies are
+        # reported as prunable, edited ones as kept.
+        set gone [dict create prune {} edited {} vanished {}]
         if {[llength $libs] > 0} {
-            foreach fname [dict keys [dict get $manifest entries]] {
-                if {![dict exists $registry_libs $fname]} {
-                    _base_entry_unset manifest $fname
-                    set manifest_dirty 1
-                }
+            set gone [_lib_registry_gone $lib_dir $manifest $registry_libs]
+            foreach fname [dict get $gone vanished] {
+                _base_entry_unset manifest $fname
+                set manifest_dirty 1
+            }
+            set n [llength [dict get $gone prune]]
+            if {$n > 0} {
+                ess_warning "  $n lib(s) deleted from the registry are still in lib/:\
+                    [join [dict get $gone prune] {, }] -- remove with: dservctl libs prune" "sync"
+            }
+            set n [llength [dict get $gone edited]]
+            if {$n > 0} {
+                ess_warning "  $n lib(s) deleted from the registry but edited locally (kept):\
+                    [join [dict get $gone edited] {, }]" "sync"
             }
         }
 
@@ -870,7 +884,31 @@ namespace eval ess {
         }
 
         ess_info "Libs sync: $pulled pulled, $unchanged unchanged" "sync"
-        return [dict create pulled $pulled unchanged $unchanged errors $errors]
+        return [dict create pulled $pulled unchanged $unchanged errors $errors \
+                    deleted_upstream [dict get $gone prune] \
+                    deleted_upstream_edited [dict get $gone edited]]
+    }
+
+    # Local libs whose registry copy is gone, classified from the lib base
+    # manifest (dservctl's planLibsPrune applies the same rule):
+    #   prune     base entry, file present and unchanged since the sync
+    #   edited    base entry, file present but edited since the sync
+    #   vanished  base entry, file gone as well (the entry can be dropped)
+    # A file with no base entry was never synced and is not considered.
+    proc _lib_registry_gone {lib_dir manifest registry_libs} {
+        set prune {}; set edited {}; set vanished {}
+        foreach fname [lsort [dict keys [dict get $manifest entries]]] {
+            if {[dict exists $registry_libs $fname] || [string first / $fname] >= 0} continue
+            set f [file join $lib_dir $fname]
+            if {![file exists $f]} {
+                lappend vanished $fname
+            } elseif {[sha256 -file $f] eq [_base_entry_get $manifest $fname]} {
+                lappend prune $fname
+            } else {
+                lappend edited $fname
+            }
+        }
+        return [dict create prune $prune edited $edited vanished $vanished]
     }
 
     # ── Sync all systems in workgroup ─────────────────────────────────
