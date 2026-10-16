@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Trial Viewer</title>
     <link rel="stylesheet" href="css/page_nav.css">
-    <link rel="stylesheet" href="css/trial_viewer.css">
+    <link rel="stylesheet" href="css/trial_viewer.css?v=20261016o">
 </head>
 <body>
     <header class="tv-bar">
@@ -17,28 +17,48 @@
     </header>
 
     <main class="tv-main">
-        <div class="tv-row">
-            <label for="datafile">Datafile</label>
-            <select id="datafile"></select>
-        </div>
-        <div class="tv-row">
-            <label for="trial">Trial</label>
-            <select id="trial"></select>
+        <div class="tv-filters">
+            <label>Subject
+                <select id="subject"></select>
+            </label>
+            <label>System
+                <select id="system"></select>
+            </label>
+            <label>Protocol
+                <select id="protocol"></select>
+            </label>
+            <label>Block
+                <select id="block"></select>
+            </label>
+            <label>Trial
+                <select id="trial"></select>
+            </label>
+            <div class="tv-layers-wrap">
+                <span class="tv-layers-caption">Layers</span>
+                <button id="layers-button" type="button" aria-expanded="false" aria-haspopup="true">None</button>
+                <div id="layers-menu" class="tv-layers-menu" hidden></div>
+            </div>
             <button id="create" type="button" disabled>Create</button>
+            <button id="play" type="button" disabled>Play</button>
+            <a id="download" aria-disabled="true">Download</a>
         </div>
-        <div class="tv-play-row">
-            <select id="videos" size="8" aria-label="Videos for this block"></select>
-            <div class="tv-buttons">
-                <button id="play" type="button">Play</button>
-                <button id="pause" type="button">Pause</button>
+        <div class="tv-stage">
+            <div class="tv-screen">
+                <video id="player"></video>
+                <div id="touch-layer" class="tv-touch-layer"></div>
+                <div id="mask" class="tv-mask"></div>
+            </div>
+            <input id="scrub" type="range" min="0" max="0" value="0" step="1" disabled aria-label="Frame">
+            <div class="tv-times">
+                <span id="playback">frame —</span>
+                <span id="playback-end">frame —</span>
             </div>
         </div>
-        <video id="player"></video>
         <p id="message"></p>
     </main>
 
     <script src="js/ws_manager.js"></script>
     <script src="js/PageNav.js"></script>
-    <script src="js/trial_viewer.js"></script>
+    <script src="js/trial_viewer.js?v=20261016q"></script>
 </body>
 </html>

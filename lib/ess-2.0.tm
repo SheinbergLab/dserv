@@ -595,13 +595,12 @@ oo::class create System {
         if { ![catch {set f [open $stimfile]}] } {
             set script [read $f]
             close $f
-            # Path and hash of the bytes about to be sourced. Playback uses
-            # the current file and treats a mismatch as the finding. The
-            # body itself is not part of the tape.
-            # ess/stim_script is the editor's copy of the script body; load
-            # overwrites it after configure_stim. The path lives beside it.
+            # Path and body of the bytes about to be sourced. Playback
+            # sources the body from the .ess. ess/stim_script is the
+            # editor's copy and a later load overwrites it, so the logged
+            # copy has its own name.
             dservSet ess/stim_script_path $stimfile
-            dservSet ess/stim_script_sha256 [sha256 $script]
+            dservSet ess/stim_script_body $script
             # rmtSend does not throw on a remote failure: it hands back the
             # error as an "!TCL_ERROR <msg>" string. Sourcing the stim script
             # is where a version pin (package require traj 1.1 on a stim2
@@ -3464,7 +3463,7 @@ namespace eval ess {
         # Unbuffered and not obs-limited, so each record keeps its own
         # arrival time. The reconstruction clocks are inside the payload.
         dservLoggerAddMatch $filename stim/inbox 0 0 1
-        foreach _ip {ess/stim_script_path ess/stim_script_sha256} {
+        foreach _ip {ess/stim_script_path ess/stim_script_body} {
             dservLoggerAddMatch $filename $_ip
         }
 
@@ -3598,7 +3597,7 @@ namespace eval ess {
         ::ess::store_evt_names
 
         dservTouch stimdg
-        foreach _ip {ess/stim_script_path ess/stim_script_sha256} {
+        foreach _ip {ess/stim_script_path ess/stim_script_body} {
             if { [dservExists $_ip] } { dservTouch $_ip }
         }
 	dservTouch em/settings

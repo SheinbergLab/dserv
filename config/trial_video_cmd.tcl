@@ -98,6 +98,25 @@ proc trial_video_list {filename} {
     return $result
 }
 
+# Filenames whose catalog row includes a stim/inbox tape. The viewer
+# treats every other block as if it were not there.
+proc taped_datafiles {} {
+    set json [yajl create #auto]
+    $json array_open
+    dfdb eval {
+        SELECT DISTINCT d.filename AS filename
+        FROM datafiles d
+        JOIN file_columns c ON c.datafile_id = d.id
+        WHERE c.column_name = '<ds>stim/inbox'
+    } {
+        $json string $filename
+    }
+    $json array_close
+    set result [$json get]
+    $json delete
+    return $result
+}
+
 proc trial_video_make {filename trial} {
     set root [trial_video_export_root]
     if {$root eq ""} {
@@ -139,4 +158,75 @@ proc trial_video_make {filename trial} {
         }
     }
     return [_json_ok $ok]
+}
+
+# Presses and releases for one observation, in video seconds and frame pixels.
+# The stim mp4 is unchanged; the viewer draws these itself.
+proc trial_video_touches {filename trial} {
+    if {![string is integer -strict $trial] || $trial < 0} {
+        return [_json_error "trial must be a non-negative integer"]
+    }
+    set filepath [dfdb eval {SELECT filepath FROM datafiles WHERE filename = $filename}]
+    if {$filepath eq "" || ![file exists $filepath]} {
+        return [_json_error "No datafile $filename"]
+    }
+    if {[catch {trial_video_load} load_err]} {
+        return [_json_error $load_err]
+    }
+    if {[info commands ::trial_video::touches] eq ""} {
+        return [_json_error "trial_video touches reader is not loaded"]
+    }
+    if {[catch {set info [::trial_video::touches $filepath $trial]} err]} {
+        return [_json_error $err]
+    }
+
+    set json [yajl create #auto]
+    $json map_open
+    $json string status string ok
+    $json string width number [dict get $info width]
+    $json string height number [dict get $info height]
+    $json string touches array_open
+    foreach ev [dict get $info events] {
+        $json map_open
+        $json string kind string [dict get $ev kind]
+        $json string t number [format %.6f [dict get $ev t]]
+        $json string x number [format %.2f [dict get $ev x]]
+        $json string y number [format %.2f [dict get $ev y]]
+        $json map_close
+    }
+    $json array_close
+    $json map_close
+    set result [$json get]
+    $json delete
+    return $result
+}
+
+# Layer names present in one datafile. The viewer only offers these.
+proc trial_video_layers {filename} {
+    set filepath [dfdb eval {SELECT filepath FROM datafiles WHERE filename = $filename}]
+    if {$filepath eq "" || ![file exists $filepath]} {
+        return [_json_error "No datafile $filename"]
+    }
+    if {[catch {trial_video_load} load_err]} {
+        return [_json_error $load_err]
+    }
+    if {[info commands ::trial_video::layers] eq ""} {
+        return [_json_error "trial_video layers reader is not loaded"]
+    }
+    if {[catch {set layers [::trial_video::layers $filepath]} err]} {
+        return [_json_error $err]
+    }
+
+    set json [yajl create #auto]
+    $json map_open
+    $json string status string ok
+    $json string layers array_open
+    foreach name $layers {
+        $json string $name
+    }
+    $json array_close
+    $json map_close
+    set result [$json get]
+    $json delete
+    return $result
 }

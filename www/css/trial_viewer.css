@@ -41,22 +41,76 @@ body {
     gap: 12px;
 }
 
-.tv-row, .tv-play-row {
+.tv-filters {
     display: flex;
+    align-items: flex-end;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.tv-filters label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 12px;
+    color: #a0a0a0;
+}
+
+.tv-filters select { color: #e0e0e0; font-size: 14px; }
+
+#subject, #system, #protocol { min-width: 9em; }
+#block { min-width: 12em; }
+#trial { min-width: 7em; }
+
+.tv-filters button, #download { margin-bottom: 1px; }
+
+.tv-layers-wrap {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.tv-layers-caption { font-size: 12px; color: #a0a0a0; }
+
+#layers-button { min-width: 4.5em; text-align: left; }
+
+.tv-layers-menu {
+    position: absolute;
+    z-index: 4;
+    top: 100%;
+    left: 0;
+    margin-top: 4px;
+    min-width: 100%;
+    background: #252535;
+    border: 1px solid #3d3d4d;
+    border-radius: 4px;
+    padding: 4px 0;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.tv-layers-menu label {
+    display: flex;
+    flex-direction: row;
     align-items: center;
-    gap: 10px;
+    gap: 8px;
+    margin: 0;
+    padding: 6px 10px;
+    color: #e0e0e0;
+    font-size: 14px;
+    white-space: nowrap;
+    cursor: pointer;
 }
 
-.tv-row label {
-    width: 64px;
+.tv-layers-menu label:hover { background: #2e2e40; }
+
+.tv-layers-empty {
+    padding: 6px 10px;
+    color: #a0a0a0;
+    font-size: 14px;
 }
 
-.tv-row select {
-    flex: 1;
-    min-width: 0;
-}
-
-select, button {
+select, button, #download {
     background: #252535;
     color: #e0e0e0;
     border: 1px solid #3d3d4d;
@@ -65,25 +119,118 @@ select, button {
     font: inherit;
 }
 
-button { cursor: pointer; }
-button:disabled { opacity: 0.5; cursor: default; }
-button:not(:disabled):hover { border-color: #7c8aff; }
+button, #download { cursor: pointer; }
+button:disabled, #download[aria-disabled="true"] { opacity: 0.5; cursor: default; }
+button:not(:disabled):hover, #download:not([aria-disabled="true"]):hover { border-color: #7c8aff; }
 
-#videos {
-    width: 320px;
-    background: #14141c;
+#download {
+    text-decoration: none;
+    display: inline-block;
 }
+#download[aria-disabled="true"] { pointer-events: none; }
 
-.tv-buttons {
+.tv-stage {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 6px;
+}
+
+.tv-screen {
+    position: relative;
+    width: 100%;
+    max-height: 480px;
+    aspect-ratio: 1280 / 800;
+    background: #000;
 }
 
 #player {
     width: 100%;
-    max-height: 480px;
+    height: 100%;
+    object-fit: contain;
     background: #000;
+    display: block;
+}
+
+.tv-touch-layer {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    pointer-events: none;
+}
+
+.tv-touch {
+    position: absolute;
+    transform: translate(-50%, -50%);
+}
+
+.tv-touch svg { display: block; width: 100%; height: 100%; }
+
+.tv-mask {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    background: #000;
+}
+
+#scrub {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 12px;
+    margin: 0;
+    background: transparent;
+    cursor: pointer;
+    --pct: 0%;
+}
+
+#scrub:disabled { opacity: 0.35; cursor: default; }
+
+#scrub::-webkit-slider-runnable-track {
+    height: 4px;
+    border-radius: 2px;
+    background: linear-gradient(to right, #7c8aff var(--pct), #2a2a36 var(--pct));
+}
+
+#scrub::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 12px;
+    height: 12px;
+    margin-top: -4px;
+    border: 0;
+    border-radius: 50%;
+    background: #7c8aff;
+}
+
+#scrub::-moz-range-track {
+    height: 4px;
+    border: 0;
+    border-radius: 2px;
+    background: #2a2a36;
+}
+
+#scrub::-moz-range-progress {
+    height: 4px;
+    border-radius: 2px;
+    background: #7c8aff;
+}
+
+#scrub::-moz-range-thumb {
+    width: 12px;
+    height: 12px;
+    border: 0;
+    border-radius: 50%;
+    background: #7c8aff;
+}
+
+.tv-times {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.tv-times span {
+    font-variant-numeric: tabular-nums;
+    color: #c8c8d0;
 }
 
 #message {

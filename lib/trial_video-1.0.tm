@@ -1,18 +1,16 @@
 # trial_video-1.0.tm — play one observation from a stim/inbox tape
 #
 # trial_video_make passes the .ess and a trial index. The player sources
-# the stim file named in the tape, checks its hash, and feeds that trial's
-# cmd and ds records back in seq order. StimTimeF is pinned from the tape
-# (stimPlayback / stimTimeSet). There is no per-protocol plugin.
+# the stim script stored in the .ess, or the file named there when the
+# block has no copy, and feeds that trial's cmd and ds records back in
+# seq order. StimTimeF is pinned from the tape (stimPlayback / stimTimeSet),
+# one capture per original swap. The mp4 repeats those pictures at 60 fps.
+# There is no per-protocol plugin.
 package provide trial_video 1.0
 
 namespace eval trial_video {
     variable frame_ms [expr {1000.0 / 60.0}]
     variable tape_ready 1
-    # dumpRaw keeps a single filename slot, filled when the display thread
-    # later runs the request. A second dumpRaw in the same script overwrites
-    # that slot before the first file is written, so each script dumps once.
-    variable batch_frames 1
 
     proc stim {script} {
         if {[catch {exec essctrl -s stim -c $script} out]} {
@@ -27,6 +25,33 @@ namespace eval trial_video {
 
     proc stim_file {path} {
         stim [list source $path]
+    }
+
+    # One stim script for a whole trial. essctrl closes the read after 30s,
+    # which is shorter than a long capture, so this talks to stim's message
+    # port directly and waits until the script returns.
+    proc stim_run {path} {
+        set payload [list source $path]
+        set n [string length $payload]
+        set sock [socket 127.0.0.1 4612]
+        # Tcl 9 dropped the "binary" encoding. iso8859-1 keeps every byte.
+        fconfigure $sock -translation lf -encoding iso8859-1 -blocking 1 -buffering full
+        puts -nonewline $sock [binary format I $n]
+        puts -nonewline $sock $payload
+        flush $sock
+        set hdr [read $sock 4]
+        if {[string length $hdr] != 4} {
+            close $sock
+            return -code error "stim: short reply header"
+        }
+        binary scan $hdr I rn
+        set resp ""
+        if {$rn > 0} { set resp [read $sock $rn] }
+        close $sock
+        if {[string match "!TCL_ERROR *" $resp]} {
+            return -code error "stim: [string range $resp 11 end]"
+        }
+        return $resp
     }
 
     proc point_value {g vals_cmd i} {
@@ -215,9 +240,27 @@ if {[info exists ::dservhost] && $::dservhost ne ""} {
                     reset_frames $wiped show $show]
     }
 
+    # Display period of one observation, in milliseconds. The median gap
+    # between tape times that looks like a single swap. A 60 Hz grid is
+    # the fallback when the tape has no such gap.
+    proc swap_period {recs} {
+        set prev ""
+        set gaps {}
+        foreach rec $recs {
+            set tk [dict get $rec ticks]
+            if {$prev ne ""} {
+                set d [expr {$tk - $prev}]
+                if {$d >= 8.0 && $d <= 40.0} { lappend gaps $d }
+            }
+            if {$prev eq "" || $tk > $prev} { set prev $tk }
+        }
+        if {[llength $gaps] == 0} { return [expr {1000.0 / 60.0}] }
+        set gaps [lsort -real $gaps]
+        return [lindex $gaps [expr {[llength $gaps] / 2}]]
+    }
+
     proc render {ess_path trial out_mp4} {
         variable frame_ms
-        variable batch_frames
         if {![file exists $ess_path]} {
             return -code error "trial_video: no such file $ess_path"
         }
@@ -235,10 +278,6 @@ if {[info exists ::dservhost] && $::dservhost ne ""} {
         }
 
         set ends {}
-        set path ""
-        set hash ""
-        set path_t -1e300
-        set hash_t -1e300
         set stimdg_i -1
         set stimdg_t -1e300
         set i 0
@@ -247,12 +286,6 @@ if {[info exists ::dservhost] && $::dservhost ne ""} {
             # timestamp, and only when the file has an obs-limited stream.
             if {[string match {evt:20:*} $name]} {
                 lappend ends $t
-            } elseif {$name eq "ess/stim_script_path" && $t >= $path_t} {
-                set path [lindex [dl_tcllist [dl_get $g:vals $i]] 0]
-                set path_t $t
-            } elseif {$name eq "ess/stim_script_sha256" && $t >= $hash_t} {
-                set hash [lindex [dl_tcllist [dl_get $g:vals $i]] 0]
-                set hash_t $t
             } elseif {$name eq "stimdg" && $t >= $stimdg_t} {
                 set stimdg_i $i
                 set stimdg_t $t
@@ -264,24 +297,39 @@ if {[info exists ::dservhost] && $::dservhost ne ""} {
             return -code error \
                 "trial_video: trial $trial outside 0..[expr {[llength $ends] - 1}]"
         }
-        if {$path eq "" || $hash eq ""} {
-            catch {dg_delete $g}
-            return -code error "trial_video: tape has no stim script path or hash"
-        }
-        if {![file exists $path]} {
-            catch {dg_delete $g}
-            return -code error "trial_video: stim script not found: $path"
-        }
-        set got [lindex [exec sha256sum $path] 0]
-        if {$got ne $hash} {
-            catch {dg_delete $g}
-            return -code error \
-                "trial_video: stim script hash differs: file $got tape $hash"
-        }
 
         set start -1e300
         if {$trial > 0} { set start [lindex $ends [expr {$trial - 1}]] }
         set end [lindex $ends $trial]
+
+        # The logged body is the script that was sourced. A block from
+        # before that point has only a path, and plays whatever file is
+        # there now.
+        set path ""
+        set path_t -1e300
+        set script_body ""
+        set body_t -1e300
+        set i 0
+        foreach name $names t $ts {
+            if {$name eq "ess/stim_script_body" && $t <= $end && $t >= $body_t} {
+                set script_body [lindex [dl_tcllist [dl_get $g:vals $i]] 0]
+                set body_t $t
+            } elseif {$name eq "ess/stim_script_path" && $t <= $end && $t >= $path_t} {
+                set path [lindex [dl_tcllist [dl_get $g:vals $i]] 0]
+                set path_t $t
+            }
+            incr i
+        }
+        if {$script_body eq ""} {
+            if {$path eq ""} {
+                catch {dg_delete $g}
+                return -code error "trial_video: tape has no stim script"
+            }
+            if {![file exists $path]} {
+                catch {dg_delete $g}
+                return -code error "trial_video: stim script not found: $path"
+            }
+        }
 
         set recs {}
         set i 0
@@ -357,8 +405,17 @@ if {[info exists ::dservhost] && $::dservhost ne ""} {
         set info ""
         set failed 0
         set err ""
+        set ff ""
+        set hold ""
         if {[catch {
-            set handlers [install_stim $host $path $work]
+            set stimfile $path
+            if {$script_body ne ""} {
+                set stimfile [file join $work stim.tcl]
+                set fd [open $stimfile w]
+                puts -nonewline $fd $script_body
+                close $fd
+            }
+            set handlers [install_stim $host $stimfile $work]
             foreach pname $need {
                 if {$pname ni $handlers} {
                     return -code error \
@@ -369,21 +426,67 @@ if {[info exists ::dservhost] && $::dservhost ne ""} {
 
             set w [expr {int([stim {return [screen_set WinWidth]}])}]
             set h [expr {int([stim {return [screen_set WinHeight]}])}]
-            set expect [expr {20 + $w * $h * 4}]
 
             set t0 [dict get [lindex $recs 0] ticks]
             set t1 [dict get [lindex $recs end] ticks]
-            set nframes [expr {int(ceil(($t1 - $t0) / $frame_ms)) + 1}]
-            if {$nframes < 1} { set nframes 1 }
+            # One redraw per original swap. A longer quiet stretch is split
+            # into steps of that same period so the clock never jumps far
+            # enough for an object to throw the step away.
+            set step_ms [swap_period $recs]
+            set times [list $t0]
+            set T $t0
+            while {1} {
+                set next [expr {$T + $step_ms}]
+                if {$next >= $t1 - 0.5} {
+                    if {$t1 > $T + 0.01} { lappend times $t1 }
+                    break
+                }
+                lappend times $next
+                set T $next
+            }
+            set n_native [llength $times]
+            # The file stays 60 fps. Each captured picture is repeated across
+            # the output slots it covers, so a 50 Hz swap still plays in the
+            # viewer without a second object update.
+            set n_out [expr {int(ceil(($t1 - $t0) / $frame_ms)) + 1}]
+            if {$n_out < 1} { set n_out 1 }
+            set reps {}
+            set out_k 0
+            for {set i 0} {$i < $n_native} {incr i} {
+                if {$i + 1 < $n_native} {
+                    set limit [lindex $times [expr {$i + 1}]]
+                } else {
+                    set limit [expr {$t1 + $frame_ms}]
+                }
+                set nrep 0
+                while {$out_k < $n_out} {
+                    set tk [expr {$t0 + $out_k * $frame_ms}]
+                    if {$i + 1 < $n_native && $tk >= $limit} break
+                    incr nrep
+                    incr out_k
+                }
+                lappend reps $nrep
+            }
 
             set seenfile [file join $work clock.txt]
             set ff_log [file join $work ffmpeg.log]
+            # One script, one fifo. The hold keeps both ends from blocking
+            # before the other arrives, and closing it is what tells ffmpeg
+            # the pictures are done. Same encoder flags as before: a keyframe
+            # every second, no B-frames, no edit list, timescale matching
+            # the frames. Firefox stalls without those.
+            set fifo [file join $work frames.fifo]
+            exec mkfifo $fifo
+            set hold [open $fifo RDWR]
+            fconfigure $hold -translation binary -blocking 1
             set ff [open [list |ffmpeg -y -loglevel error \
                 -f rawvideo -pixel_format rgba -video_size ${w}x${h} \
-                -framerate 60 -i - \
-                -c:v libx264 -pix_fmt yuv420p $out_mp4 2> $ff_log] w]
-            fconfigure $ff -translation binary -blocking 1 \
-                -buffering full -buffersize 1048576
+                -framerate 60 -i $fifo \
+                -c:v libx264 -pix_fmt yuv420p \
+                -bf 0 -g 60 -keyint_min 60 -sc_threshold 0 \
+                -use_editlist 0 -movie_timescale 15360 \
+                -movflags +faststart $out_mp4 2> $ff_log] w]
+            fconfigure $ff -translation binary -blocking 1
 
             set base 0.0
             set base_ticks $t0
@@ -391,43 +494,12 @@ if {[info exists ::dservhost] && $::dservhost ne ""} {
             set show_pin ""
             set idx 0
             set nrec [llength $recs]
-            set batch_fd ""
-            set batch_n 0
-            set batch_raws {}
-            set batch_path [file join $work batch.tcl]
+            set play_path [file join $work play.tcl]
+            set play_fd [open $play_path w]
+            puts $play_fd "stimPlayback 1"
 
-            proc flush_batch {path raws expect ff} {
-                if {[llength $raws] == 0} return
-                stim_file $path
-                foreach raw $raws {
-                    set deadline [expr {[clock milliseconds] + 3000}]
-                    set size 0
-                    while {[clock milliseconds] < $deadline} {
-                        if {[file exists $raw]} { set size [file size $raw] }
-                        if {$size >= $expect} break
-                    }
-                    if {$size < $expect} {
-                        return -code error \
-                            "dumpRaw incomplete for $raw (got $size, want $expect)"
-                    }
-                    set in [open $raw rb]
-                    fconfigure $in -translation binary
-                    read $in 20
-                    fcopy $in $ff
-                    close $in
-                    file delete -force $raw
-                }
-            }
-
-            for {set fi 0} {$fi < $nframes} {incr fi} {
-                set T [expr {$t0 + $fi * $frame_ms}]
-                if {$T > $t1} { set T $t1 }
-                if {$batch_fd eq ""} {
-                    set batch_fd [open $batch_path w]
-                    puts $batch_fd "stimPlayback 1"
-                    set batch_raws {}
-                    set batch_n 0
-                }
+            for {set fi 0} {$fi < $n_native} {incr fi} {
+                set T [lindex $times $fi]
                 set marked 0
                 while {$idx < $nrec} {
                     set rec [lindex $recs $idx]
@@ -438,7 +510,7 @@ if {[info exists ::dservhost] && $::dservhost ne ""} {
                     } else {
                         set base [dict get $rec timef]
                     }
-                    if {[emit_record $batch_fd $rec] == 2} {
+                    if {[emit_record $play_fd $rec] == 2} {
                         set marked 1
                         set show_cmd_time [dict get $rec timef]
                     }
@@ -446,25 +518,23 @@ if {[info exists ::dservhost] && $::dservhost ne ""} {
                 }
                 set pin [expr {$base + ($T - $base_ticks)}]
                 if {$marked} { set show_pin $pin }
-                set raw [file join $work [format frame_%04d.raw $fi]]
-                puts $batch_fd [list set ::tape_mark $marked]
-                puts $batch_fd [list stimTimeSet $pin]
-                puts $batch_fd "diagShow off"
-                puts $batch_fd "redraw"
-                puts $batch_fd [list dumpRaw $raw]
-                puts $batch_fd [list _tape_seen $seenfile $T $pin]
-                lappend batch_raws $raw
-                incr batch_n
-                if {$batch_n >= $batch_frames || $fi == $nframes - 1} {
-                    close $batch_fd
-                    set batch_fd ""
-                    flush_batch $batch_path $batch_raws $expect $ff
-                }
+                set nrep [lindex $reps $fi]
+                puts $play_fd [list set ::tape_mark $marked]
+                puts $play_fd [list stimTimeSet $pin]
+                puts $play_fd "diagShow off"
+                puts $play_fd [list captureFrame $fifo $nrep]
+                puts $play_fd [list _tape_seen $seenfile $T $pin]
             }
+            close $play_fd
+            stim_run $play_path
+            # The fifo's last writer has to go before ffmpeg will finish.
+            close $hold
+            set hold ""
             close $ff
+            set ff ""
             set info [check_clock $seenfile]
             if {$show_cmd_time ne ""} {
-                if {abs($show_pin - $show_cmd_time) > $frame_ms + 1.0} {
+                if {abs($show_pin - $show_cmd_time) > $step_ms + 1.0} {
                     return -code error \
                         "show_response pin $show_pin is more than a frame from tape time $show_cmd_time"
                 }
@@ -474,9 +544,17 @@ if {[info exists ::dservhost] && $::dservhost ne ""} {
             dict set info width $w
             dict set info height $h
             dict set info out $out_mp4
+            dict set info step_ms $step_ms
+            dict set info output_frames $n_out
         } err]} {
             set failed 1
         }
+        # A fast failure closes the fifo's writer before ffmpeg has opened
+        # it, and ffmpeg then waits forever. Stop it instead of waiting.
+        if {$failed && $ff ne ""} {
+            catch {exec kill -9 [pid $ff]}
+        }
+        catch {close $hold}
         catch {close $ff}
         catch {restore_live $host}
         file delete -force $work
@@ -485,5 +563,181 @@ if {[info exists ::dservhost] && $::dservhost ne ""} {
             return -code error $err
         }
         return $info
+    }
+
+    # StimTicksF at a logger time, from the inbox records of one observation.
+    # pairs are {logger_seconds ticks_ms}, sorted by logger time.
+    proc ticks_at {pairs logger_t} {
+        set n [llength $pairs]
+        if {$n == 0} {
+            return -code error "trial_video: no clock"
+        }
+        if {$n == 1} {
+            return [expr {[lindex $pairs 0 1] + ($logger_t - [lindex $pairs 0 0]) * 1000.0}]
+        }
+        set lo 0
+        for {set i 1} {$i < $n} {incr i} {
+            if {[lindex $pairs $i 0] <= $logger_t} {
+                set lo $i
+            } else {
+                break
+            }
+        }
+        if {$lo == 0 && $logger_t < [lindex $pairs 0 0]} {
+            set a 0
+            set b 1
+        } elseif {$lo >= $n - 1} {
+            set a [expr {$n - 2}]
+            set b [expr {$n - 1}]
+        } else {
+            set a $lo
+            set b [expr {$lo + 1}]
+        }
+        set ta [lindex $pairs $a 0]
+        set tb [lindex $pairs $b 0]
+        set ka [lindex $pairs $a 1]
+        set kb [lindex $pairs $b 1]
+        set dt [expr {$tb - $ta}]
+        if {abs($dt) < 1e-12} {
+            return $ka
+        }
+        return [expr {$ka + ($logger_t - $ta) * ($kb - $ka) / $dt}]
+    }
+
+    # Presses and releases for one observation, in video seconds and frame pixels.
+    # The framebuffer is 1280x800. Touch pixels are in ess/screen_w by ess/screen_h.
+    proc touches {ess_path trial} {
+        if {![file exists $ess_path]} {
+            return -code error "trial_video: no such file $ess_path"
+        }
+        if {![string is integer -strict $trial] || $trial < 0} {
+            return -code error "trial_video: trial must be a non-negative integer"
+        }
+
+        catch {dg_delete $ess_path}
+        set g [dslog::read $ess_path]
+        set names [dl_tcllist $g:varname]
+        set ts [dl_tcllist $g:timestamp]
+        if {[lsearch -exact $names stim/inbox] < 0} {
+            catch {dg_delete $g}
+            return -code error "trial_video: no stim/inbox tape in [file tail $ess_path]"
+        }
+
+        set ends {}
+        set i 0
+        foreach name $names t $ts {
+            if {[string match {evt:20:*} $name]} {
+                lappend ends $t
+            }
+            incr i
+        }
+        if {$trial >= [llength $ends]} {
+            catch {dg_delete $g}
+            return -code error \
+                "trial_video: trial $trial outside 0..[expr {[llength $ends] - 1}]"
+        }
+        set start -1e300
+        if {$trial > 0} { set start [lindex $ends [expr {$trial - 1}]] }
+        set end [lindex $ends $trial]
+
+        set frame_w 1280.0
+        set frame_h 800.0
+        set screen_w 0.0
+        set screen_h 0.0
+        set screen_wt -1e300
+        set screen_ht -1e300
+        set recs {}
+        set raw_events {}
+        set i 0
+        foreach name $names t $ts {
+            if {$name eq "stim/inbox" && $t > $start && $t <= $end} {
+                set rec [parse_inbox [lindex [dl_tcllist [dl_get $g:vals $i]] 0]]
+                dict set rec t $t
+                lappend recs $rec
+            } elseif {($name eq "evt:48:0" || $name eq "evt:48:1") && $t > $start && $t <= $end} {
+                set xy [dl_tcllist [dl_get $g:vals $i]]
+                lappend raw_events [list $t $name [lindex $xy 0] [lindex $xy 1]]
+            } elseif {$name eq "ess/screen_w" && $t <= $end && $t >= $screen_wt} {
+                set raw [lindex [dl_tcllist [dl_get $g:vals $i]] 0]
+                if {[string is double -strict $raw] && $raw > 0} {
+                    set screen_w $raw
+                    set screen_wt $t
+                }
+            } elseif {$name eq "ess/screen_h" && $t <= $end && $t >= $screen_ht} {
+                set raw [lindex [dl_tcllist [dl_get $g:vals $i]] 0]
+                if {[string is double -strict $raw] && $raw > 0} {
+                    set screen_h $raw
+                    set screen_ht $t
+                }
+            }
+            incr i
+        }
+        catch {dg_delete $g}
+        if {[llength $recs] == 0} {
+            return -code error "trial_video: trial $trial has no stim/inbox records"
+        }
+        if {$screen_w <= 0} { set screen_w $frame_w }
+        if {$screen_h <= 0} { set screen_h $frame_h }
+
+        set recs [lsort -command {apply {{a b} {
+            set d [expr {[dict get $a seq] - [dict get $b seq]}]
+            expr {$d < 0 ? -1 : $d > 0 ? 1 : 0}
+        }}} $recs]
+        set t0 [dict get [lindex $recs 0] ticks]
+
+        set pairs {}
+        foreach rec [lsort -command {apply {{a b} {
+            set d [expr {[dict get $a t] - [dict get $b t]}]
+            expr {$d < 0 ? -1 : $d > 0 ? 1 : 0}
+        }}} $recs] {
+            lappend pairs [list [dict get $rec t] [dict get $rec ticks]]
+        }
+
+        set events {}
+        foreach ev $raw_events {
+            lassign $ev logger_t name x y
+            if {![string is double -strict $x] || ![string is double -strict $y]} {
+                continue
+            }
+            set ticks [ticks_at $pairs $logger_t]
+            set kind [expr {$name eq "evt:48:0" ? "press" : "release"}]
+            lappend events [dict create \
+                kind $kind \
+                t [expr {($ticks - $t0) / 1000.0}] \
+                x [expr {$x * $frame_w / $screen_w}] \
+                y [expr {$y * $frame_h / $screen_h}]]
+        }
+        set events [lsort -command {apply {{a b} {
+            set d [expr {[dict get $a t] - [dict get $b t]}]
+            if {abs($d) > 1e-9} {
+                return [expr {$d < 0 ? -1 : 1}]
+            }
+            set ka [dict get $a kind]
+            set kb [dict get $b kind]
+            if {$ka eq $kb} { return 0 }
+            if {$ka eq "press"} { return -1 }
+            return 1
+        }}} $events]
+
+        return [dict create width [expr {int($frame_w)}] height [expr {int($frame_h)}] \
+                    events $events]
+    }
+
+    # Layer names this file can actually draw. Touch is the press/release
+    # events, whichever device produced them.
+    proc layers {ess_path} {
+        if {![file exists $ess_path]} {
+            return -code error "trial_video: no such file $ess_path"
+        }
+        catch {dg_delete $ess_path}
+        set g [dslog::read $ess_path]
+        set names [dl_tcllist $g:varname]
+        catch {dg_delete $g}
+        set layers {}
+        if {[lsearch -exact $names evt:48:0] >= 0 ||
+            [lsearch -exact $names evt:48:1] >= 0} {
+            lappend layers touch
+        }
+        return $layers
     }
 }
