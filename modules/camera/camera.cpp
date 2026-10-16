@@ -1106,9 +1106,8 @@ public:
 	  available_controls.end()) {
 	int64_t frame_duration_us =
 	  static_cast<int64_t>(1000000.0 / target_fps_);
-	controls.set(controls::FrameDurationLimits, 
-		     Span<const int64_t, 2>({frame_duration_us,
-			 frame_duration_us}));
+	controls.set(controls::FrameDurationLimits,
+		     {frame_duration_us, frame_duration_us});
 	hardware_fps_supported_ = true;
 	software_throttling_active_ = false;
       } else {
@@ -2654,8 +2653,7 @@ public:
       int64_t frame_duration_us =
 	static_cast<int64_t>(1000000.0 / target_fps_);
       controls.set(controls::FrameDurationLimits,
-		   Span<const int64_t, 2>({frame_duration_us,
-		       frame_duration_us}));
+		   {frame_duration_us, frame_duration_us});
     }
 
     // White balance control
