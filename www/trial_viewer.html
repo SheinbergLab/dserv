@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trial Viewer</title>
+    <link rel="stylesheet" href="css/page_nav.css">
+    <link rel="stylesheet" href="css/trial_viewer.css">
+</head>
+<body>
+    <header class="tv-bar">
+        <h1>Trial Viewer</h1>
+        <span id="status-dot" class="tv-dot"></span>
+        <span id="status-text">Connecting...</span>
+        <div class="tv-spacer"></div>
+        <div id="page-nav-container"></div>
+    </header>
+
+    <main class="tv-main">
+        <div class="tv-row">
+            <label for="datafile">Datafile</label>
+            <select id="datafile"></select>
+        </div>
+        <div class="tv-row">
+            <label for="trial">Trial</label>
+            <select id="trial"></select>
+            <button id="create" type="button" disabled>Create</button>
+        </div>
+        <div class="tv-play-row">
+            <select id="videos" size="8" aria-label="Videos for this block"></select>
+            <div class="tv-buttons">
+                <button id="play" type="button">Play</button>
+                <button id="pause" type="button">Pause</button>
+            </div>
+        </div>
+        <video id="player"></video>
+        <p id="message"></p>
+    </main>
+
+    <script src="js/ws_manager.js"></script>
+    <script src="js/PageNav.js"></script>
+    <script src="js/trial_viewer.js"></script>
+</body>
+</html>

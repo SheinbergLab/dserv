@@ -1,0 +1,95 @@
+body {
+    margin: 0;
+    background: #1a1a24;
+    color: #e0e0e0;
+    font: 14px/1.4 system-ui, sans-serif;
+}
+
+.tv-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 16px;
+    background: #252535;
+    border-bottom: 1px solid #3d3d4d;
+}
+
+.tv-bar h1 {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 600;
+}
+
+.tv-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #666;
+}
+
+.tv-dot.connected { background: #3dba7c; }
+.tv-dot.connecting { background: #d4a017; }
+
+.tv-spacer { flex: 1; }
+
+.tv-main {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.tv-row, .tv-play-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.tv-row label {
+    width: 64px;
+}
+
+.tv-row select {
+    flex: 1;
+    min-width: 0;
+}
+
+select, button {
+    background: #252535;
+    color: #e0e0e0;
+    border: 1px solid #3d3d4d;
+    border-radius: 4px;
+    padding: 6px 8px;
+    font: inherit;
+}
+
+button { cursor: pointer; }
+button:disabled { opacity: 0.5; cursor: default; }
+button:not(:disabled):hover { border-color: #7c8aff; }
+
+#videos {
+    width: 320px;
+    background: #14141c;
+}
+
+.tv-buttons {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+#player {
+    width: 100%;
+    max-height: 480px;
+    background: #000;
+}
+
+#message {
+    margin: 0;
+    min-height: 1.4em;
+    color: #a0a0a0;
+}
+
+#message.error { color: #e06a6a; }

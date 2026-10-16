@@ -73,6 +73,15 @@ class PageNav {
             windowSize: { width: 1200, height: 800 }
         },
         {
+            id: 'trial_viewer',
+            title: 'Trial Viewer',
+            desc: 'Render and play trial videos',
+            icon: '🎬',
+            href: 'trial_viewer.html',
+            category: 'viewers',
+            windowSize: { width: 1000, height: 760 }
+        },
+        {
             id: 'event_viewer',
             title: 'Event Viewer',
             desc: 'Real-time event log',

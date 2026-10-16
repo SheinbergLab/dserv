@@ -468,6 +468,43 @@ oo::class create System {
                 }
             }
 
+            # Trial inbox tape. stim2 calls this after every command it
+            # evals, every datapoint it dispatches, and every StimTimeF
+            # reset. One string on the return socket, no reply:
+            #   seq kind stimticksf stimtimef swapcount nbytes\n
+            #   <body of nbytes characters>
+            # kind is cmd, swap, ds, or reset. A cmd over 8KB is stored as
+            # "omitted <nbytes> <sha256>" -- the stim script source is the
+            # only command that large. A stimdg dispatch is the name only;
+            # those bytes are already the stimdg point.
+            proc stim_inbox_log {kind body} {
+                if { ![info exists ::dserv_return_sock] } { return -1 }
+                if { ![info exists ::stim_inbox_seq] } { set ::stim_inbox_seq 0 }
+                if { $kind eq "ds" && ($body eq "stimdg" ||
+                                       [string match "stimdg *" $body]) } {
+                    set body stimdg
+                }
+                if { $kind eq "cmd" && [string length $body] > 8192 } {
+                    set n [string length $body]
+                    if { [catch { stim_inbox_sha256 $body } dig] } {
+                        set body "omitted $n"
+                    } else {
+                        set body "omitted $n $dig"
+                    }
+                }
+                set seq $::stim_inbox_seq
+                incr ::stim_inbox_seq
+                set nbytes [string length $body]
+                set rec [format "%s %s %.6f %.6f %d %d" \
+                             $seq $kind $::StimTicksF $::StimTimeF \
+                             $::SwapCount $nbytes]
+                append rec \n $body
+                # The fixed 128-byte frame cannot hold a command record.
+                # The variable-length send shares this socket and flushes.
+                qpcs::dsSocketSendBytesVar $::dserv_return_sock stim/inbox $rec 1
+                return $seq
+            }
+
             # Event-bearing send: prepend a sync header {SwapCount StimTicksF
             # FlipWallUs tag}, read live, ahead of an optional float value
             # list, as one DSERV_BYTE blob (ESS reconstructs the event time
@@ -558,6 +595,13 @@ oo::class create System {
         if { ![catch {set f [open $stimfile]}] } {
             set script [read $f]
             close $f
+            # Path and hash of the bytes about to be sourced. Playback uses
+            # the current file and treats a mismatch as the finding. The
+            # body itself is not part of the tape.
+            # ess/stim_script is the editor's copy of the script body; load
+            # overwrites it after configure_stim. The path lives beside it.
+            dservSet ess/stim_script_path $stimfile
+            dservSet ess/stim_script_sha256 [sha256 $script]
             # rmtSend does not throw on a remote failure: it hands back the
             # error as an "!TCL_ERROR <msg>" string. Sourcing the stim script
             # is where a version pin (package require traj 1.1 on a stim2
@@ -3416,6 +3460,13 @@ namespace eval ess {
         dservLoggerAddMatch $filename eventlog/events
         dservLoggerAddMatch $filename eventlog/names
         dservLoggerAddMatch $filename stimdg
+        # Trial inbox tape: every command and datapoint stim applied.
+        # Unbuffered and not obs-limited, so each record keeps its own
+        # arrival time. The reconstruction clocks are inside the payload.
+        dservLoggerAddMatch $filename stim/inbox 0 0 1
+        foreach _ip {ess/stim_script_path ess/stim_script_sha256} {
+            dservLoggerAddMatch $filename $_ip
+        }
 
         # Screen geometry + timing. These are dservSet once at configure (before
         # the file opens), so add the match and dservTouch each to re-emit its
@@ -3547,6 +3598,9 @@ namespace eval ess {
         ::ess::store_evt_names
 
         dservTouch stimdg
+        foreach _ip {ess/stim_script_path ess/stim_script_sha256} {
+            if { [dservExists $_ip] } { dservTouch $_ip }
+        }
 	dservTouch em/settings
 	dservTouch em/biquadratic
 	dservTouch ess/ain/recorded   ;# re-emit into THIS file (set before the match)

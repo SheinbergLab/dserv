@@ -2166,4 +2166,6 @@ catch {dservTouch df/export_destination}
 # Clean up old download files
 catch {cleanup_downloads 1}
 
+source [file join [file dirname [info script]] trial_video_cmd.tcl]
+
 puts "dfconf: Datafile manager ready (df 2.0 - obs/trials/export)"
