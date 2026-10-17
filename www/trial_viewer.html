@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Trial Viewer</title>
     <link rel="stylesheet" href="css/page_nav.css">
-    <link rel="stylesheet" href="css/trial_viewer.css?v=20261017h">
+    <link rel="stylesheet" href="css/trial_viewer.css?v=20261017o">
 </head>
 <body>
     <header class="tv-bar">
@@ -31,7 +31,11 @@
                 <select id="block"></select>
             </label>
             <label>Trial
-                <select id="trial"></select>
+                <div class="tv-trial-wrap">
+                    <select id="trial" class="tv-trial-native" tabindex="-1" aria-hidden="true"></select>
+                    <button id="trial-button" type="button" aria-haspopup="listbox" aria-expanded="false" disabled>trial</button>
+                    <div id="trial-menu" class="tv-trial-menu" role="listbox" hidden></div>
+                </div>
             </label>
             <div class="tv-layers-wrap">
                 <span class="tv-layers-caption">Layers</span>
@@ -58,9 +62,19 @@
         <p id="message"></p>
     </main>
 
+    <div id="modal" class="tv-modal" hidden>
+        <div class="tv-modal-card" role="dialog" aria-modal="true" aria-labelledby="modal-text">
+            <p id="modal-text"></p>
+            <div class="tv-modal-actions">
+                <button id="modal-cancel" type="button">Cancel</button>
+                <button id="modal-ok" type="button">OK</button>
+            </div>
+        </div>
+    </div>
+
     <script src="js/ws_manager.js"></script>
     <script src="js/DatapointManager.js"></script>
     <script src="js/PageNav.js"></script>
-    <script src="js/trial_viewer.js?v=20261017h"></script>
+    <script src="js/trial_viewer.js?v=20261017p"></script>
 </body>
 </html>

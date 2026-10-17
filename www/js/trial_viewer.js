@@ -3,6 +3,7 @@ let files = [];
 let videos = [];
 let currentVideo = '';
 let creating = false;
+let confirming = false;
 let videosReady = false;
 let videoLoadGen = 0;
 let scrubbing = false;
@@ -25,9 +26,18 @@ let layersKey = '';
 let layersGen = 0;
 let touchSpace = { w: 1280, h: 800 };
 let burning = false;
+let backgroundGen = 0;
+let backgroundKey = '';
+let backgroundMissing = false;
+let backgroundModalFor = '';
+let modalGen = 0;
 let filesBusy = false;
 let filesAgain = false;
 const FRAME_RATE = 60;
+const BACKGROUND_NOTE =
+    'Background color not set in this task! Defaulting to black for this video.';
+const BACKGROUND_MISSING =
+    BACKGROUND_NOTE + ' The task should call setBackground to set a background color.';
 const EYE_TRAIL = 15;
 const EYE_TRAIL_GAP = 3;
 const EYE_TRAIL_FADE = 0.82;
@@ -159,11 +169,36 @@ function trialLabel(index) {
     return trialVideo(index) ? name + ' \u2713' : name;
 }
 
+function setTrialOpen(open) {
+    document.getElementById('trial-menu').hidden = !open;
+    document.getElementById('trial-button').setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+
 function paintTrials() {
     const trial = document.getElementById('trial');
+    const menu = document.getElementById('trial-menu');
+    const button = document.getElementById('trial-button');
+    menu.innerHTML = '';
     for (const opt of trial.options) {
-        opt.textContent = trialLabel(opt.value);
+        const item = document.createElement('button');
+        item.type = 'button';
+        item.dataset.value = opt.value;
+        item.textContent = trialLabel(opt.value);
+        item.setAttribute('role', 'option');
+        const selected = opt.value === trial.value;
+        item.setAttribute('aria-selected', selected ? 'true' : 'false');
+        if (selected) item.classList.add('is-selected');
+        item.addEventListener('click', () => {
+            setTrialOpen(false);
+            if (trial.value === opt.value) return;
+            trial.value = opt.value;
+            paintTrials();
+            trial.dispatchEvent(new Event('change'));
+        });
+        menu.appendChild(item);
     }
+    button.textContent = trial.value === '' ? 'trial' : trialLabel(trial.value);
+    button.disabled = trial.disabled;
     syncButtons();
 }
 
@@ -189,6 +224,10 @@ function syncButtons() {
         download.href = '/' + video.url;
         download.download = block + '-' + video.name;
         download.removeAttribute('aria-disabled');
+    }
+    if (confirming) {
+        action.disabled = true;
+        return;
     }
     if (creating) {
         action.disabled = true;
@@ -280,12 +319,96 @@ function ensureLoaded(video) {
     return job;
 }
 
+function showModal(text, opts) {
+    const gen = ++modalGen;
+    const root = document.getElementById('modal');
+    const card = root.querySelector('.tv-modal-card');
+    const cancel = document.getElementById('modal-cancel');
+    const ok = document.getElementById('modal-ok');
+    document.getElementById('modal-text').textContent = text;
+    card.classList.toggle('warn', !!opts.warn);
+    cancel.hidden = !opts.cancel;
+    cancel.textContent = opts.cancelLabel || 'Cancel';
+    ok.textContent = opts.okLabel || 'OK';
+    root.hidden = false;
+    ok.focus();
+    return new Promise((resolve) => {
+        const finish = (yes) => {
+            ok.removeEventListener('click', onOk);
+            cancel.removeEventListener('click', onCancel);
+            if (gen !== modalGen) return;
+            root.hidden = true;
+            resolve(yes);
+        };
+        const onOk = () => finish(true);
+        const onCancel = () => finish(false);
+        ok.addEventListener('click', onOk);
+        cancel.addEventListener('click', onCancel);
+    });
+}
+
+async function ensureBackground(file, trial, popup) {
+    const gen = ++backgroundGen;
+    const key = file.filename + '#' + trial;
+    if (key !== backgroundKey) {
+        const raw = await dfEval(
+            'trial_video_background {' + file.filename + '} ' + trial,
+            30000
+        );
+        if (gen !== backgroundGen) return;
+        const data = JSON.parse(raw);
+        if (data.status !== 'ok') {
+            throw new Error(data.error || 'Could not read background');
+        }
+        backgroundMissing = Number(data.missing) === 1;
+        backgroundKey = key;
+    }
+    if (!backgroundMissing) {
+        backgroundModalFor = '';
+        return;
+    }
+    if (!popup || backgroundModalFor === key) return;
+    backgroundModalFor = key;
+    await showModal(BACKGROUND_MISSING, { cancel: false, okLabel: 'OK', warn: true });
+}
+
+function applyBackgroundNote() {
+    const file = selectedFile();
+    const trial = document.getElementById('trial').value;
+    const el = document.getElementById('message');
+    const key = file ? file.filename + '#' + trial : '';
+    if (file && trialVideo(trial) && backgroundKey === key && backgroundMissing) {
+        if (!el.classList.contains('error')) setMessage(BACKGROUND_NOTE);
+        return;
+    }
+    if (el.textContent === BACKGROUND_NOTE) setMessage('');
+}
+
+async function noteBackground(index) {
+    const file = selectedFile();
+    if (!file || index === '' || index === undefined || !trialVideo(index)) {
+        applyBackgroundNote();
+        return;
+    }
+    try {
+        await ensureBackground(file, index, false);
+    } catch (e) {
+        if (document.getElementById('trial').value === String(index)) {
+            setMessage(e.message, true);
+        }
+        return;
+    }
+    if (document.getElementById('trial').value !== String(index)) return;
+    applyBackgroundNote();
+}
+
 async function showTrial(index, autoplay) {
     const video = trialVideo(index);
     const player = document.getElementById('player');
     if (!video) {
         clearPlayer();
         syncButtons();
+        applyBackgroundNote();
         return;
     }
     if (!autoplay) showMask();
@@ -296,6 +419,8 @@ async function showTrial(index, autoplay) {
         syncButtons();
         return;
     }
+    if (currentVideo !== video.name) return;
+    await noteBackground(index);
     if (currentVideo !== video.name) return;
     if (!autoplay) {
         syncButtons();
@@ -329,7 +454,7 @@ async function loadVideos() {
     videos = data.videos || [];
     videosReady = true;
     paintTrials();
-    showTrial(document.getElementById('trial').value, false);
+    await showTrial(document.getElementById('trial').value, false);
 }
 
 async function onDatafileChange() {
@@ -338,7 +463,11 @@ async function onDatafileChange() {
     applyFilters();
     try {
         await loadVideos();
-        setMessage('');
+        const el = document.getElementById('message');
+        if (!el.classList.contains('error')) {
+            setMessage('');
+            applyBackgroundNote();
+        }
     } catch (e) {
         setMessage(e.message, true);
     }
@@ -351,14 +480,68 @@ function onTrialChange() {
     refreshEyes();
 }
 
+async function askToStopTask() {
+    confirming = true;
+    syncButtons();
+    const stop = await showModal(
+        'A task is running. Creating this video takes over the stim display until the capture finishes, so the task has to stop.',
+        { cancel: true, okLabel: 'Agree', cancelLabel: 'Cancel' }
+    );
+    confirming = false;
+    syncButtons();
+    return stop;
+}
+
+async function essValue(name) {
+    const raw = await connection.evalAsync(
+        'if {[catch {dservGet ' + name + '} _tv]} { set _tv "" }; string trim $_tv'
+    );
+    return String(raw || '').trim();
+}
+
+async function reloadSelectedTask(onReload) {
+    const system = await essValue('ess/system');
+    const protocol = await essValue('ess/protocol');
+    const variant = await essValue('ess/variant');
+    if (!system || !protocol) return false;
+    if (onReload) onReload();
+    const cmd = variant ? 'ess::reload_system' : 'ess::reload_protocol';
+    await connection.evalAsync('send ess {' + cmd + '}', 600000);
+    return true;
+}
+
 async function createVideo() {
     const file = selectedFile();
     const trial = document.getElementById('trial').value;
     if (!file || trial === '') return;
+    try {
+        await ensureBackground(file, trial, true);
+    } catch (e) {
+        setMessage(e.message, true);
+        return;
+    }
+    let status = '';
+    try {
+        status = await essValue('ess/status');
+    } catch (e) {
+        setMessage(e.message, true);
+        return;
+    }
+    if (status === 'loading') {
+        setMessage('The system is still loading.', true);
+        return;
+    }
+    if (status === 'running') {
+        const stop = await askToStopTask();
+        if (!stop) return;
+    }
     creating = true;
     syncButtons();
     setMessage('Rendering trial ' + trial + '. This holds stim2 until the trial finishes.');
     try {
+        if (status === 'running') {
+            await connection.evalAsync('send ess {ess::stop}', 60000);
+        }
         const raw = await dfEval(
             'trial_video_make {' + file.filename + '} ' + trial,
             600000
@@ -368,7 +551,17 @@ async function createVideo() {
             throw new Error(data.error || 'Render failed');
         }
         await loadVideos();
-        setMessage('Wrote ' + (data.path || ('trial_' + trial + '.mp4')));
+        backgroundMissing = Number(data.background_missing) === 1;
+        backgroundKey = file.filename + '#' + trial;
+        const wrote = 'Wrote ' + (data.path || ('trial_' + trial + '.mp4'));
+        try {
+            const restored = await reloadSelectedTask(function () {
+                setMessage('Restoring the selected task.');
+            });
+            setMessage(restored ? wrote + '. Reloaded the selected task.' : wrote);
+        } catch (e) {
+            setMessage(wrote + '. The selected task was not restored. ' + e.message, true);
+        }
     } catch (e) {
         setMessage(e.message, true);
     } finally {
@@ -746,7 +939,7 @@ function watchPlayback() {
 }
 
 function onAction() {
-    if (creating) return;
+    if (creating || confirming) return;
     const trial = document.getElementById('trial').value;
     const video = trialVideo(trial);
     const player = document.getElementById('player');
@@ -759,7 +952,9 @@ function onAction() {
         return;
     }
     showTrial(trial, true);
-    setMessage('');
+    if (document.getElementById('message').textContent !== BACKGROUND_NOTE) {
+        setMessage('');
+    }
 }
 
 async function refreshEyes() {
@@ -839,6 +1034,7 @@ async function onDownload(ev) {
         a.click();
         a.remove();
         setMessage('');
+        applyBackgroundNote();
     } catch (e) {
         setMessage(e.message, true);
     } finally {
@@ -899,11 +1095,20 @@ async function init() {
     document.getElementById('action').addEventListener('click', onAction);
     document.getElementById('download').addEventListener('click', onDownload);
     document.getElementById('layers-button').addEventListener('click', () => {
+        setTrialOpen(false);
         setLayersOpen(document.getElementById('layers-menu').hidden);
+    });
+    document.getElementById('trial-button').addEventListener('click', () => {
+        if (document.getElementById('trial-button').disabled) return;
+        setLayersOpen(false);
+        setTrialOpen(document.getElementById('trial-menu').hidden);
     });
     document.addEventListener('click', (ev) => {
         if (!document.querySelector('.tv-layers-wrap').contains(ev.target)) {
             setLayersOpen(false);
+        }
+        if (!document.querySelector('.tv-trial-wrap').contains(ev.target)) {
+            setTrialOpen(false);
         }
     });
     window.addEventListener('resize', paintMarks);

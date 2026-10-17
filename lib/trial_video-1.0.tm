@@ -270,6 +270,100 @@ if {[info exists ::dservhost] && $::dservhost ne ""} {
         return [lindex $gaps [expr {[llength $gaps] / 2}]]
     }
 
+    # "setBackground r g b" from one inbox command, or "" when it is not one.
+    proc background_rgb {kind body} {
+        if {$kind ne "cmd" || [llength $body] != 4} { return "" }
+        if {[lindex $body 0] ne "setBackground"} { return "" }
+        foreach c [lrange $body 1 3] {
+            if {![string is integer -strict $c] || $c < 0 || $c > 255} {
+                return ""
+            }
+        }
+        return [lrange $body 1 3]
+    }
+
+    # Last setBackground at or before trial start. Trial start is BEGINOBS.
+    # A command from earlier in the file counts. With no BEGINOBS, the first
+    # inbox time of the trial stands in for the start. "" when the tape has none.
+    proc background_before {g names ts trial} {
+        set ends {}
+        set begins {}
+        set i 0
+        foreach name $names t $ts {
+            if {[string match {evt:19:*} $name]} {
+                lappend begins $t
+            } elseif {[string match {evt:20:*} $name]} {
+                lappend ends $t
+            }
+            incr i
+        }
+        if {$trial >= [llength $ends]} {
+            return -code error \
+                "trial_video: trial $trial outside 0..[expr {[llength $ends] - 1}]"
+        }
+        set start -1e300
+        if {$trial > 0} { set start [lindex $ends [expr {$trial - 1}]] }
+        set end [lindex $ends $trial]
+        set begin_t [begin_logger $begins $start $end]
+
+        set first_t ""
+        set i 0
+        foreach name $names t $ts {
+            if {$name eq "stim/inbox" && $t > $start && $t <= $end} {
+                if {$first_t eq "" || $t < $first_t} { set first_t $t }
+            }
+            incr i
+        }
+        if {$first_t eq ""} {
+            return -code error "trial_video: trial $trial has no stim/inbox records"
+        }
+        set limit $begin_t
+        if {$limit eq ""} { set limit $first_t }
+
+        set bg ""
+        set bg_t -1e300
+        set i 0
+        foreach name $names t $ts {
+            if {$name eq "stim/inbox" && $t <= $limit} {
+                set rec [parse_inbox [lindex [dl_tcllist [dl_get $g:vals $i]] 0]]
+                set rgb [background_rgb [dict get $rec kind] [dict get $rec body]]
+                if {$rgb ne "" && $t >= $bg_t} {
+                    set bg $rgb
+                    set bg_t $t
+                }
+            }
+            incr i
+        }
+        return $bg
+    }
+
+    # missing 1 when the tape never set a color by trial start.
+    proc background {ess_path trial} {
+        if {![file exists $ess_path]} {
+            return -code error "trial_video: no such file $ess_path"
+        }
+        if {![string is integer -strict $trial] || $trial < 0} {
+            return -code error "trial_video: trial must be a non-negative integer"
+        }
+        catch {dg_delete $ess_path}
+        set g [dslog::read $ess_path]
+        set names [dl_tcllist $g:varname]
+        set ts [dl_tcllist $g:timestamp]
+        if {[lsearch -exact $names stim/inbox] < 0} {
+            catch {dg_delete $g}
+            return -code error "trial_video: no stim/inbox tape in [file tail $ess_path]"
+        }
+        if {[catch {set rgb [background_before $g $names $ts $trial]} err]} {
+            catch {dg_delete $g}
+            return -code error $err
+        }
+        catch {dg_delete $g}
+        if {$rgb eq ""} {
+            return [dict create missing 1]
+        }
+        return [dict create missing 0 color $rgb]
+    }
+
     proc render {ess_path trial out_mp4} {
         variable frame_ms
         if {![file exists $ess_path]} {
@@ -400,6 +494,12 @@ if {[info exists ::dservhost] && $::dservhost ne ""} {
             if {$pname ni $need} { lappend need $pname }
         }
 
+        if {[catch {set bg_rgb [background_before $g $names $ts $trial]} err]} {
+            catch {dg_delete $g}
+            return -code error $err
+        }
+        set bg_missing [expr {$bg_rgb eq ""}]
+
         set outdir [file dirname $out_mp4]
         file mkdir $outdir
         set work [file join $outdir _play]
@@ -526,6 +626,13 @@ if {[info exists ::dservhost] && $::dservhost ne ""} {
             set play_path [file join $work play.tcl]
             set play_fd [open $play_path w]
             puts $play_fd "stimPlayback 1"
+            # The color is the last one the tape set by trial start. Black is
+            # stim's own start, used only when the tape never set one.
+            if {$bg_missing} {
+                puts $play_fd [list setBackground 0 0 0]
+            } else {
+                puts $play_fd [list setBackground {*}$bg_rgb]
+            }
 
             # Inbox records before BEGINOBS set the scene (background, the
             # hidden object list). Step the stim clock across that gap so a
@@ -601,6 +708,7 @@ if {[info exists ::dservhost] && $::dservhost ne ""} {
             }
             dict set info width $w
             dict set info height $h
+            dict set info background_missing $bg_missing
             dict set info out $out_mp4
             dict set info step_ms $step_ms
             dict set info output_frames $n_out

@@ -124,6 +124,15 @@ proc trial_video_make {filename trial} {
     if {![string is integer -strict $trial] || $trial < 0} {
         return [_json_error "trial must be a non-negative integer"]
     }
+    if {![catch {dservGet ess/status} ess_status]} {
+        set ess_status [string trim $ess_status]
+        if {$ess_status eq "running"} {
+            return [_json_error "A task is running. Stop it before creating a video."]
+        }
+        if {$ess_status eq "loading"} {
+            return [_json_error "The system is still loading."]
+        }
+    }
     set filepath [dfdb eval {SELECT filepath FROM datafiles WHERE filename = $filename}]
     if {$filepath eq "" || ![file exists $filepath]} {
         return [_json_error "No datafile $filename"]
@@ -151,10 +160,33 @@ proc trial_video_make {filename trial} {
         url "trial_video/$base/trial_${trial}.mp4" \
         trial $trial \
         frames [dict get $info frames]]
-    foreach key {clock_held reset_frames} {
+    foreach key {clock_held reset_frames background_missing} {
         if {[dict exists $info $key]} {
             dict set ok $key [dict get $info $key]
         }
+    }
+    return [_json_ok $ok]
+}
+
+# Whether the tape set a background by the start of this trial.
+# missing 1 means the capture starts from black and the viewer says so.
+proc trial_video_background {filename trial} {
+    if {![string is integer -strict $trial] || $trial < 0} {
+        return [_json_error "trial must be a non-negative integer"]
+    }
+    set filepath [dfdb eval {SELECT filepath FROM datafiles WHERE filename = $filename}]
+    if {$filepath eq "" || ![file exists $filepath]} {
+        return [_json_error "No datafile $filename"]
+    }
+    if {[catch {trial_video_load} load_err]} {
+        return [_json_error $load_err]
+    }
+    if {[catch {set info [::trial_video::background $filepath $trial]} err]} {
+        return [_json_error $err]
+    }
+    set ok [dict create missing [dict get $info missing]]
+    if {[dict exists $info color]} {
+        dict set ok color [dict get $info color]
     }
     return [_json_ok $ok]
 }
