@@ -57,19 +57,34 @@ body {
     color: #a0a0a0;
 }
 
+.tv-filters select,
+#layers-button,
+#action {
+    box-sizing: border-box;
+    height: 32px;
+    margin: 0;
+    padding: 0 8px;
+    appearance: none;
+    -webkit-appearance: none;
+    font: inherit;
+    font-size: 14px;
+    line-height: 30px;
+}
 .tv-filters select {
     width: 100%;
     min-width: 0;
+    padding-right: 22px;
     color: #e0e0e0;
-    font-size: 14px;
+    background-color: #252535;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='none' stroke='%23a0a0a0' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round' d='M1 1.5 L6 6.5 L11 1.5'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 8px center;
 }
 
 .tv-filters label:has(#subject) { flex-grow: 0.85; }
 .tv-filters label:has(#system) { flex-grow: 1.2; }
 .tv-filters label:has(#trial) { flex-grow: 0.75; }
 .tv-filters label:has(#block) { flex-grow: 1.7; }
-
-.tv-filters button { margin-bottom: 1px; }
 
 .tv-layers-wrap {
     position: relative;
@@ -81,8 +96,34 @@ body {
 
 .tv-layers-caption { font-size: 12px; color: #a0a0a0; }
 
-#layers-button { min-width: 4.5em; text-align: left; }
-#action { flex: 0 0 auto; min-width: 7.5em; }
+#layers-button {
+    min-width: 4.5em;
+    text-align: left;
+    background: #252535;
+    color: #e0e0e0;
+    border-color: #3d3d4d;
+}
+#action {
+    flex: 0 0 auto;
+    min-width: 7.5em;
+    margin-left: 10px;
+}
+#action[data-mode="create"] {
+    background: #2f4f86;
+    color: #e8eef8;
+    border-color: #3e68ad;
+}
+#action[data-mode="play"] {
+    background: #1f6b48;
+    color: #e9f7ef;
+    border-color: #2d8f62;
+}
+#action[data-mode="pause"] {
+    background: #c4a035;
+    color: #1a1a24;
+    border-color: #d4b44a;
+}
+#action:disabled { opacity: 0.55; cursor: default; }
 
 .tv-layers-menu {
     position: absolute;
@@ -173,6 +214,14 @@ button:not(:disabled):hover, #download:not([aria-disabled="true"]):hover { borde
 }
 
 .tv-touch svg { display: block; width: 100%; height: 100%; }
+
+.tv-eye {
+    position: absolute;
+    border-radius: 50%;
+    background: #fff;
+    opacity: 0.5;
+    transform: translate(-50%, -50%);
+}
 
 .tv-mask {
     position: absolute;

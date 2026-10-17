@@ -3522,6 +3522,9 @@ namespace eval ess {
 	    dservLoggerAddMatch $filename eyetracking/raw 1 80 1
             dservLoggerAddMatch $filename em/settings
             dservLoggerAddMatch $filename em/biquadratic
+            # Which writer produced eyetracking/raw. Published only when it
+            # changes, so this stays unbuffered and not limited to the obs.
+            dservLoggerAddMatch $filename em/source_active
 
 	    if { [dservExists eyetracking/results] } {
 		foreach v "pupil p1 p4" {
@@ -3625,6 +3628,9 @@ namespace eval ess {
         }
 	dservTouch em/settings
 	dservTouch em/biquadratic
+	if {[dservExists em/source_active]} {
+	    dservTouch em/source_active
+	}
 	dservTouch ess/ain/recorded   ;# re-emit into THIS file (set before the match)
 	
 	::ess::evt_put TIME OPEN [now] [clock seconds]

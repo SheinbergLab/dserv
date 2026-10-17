@@ -16,26 +16,26 @@ let touchOn = false;
 let touches = [];
 let touchKey = '';
 let touchGen = 0;
+let eyeOn = false;
+let eyes = [];
+let eyeKey = '';
+let eyeGen = 0;
 let availableLayers = new Set();
 let layersKey = '';
 let layersGen = 0;
 let touchSpace = { w: 1280, h: 800 };
 let burning = false;
+let filesBusy = false;
+let filesAgain = false;
 const FRAME_RATE = 60;
+const EYE_TRAIL = 15;
+const EYE_TRAIL_GAP = 3;
+const EYE_TRAIL_FADE = 0.82;
 const TOUCH_HOLD = 0.2;
-const TOUCH_RIDGES =
-    '<path d="M32 22c-3.2 0-5.6 3-5.6 7.2 0 3.2.8 6 2 8.6"/>' +
-    '<path d="M24.4 24.2c0-6 3.4-10.6 7.6-10.6s7.6 4.6 7.6 10.6c0 7.4-1.6 13.2-3.2 17"/>' +
-    '<path d="M19.6 22.4c.6-8.6 5.8-14.2 12.4-14.2s11.8 5.6 12.4 14.2c.4 9-2.2 16.6-4.6 21.4"/>' +
-    '<path d="M15 25c1.2-11.4 8-18 17-18s15.8 6.6 17 18c.8 9.2-1.4 18-4.4 23.6"/>' +
-    '<path d="M26.2 36c1 4.4 2.2 8.4 2.4 12"/>' +
-    '<path d="M36.4 34.4c.2 4.6-.4 9-1.2 12.6"/>';
 const FINGERPRINT =
     '<svg viewBox="0 0 64 64" aria-hidden="true">' +
-    '<g fill="none" stroke-linecap="round">' +
-    '<g stroke="#000" stroke-width="5" opacity="0.45">' + TOUCH_RIDGES + '</g>' +
-    '<g stroke="#fff" stroke-width="2.2">' + TOUCH_RIDGES + '</g>' +
-    '</g></svg>';
+    '<circle cx="32" cy="32" r="28" fill="#fff" fill-opacity="0.65"/>' +
+    '</svg>';
 
 function setMessage(text, isError) {
     const el = document.getElementById('message');
@@ -174,7 +174,7 @@ function syncButtons() {
     const trial = document.getElementById('trial');
     const video = trialVideo(trial.value);
     const file = selectedFile();
-    const layered = touchOn && touchAvailable();
+    const layered = selectedLayers().length > 0;
     download.textContent = burning ? 'Preparing…' : 'Download';
     if (burning || creating || !videosReady || !video || !file) {
         download.removeAttribute('href');
@@ -193,23 +193,28 @@ function syncButtons() {
     if (creating) {
         action.disabled = true;
         action.textContent = 'Creating…';
+        action.dataset.mode = 'create';
         return;
     }
     if (!videosReady) {
         action.disabled = true;
         action.textContent = 'Create';
+        action.dataset.mode = 'create';
         return;
     }
     const playing = !!video && currentVideo === video.name && !player.paused && !player.ended;
     if (playing) {
         action.disabled = false;
         action.textContent = 'Pause';
+        action.dataset.mode = 'pause';
     } else if (video) {
         action.disabled = false;
         action.textContent = 'Play';
+        action.dataset.mode = 'play';
     } else {
         action.disabled = trial.disabled || trial.value === '';
         action.textContent = 'Create';
+        action.dataset.mode = 'create';
     }
 }
 
@@ -343,6 +348,7 @@ async function onDatafileChange() {
 function onTrialChange() {
     showTrial(document.getElementById('trial').value, false);
     refreshTouches();
+    refreshEyes();
 }
 
 async function createVideo() {
@@ -376,8 +382,23 @@ function touchAvailable() {
     return !!file && file.filename === layersKey && availableLayers.has('touch');
 }
 
+function eyeAvailable() {
+    const file = selectedFile();
+    return !!file && file.filename === layersKey && availableLayers.has('eye');
+}
+
+function selectedLayers() {
+    const names = [];
+    if (touchOn && touchAvailable()) names.push('touch');
+    if (eyeOn && eyeAvailable()) names.push('eye');
+    return names;
+}
+
 function layerButtonText() {
-    return touchOn && touchAvailable() ? 'Touch' : 'None';
+    const names = [];
+    if (touchOn && touchAvailable()) names.push('Touch');
+    if (eyeOn && eyeAvailable()) names.push('Eye');
+    return names.length ? names.join(', ') : 'None';
 }
 
 function setLayersOpen(open) {
@@ -385,25 +406,33 @@ function setLayersOpen(open) {
     document.getElementById('layers-button').setAttribute('aria-expanded', open ? 'true' : 'false');
 }
 
+function addLayerBox(menu, button, id, labelText, on, setOn, refresh) {
+    const label = document.createElement('label');
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.id = id;
+    box.checked = on;
+    box.addEventListener('change', () => {
+        setOn(box.checked);
+        button.textContent = layerButtonText();
+        refresh();
+        syncButtons();
+    });
+    label.append(box, document.createTextNode(labelText));
+    menu.appendChild(label);
+}
+
 function fillLayers() {
     const menu = document.getElementById('layers-menu');
     const button = document.getElementById('layers-button');
     menu.replaceChildren();
     if (touchAvailable()) {
-        const label = document.createElement('label');
-        const box = document.createElement('input');
-        box.type = 'checkbox';
-        box.id = 'layer-touch';
-        box.checked = touchOn;
-        box.addEventListener('change', () => {
-            touchOn = box.checked;
-            button.textContent = layerButtonText();
-            refreshTouches();
-            syncButtons();
-        });
-        label.append(box, document.createTextNode('Touch'));
-        menu.appendChild(label);
-    } else {
+        addLayerBox(menu, button, 'layer-touch', 'Touch', touchOn, (v) => { touchOn = v; }, refreshTouches);
+    }
+    if (eyeAvailable()) {
+        addLayerBox(menu, button, 'layer-eye', 'Eye', eyeOn, (v) => { eyeOn = v; }, refreshEyes);
+    }
+    if (!touchAvailable() && !eyeAvailable()) {
         const empty = document.createElement('div');
         empty.className = 'tv-layers-empty';
         empty.textContent = 'None';
@@ -420,11 +449,13 @@ async function refreshLayers() {
         layersKey = '';
         fillLayers();
         refreshTouches();
+        refreshEyes();
         return;
     }
     if (file.filename === layersKey) {
         fillLayers();
         refreshTouches();
+        refreshEyes();
         return;
     }
     availableLayers = new Set();
@@ -442,11 +473,14 @@ async function refreshLayers() {
         layersKey = file.filename;
         fillLayers();
         refreshTouches();
+        refreshEyes();
     } catch (e) {
         if (gen !== layersGen) return;
         availableLayers = new Set();
         layersKey = '';
         fillLayers();
+        refreshTouches();
+        refreshEyes();
         setMessage(e.message, true);
     }
 }
@@ -497,30 +531,73 @@ function pictureBox() {
     };
 }
 
-function paintTouches() {
+function eyeAt(t) {
+    if (!eyes.length || t == null) return null;
+    let lo = 0;
+    let hi = eyes.length - 1;
+    let found = -1;
+    while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        if (eyes[mid].t <= t + 1e-6) {
+            found = mid;
+            lo = mid + 1;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    return found < 0 ? null : eyes[found];
+}
+
+function eyeTrail(t) {
+    const picked = [];
+    const seen = new Set();
+    for (let i = 0; i < EYE_TRAIL; i++) {
+        const sample = eyeAt(t - (i * EYE_TRAIL_GAP) / FRAME_RATE);
+        if (!sample || seen.has(sample.t)) continue;
+        seen.add(sample.t);
+        picked.push({
+            sample: sample,
+            opacity: 0.5 * Math.pow(EYE_TRAIL_FADE, i)
+        });
+    }
+    picked.reverse();
+    return picked;
+}
+
+function paintMarks() {
     const layer = document.getElementById('touch-layer');
     const mask = document.getElementById('mask');
-    if (!touchOn || !touchAvailable() || !mask.hidden) {
-        layer.replaceChildren();
-        return;
-    }
-    const t = playheadSeconds();
-    const marks = t == null ? [] : marksAt(t);
     layer.replaceChildren();
-    if (!marks.length) return;
+    if (!mask.hidden) return;
+    const t = playheadSeconds();
     const box = pictureBox();
     const spaceW = touchSpace.w || 1280;
     const spaceH = touchSpace.h || 800;
-    for (const mark of marks) {
-        const el = document.createElement('div');
-        el.className = 'tv-touch';
-        const size = (56 / spaceW) * box.width;
-        el.style.width = size + 'px';
-        el.style.height = size + 'px';
-        el.style.left = (box.left + (mark.x / spaceW) * box.width) + 'px';
-        el.style.top = (box.top + (mark.y / spaceH) * box.height) + 'px';
-        el.innerHTML = FINGERPRINT;
-        layer.appendChild(el);
+    if (touchOn && touchAvailable() && t != null) {
+        for (const mark of marksAt(t)) {
+            const el = document.createElement('div');
+            el.className = 'tv-touch';
+            const size = (56 / spaceW) * box.width;
+            el.style.width = size + 'px';
+            el.style.height = size + 'px';
+            el.style.left = (box.left + (mark.x / spaceW) * box.width) + 'px';
+            el.style.top = (box.top + (mark.y / spaceH) * box.height) + 'px';
+            el.innerHTML = FINGERPRINT;
+            layer.appendChild(el);
+        }
+    }
+    if (eyeOn && eyeAvailable()) {
+        const size = (8 / spaceW) * box.width;
+        for (const dot of eyeTrail(t)) {
+            const el = document.createElement('div');
+            el.className = 'tv-eye';
+            el.style.opacity = String(dot.opacity);
+            el.style.width = size + 'px';
+            el.style.height = size + 'px';
+            el.style.left = (box.left + (dot.sample.x / spaceW) * box.width) + 'px';
+            el.style.top = (box.top + (dot.sample.y / spaceH) * box.height) + 'px';
+            layer.appendChild(el);
+        }
     }
 }
 
@@ -532,16 +609,16 @@ async function refreshTouches() {
     if (!show) {
         touches = [];
         touchKey = '';
-        paintTouches();
+        paintMarks();
         return;
     }
     const key = file.filename + '#' + trial;
     if (key === touchKey) {
-        paintTouches();
+        paintMarks();
         return;
     }
     touches = [];
-    paintTouches();
+    paintMarks();
     try {
         const raw = await dfEval('trial_video_touches {' + file.filename + '} ' + trial, 30000);
         if (gen !== touchGen) return;
@@ -555,7 +632,7 @@ async function refreshTouches() {
             h: Number(data.height) || 800
         };
         touchKey = key;
-        paintTouches();
+        paintMarks();
     } catch (e) {
         if (gen !== touchGen) return;
         touches = [];
@@ -590,7 +667,7 @@ function updatePlayback() {
         document.getElementById('playback').textContent = 'frame —';
         scrub.value = '0';
         scrub.style.setProperty('--pct', '0%');
-        paintTouches();
+        paintMarks();
         return;
     }
     let frame;
@@ -609,7 +686,7 @@ function updatePlayback() {
     const pct = last > 0 ? (frame / last) * 100 : 0;
     scrub.style.setProperty('--pct', pct + '%');
     document.getElementById('playback').textContent = spotText(frame, seconds);
-    paintTouches();
+    paintMarks();
 }
 
 function seekFrame(frame) {
@@ -685,8 +762,57 @@ function onAction() {
     setMessage('');
 }
 
+async function refreshEyes() {
+    const gen = ++eyeGen;
+    const file = selectedFile();
+    const trial = document.getElementById('trial').value;
+    const show = eyeOn && eyeAvailable() && file && trial !== '';
+    if (!show) {
+        eyes = [];
+        eyeKey = '';
+        paintMarks();
+        return;
+    }
+    const key = file.filename + '#' + trial;
+    if (key === eyeKey) {
+        paintMarks();
+        return;
+    }
+    eyes = [];
+    paintMarks();
+    try {
+        const raw = await dfEval('trial_video_eyes {' + file.filename + '} ' + trial, 30000);
+        if (gen !== eyeGen) return;
+        const data = JSON.parse(raw);
+        if (data.status !== 'ok') {
+            throw new Error(data.error || 'Could not read eye position');
+        }
+        eyes = data.eyes || [];
+        touchSpace = {
+            w: Number(data.width) || 1280,
+            h: Number(data.height) || 800
+        };
+        eyeKey = key;
+        paintMarks();
+    } catch (e) {
+        if (gen !== eyeGen) return;
+        eyes = [];
+        eyeKey = '';
+        setMessage(e.message, true);
+    }
+}
+
+function layerStatusText() {
+    const names = [];
+    if (touchOn && touchAvailable()) names.push('Touch');
+    if (eyeOn && eyeAvailable()) names.push('Eye');
+    if (names.length === 1) return 'Adding ' + names[0] + ' to the video.';
+    return 'Adding ' + names.join(' and ') + ' to the video.';
+}
+
 async function onDownload(ev) {
-    if (!(touchOn && touchAvailable())) return;
+    const layers = selectedLayers();
+    if (!layers.length) return;
     ev.preventDefault();
     if (burning) return;
     const file = selectedFile();
@@ -694,10 +820,10 @@ async function onDownload(ev) {
     if (!file || trial === '' || !trialVideo(trial)) return;
     burning = true;
     syncButtons();
-    setMessage('Adding Touch to the video.');
+    setMessage(layerStatusText());
     try {
         const raw = await dfEval(
-            'trial_video_burn {' + file.filename + '} ' + trial + ' touch',
+            'trial_video_burn {' + file.filename + '} ' + trial + ' ' + layers.join(' '),
             600000
         );
         const data = JSON.parse(raw);
@@ -721,7 +847,7 @@ async function onDownload(ev) {
     }
 }
 
-async function loadFiles() {
+async function refreshFileList() {
     const raw = await dfEval('list_datafiles', 30000);
     const tapedRaw = await dfEval('taped_datafiles', 30000);
     const parsed = JSON.parse(raw);
@@ -733,9 +859,34 @@ async function loadFiles() {
         throw new Error(taped.error || 'Could not list tapes');
     }
     const have = new Set(taped);
+    const block = document.getElementById('block');
+    const previous = block.value;
     files = parsed.filter(file => have.has(file.filename));
-    await onDatafileChange();
+    applyFilters();
+    if (block.value !== previous) {
+        await onDatafileChange();
+    }
     if (files.length === 0) setMessage('no blocks with tape');
+}
+
+async function loadFiles() {
+    if (filesBusy) {
+        filesAgain = true;
+        return;
+    }
+    filesBusy = true;
+    try {
+        do {
+            filesAgain = false;
+            try {
+                await refreshFileList();
+            } catch (e) {
+                setMessage(e.message, true);
+            }
+        } while (filesAgain);
+    } finally {
+        filesBusy = false;
+    }
 }
 
 async function init() {
@@ -755,7 +906,7 @@ async function init() {
             setLayersOpen(false);
         }
     });
-    window.addEventListener('resize', paintTouches);
+    window.addEventListener('resize', paintMarks);
 
     connection = new DservConnection({
         subprocess: 'df',
@@ -767,6 +918,8 @@ async function init() {
         await connection.connect();
         setConnected('connected', 'Connected');
         await loadFiles();
+        const datapoints = new DatapointManager(connection, { autoGetKeys: false });
+        datapoints.subscribe('df/file_closed', () => { loadFiles(); });
     } catch (e) {
         setConnected('', 'Disconnected');
         setMessage(e.message, true);

@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Trial Viewer</title>
     <link rel="stylesheet" href="css/page_nav.css">
-    <link rel="stylesheet" href="css/trial_viewer.css?v=20261016w">
+    <link rel="stylesheet" href="css/trial_viewer.css?v=20261017h">
 </head>
 <body>
     <header class="tv-bar">
@@ -38,7 +38,7 @@
                 <button id="layers-button" type="button" aria-expanded="false" aria-haspopup="true">None</button>
                 <div id="layers-menu" class="tv-layers-menu" hidden></div>
             </div>
-            <button id="action" type="button" disabled>Create</button>
+            <button id="action" type="button" data-mode="create" disabled>Create</button>
         </div>
         <div class="tv-stage">
             <div class="tv-screen">
@@ -59,7 +59,8 @@
     </main>
 
     <script src="js/ws_manager.js"></script>
+    <script src="js/DatapointManager.js"></script>
     <script src="js/PageNav.js"></script>
-    <script src="js/trial_viewer.js?v=20261016s"></script>
+    <script src="js/trial_viewer.js?v=20261017h"></script>
 </body>
 </html>

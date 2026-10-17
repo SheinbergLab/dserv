@@ -160,8 +160,10 @@ proc trial_video_make {filename trial} {
 }
 
 # Paint the requested layers onto a copy of an existing trial video.
+# Layer names follow the trial as separate words (touch, eye, or both).
 # An empty layer list returns the clean file. Touch with no marks does too.
-proc trial_video_burn {filename trial layers} {
+proc trial_video_burn {filename trial args} {
+    set layers $args
     set root [trial_video_export_root]
     if {$root eq ""} {
         return [_json_error "Export is not configured"]
@@ -182,7 +184,7 @@ proc trial_video_burn {filename trial layers} {
     set wanted {}
     foreach name $layers {
         if {$name eq ""} continue
-        if {$name ne "touch"} {
+        if {$name ne "touch" && $name ne "eye"} {
             return [_json_error "Unknown layer $name"]
         }
         if {$name ni $wanted} {
@@ -190,18 +192,18 @@ proc trial_video_burn {filename trial layers} {
         }
     }
 
-    if {"touch" in $wanted} {
+    if {[llength $wanted] == 0} {
+        set out $clean
+        set layered 0
+    } else {
         if {[catch {trial_video_load} load_err]} {
             return [_json_error $load_err]
         }
-        if {[catch {set info [::trial_video::burn $filepath $trial $clean]} err]} {
+        if {[catch {set info [::trial_video::burn $filepath $trial $clean $wanted]} err]} {
             return [_json_error $err]
         }
         set out [dict get $info out]
         set layered [dict get $info layered]
-    } else {
-        set out $clean
-        set layered 0
     }
 
     set ok [dict create \
@@ -210,6 +212,46 @@ proc trial_video_burn {filename trial layers} {
         trial $trial \
         layered $layered]
     return [_json_ok $ok]
+}
+
+# Eye samples for one observation, in video seconds and frame pixels.
+# The stim mp4 is unchanged; the viewer draws the dot itself.
+proc trial_video_eyes {filename trial} {
+    if {![string is integer -strict $trial] || $trial < 0} {
+        return [_json_error "trial must be a non-negative integer"]
+    }
+    set filepath [dfdb eval {SELECT filepath FROM datafiles WHERE filename = $filename}]
+    if {$filepath eq "" || ![file exists $filepath]} {
+        return [_json_error "No datafile $filename"]
+    }
+    if {[catch {trial_video_load} load_err]} {
+        return [_json_error $load_err]
+    }
+    if {[info commands ::trial_video::eyes] eq ""} {
+        return [_json_error "trial_video eye reader is not loaded"]
+    }
+    if {[catch {set info [::trial_video::eyes $filepath $trial]} err]} {
+        return [_json_error $err]
+    }
+
+    set json [yajl create #auto]
+    $json map_open
+    $json string status string ok
+    $json string width number [dict get $info width]
+    $json string height number [dict get $info height]
+    $json string eyes array_open
+    foreach ev [dict get $info samples] {
+        $json map_open
+        $json string t number [format %.6f [dict get $ev t]]
+        $json string x number [format %.2f [dict get $ev x]]
+        $json string y number [format %.2f [dict get $ev y]]
+        $json map_close
+    }
+    $json array_close
+    $json map_close
+    set result [$json get]
+    $json delete
+    return $result
 }
 
 # Presses and releases for one observation, in video seconds and frame pixels.

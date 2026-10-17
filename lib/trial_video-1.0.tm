@@ -13,6 +13,15 @@ namespace eval trial_video {
     variable tape_ready 1
     variable touch_hold 0.2
     variable touch_png [file normalize [file join [file dirname [info script]] touch.png]]
+    variable eye_png [file normalize [file join [file dirname [info script]] eye.png]]
+    variable eye_trail_py [file normalize [file join [file dirname [info script]] eye_trail.py]]
+    # One dot per video frame, every third frame, newest at 50% and each
+    # older dot 0.82 of the one in front of it. Fifteen dots reach back
+    # about 0.7 s and the last one is near 3%. The download paints that
+    # whole trail into one frame and overlays it once.
+    variable eye_trail_n 15
+    variable eye_trail_gap 3
+    variable eye_trail_fade 0.82
 
     proc stim {script} {
         if {[catch {exec essctrl -s stim -c $script} out]} {
@@ -675,26 +684,26 @@ if {[info exists ::dservhost] && $::dservhost ne ""} {
         return [list $w $h]
     }
 
-    proc write_touch_filter {path marks size} {
+    proc write_touch_filter {path marks size {input "1:v"} {tail "out"} {head "0:v"}} {
         set n [llength $marks]
         set parts {}
         if {$n == 1} {
-            lappend parts "\[1:v\]scale=${size}:${size}:flags=lanczos,format=rgba\[m0\]"
+            lappend parts "\[${input}\]scale=${size}:${size}:flags=lanczos,format=rgba\[m0\]"
         } else {
             set outs {}
             for {set i 0} {$i < $n} {incr i} {
                 lappend outs "\[m$i\]"
             }
-            lappend parts "\[1:v\]scale=${size}:${size}:flags=lanczos,format=rgba,split=${n}[join $outs ""]"
+            lappend parts "\[${input}\]scale=${size}:${size}:flags=lanczos,format=rgba,split=${n}[join $outs ""]"
         }
-        set prev "0:v"
+        set prev $head
         for {set i 0} {$i < $n} {incr i} {
             set m [lindex $marks $i]
             set x [format %.2f [dict get $m x]]
             set y [format %.2f [dict get $m y]]
             set t0 [format %.6f [dict get $m t0]]
             set t1 [format %.6f [dict get $m t1]]
-            set dest [expr {$i + 1 == $n ? "out" : "v$i"}]
+            set dest [expr {$i + 1 == $n ? $tail : "v$i"}]
             lappend parts "\[$prev\]\[m$i\]overlay=x='${x}-overlay_w/2':y='${y}-overlay_h/2':enable='between(t,${t0},${t1})':eof_action=repeat\[$dest\]"
             set prev "v$i"
         }
@@ -703,11 +712,81 @@ if {[info exists ::dservhost] && $::dservhost ne ""} {
         close $fd
     }
 
-    # Paint the touch marks onto a copy of an existing stim mp4.
-    # Returns a dict: out path, layered 1 when that file has marks.
-    # No marks leaves the clean file untouched.
-    proc burn {ess_path trial clean_mp4} {
+    # One center per video frame. "-" is a frame that has no sample yet.
+    # The painter turns this into a single transparent frame per step.
+    proc write_eye_moves {path moves} {
+        set fd [open $path w]
+        foreach m $moves {
+            lassign $m _ x y
+            if {$x eq ""} {
+                puts $fd -
+            } else {
+                puts $fd "$x $y"
+            }
+        }
+        close $fd
+    }
+
+    # The trail is already painted into input, full frame, so one overlay.
+    proc write_eye_filter {path input head tail} {
+        set parts [list \
+            "\[${head}\]\[${input}\]overlay=x=0:y=0:format=auto:eof_action=pass\[${tail}\]"]
+        set prefix ""
+        if {[file exists $path] && [file size $path] > 0} {
+            set prefix ";"
+        }
+        set fd [open $path a]
+        puts -nonewline $fd $prefix
+        puts -nonewline $fd [join $parts ";"]
+        close $fd
+    }
+
+    proc video_duration {path} {
+        if {[catch {exec ffprobe -v error -show_entries format=duration \
+                -of default=nw=1:nk=1 $path} out]} {
+            return -code error "trial_video: ffprobe: $out"
+        }
+        set out [string trim $out]
+        if {![string is double -strict $out] || $out <= 0} {
+            return -code error "trial_video: bad duration '$out'"
+        }
+        return $out
+    }
+
+    # Latest sample at each video frame. x and y are already video pixels.
+    proc eye_frame_moves {samples duration} {
+        variable frame_ms
+        set step [expr {$frame_ms / 1000.0}]
+        set n [llength $samples]
+        set nframes [expr {int(ceil($duration / $step - 1e-9))}]
+        if {$nframes < 1} { set nframes 1 }
+        set moves {}
+        set idx -1
+        for {set f 0} {$f < $nframes} {incr f} {
+            set t [expr {$f * $step}]
+            while {$idx + 1 < $n && [lindex $samples $idx+1 0] <= $t + 1e-6} {
+                incr idx
+            }
+            if {$idx < 0} {
+                lappend moves [list $t "" ""]
+            } else {
+                set s [lindex $samples $idx]
+                lappend moves [list $t [lindex $s 1] [lindex $s 2]]
+            }
+        }
+        return $moves
+    }
+
+    # Paint the requested layers onto a copy of an existing stim mp4.
+    # layers is touch, eye, or both. A layer with nothing to draw is left
+    # out of the filename. Nothing to draw leaves the clean file untouched.
+    proc burn {ess_path trial clean_mp4 {layers touch}} {
         variable touch_png
+        variable eye_trail_py
+        variable eye_trail_fade
+        variable eye_trail_gap
+        variable eye_trail_n
+        variable frame_ms
         if {![file exists $ess_path]} {
             return -code error "trial_video: no such file $ess_path"
         }
@@ -717,50 +796,123 @@ if {[info exists ::dservhost] && $::dservhost ne ""} {
         if {![file exists $clean_mp4]} {
             return -code error "trial_video: no video for trial $trial"
         }
-        if {![file exists $touch_png]} {
+        set want_touch [expr {"touch" in $layers}]
+        set want_eye [expr {"eye" in $layers}]
+        if {!$want_touch && !$want_eye} {
+            return [dict create out $clean_mp4 layered 0]
+        }
+        if {$want_touch && ![file exists $touch_png]} {
             return -code error "trial_video: missing touch mark $touch_png"
         }
+        if {$want_eye && ![file exists $eye_trail_py]} {
+            return -code error "trial_video: missing eye painter $eye_trail_py"
+        }
 
-        set info [touches $ess_path $trial]
-        set raw [touch_intervals [dict get $info events]]
-        if {[llength $raw] == 0} {
+        set marks {}
+        set space_w 1280
+        set space_h 800
+        if {$want_touch} {
+            set info [touches $ess_path $trial]
+            set marks [touch_intervals [dict get $info events]]
+            set space_w [dict get $info width]
+            set space_h [dict get $info height]
+        }
+        set eye_samples {}
+        if {$want_eye} {
+            set einfo [eyes $ess_path $trial]
+            set eye_samples [dict get $einfo samples]
+            if {!$want_touch} {
+                set space_w [dict get $einfo width]
+                set space_h [dict get $einfo height]
+            }
+        }
+        set paint_touch [expr {[llength $marks] > 0}]
+        set paint_eye [expr {[llength $eye_samples] > 0}]
+        if {!$paint_touch && !$paint_eye} {
             return [dict create out $clean_mp4 layered 0]
         }
 
-        set final "[file rootname $clean_mp4].touch.mp4"
-        if {[file exists $final] && [file mtime $final] >= [file mtime $clean_mp4]} {
+        set suffix ""
+        if {$paint_touch} { append suffix ".touch" }
+        if {$paint_eye} { append suffix ".eye" }
+        set final "[file rootname $clean_mp4]$suffix.mp4"
+        set fresh [file mtime $clean_mp4]
+        if {$paint_touch} {
+            set mark_time [file mtime $touch_png]
+            if {$mark_time > $fresh} { set fresh $mark_time }
+        }
+        if {$paint_eye} {
+            set mark_time [file mtime $eye_trail_py]
+            if {$mark_time > $fresh} { set fresh $mark_time }
+            set code_time [file mtime [file join [file dirname $eye_trail_py] trial_video-1.0.tm]]
+            if {$code_time > $fresh} { set fresh $code_time }
+        }
+        if {[file exists $final] && [file mtime $final] >= $fresh} {
             return [dict create out $final layered 1]
         }
 
         lassign [video_size $clean_mp4] vw vh
-        set space_w [dict get $info width]
-        set space_h [dict get $info height]
         if {$space_w <= 0} { set space_w $vw }
         if {$space_h <= 0} { set space_h $vh }
         set sx [expr {double($vw) / double($space_w)}]
         set sy [expr {double($vh) / double($space_h)}]
-        set size [expr {max(1, int(round(56.0 * $sx)))}]
-        set marks {}
-        foreach m $raw {
-            lappend marks [dict create \
-                t0 [dict get $m t0] t1 [dict get $m t1] \
-                x [expr {[dict get $m x] * $sx}] \
-                y [expr {[dict get $m y] * $sy}]]
+
+        set stem [file rootname $clean_mp4]
+        set part "${stem}${suffix}.part.mp4"
+        set script "${stem}${suffix}.filter"
+        set movesf "${stem}${suffix}.moves"
+        file delete -force $part $script $movesf
+
+        set inputs [list -i $clean_mp4]
+        set next_in 1
+        set head "0:v"
+        if {$paint_touch} {
+            set touch_in $next_in
+            incr next_in
+            lappend inputs -i $touch_png
+            set tsize [expr {max(1, int(round(56.0 * $sx)))}]
+            set scaled {}
+            foreach m $marks {
+                lappend scaled [dict create \
+                    t0 [dict get $m t0] t1 [dict get $m t1] \
+                    x [expr {[dict get $m x] * $sx}] \
+                    y [expr {[dict get $m y] * $sy}]]
+            }
+            set tail [expr {$paint_eye ? "base" : "out"}]
+            write_touch_filter $script $scaled $tsize "${touch_in}:v" $tail
+            set head "base"
+        }
+        if {$paint_eye} {
+            set esize [expr {max(1, int(round(8.0 * $sx)))}]
+            set scaled {}
+            foreach s $eye_samples {
+                lappend scaled [list [dict get $s t] \
+                    [expr {[dict get $s x] * $sx}] \
+                    [expr {[dict get $s y] * $sy}]]
+            }
+            set duration [video_duration $clean_mp4]
+            write_eye_moves $movesf [eye_frame_moves $scaled $duration]
+            write_eye_filter $script "${next_in}:v" $head out
         }
 
-        set part "[file rootname $clean_mp4].touch.part.mp4"
-        set script "[file rootname $clean_mp4].touch.filter"
-        file delete -force $part
-        write_touch_filter $script $marks $size
-        set failed [catch {exec ffmpeg -y -loglevel error \
-            -i $clean_mp4 -i $touch_png \
-            -filter_complex_script $script \
+        set ff [list ffmpeg -y -loglevel error {*}$inputs]
+        if {$paint_eye} {
+            set rate [format %.6f [expr {1000.0 / $frame_ms}]]
+            lappend ff -f rawvideo -pix_fmt rgba -s ${vw}x${vh} -r $rate -i -
+        }
+        lappend ff -filter_complex_script $script \
             -map {[out]} \
             -c:v libx264 -pix_fmt yuv420p \
             -bf 0 -g 60 -keyint_min 60 -sc_threshold 0 \
             -use_editlist 0 -movie_timescale 15360 \
-            -movflags +faststart $part} ff_err]
-        file delete -force $script
+            -movflags +faststart $part
+        if {$paint_eye} {
+            set failed [catch {exec python3 -u $eye_trail_py $vw $vh $esize \
+                $eye_trail_fade $eye_trail_gap $eye_trail_n < $movesf | {*}$ff} ff_err]
+        } else {
+            set failed [catch {exec {*}$ff} ff_err]
+        }
+        file delete -force $script $movesf
         if {$failed} {
             file delete -force $part
             return -code error "trial_video: ffmpeg: $ff_err"
@@ -976,6 +1128,316 @@ if {[info exists ::dservhost] && $::dservhost ne ""} {
                     events $events]
     }
 
+    # deg = c0 + c1*x + c2*y + c3*x^2 + c4*y^2 + c5*xy + c6*x^2*y + c7*x*y^2 + c8*x^2*y^2
+    proc eye_biquad {x y coeffs} {
+        lassign $coeffs c0 c1 c2 c3 c4 c5 c6 c7 c8
+        set x2 [expr {$x * $x}]
+        set y2 [expr {$y * $y}]
+        set xy [expr {$x * $y}]
+        return [expr {$c0 + $c1*$x + $c2*$y + $c3*$x2 + $c4*$y2 + $c5*$xy + \
+                      $c6*$x2*$y + $c7*$x*$y2 + $c8*$x2*$y2}]
+    }
+
+    proc eye_coeffs_real {coeffs} {
+        if {[llength $coeffs] != 9} { return 0 }
+        foreach c $coeffs {
+            if {![string is double -strict $c]} { return 0 }
+            if {$c != 0} { return 1 }
+        }
+        return 0
+    }
+
+    # A logged string may come back as one element, or already as a dict list.
+    proc logged_dict {vals} {
+        if {[llength $vals] == 1} {
+            set vals [lindex $vals 0]
+        }
+        if {[catch {dict size $vals}]} { return "" }
+        return $vals
+    }
+
+    proc logged_word {vals} {
+        if {[llength $vals] == 0} { return "" }
+        return [lindex $vals 0]
+    }
+
+    # Last value whose time is at or before t. records are {time value}, sorted.
+    proc value_at {records t} {
+        set found ""
+        foreach rec $records {
+            if {[lindex $rec 0] <= $t} {
+                set found [lindex $rec 1]
+            } else {
+                break
+            }
+        }
+        return $found
+    }
+
+    # Camera raw is already the inverted P1-P4 difference. Analog raw is
+    # post-swap ADC counts, and invert is applied after the linear scale.
+    proc eye_to_deg {source settings h v} {
+        if {$source eq "virtual"} {
+            return [list $h $v]
+        }
+        set bq 0
+        if {[dict exists $settings use_biquadratic]} {
+            set bq [dict get $settings use_biquadratic]
+        }
+        set bqh {}
+        set bqv {}
+        if {[dict exists $settings bq_h_coeffs]} {
+            set bqh [dict get $settings bq_h_coeffs]
+        }
+        if {[dict exists $settings bq_v_coeffs]} {
+            set bqv [dict get $settings bq_v_coeffs]
+        }
+        if {$bq && [eye_coeffs_real $bqh] && [eye_coeffs_real $bqv]} {
+            return [list [eye_biquad $h $v $bqh] [eye_biquad $h $v $bqv]]
+        }
+        set sh 1.0
+        set sv 1.0
+        set ch 0.0
+        set cv 0.0
+        set ih 0
+        set iv 0
+        foreach {key var} {scale_h sh scale_v sv raw_center_h ch raw_center_v cv \
+                           invert_h ih invert_v iv} {
+            if {[dict exists $settings $key]} {
+                set $var [dict get $settings $key]
+            }
+        }
+        set hd [expr {$sh * ($h - $ch)}]
+        set vd [expr {$sv * ($v - $cv)}]
+        if {$source eq "analog"} {
+            if {$ih} { set hd [expr {-$hd}] }
+            if {$iv} { set vd [expr {-$vd}] }
+        }
+        return [list $hd $vd]
+    }
+
+    # A raw log row is a batch of pairs stamped with the first sample.
+    # Space the pairs up to the next row. The last row reuses the previous gap.
+    proc expand_eye_batches {batches} {
+        set n [llength $batches]
+        set samples {}
+        for {set i 0} {$i < $n} {incr i} {
+            lassign [lindex $batches $i] t floats
+            set pairs [expr {[llength $floats] / 2}]
+            if {$pairs < 1} continue
+            set dt 0.0
+            if {$i + 1 < $n} {
+                set next_t [lindex $batches $i+1 0]
+                if {$next_t > $t} {
+                    set dt [expr {($next_t - $t) / double($pairs)}]
+                }
+            } elseif {$i > 0} {
+                lassign [lindex $batches $i-1] prev_t prev_floats
+                set prev_pairs [expr {[llength $prev_floats] / 2}]
+                if {$prev_pairs > 0 && $t > $prev_t} {
+                    set dt [expr {($t - $prev_t) / double($prev_pairs)}]
+                }
+            }
+            for {set k 0} {$k < $pairs} {incr k} {
+                lappend samples [list \
+                    [expr {$t + $k * $dt}] \
+                    [lindex $floats [expr {$k * 2}]] \
+                    [lindex $floats [expr {$k * 2 + 1}]]]
+            }
+        }
+        return $samples
+    }
+
+    proc eye_source_ok {name} {
+        expr {$name eq "video" || $name eq "analog" || $name eq "virtual"}
+    }
+
+    # Eye samples for one observation, in video seconds and frame pixels.
+    # A sample with no source label, or a label this reader does not know, is skipped.
+    proc eyes {ess_path trial} {
+        if {![file exists $ess_path]} {
+            return -code error "trial_video: no such file $ess_path"
+        }
+        if {![string is integer -strict $trial] || $trial < 0} {
+            return -code error "trial_video: trial must be a non-negative integer"
+        }
+
+        catch {dg_delete $ess_path}
+        set g [dslog::read $ess_path]
+        set names [dl_tcllist $g:varname]
+        set ts [dl_tcllist $g:timestamp]
+        if {[lsearch -exact $names stim/inbox] < 0} {
+            catch {dg_delete $g}
+            return -code error "trial_video: no stim/inbox tape in [file tail $ess_path]"
+        }
+
+        set ends {}
+        set begins {}
+        foreach name $names t $ts {
+            if {[string match {evt:19:*} $name]} {
+                lappend begins $t
+            } elseif {[string match {evt:20:*} $name]} {
+                lappend ends $t
+            }
+        }
+        if {$trial >= [llength $ends]} {
+            catch {dg_delete $g}
+            return -code error \
+                "trial_video: trial $trial outside 0..[expr {[llength $ends] - 1}]"
+        }
+        set start -1e300
+        if {$trial > 0} { set start [lindex $ends [expr {$trial - 1}]] }
+        set end [lindex $ends $trial]
+        set begin_t [begin_logger $begins $start $end]
+
+        set frame_w 1280.0
+        set frame_h 800.0
+        set screen_w 0.0
+        set screen_h 0.0
+        set screen_hx 0.0
+        set screen_hy 0.0
+        set screen_wt -1e300
+        set screen_ht -1e300
+        set screen_hxt -1e300
+        set screen_hyt -1e300
+        set recs {}
+        set batches {}
+        set later ""
+        set sources {}
+        set settings_at {}
+        set i 0
+        foreach name $names t $ts {
+            set vals [dl_tcllist [dl_get $g:vals $i]]
+            if {$name eq "stim/inbox" && $t > $start && $t <= $end} {
+                set rec [parse_inbox [lindex $vals 0]]
+                dict set rec t $t
+                lappend recs $rec
+            } elseif {$name eq "eyetracking/raw" && $t > $start && $t <= $end} {
+                lappend batches [list $t $vals]
+            } elseif {$name eq "eyetracking/raw" && $t > $end} {
+                if {$later eq "" || $t < [lindex $later 0]} {
+                    set later [list $t $vals]
+                }
+            } elseif {$name eq "em/source_active"} {
+                set word [logged_word $vals]
+                if {[eye_source_ok $word]} {
+                    lappend sources [list $t $word]
+                }
+            } elseif {$name eq "em/settings"} {
+                set spec [logged_dict $vals]
+                if {$spec ne ""} {
+                    lappend settings_at [list $t $spec]
+                }
+            } elseif {$name eq "ess/screen_w" && $t <= $end && $t >= $screen_wt} {
+                set raw [lindex $vals 0]
+                if {[string is double -strict $raw] && $raw > 0} {
+                    set screen_w $raw
+                    set screen_wt $t
+                }
+            } elseif {$name eq "ess/screen_h" && $t <= $end && $t >= $screen_ht} {
+                set raw [lindex $vals 0]
+                if {[string is double -strict $raw] && $raw > 0} {
+                    set screen_h $raw
+                    set screen_ht $t
+                }
+            } elseif {$name eq "ess/screen_halfx" && $t <= $end && $t >= $screen_hxt} {
+                set raw [lindex $vals 0]
+                if {[string is double -strict $raw] && $raw > 0} {
+                    set screen_hx $raw
+                    set screen_hxt $t
+                }
+            } elseif {$name eq "ess/screen_halfy" && $t <= $end && $t >= $screen_hyt} {
+                set raw [lindex $vals 0]
+                if {[string is double -strict $raw] && $raw > 0} {
+                    set screen_hy $raw
+                    set screen_hyt $t
+                }
+            }
+            incr i
+        }
+        catch {dg_delete $g}
+        if {[llength $recs] == 0} {
+            return -code error "trial_video: trial $trial has no stim/inbox records"
+        }
+        if {$screen_w <= 0} { set screen_w $frame_w }
+        if {$screen_h <= 0} { set screen_h $frame_h }
+        if {$screen_hx <= 0} { set screen_hx 16.0 }
+        if {$screen_hy <= 0} { set screen_hy 16.0 }
+
+        set recs [lsort -command {apply {{a b} {
+            set d [expr {[dict get $a seq] - [dict get $b seq]}]
+            expr {$d < 0 ? -1 : $d > 0 ? 1 : 0}
+        }}} $recs]
+        set pairs [clock_pairs $recs]
+        set t0 [origin_tick $pairs $begin_t \
+                    [dict get [lindex $recs 0] ticks] \
+                    [dict get [lindex $recs end] ticks]]
+
+        if {$later ne ""} { lappend batches $later }
+        set batches [lsort -command {apply {{a b} {
+            expr {[lindex $a 0] < [lindex $b 0] ? -1 : [lindex $a 0] > [lindex $b 0] ? 1 : 0}
+        }}} $batches]
+        set sources [lsort -command {apply {{a b} {
+            expr {[lindex $a 0] < [lindex $b 0] ? -1 : [lindex $a 0] > [lindex $b 0] ? 1 : 0}
+        }}} $sources]
+        set settings_at [lsort -command {apply {{a b} {
+            expr {[lindex $a 0] < [lindex $b 0] ? -1 : [lindex $a 0] > [lindex $b 0] ? 1 : 0}
+        }}} $settings_at]
+        set raw_samples [expand_eye_batches $batches]
+
+        set samples {}
+        foreach s $raw_samples {
+            lassign $s logger_t h v
+            if {$logger_t <= $start || $logger_t > $end} continue
+            if {![string is double -strict $h] || ![string is double -strict $v]} continue
+            set source [value_at $sources $logger_t]
+            if {![eye_source_ok $source]} continue
+            set spec [value_at $settings_at $logger_t]
+            if {$source ne "virtual" && $spec eq ""} continue
+            if {$spec eq ""} { set spec [dict create] }
+            lassign [eye_to_deg $source $spec $h $v] deg_h deg_v
+            set ticks [ticks_at $pairs $logger_t]
+            set px [expr {$screen_w / 2.0 + $deg_h / $screen_hx * ($screen_w / 2.0)}]
+            set py [expr {$screen_h / 2.0 - $deg_v / $screen_hy * ($screen_h / 2.0)}]
+            lappend samples [dict create \
+                t [expr {($ticks - $t0) / 1000.0}] \
+                x [expr {$px * $frame_w / $screen_w}] \
+                y [expr {$py * $frame_h / $screen_h}]]
+        }
+        set samples [lsort -command {apply {{a b} {
+            set d [expr {[dict get $a t] - [dict get $b t]}]
+            expr {$d < 0 ? -1 : $d > 0 ? 1 : 0}
+        }}} $samples]
+        return [dict create width [expr {int($frame_w)}] height [expr {int($frame_h)}] \
+                    samples $samples]
+    }
+
+    # True when some raw sample has a video, analog, or virtual label at or before it.
+    proc eye_covered {g names ts} {
+        set sources {}
+        set raws {}
+        set i 0
+        foreach name $names t $ts {
+            if {$name eq "em/source_active"} {
+                set word [logged_word [dl_tcllist [dl_get $g:vals $i]]]
+                if {[eye_source_ok $word]} {
+                    lappend sources [list $t $word]
+                }
+            } elseif {$name eq "eyetracking/raw"} {
+                lappend raws $t
+            }
+            incr i
+        }
+        if {[llength $raws] == 0 || [llength $sources] == 0} { return 0 }
+        set sources [lsort -command {apply {{a b} {
+            expr {[lindex $a 0] < [lindex $b 0] ? -1 : [lindex $a 0] > [lindex $b 0] ? 1 : 0}
+        }}} $sources]
+        foreach t $raws {
+            if {[eye_source_ok [value_at $sources $t]]} { return 1 }
+        }
+        return 0
+    }
+
     # Layer names this file can actually draw. Touch is the press/release
     # events, whichever device produced them.
     proc layers {ess_path} {
@@ -985,11 +1447,16 @@ if {[info exists ::dservhost] && $::dservhost ne ""} {
         catch {dg_delete $ess_path}
         set g [dslog::read $ess_path]
         set names [dl_tcllist $g:varname]
+        set ts [dl_tcllist $g:timestamp]
+        set eye [eye_covered $g $names $ts]
         catch {dg_delete $g}
         set layers {}
         if {[lsearch -exact $names evt:48:0] >= 0 ||
             [lsearch -exact $names evt:48:1] >= 0} {
             lappend layers touch
+        }
+        if {$eye} {
+            lappend layers eye
         }
         return $layers
     }
