@@ -44,29 +44,37 @@ body {
 .tv-filters {
     display: flex;
     align-items: flex-end;
-    flex-wrap: wrap;
     gap: 6px;
 }
 
 .tv-filters label {
     display: flex;
+    flex: 1 1 0;
     flex-direction: column;
     gap: 4px;
+    min-width: 0;
     font-size: 12px;
     color: #a0a0a0;
 }
 
-.tv-filters select { color: #e0e0e0; font-size: 14px; }
+.tv-filters select {
+    width: 100%;
+    min-width: 0;
+    color: #e0e0e0;
+    font-size: 14px;
+}
 
-#subject, #system, #protocol { min-width: 9em; }
-#block { min-width: 12em; }
-#trial { min-width: 7em; }
+.tv-filters label:has(#subject) { flex-grow: 0.85; }
+.tv-filters label:has(#system) { flex-grow: 1.2; }
+.tv-filters label:has(#trial) { flex-grow: 0.75; }
+.tv-filters label:has(#block) { flex-grow: 1.7; }
 
-.tv-filters button, #download { margin-bottom: 1px; }
+.tv-filters button { margin-bottom: 1px; }
 
 .tv-layers-wrap {
     position: relative;
     display: flex;
+    flex: 0 0 auto;
     flex-direction: column;
     gap: 4px;
 }
@@ -74,6 +82,7 @@ body {
 .tv-layers-caption { font-size: 12px; color: #a0a0a0; }
 
 #layers-button { min-width: 4.5em; text-align: left; }
+#action { flex: 0 0 auto; min-width: 7.5em; }
 
 .tv-layers-menu {
     position: absolute;
@@ -226,6 +235,11 @@ button:not(:disabled):hover, #download:not([aria-disabled="true"]):hover { borde
     display: flex;
     justify-content: space-between;
     gap: 12px;
+}
+
+.tv-download {
+    display: flex;
+    justify-content: flex-end;
 }
 
 .tv-times span {

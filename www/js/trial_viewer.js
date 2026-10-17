@@ -20,6 +20,7 @@ let availableLayers = new Set();
 let layersKey = '';
 let layersGen = 0;
 let touchSpace = { w: 1280, h: 800 };
+let burning = false;
 const FRAME_RATE = 60;
 const TOUCH_HOLD = 0.2;
 const TOUCH_RIDGES =
@@ -167,33 +168,49 @@ function paintTrials() {
 }
 
 function syncButtons() {
-    const create = document.getElementById('create');
-    const play = document.getElementById('play');
+    const action = document.getElementById('action');
     const download = document.getElementById('download');
     const player = document.getElementById('player');
     const trial = document.getElementById('trial');
     const video = trialVideo(trial.value);
     const file = selectedFile();
-    if (!creating && videosReady && video && file) {
+    const layered = touchOn && touchAvailable();
+    download.textContent = burning ? 'Preparing…' : 'Download';
+    if (burning || creating || !videosReady || !video || !file) {
+        download.removeAttribute('href');
+        download.removeAttribute('download');
+        download.setAttribute('aria-disabled', 'true');
+    } else if (layered) {
+        download.removeAttribute('href');
+        download.removeAttribute('download');
+        download.removeAttribute('aria-disabled');
+    } else {
         const block = file.filename.replace(/\.[^.]+$/, '');
         download.href = '/' + video.url;
         download.download = block + '-' + video.name;
         download.removeAttribute('aria-disabled');
-    } else {
-        download.removeAttribute('href');
-        download.removeAttribute('download');
-        download.setAttribute('aria-disabled', 'true');
     }
-    if (creating || !videosReady) {
-        create.disabled = true;
-        play.disabled = true;
-        if (!creating) play.textContent = 'Play';
+    if (creating) {
+        action.disabled = true;
+        action.textContent = 'Creating…';
         return;
     }
-    create.disabled = trial.disabled || trial.value === '' || !!video;
-    play.disabled = !video;
+    if (!videosReady) {
+        action.disabled = true;
+        action.textContent = 'Create';
+        return;
+    }
     const playing = !!video && currentVideo === video.name && !player.paused && !player.ended;
-    play.textContent = playing ? 'Pause' : 'Play';
+    if (playing) {
+        action.disabled = false;
+        action.textContent = 'Pause';
+    } else if (video) {
+        action.disabled = false;
+        action.textContent = 'Play';
+    } else {
+        action.disabled = trial.disabled || trial.value === '';
+        action.textContent = 'Create';
+    }
 }
 
 function showMask() {
@@ -333,9 +350,7 @@ async function createVideo() {
     const trial = document.getElementById('trial').value;
     if (!file || trial === '') return;
     creating = true;
-    const button = document.getElementById('create');
     syncButtons();
-    button.textContent = 'Creating…';
     setMessage('Rendering trial ' + trial + '. This holds stim2 until the trial finishes.');
     try {
         const raw = await dfEval(
@@ -352,7 +367,6 @@ async function createVideo() {
         setMessage(e.message, true);
     } finally {
         creating = false;
-        button.textContent = 'Create';
         paintTrials();
     }
 }
@@ -385,6 +399,7 @@ function fillLayers() {
             touchOn = box.checked;
             button.textContent = layerButtonText();
             refreshTouches();
+            syncButtons();
         });
         label.append(box, document.createTextNode('Touch'));
         menu.appendChild(label);
@@ -653,17 +668,57 @@ function watchPlayback() {
     });
 }
 
-function togglePlay() {
+function onAction() {
+    if (creating) return;
     const trial = document.getElementById('trial').value;
     const video = trialVideo(trial);
     const player = document.getElementById('player');
-    if (!video) return;
+    if (!video) {
+        createVideo();
+        return;
+    }
     if (currentVideo === video.name && !player.paused && !player.ended) {
         player.pause();
         return;
     }
     showTrial(trial, true);
     setMessage('');
+}
+
+async function onDownload(ev) {
+    if (!(touchOn && touchAvailable())) return;
+    ev.preventDefault();
+    if (burning) return;
+    const file = selectedFile();
+    const trial = document.getElementById('trial').value;
+    if (!file || trial === '' || !trialVideo(trial)) return;
+    burning = true;
+    syncButtons();
+    setMessage('Adding Touch to the video.');
+    try {
+        const raw = await dfEval(
+            'trial_video_burn {' + file.filename + '} ' + trial + ' touch',
+            600000
+        );
+        const data = JSON.parse(raw);
+        if (data.status !== 'ok') {
+            throw new Error(data.error || 'Could not add layers');
+        }
+        const block = file.filename.replace(/\.[^.]+$/, '');
+        const base = String(data.url || '').split('/').pop();
+        const a = document.createElement('a');
+        a.href = '/' + data.url;
+        a.download = block + '-' + base;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setMessage('');
+    } catch (e) {
+        setMessage(e.message, true);
+    } finally {
+        burning = false;
+        syncButtons();
+    }
 }
 
 async function loadFiles() {
@@ -690,8 +745,8 @@ async function init() {
     }
     watchPlayback();
     document.getElementById('trial').addEventListener('change', onTrialChange);
-    document.getElementById('create').addEventListener('click', createVideo);
-    document.getElementById('play').addEventListener('click', togglePlay);
+    document.getElementById('action').addEventListener('click', onAction);
+    document.getElementById('download').addEventListener('click', onDownload);
     document.getElementById('layers-button').addEventListener('click', () => {
         setLayersOpen(document.getElementById('layers-menu').hidden);
     });

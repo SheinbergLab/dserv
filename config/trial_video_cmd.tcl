@@ -82,11 +82,10 @@ proc trial_video_list {filename} {
     if {[file isdirectory $dir]} {
         foreach f [lsort -dictionary [glob -nocomplain -directory $dir trial_*.mp4]] {
             set name [file tail $f]
+            if {![regexp {^trial_(\d+)\.mp4$} $name -> n]} continue
             $json map_open
             $json string name string $name
-            if {[regexp {trial_(\d+)\.mp4} $name -> n]} {
-                $json string trial number $n
-            }
+            $json string trial number $n
             $json string url string "trial_video/$base/$name"
             $json map_close
         }
@@ -157,6 +156,59 @@ proc trial_video_make {filename trial} {
             dict set ok $key [dict get $info $key]
         }
     }
+    return [_json_ok $ok]
+}
+
+# Paint the requested layers onto a copy of an existing trial video.
+# An empty layer list returns the clean file. Touch with no marks does too.
+proc trial_video_burn {filename trial layers} {
+    set root [trial_video_export_root]
+    if {$root eq ""} {
+        return [_json_error "Export is not configured"]
+    }
+    if {![string is integer -strict $trial] || $trial < 0} {
+        return [_json_error "trial must be a non-negative integer"]
+    }
+    set filepath [dfdb eval {SELECT filepath FROM datafiles WHERE filename = $filename}]
+    if {$filepath eq "" || ![file exists $filepath]} {
+        return [_json_error "No datafile $filename"]
+    }
+    set base [trial_video_basename $filename]
+    set clean [file join $root $base trial_${trial}.mp4]
+    if {![file exists $clean]} {
+        return [_json_error "No video for trial $trial"]
+    }
+
+    set wanted {}
+    foreach name $layers {
+        if {$name eq ""} continue
+        if {$name ne "touch"} {
+            return [_json_error "Unknown layer $name"]
+        }
+        if {$name ni $wanted} {
+            lappend wanted $name
+        }
+    }
+
+    if {"touch" in $wanted} {
+        if {[catch {trial_video_load} load_err]} {
+            return [_json_error $load_err]
+        }
+        if {[catch {set info [::trial_video::burn $filepath $trial $clean]} err]} {
+            return [_json_error $err]
+        }
+        set out [dict get $info out]
+        set layered [dict get $info layered]
+    } else {
+        set out $clean
+        set layered 0
+    }
+
+    set ok [dict create \
+        path $out \
+        url "trial_video/$base/[file tail $out]" \
+        trial $trial \
+        layered $layered]
     return [_json_ok $ok]
 }
 

@@ -1139,6 +1139,12 @@ namespace eval ess {
     # (rpi500, 2026-08-24). A rig that wants a host obs pin declares it:
     # `setting ess obs_pin 26` (essconf claims the line and sets this).
     variable in_obs 0
+    # Microseconds of the open observation. The touch that hits a window
+    # can arrive after end_obs has already cleared in_obs, because the
+    # window processor finishes the trial before the press script runs.
+    # obs_end_us stays 0 while the observation is open.
+    variable obs_begin_us 0
+    variable obs_end_us 0
     variable obs_pin -1
 
     variable em_active 0
@@ -2289,6 +2295,10 @@ namespace eval ess {
         dservSetData ess/in_obs $T 1 "1"
         rpioPinOn $obs_pin
         set in_obs 1
+        variable obs_begin_us
+        variable obs_end_us
+        set obs_begin_us $T
+        set obs_end_us 0
         dservSet ess/obs_scheduled 1
         dservSet ess/obs_schedule_health ok    ;# retained: never lie stale
         # +33: the request->actual record. delta = how far the actual
@@ -2340,9 +2350,14 @@ namespace eval ess {
         lassign $obs_pending_args current total
         variable in_obs
         variable obs_pin
-        ::ess::evt_put BEGINOBS INFO [now] $current $total
+        set T [now]
+        ::ess::evt_put BEGINOBS INFO $T $current $total
         dservSet ess/in_obs 1
         rpioPinOn $obs_pin
+        variable obs_begin_us
+        variable obs_end_us
+        set obs_begin_us $T
+        set obs_end_us 0
         # a bound obs still deserves a physical line (the +31 principle):
         # the leader-mode box suppresses its mirror and the scheduled fire
         # never happened -- drive the line explicitly, as begin_obs's
@@ -2431,9 +2446,14 @@ namespace eval ess {
         }
         # classic path -- byte-identical to the unbound behavior a system
         # that never calls obs_schedule_bind has always had
-        ::ess::evt_put BEGINOBS INFO [now] $current $total
+        set T [now]
+        ::ess::evt_put BEGINOBS INFO $T $current $total
         dservSet ess/in_obs 1
         rpioPinOn $obs_pin
+        variable obs_begin_us
+        variable obs_end_us
+        set obs_begin_us $T
+        set obs_end_us 0
         if {$obs_sched_box ne ""} {
             # +31: a bound-but-untrusted obs still deserves a physical line.
             # The leader-mode box suppresses its mirror, so drive it
@@ -2656,7 +2676,10 @@ namespace eval ess {
             catch {dservSet $io_class/$obs_sched_box/cmd/do/$obs_sched_pin 0}
         }
 
-        ::ess::evt_put ENDOBS $status [now]
+        set T [now]
+        ::ess::evt_put ENDOBS $status $T
+        variable obs_end_us
+        set obs_end_us $T
         set in_obs 0
         dservSet ess/in_obs 0
     }
@@ -5095,7 +5118,18 @@ namespace eval ess {
 	# events closer than 15ms aparts skipped
 	set min_us 15000
 	set timestamp [dservTimestamp $name]
-	if {!$::ess::in_obs} return
+	# in_obs is already 0 for the press that hit the window: the
+	# window processor ends the observation before this script runs.
+	# That press still belongs to the observation if its own timestamp
+	# falls inside it.
+	variable in_obs
+	variable obs_begin_us
+	variable obs_end_us
+	set during $in_obs
+	if {!$during && $obs_begin_us > 0 && $obs_end_us > 0} {
+	    set during [expr {$timestamp >= $obs_begin_us && $timestamp <= $obs_end_us}]
+	}
+	if {!$during} return
 	lassign $data x y
 	# calibrated-deg version, parallel to the raw-pixel datapoint —
 	# protocols and viz that work in stim space subscribe to

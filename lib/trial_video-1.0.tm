@@ -11,6 +11,8 @@ package provide trial_video 1.0
 namespace eval trial_video {
     variable frame_ms [expr {1000.0 / 60.0}]
     variable tape_ready 1
+    variable touch_hold 0.2
+    variable touch_png [file normalize [file join [file dirname [info script]] touch.png]]
 
     proc stim {script} {
         if {[catch {exec essctrl -s stim -c $script} out]} {
@@ -278,13 +280,17 @@ if {[info exists ::dservhost] && $::dservhost ne ""} {
         }
 
         set ends {}
+        set begins {}
         set stimdg_i -1
         set stimdg_t -1e300
         set i 0
         foreach name $names t $ts {
             # ENDOBS is evt type 20. logger:endobs is only a copy of that
             # timestamp, and only when the file has an obs-limited stream.
-            if {[string match {evt:20:*} $name]} {
+            # BEGINOBS is evt type 19, and it is time zero for the movie.
+            if {[string match {evt:19:*} $name]} {
+                lappend begins $t
+            } elseif {[string match {evt:20:*} $name]} {
                 lappend ends $t
             } elseif {$name eq "stimdg" && $t >= $stimdg_t} {
                 set stimdg_i $i
@@ -301,6 +307,7 @@ if {[info exists ::dservhost] && $::dservhost ne ""} {
         set start -1e300
         if {$trial > 0} { set start [lindex $ends [expr {$trial - 1}]] }
         set end [lindex $ends $trial]
+        set begin_t [begin_logger $begins $start $end]
 
         # The logged body is the script that was sourced. A block from
         # before that point has only a path, and plays whatever file is
@@ -427,8 +434,17 @@ if {[info exists ::dservhost] && $::dservhost ne ""} {
             set w [expr {int([stim {return [screen_set WinWidth]}])}]
             set h [expr {int([stim {return [screen_set WinHeight]}])}]
 
-            set t0 [dict get [lindex $recs 0] ticks]
-            set t1 [dict get [lindex $recs end] ticks]
+            set t_first [dict get [lindex $recs 0] ticks]
+            set t_swap [dict get [lindex $recs end] ticks]
+            # ENDOBS is later than the last swap when the display sits still.
+            # Hold that last picture until the observation ends. Sample times
+            # stay on the swaps, so stim time is not run past the tape.
+            # Time zero is BEGINOBS. nexttrial is earlier, and is only a seed.
+            set pairs [clock_pairs $recs]
+            set t_end [ticks_at $pairs $end]
+            if {$t_end < $t_swap} { set t_end $t_swap }
+            set t0 [origin_tick $pairs $begin_t $t_first $t_swap]
+            set t1 $t_swap
             # One redraw per original swap. A longer quiet stretch is split
             # into steps of that same period so the clock never jumps far
             # enough for an object to throw the step away.
@@ -447,8 +463,9 @@ if {[info exists ::dservhost] && $::dservhost ne ""} {
             set n_native [llength $times]
             # The file stays 60 fps. Each captured picture is repeated across
             # the output slots it covers, so a 50 Hz swap still plays in the
-            # viewer without a second object update.
-            set n_out [expr {int(ceil(($t1 - $t0) / $frame_ms)) + 1}]
+            # viewer without a second object update. The last picture also
+            # fills every slot through ENDOBS.
+            set n_out [expr {int(ceil(($t_end - $t0) / $frame_ms)) + 1}]
             if {$n_out < 1} { set n_out 1 }
             set reps {}
             set out_k 0
@@ -479,6 +496,7 @@ if {[info exists ::dservhost] && $::dservhost ne ""} {
             exec mkfifo $fifo
             set hold [open $fifo RDWR]
             fconfigure $hold -translation binary -blocking 1
+            forget_layered $out_mp4
             set ff [open [list |ffmpeg -y -loglevel error \
                 -f rawvideo -pixel_format rgba -video_size ${w}x${h} \
                 -framerate 60 -i $fifo \
@@ -488,8 +506,10 @@ if {[info exists ::dservhost] && $::dservhost ne ""} {
                 -movflags +faststart $out_mp4 2> $ff_log] w]
             fconfigure $ff -translation binary -blocking 1
 
-            set base 0.0
-            set base_ticks $t0
+            set rec0 [lindex $recs 0]
+            set base [dict get $rec0 timef]
+            set base_ticks [dict get $rec0 ticks]
+            if {[dict get $rec0 kind] eq "reset"} { set base 0.0 }
             set show_cmd_time ""
             set show_pin ""
             set idx 0
@@ -497,6 +517,35 @@ if {[info exists ::dservhost] && $::dservhost ne ""} {
             set play_path [file join $work play.tcl]
             set play_fd [open $play_path w]
             puts $play_fd "stimPlayback 1"
+
+            # Inbox records before BEGINOBS set the scene (background, the
+            # hidden object list). Step the stim clock across that gap so a
+            # long interblock is not one jump, and do not capture it.
+            set stepped ""
+            while {$idx < $nrec} {
+                set rec [lindex $recs $idx]
+                if {[dict get $rec ticks] >= $t0} break
+                set rt [dict get $rec ticks]
+                if {$stepped ne "" && $rt > $stepped + 0.01} {
+                    write_clock_steps $play_fd $base $base_ticks \
+                        $stepped $rt $step_ms
+                }
+                set base_ticks $rt
+                if {[dict get $rec kind] eq "reset"} {
+                    set base 0.0
+                } else {
+                    set base [dict get $rec timef]
+                }
+                emit_record $play_fd $rec
+                set pin [expr {$base + ($rt - $base_ticks)}]
+                puts $play_fd [list stimTimeSet $pin]
+                set stepped $rt
+                incr idx
+            }
+            if {$stepped ne "" && $t0 > $stepped + 0.01} {
+                write_clock_steps $play_fd $base $base_ticks \
+                    $stepped $t0 $step_ms
+            }
 
             for {set fi 0} {$fi < $n_native} {incr fi} {
                 set T [lindex $times $fi]
@@ -565,6 +614,211 @@ if {[info exists ::dservhost] && $::dservhost ne ""} {
         return $info
     }
 
+    # Drop layered copies of one clean trial so a fresh render is not served
+    # from the previous bake.
+    proc forget_layered {out_mp4} {
+        set dir [file dirname $out_mp4]
+        set stem [file rootname [file tail $out_mp4]]
+        foreach f [glob -nocomplain -directory $dir ${stem}.*.mp4] {
+            file delete -force $f
+        }
+    }
+
+    # Same visibility as the viewer's marksAt. A press lasts until its
+    # release. A press with no release, or one replaced by another press,
+    # lasts touch_hold seconds.
+    proc touch_intervals {events} {
+        variable touch_hold
+        set marks {}
+        set open ""
+        foreach ev $events {
+            set kind [dict get $ev kind]
+            if {$kind eq "press"} {
+                if {$open ne ""} {
+                    lappend marks [dict create \
+                        t0 [dict get $open t] \
+                        t1 [expr {[dict get $open t] + $touch_hold}] \
+                        x [dict get $open x] \
+                        y [dict get $open y]]
+                }
+                set open $ev
+            } elseif {$kind eq "release" && $open ne ""} {
+                set t0 [dict get $open t]
+                set t1 [dict get $ev t]
+                if {$t1 < $t0} {
+                    set t1 [expr {$t0 + $touch_hold}]
+                }
+                lappend marks [dict create t0 $t0 t1 $t1 \
+                    x [dict get $open x] y [dict get $open y]]
+                set open ""
+            }
+        }
+        if {$open ne ""} {
+            lappend marks [dict create \
+                t0 [dict get $open t] \
+                t1 [expr {[dict get $open t] + $touch_hold}] \
+                x [dict get $open x] \
+                y [dict get $open y]]
+        }
+        return $marks
+    }
+
+    proc video_size {path} {
+        if {[catch {exec ffprobe -v error -select_streams v:0 \
+                -show_entries stream=width,height -of csv=p=0 $path} out]} {
+            return -code error "trial_video: ffprobe: $out"
+        }
+        set out [string trim $out]
+        if {![regexp {^(\d+),(\d+)$} $out -> w h]} {
+            return -code error "trial_video: bad video size '$out'"
+        }
+        return [list $w $h]
+    }
+
+    proc write_touch_filter {path marks size} {
+        set n [llength $marks]
+        set parts {}
+        if {$n == 1} {
+            lappend parts "\[1:v\]scale=${size}:${size}:flags=lanczos,format=rgba\[m0\]"
+        } else {
+            set outs {}
+            for {set i 0} {$i < $n} {incr i} {
+                lappend outs "\[m$i\]"
+            }
+            lappend parts "\[1:v\]scale=${size}:${size}:flags=lanczos,format=rgba,split=${n}[join $outs ""]"
+        }
+        set prev "0:v"
+        for {set i 0} {$i < $n} {incr i} {
+            set m [lindex $marks $i]
+            set x [format %.2f [dict get $m x]]
+            set y [format %.2f [dict get $m y]]
+            set t0 [format %.6f [dict get $m t0]]
+            set t1 [format %.6f [dict get $m t1]]
+            set dest [expr {$i + 1 == $n ? "out" : "v$i"}]
+            lappend parts "\[$prev\]\[m$i\]overlay=x='${x}-overlay_w/2':y='${y}-overlay_h/2':enable='between(t,${t0},${t1})':eof_action=repeat\[$dest\]"
+            set prev "v$i"
+        }
+        set fd [open $path w]
+        puts -nonewline $fd [join $parts ";"]
+        close $fd
+    }
+
+    # Paint the touch marks onto a copy of an existing stim mp4.
+    # Returns a dict: out path, layered 1 when that file has marks.
+    # No marks leaves the clean file untouched.
+    proc burn {ess_path trial clean_mp4} {
+        variable touch_png
+        if {![file exists $ess_path]} {
+            return -code error "trial_video: no such file $ess_path"
+        }
+        if {![string is integer -strict $trial] || $trial < 0} {
+            return -code error "trial_video: trial must be a non-negative integer"
+        }
+        if {![file exists $clean_mp4]} {
+            return -code error "trial_video: no video for trial $trial"
+        }
+        if {![file exists $touch_png]} {
+            return -code error "trial_video: missing touch mark $touch_png"
+        }
+
+        set info [touches $ess_path $trial]
+        set raw [touch_intervals [dict get $info events]]
+        if {[llength $raw] == 0} {
+            return [dict create out $clean_mp4 layered 0]
+        }
+
+        set final "[file rootname $clean_mp4].touch.mp4"
+        if {[file exists $final] && [file mtime $final] >= [file mtime $clean_mp4]} {
+            return [dict create out $final layered 1]
+        }
+
+        lassign [video_size $clean_mp4] vw vh
+        set space_w [dict get $info width]
+        set space_h [dict get $info height]
+        if {$space_w <= 0} { set space_w $vw }
+        if {$space_h <= 0} { set space_h $vh }
+        set sx [expr {double($vw) / double($space_w)}]
+        set sy [expr {double($vh) / double($space_h)}]
+        set size [expr {max(1, int(round(56.0 * $sx)))}]
+        set marks {}
+        foreach m $raw {
+            lappend marks [dict create \
+                t0 [dict get $m t0] t1 [dict get $m t1] \
+                x [expr {[dict get $m x] * $sx}] \
+                y [expr {[dict get $m y] * $sy}]]
+        }
+
+        set part "[file rootname $clean_mp4].touch.part.mp4"
+        set script "[file rootname $clean_mp4].touch.filter"
+        file delete -force $part
+        write_touch_filter $script $marks $size
+        set failed [catch {exec ffmpeg -y -loglevel error \
+            -i $clean_mp4 -i $touch_png \
+            -filter_complex_script $script \
+            -map {[out]} \
+            -c:v libx264 -pix_fmt yuv420p \
+            -bf 0 -g 60 -keyint_min 60 -sc_threshold 0 \
+            -use_editlist 0 -movie_timescale 15360 \
+            -movflags +faststart $part} ff_err]
+        file delete -force $script
+        if {$failed} {
+            file delete -force $part
+            return -code error "trial_video: ffmpeg: $ff_err"
+        }
+        file rename -force $part $final
+        return [dict create out $final layered 1]
+    }
+
+    # Last BEGINOBS logger time in (start, end]. Empty when the window has none.
+    proc begin_logger {begins start end} {
+        set found ""
+        foreach t $begins {
+            if {$t > $start && $t <= $end} { set found $t }
+        }
+        return $found
+    }
+
+    # {logger_seconds ticks_ms} for one observation, sorted by logger time.
+    proc clock_pairs {recs} {
+        set pairs {}
+        foreach rec $recs {
+            lappend pairs [list [dict get $rec t] [dict get $rec ticks]]
+        }
+        return [lsort -command {apply {{a b} {
+            set d [expr {[lindex $a 0] - [lindex $b 0]}]
+            expr {$d < 0 ? -1 : $d > 0 ? 1 : 0}
+        }}} $pairs]
+    }
+
+    # Stim tick of time zero. BEGINOBS when that tick is before the last
+    # swap; the first inbox tick when this window has no BEGINOBS.
+    proc origin_tick {pairs begin_t first_tick last_tick} {
+        if {$begin_t eq ""} { return $first_tick }
+        set t_begin [ticks_at $pairs $begin_t]
+        if {$t_begin >= $last_tick} { return $first_tick }
+        return $t_begin
+    }
+
+    # stimTimeSet from just after `from` through `to`, in steps of step_ms.
+    # No picture is captured. A single jump across an interblock is what
+    # the clock check rejects, so the seed walks the same period as playback.
+    proc write_clock_steps {fd base base_ticks from to step_ms} {
+        set T $from
+        while {1} {
+            set next [expr {$T + $step_ms}]
+            if {$next >= $to - 0.5} {
+                if {$to > $T + 0.01} {
+                    set pin [expr {$base + ($to - $base_ticks)}]
+                    puts $fd [list stimTimeSet $pin]
+                }
+                return
+            }
+            set pin [expr {$base + ($next - $base_ticks)}]
+            puts $fd [list stimTimeSet $pin]
+            set T $next
+        }
+    }
+
     # StimTicksF at a logger time, from the inbox records of one observation.
     # pairs are {logger_seconds ticks_ms}, sorted by logger time.
     proc ticks_at {pairs logger_t} {
@@ -624,9 +878,12 @@ if {[info exists ::dservhost] && $::dservhost ne ""} {
         }
 
         set ends {}
+        set begins {}
         set i 0
         foreach name $names t $ts {
-            if {[string match {evt:20:*} $name]} {
+            if {[string match {evt:19:*} $name]} {
+                lappend begins $t
+            } elseif {[string match {evt:20:*} $name]} {
                 lappend ends $t
             }
             incr i
@@ -639,6 +896,7 @@ if {[info exists ::dservhost] && $::dservhost ne ""} {
         set start -1e300
         if {$trial > 0} { set start [lindex $ends [expr {$trial - 1}]] }
         set end [lindex $ends $trial]
+        set begin_t [begin_logger $begins $start $end]
 
         set frame_w 1280.0
         set frame_h 800.0
@@ -683,15 +941,10 @@ if {[info exists ::dservhost] && $::dservhost ne ""} {
             set d [expr {[dict get $a seq] - [dict get $b seq]}]
             expr {$d < 0 ? -1 : $d > 0 ? 1 : 0}
         }}} $recs]
-        set t0 [dict get [lindex $recs 0] ticks]
-
-        set pairs {}
-        foreach rec [lsort -command {apply {{a b} {
-            set d [expr {[dict get $a t] - [dict get $b t]}]
-            expr {$d < 0 ? -1 : $d > 0 ? 1 : 0}
-        }}} $recs] {
-            lappend pairs [list [dict get $rec t] [dict get $rec ticks]]
-        }
+        set pairs [clock_pairs $recs]
+        set t0 [origin_tick $pairs $begin_t \
+                    [dict get [lindex $recs 0] ticks] \
+                    [dict get [lindex $recs end] ticks]]
 
         set events {}
         foreach ev $raw_events {
