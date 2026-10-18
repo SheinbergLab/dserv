@@ -502,6 +502,26 @@ if { [settings::source_of ess obs_pin] ne "default" } {
     unset -nocomplain _op _cur _e
 }
 
+# Pull the workgroup's subject list from the registry. This OVERRIDES the
+# env/hardcoded default that ess-2.0.tm set during load (which stays the
+# fallback); if the registry is unset/unreachable/empty the default remains.
+# Registry url+workgroup were configured above via ess::registry::configure.
+# Bare verb so the Workbench (or "dservctl ess refresh_subjects") can re-pull;
+# the logic itself lives in the ess package (ess::refresh_subjects).
+proc refresh_subjects {} { ess::refresh_subjects }
+refresh_subjects
+
+# Set the initial subject BEFORE the boot load, not after it. set_subject
+# reloads the variant when the subject changes, and at this point it always
+# changes (from empty), so with the call after the load the boot variant was
+# built twice: measured 2026-10-17 on the dev Mac, planko/ricochet spent
+# 15.6 s in its box2d loader and then 15.5 s again in a variant_reload
+# triggered from this line -- half of a 32 s ess boot. Before the load,
+# reload_variant has nothing to reload and the single load below builds the
+# trials for this subject (variant_init publishes ID/SUBJECT -> ess/subject).
+# Same order load_config uses.
+ess::set_subject human
+
 #
 # and finally load the rig's boot system.
 #
@@ -612,18 +632,6 @@ if { $_boot ne "" } {
     catch { dservSet ess/boot_error "" }
 }
 unset -nocomplain _boot _why _err
-
-# Pull the workgroup's subject list from the registry. This OVERRIDES the
-# env/hardcoded default that ess-2.0.tm set during load (which stays the
-# fallback); if the registry is unset/unreachable/empty the default remains.
-# Registry url+workgroup were configured above via ess::registry::configure.
-# Bare verb so the Workbench (or "dservctl ess refresh_subjects") can re-pull;
-# the logic itself lives in the ess package (ess::refresh_subjects).
-proc refresh_subjects {} { ess::refresh_subjects }
-refresh_subjects
-
-# set initial subject
-ess::set_subject human
 
 puts "ESS thread configured"
 

@@ -1868,10 +1868,13 @@ namespace eval ess {
     
     proc reload_variant {} {
 	variable current
-	if { $current(system) == {} || 
-	     $current(protocol) == {} || 
+	# Nothing loaded: nothing to reload. Do NOT consult query_state here --
+	# it runs `$current(state_system) status`, and with no system that is
+	# `"" status` -> "invalid command name" (it took essconf.tcl down at
+	# boot, 2026-10-17, when set_subject ran before the boot load).
+	if { $current(system) == {} ||
+	     $current(protocol) == {} ||
 	     $current(variant) == {}} {
-	    if {[query_state] == "running"} {return}
 	    return
 	}
 	
@@ -1917,11 +1920,21 @@ namespace eval ess {
     proc set_subject {subj} {
         variable subject_id
 	variable _loading_from_config
-        set subject_id [string tolower $subj]
+        set subj [string tolower $subj]
+        set changed [expr {$subj ne $subject_id}]
+        set subject_id $subj
         ::ess::evt_put ID SUBJECT [now] $subject_id
 
-	# if changed by hand, reload the variant
-	if {![info exists _loading_from_config] || !$_loading_from_config} {
+	# if changed by hand, reload the variant -- a loader may key trials
+	# off the subject. "Changed" is literal: re-selecting the current
+	# subject must not regenerate anything (a planko variant_init is ~15 s
+	# of box2d on a dev Mac, measured 2026-10-17). With no system loaded
+	# reload_variant is a no-op, which is what lets essconf.tcl set the
+	# boot subject BEFORE the boot load instead of paying a second load
+	# right after it -- the same order load_config uses.
+	variable current
+	if {$changed && $current(system) ne {} &&
+	    (![info exists _loading_from_config] || !$_loading_from_config)} {
 	    reload_variant
 	}
 
@@ -6423,6 +6436,13 @@ namespace eval ess {
         reset_trial_info
         
         ::ess::evt_put ID VARIANT [now] $system:$protocol:$variant
+        # The subject the trials were built for. ess/subject (triggers.tcl,
+        # ID/SUBJECT) used to be published only by set_subject's own event,
+        # which evt_put DROPS when no system is loaded yet -- so a subject
+        # set before the load (the boot path, load_config) never reached
+        # the datapoint. Emit it here, after the load, like ESS/PROTOCOL/
+        # VARIANT above; a datafile open repeats the same four.
+        ::ess::evt_put ID SUBJECT [now] $::ess::subject_id
         set current(variant) $variant
         set current(open_variant) 1
 
