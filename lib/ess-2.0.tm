@@ -474,9 +474,9 @@ oo::class create System {
             #   seq kind stimticksf stimtimef swapcount nbytes\n
             #   <body of nbytes characters>
             # kind is cmd, swap, ds, or reset. A cmd over 8KB is stored as
-            # "omitted <nbytes> <sha256>" -- the stim script source is the
-            # only command that large. A stimdg dispatch is the name only;
-            # those bytes are already the stimdg point.
+            # "omitted <nbytes>". That command is the stim script, and the
+            # body logged at configure is what playback sources. A stimdg
+            # dispatch is the name only; those bytes are already the stimdg point.
             proc stim_inbox_log {kind body} {
                 if { ![info exists ::dserv_return_sock] } { return -1 }
                 if { ![info exists ::stim_inbox_seq] } { set ::stim_inbox_seq 0 }
@@ -485,12 +485,7 @@ oo::class create System {
                     set body stimdg
                 }
                 if { $kind eq "cmd" && [string length $body] > 8192 } {
-                    set n [string length $body]
-                    if { [catch { stim_inbox_sha256 $body } dig] } {
-                        set body "omitted $n"
-                    } else {
-                        set body "omitted $n $dig"
-                    }
+                    set body "omitted [string length $body]"
                 }
                 set seq $::stim_inbox_seq
                 incr ::stim_inbox_seq
