@@ -1547,8 +1547,9 @@ if {[info exists ::dservhost] && $::dservhost ne ""} {
                     samples $samples]
     }
 
-    # True when some raw sample has a video, analog, or virtual label at or before it.
-    proc eye_covered {g names ts} {
+    # "" when no raw sample has a known source. "virtual" when every covered
+    # sample is the virtual eye. "eye" when any covered sample is video or analog.
+    proc eye_kind {g names ts} {
         set sources {}
         set raws {}
         set i 0
@@ -1563,18 +1564,27 @@ if {[info exists ::dservhost] && $::dservhost ne ""} {
             }
             incr i
         }
-        if {[llength $raws] == 0 || [llength $sources] == 0} { return 0 }
+        if {[llength $raws] == 0 || [llength $sources] == 0} { return "" }
         set sources [lsort -command {apply {{a b} {
             expr {[lindex $a 0] < [lindex $b 0] ? -1 : [lindex $a 0] > [lindex $b 0] ? 1 : 0}
         }}} $sources]
+        set kind ""
         foreach t $raws {
-            if {[eye_source_ok [value_at $sources $t]]} { return 1 }
+            set src [value_at $sources $t]
+            if {![eye_source_ok $src]} continue
+            if {$src eq "virtual"} {
+                if {$kind eq ""} { set kind virtual }
+            } else {
+                set kind eye
+            }
         }
-        return 0
+        return $kind
     }
 
-    # Layer names this file can actually draw. Touch is the press/release
-    # events, whichever device produced them.
+    # Layer names this file can actually draw, plus whether the eye samples
+    # are all from the virtual eye. Touch is the press/release events,
+    # whichever device produced them. virtual is 1 only when every covered
+    # sample is virtual; a mix with a tracker stays 0.
     proc layers {ess_path} {
         if {![file exists $ess_path]} {
             return -code error "trial_video: no such file $ess_path"
@@ -1583,16 +1593,16 @@ if {[info exists ::dservhost] && $::dservhost ne ""} {
         set g [dslog::read $ess_path]
         set names [dl_tcllist $g:varname]
         set ts [dl_tcllist $g:timestamp]
-        set eye [eye_covered $g $names $ts]
+        set kind [eye_kind $g $names $ts]
         catch {dg_delete $g}
         set layers {}
         if {[lsearch -exact $names evt:48:0] >= 0 ||
             [lsearch -exact $names evt:48:1] >= 0} {
             lappend layers touch
         }
-        if {$eye} {
+        if {$kind ne ""} {
             lappend layers eye
         }
-        return $layers
+        return [dict create names $layers virtual [expr {$kind eq "virtual"}]]
     }
 }

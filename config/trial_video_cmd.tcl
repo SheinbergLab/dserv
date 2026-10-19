@@ -339,15 +339,16 @@ proc trial_video_layers {filename} {
     if {[info commands ::trial_video::layers] eq ""} {
         return [_json_error "trial_video layers reader is not loaded"]
     }
-    if {[catch {set layers [::trial_video::layers $filepath]} err]} {
+    if {[catch {set info [::trial_video::layers $filepath]} err]} {
         return [_json_error $err]
     }
 
     set json [yajl create #auto]
     $json map_open
     $json string status string ok
+    $json string eye_virtual number [dict get $info virtual]
     $json string layers array_open
-    foreach name $layers {
+    foreach name [dict get $info names] {
         $json string $name
     }
     $json array_close

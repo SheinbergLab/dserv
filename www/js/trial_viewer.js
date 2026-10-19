@@ -22,6 +22,7 @@ let eyes = [];
 let eyeKey = '';
 let eyeGen = 0;
 let availableLayers = new Set();
+let eyeVirtual = false;
 let layersKey = '';
 let layersGen = 0;
 let touchSpace = { w: 1280, h: 800 };
@@ -587,10 +588,14 @@ function selectedLayers() {
     return names;
 }
 
+function eyeLabel() {
+    return eyeVirtual ? 'Virtual eye' : 'Eye';
+}
+
 function layerButtonText() {
     const names = [];
     if (touchOn && touchAvailable()) names.push('Touch');
-    if (eyeOn && eyeAvailable()) names.push('Eye');
+    if (eyeOn && eyeAvailable()) names.push(eyeLabel());
     return names.length ? names.join(', ') : 'None';
 }
 
@@ -623,7 +628,7 @@ function fillLayers() {
         addLayerBox(menu, button, 'layer-touch', 'Touch', touchOn, (v) => { touchOn = v; }, refreshTouches);
     }
     if (eyeAvailable()) {
-        addLayerBox(menu, button, 'layer-eye', 'Eye', eyeOn, (v) => { eyeOn = v; }, refreshEyes);
+        addLayerBox(menu, button, 'layer-eye', eyeLabel(), eyeOn, (v) => { eyeOn = v; }, refreshEyes);
     }
     if (!touchAvailable() && !eyeAvailable()) {
         const empty = document.createElement('div');
@@ -639,6 +644,7 @@ async function refreshLayers() {
     const file = selectedFile();
     if (!file) {
         availableLayers = new Set();
+        eyeVirtual = false;
         layersKey = '';
         fillLayers();
         refreshTouches();
@@ -652,6 +658,7 @@ async function refreshLayers() {
         return;
     }
     availableLayers = new Set();
+    eyeVirtual = false;
     layersKey = '';
     fillLayers();
     try {
@@ -663,6 +670,7 @@ async function refreshLayers() {
         }
         if (selectedFile() !== file) return;
         availableLayers = new Set(data.layers || []);
+        eyeVirtual = !!data.eye_virtual;
         layersKey = file.filename;
         fillLayers();
         refreshTouches();
@@ -670,6 +678,7 @@ async function refreshLayers() {
     } catch (e) {
         if (gen !== layersGen) return;
         availableLayers = new Set();
+        eyeVirtual = false;
         layersKey = '';
         fillLayers();
         refreshTouches();
@@ -1000,7 +1009,7 @@ async function refreshEyes() {
 function layerStatusText() {
     const names = [];
     if (touchOn && touchAvailable()) names.push('Touch');
-    if (eyeOn && eyeAvailable()) names.push('Eye');
+    if (eyeOn && eyeAvailable()) names.push(eyeLabel());
     if (names.length === 1) return 'Adding ' + names[0] + ' to the video.';
     return 'Adding ' + names.join(' and ') + ' to the video.';
 }
