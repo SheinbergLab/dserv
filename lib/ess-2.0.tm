@@ -3482,11 +3482,30 @@ namespace eval ess {
         dservLoggerAddMatch $filename eventlog/events
         dservLoggerAddMatch $filename eventlog/names
         dservLoggerAddMatch $filename stimdg
+        # Color stim is already clearing with. Variant init often sends
+        # setBackground before this file exists, so the inbox never sees
+        # it. Ask now, before the inbox match, so the query itself is not
+        # a tape command. A bad reply leaves the point unset.
+        set _bg [string trim [rmtSend setBackground]]
+        set _bg_ok 0
+        if {![string match "!TCL_ERROR*" $_bg] && [llength $_bg] == 3} {
+            set _bg_ok 1
+            foreach _c $_bg {
+                if {![string is integer -strict $_c] || $_c < 0 || $_c > 255} {
+                    set _bg_ok 0
+                }
+            }
+        }
+        if {$_bg_ok} {
+            dservSet ess/stim_background $_bg
+        } else {
+            catch { dservClear ess/stim_background }
+        }
         # Trial inbox tape: every command and datapoint stim applied.
         # Unbuffered and not obs-limited, so each record keeps its own
         # arrival time. The reconstruction clocks are inside the payload.
         dservLoggerAddMatch $filename stim/inbox 0 0 1
-        foreach _ip {ess/stim_script_path ess/stim_script_body} {
+        foreach _ip {ess/stim_script_path ess/stim_script_body ess/stim_background} {
             dservLoggerAddMatch $filename $_ip
         }
 
@@ -3623,7 +3642,7 @@ namespace eval ess {
         ::ess::store_evt_names
 
         dservTouch stimdg
-        foreach _ip {ess/stim_script_path ess/stim_script_body} {
+        foreach _ip {ess/stim_script_path ess/stim_script_body ess/stim_background} {
             if { [dservExists $_ip] } { dservTouch $_ip }
         }
 	dservTouch em/settings

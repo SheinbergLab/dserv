@@ -282,9 +282,24 @@ if {[info exists ::dservhost] && $::dservhost ne ""} {
         return [lrange $body 1 3]
     }
 
+    # "r g b" from one ess/stim_background value, or "" when it is not one.
+    # A string point comes back as one element holding all three numbers.
+    proc background_stored {raw} {
+        if {[llength $raw] == 1} { set raw [lindex $raw 0] }
+        if {[llength $raw] != 3} { return "" }
+        foreach c $raw {
+            if {![string is integer -strict $c] || $c < 0 || $c > 255} {
+                return ""
+            }
+        }
+        return $raw
+    }
+
     # Last setBackground at or before trial start. Trial start is BEGINOBS.
     # A command from earlier in the file counts. With no BEGINOBS, the first
-    # inbox time of the trial stands in for the start. "" when the tape has none.
+    # inbox time of the trial stands in for the start. If the inbox has none,
+    # the color stim was holding when the file opened counts. "" when neither
+    # was stored.
     proc background_before {g names ts trial} {
         set ends {}
         set begins {}
@@ -334,10 +349,22 @@ if {[info exists ::dservhost] && $::dservhost ne ""} {
             }
             incr i
         }
+        if {$bg ne ""} { return $bg }
+        set i 0
+        foreach name $names t $ts {
+            if {$name eq "ess/stim_background" && $t <= $limit && $t >= $bg_t} {
+                set rgb [background_stored [dl_tcllist [dl_get $g:vals $i]]]
+                if {$rgb ne ""} {
+                    set bg $rgb
+                    set bg_t $t
+                }
+            }
+            incr i
+        }
         return $bg
     }
 
-    # missing 1 when the tape never set a color by trial start.
+    # missing 1 when neither the inbox nor the file-open color is stored.
     proc background {ess_path trial} {
         if {![file exists $ess_path]} {
             return -code error "trial_video: no such file $ess_path"
