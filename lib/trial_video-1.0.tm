@@ -1605,4 +1605,42 @@ if {[info exists ::dservhost] && $::dservhost ne ""} {
         }
         return [dict create names $layers virtual [expr {$kind eq "virtual"}]]
     }
+
+    # Half-angles of the stimulus window, in degrees, as stored when the
+    # file opened. Empty strings when either value is missing. No fallback.
+    proc screen {ess_path} {
+        if {![file exists $ess_path]} {
+            return -code error "trial_video: no such file $ess_path"
+        }
+        catch {dg_delete $ess_path}
+        set g [dslog::read $ess_path]
+        set names [dl_tcllist $g:varname]
+        set ts [dl_tcllist $g:timestamp]
+        set halfx ""
+        set halfy ""
+        set hxt -1e300
+        set hyt -1e300
+        set i 0
+        foreach name $names t $ts {
+            if {$name eq "ess/screen_halfx" && $t >= $hxt} {
+                set raw [lindex [dl_tcllist [dl_get $g:vals $i]] 0]
+                if {[string is double -strict $raw] && $raw > 0} {
+                    set halfx $raw
+                    set hxt $t
+                }
+            } elseif {$name eq "ess/screen_halfy" && $t >= $hyt} {
+                set raw [lindex [dl_tcllist [dl_get $g:vals $i]] 0]
+                if {[string is double -strict $raw] && $raw > 0} {
+                    set halfy $raw
+                    set hyt $t
+                }
+            }
+            incr i
+        }
+        catch {dg_delete $g}
+        if {$halfx eq "" || $halfy eq ""} {
+            return [dict create halfx "" halfy ""]
+        }
+        return [dict create halfx $halfx halfy $halfy]
+    }
 }

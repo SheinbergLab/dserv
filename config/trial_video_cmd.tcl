@@ -97,6 +97,97 @@ proc trial_video_list {filename} {
     return $result
 }
 
+# Saved-trial numbers for one block, from a trials table that already
+# exists. No re-extract. saved is null when there is no table, or the
+# table has no obsid column. Otherwise each attempt maps to the inclusive
+# span of extracted trial ids that came from it.
+proc trial_video_trials_path {filename} {
+    variable export_destination
+    set trials_path [dfdb eval {
+        SELECT trials_path FROM datafiles WHERE filename = $filename LIMIT 1
+    }]
+    if {$trials_path ne "" && [file exists $trials_path]} {
+        return $trials_path
+    }
+    if {[info exists export_destination] && $export_destination ne ""} {
+        set base [trial_video_basename $filename]
+        set exported [file join $export_destination trials ${base}.trials.dgz]
+        if {[file exists $exported]} {
+            return $exported
+        }
+    }
+    return ""
+}
+
+proc trial_video_saved {filename} {
+    set path [trial_video_trials_path $filename]
+    if {$path eq ""} {
+        return [_json_saved ""]
+    }
+    set g ""
+    if {[catch {
+        set g [dg_read $path]
+        set names [dg_tclListnames $g]
+        if {[lsearch -exact $names obsid] < 0} {
+            set obsids {}
+            set ids {}
+        } else {
+            set obsids [dl_tcllist $g:obsid]
+            if {[lsearch -exact $names trialid] >= 0} {
+                set ids [dl_tcllist $g:trialid]
+            } else {
+                set ids {}
+                set i 0
+                foreach _ $obsids {
+                    lappend ids $i
+                    incr i
+                }
+            }
+        }
+    } err]} {
+        catch {if {$g ne ""} { dg_delete $g }}
+        return [_json_error $err]
+    }
+    catch {if {$g ne ""} { dg_delete $g }}
+    if {[llength $obsids] == 0} {
+        return [_json_saved ""]
+    }
+
+    array set span {}
+    foreach obs $obsids id $ids {
+        if {![string is integer -strict $obs] || ![string is integer -strict $id]} {
+            continue
+        }
+        if {![info exists span($obs)]} {
+            set span($obs) [list $id $id]
+        } else {
+            lassign $span($obs) lo hi
+            if {$id < $lo} { set lo $id }
+            if {$id > $hi} { set hi $id }
+            set span($obs) [list $lo $hi]
+        }
+    }
+    if {[array size span] == 0} {
+        return [_json_saved ""]
+    }
+    set parts {}
+    foreach obs [lsort -integer [array names span]] {
+        lassign $span($obs) lo hi
+        lappend parts "\"$obs\":\[$lo,$hi\]"
+    }
+    return [_json_saved [join $parts ,]]
+}
+
+# spans is a JSON object body, or "" for null.
+proc _json_saved {spans} {
+    if {$spans eq ""} {
+        set saved null
+    } else {
+        set saved "{$spans}"
+    }
+    return "{\"status\":\"ok\",\"saved\":$saved}"
+}
+
 # Filenames whose catalog row includes a stim/inbox tape. The viewer
 # treats every other block as if it were not there.
 proc taped_datafiles {} {
@@ -325,6 +416,29 @@ proc trial_video_touches {filename trial} {
     set result [$json get]
     $json delete
     return $result
+}
+
+# Half-angles for one datafile. null when either was not stored.
+proc trial_video_screen {filename} {
+    set filepath [dfdb eval {SELECT filepath FROM datafiles WHERE filename = $filename}]
+    if {$filepath eq "" || ![file exists $filepath]} {
+        return [_json_error "No datafile $filename"]
+    }
+    if {[catch {trial_video_load} load_err]} {
+        return [_json_error $load_err]
+    }
+    if {[info commands ::trial_video::screen] eq ""} {
+        return [_json_error "trial_video screen reader is not loaded"]
+    }
+    if {[catch {set info [::trial_video::screen $filepath]} err]} {
+        return [_json_error $err]
+    }
+    set halfx [dict get $info halfx]
+    set halfy [dict get $info halfy]
+    if {$halfx eq "" || $halfy eq ""} {
+        return "{\"status\":\"ok\",\"halfx\":null,\"halfy\":null}"
+    }
+    return "{\"status\":\"ok\",\"halfx\":$halfx,\"halfy\":$halfy}"
 }
 
 # Layer names present in one datafile. The viewer only offers these.

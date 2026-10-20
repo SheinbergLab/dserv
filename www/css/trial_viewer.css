@@ -84,9 +84,10 @@ body {
 }
 
 .tv-filters label:has(#subject) { flex-grow: 0.85; }
-.tv-filters label:has(#system) { flex-grow: 1.2; }
-.tv-filters label:has(#trial) { flex-grow: 0.75; }
-.tv-filters label:has(#block) { flex-grow: 1.7; }
+.tv-filters label:has(#system) { flex-grow: 1.1; }
+.tv-filters label:has(#protocol) { flex-grow: 1.18; }
+.tv-filters label:has(#trial) { flex-grow: 1.15; }
+.tv-filters label:has(#block) { flex-grow: 1.22; }
 
 .tv-trial-wrap {
     position: relative;
@@ -101,6 +102,9 @@ body {
 
 #trial-button {
     width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     text-align: left;
     color: #e0e0e0;
     border-color: #3d3d4d;
@@ -113,7 +117,9 @@ body {
     z-index: 4;
     top: 100%;
     left: 0;
-    right: 0;
+    right: auto;
+    min-width: 100%;
+    width: max-content;
     margin-top: 4px;
     max-height: 240px;
     overflow: auto;
@@ -128,6 +134,7 @@ body {
     display: block;
     width: 100%;
     height: auto;
+    white-space: nowrap;
     margin: 0;
     padding: 6px 10px;
     border: 0;
@@ -141,6 +148,24 @@ body {
 
 .tv-trial-menu button.is-selected { background: #2a2a3c; }
 .tv-trial-menu button:hover { background: #2e2e40; }
+
+.tv-trial-tip {
+    position: fixed;
+    z-index: 6;
+    max-width: 28rem;
+    margin: 0;
+    padding: 8px 10px;
+    background: #1c1c28;
+    border: 1px solid #3d3d4d;
+    border-radius: 4px;
+    color: #e0e0e0;
+    font-size: 13px;
+    line-height: 1.4;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+    pointer-events: none;
+}
+
+#coord-tip { white-space: pre-line; }
 
 .tv-layers-wrap {
     position: relative;
@@ -248,6 +273,8 @@ button:not(:disabled):hover, #download:not([aria-disabled="true"]):hover { borde
     aspect-ratio: 1280 / 800;
     background: #000;
 }
+
+.tv-screen.is-playable { cursor: pointer; }
 
 #player {
     width: 100%;

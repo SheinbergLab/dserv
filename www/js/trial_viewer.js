@@ -34,6 +34,17 @@ let backgroundModalFor = '';
 let modalGen = 0;
 let filesBusy = false;
 let filesAgain = false;
+// undefined until this block's table has been read. null means there is
+// no extracted table. An object maps an attempt to [first, last] saved ids.
+let savedMap;
+let savedGen = 0;
+let trialTipTimer = 0;
+// null until this block's half-angles are read, and when the file has none.
+let screenHalf = null;
+let screenGen = 0;
+let coordWait = 0;
+let coordShown = false;
+let coordEvent = null;
 const FRAME_RATE = 60;
 const BACKGROUND_NOTE =
     'Background color not set in this task! Defaulting to black for this video.';
@@ -93,6 +104,26 @@ function blockStamp(file) {
     return [file.date, file.time].filter(Boolean).join(' ');
 }
 
+function protocolKey(file) {
+    return (file.protocol || '') + '\n' + (file.variant || '');
+}
+
+function protocolPairs(rows) {
+    const seen = new Set();
+    const pairs = [];
+    for (const file of rows) {
+        const key = protocolKey(file);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        pairs.push({
+            value: key,
+            label: choiceLabel(file.protocol) + ' - ' + choiceLabel(file.variant)
+        });
+    }
+    pairs.sort((a, b) => a.label.localeCompare(b.label));
+    return pairs;
+}
+
 function applyFilters() {
     const subject = setOptions(
         document.getElementById('subject'),
@@ -112,13 +143,10 @@ function applyFilters() {
     const protocolRows = subjectRows.filter(file => (file.system || '') === system);
     const protocol = setOptions(
         document.getElementById('protocol'),
-        uniqueValues(protocolRows, 'protocol').map(value => ({
-            value: value,
-            label: choiceLabel(value)
-        }))
+        protocolPairs(protocolRows)
     );
     const blocks = protocolRows
-        .filter(file => (file.protocol || '') === protocol)
+        .filter(file => protocolKey(file) === protocol)
         .sort((a, b) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0)
             || String(b.filename).localeCompare(String(a.filename)));
     const stamps = blocks.map(blockStamp);
@@ -147,8 +175,8 @@ function fillTrials() {
     const trial = document.getElementById('trial');
     const keep = trial.value;
     trial.innerHTML = '';
-    // The player indexes observations (evt:20). n_trials is the extracted
-    // table, which leaves out an observation that did not complete.
+    // The option value is the attempt: the Nth ENDOBS in the raw file.
+    // A saved trial id, when a table exists, is only a label.
     const n = file ? (Number(file.n_obs) || 0) : 0;
     for (let i = 0; i < n; i++) {
         const opt = document.createElement('option');
@@ -165,14 +193,79 @@ function trialVideo(index) {
     return videos.find(video => String(video.trial) === String(index)) || null;
 }
 
+function trialSpan(index) {
+    if (savedMap == null) return undefined;
+    const key = String(index);
+    if (!Object.prototype.hasOwnProperty.call(savedMap, key)) return null;
+    return savedMap[key];
+}
+
 function trialLabel(index) {
-    const name = 'trial ' + index;
+    const saved = trialSpan(index);
+    let trial = saved === null ? '-' : '?';
+    if (saved && saved[0] === saved[1]) trial = String(saved[0]);
+    else if (saved) trial = saved[0] + '\u2013' + saved[1];
+    const name = 'Attempt ' + index + ' trial ' + trial;
     return trialVideo(index) ? name + ' \u2713' : name;
+}
+
+function trialTip(index) {
+    const n = String(index);
+    const saved = trialSpan(index);
+    if (saved === undefined) {
+        return 'This is attempt ' + n + ' in this block. No extracted data was found, so this row cannot say whether the attempt was kept or what number it would have. Extracted data skips trials that were not completed and, for example, trials that had no response.';
+    }
+    if (saved === null) {
+        return 'This is attempt ' + n + '. It was not extracted. Extractors skip trials that were not completed and, depending on the task, trials with no response.';
+    }
+    if (saved[0] === saved[1] && saved[0] === Number(index)) {
+        return 'This is attempt ' + n + ', and it is also trial ' + n + ' in the extracted data.';
+    }
+    if (saved[0] === saved[1]) {
+        return 'This is attempt ' + n + ', and trial ' + saved[0] + ' in the extracted data. Differences in these numbers usually result from trials that were not completed and therefore skipped by the extractor.';
+    }
+    return 'This is attempt ' + n + '. In the extracted data it is trials ' + saved[0] + ' through ' + saved[1] + ', because this block stores one extracted row per stimulus.';
+}
+
+function hideTrialTip() {
+    clearTimeout(trialTipTimer);
+    document.getElementById('trial-tip').hidden = true;
+}
+
+function scheduleTrialTip(anchor, text) {
+    clearTimeout(trialTipTimer);
+    hideTrialTip();
+    trialTipTimer = setTimeout(() => placeTrialTip(anchor, text), 200);
+}
+
+function placeTrialTip(anchor, text) {
+    const tip = document.getElementById('trial-tip');
+    if (!text) {
+        tip.hidden = true;
+        return;
+    }
+    tip.textContent = text;
+    tip.hidden = false;
+    tip.style.left = '0px';
+    tip.style.top = '0px';
+    const rect = anchor.getBoundingClientRect();
+    const tipRect = tip.getBoundingClientRect();
+    let left = rect.right + 8;
+    if (left + tipRect.width > window.innerWidth - 8) {
+        left = Math.max(8, rect.left - tipRect.width - 8);
+    }
+    let top = rect.top;
+    if (top + tipRect.height > window.innerHeight - 8) {
+        top = Math.max(8, window.innerHeight - tipRect.height - 8);
+    }
+    tip.style.left = left + 'px';
+    tip.style.top = top + 'px';
 }
 
 function setTrialOpen(open) {
     document.getElementById('trial-menu').hidden = !open;
     document.getElementById('trial-button').setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (!open) hideTrialTip();
 }
 
 function paintTrials() {
@@ -189,6 +282,10 @@ function paintTrials() {
         const selected = opt.value === trial.value;
         item.setAttribute('aria-selected', selected ? 'true' : 'false');
         if (selected) item.classList.add('is-selected');
+        item.addEventListener('mouseenter', () => scheduleTrialTip(item, trialTip(opt.value)));
+        item.addEventListener('mouseleave', hideTrialTip);
+        item.addEventListener('focus', () => scheduleTrialTip(item, trialTip(opt.value)));
+        item.addEventListener('blur', hideTrialTip);
         item.addEventListener('click', () => {
             setTrialOpen(false);
             if (trial.value === opt.value) return;
@@ -211,6 +308,10 @@ function syncButtons() {
     const video = trialVideo(trial.value);
     const file = selectedFile();
     const layered = selectedLayers().length > 0;
+    document.querySelector('.tv-screen').classList.toggle(
+        'is-playable',
+        !!video && videosReady && !creating && !confirming
+    );
     download.textContent = burning ? 'Preparing…' : 'Download';
     if (burning || creating || !videosReady || !video || !file) {
         download.removeAttribute('href');
@@ -458,10 +559,56 @@ async function loadVideos() {
     await showTrial(document.getElementById('trial').value, false);
 }
 
+async function loadSaved() {
+    const gen = ++savedGen;
+    const file = selectedFile();
+    savedMap = undefined;
+    if (!file) {
+        paintTrials();
+        return;
+    }
+    try {
+        const raw = await dfEval('trial_video_saved {' + file.filename + '}', 120000);
+        if (gen !== savedGen) return;
+        const data = JSON.parse(raw);
+        if (data.status !== 'ok') throw new Error(data.error || 'Could not read extracted trials');
+        savedMap = data.saved;
+    } catch (e) {
+        if (gen !== savedGen) return;
+        savedMap = null;
+    }
+    paintTrials();
+}
+
+async function loadScreen() {
+    const gen = ++screenGen;
+    screenHalf = null;
+    hideCoordTip();
+    const file = selectedFile();
+    if (!file) return;
+    try {
+        const raw = await dfEval('trial_video_screen {' + file.filename + '}', 30000);
+        if (gen !== screenGen) return;
+        const data = JSON.parse(raw);
+        if (data.status !== 'ok') throw new Error(data.error || 'Could not read the screen');
+        if (data.halfx != null && data.halfy != null) {
+            screenHalf = { halfx: Number(data.halfx), halfy: Number(data.halfy) };
+        }
+    } catch (e) {
+        if (gen !== screenGen) return;
+        screenHalf = null;
+    }
+}
+
 async function onDatafileChange() {
     clearPlayer();
     videos = [];
+    savedMap = undefined;
+    hideTrialTip();
+    hideCoordTip();
     applyFilters();
+    const saved = loadSaved();
+    const screen = loadScreen();
     try {
         await loadVideos();
         const el = document.getElementById('message');
@@ -473,6 +620,8 @@ async function onDatafileChange() {
         setMessage(e.message, true);
     }
     refreshLayers();
+    await saved;
+    await screen;
 }
 
 function onTrialChange() {
@@ -733,6 +882,84 @@ function pictureBox() {
     };
 }
 
+function picturePoint(ev) {
+    const screen = document.querySelector('.tv-screen');
+    const box = pictureBox();
+    const rect = screen.getBoundingClientRect();
+    const x = ev.clientX - rect.left;
+    const y = ev.clientY - rect.top;
+    if (x < box.left || y < box.top || x >= box.left + box.width || y >= box.top + box.height) {
+        return null;
+    }
+    const player = document.getElementById('player');
+    const vw = player.videoWidth || touchSpace.w || 1280;
+    const vh = player.videoHeight || touchSpace.h || 800;
+    let px = Math.floor((x - box.left) / box.width * vw);
+    let py = Math.floor((y - box.top) / box.height * vh);
+    if (px < 0) px = 0;
+    if (py < 0) py = 0;
+    if (px > vw - 1) px = vw - 1;
+    if (py > vh - 1) py = vh - 1;
+    return { x: px, y: py, vw: vw, vh: vh };
+}
+
+function hideCoordTip() {
+    clearTimeout(coordWait);
+    coordWait = 0;
+    coordShown = false;
+    coordEvent = null;
+    const tip = document.getElementById('coord-tip');
+    if (tip) tip.hidden = true;
+}
+
+function placeCoordTip(ev, point) {
+    const tip = document.getElementById('coord-tip');
+    let text = point.x + ', ' + point.y + ' px';
+    if (screenHalf) {
+        const dx = (point.x / point.vw - 0.5) * 2 * screenHalf.halfx;
+        const dy = (0.5 - point.y / point.vh) * 2 * screenHalf.halfy;
+        text += '\n' + dx.toFixed(2) + '\u00b0, ' + dy.toFixed(2) + '\u00b0';
+    }
+    tip.textContent = text;
+    tip.hidden = false;
+    tip.style.left = '0px';
+    tip.style.top = '0px';
+    const tipRect = tip.getBoundingClientRect();
+    let left = ev.clientX + 14;
+    let top = ev.clientY + 16;
+    if (left + tipRect.width > window.innerWidth - 8) {
+        left = Math.max(8, ev.clientX - tipRect.width - 14);
+    }
+    if (top + tipRect.height > window.innerHeight - 8) {
+        top = Math.max(8, ev.clientY - tipRect.height - 16);
+    }
+    tip.style.left = left + 'px';
+    tip.style.top = top + 'px';
+}
+
+function onScreenPointer(ev) {
+    coordEvent = ev;
+    const point = picturePoint(ev);
+    if (!point) {
+        hideCoordTip();
+        return;
+    }
+    if (coordShown) {
+        coordShown = false;
+        const tip = document.getElementById('coord-tip');
+        if (tip) tip.hidden = true;
+    }
+    clearTimeout(coordWait);
+    coordWait = setTimeout(() => {
+        coordWait = 0;
+        if (!coordEvent) return;
+        const current = picturePoint(coordEvent);
+        if (!current) return;
+        coordShown = true;
+        placeCoordTip(coordEvent, current);
+    }, 200);
+}
+
 function eyeAt(t) {
     if (!eyes.length || t == null) return null;
     let lo = 0;
@@ -947,15 +1174,12 @@ function watchPlayback() {
     });
 }
 
-function onAction() {
+function togglePlayback() {
     if (creating || confirming) return;
     const trial = document.getElementById('trial').value;
     const video = trialVideo(trial);
     const player = document.getElementById('player');
-    if (!video) {
-        createVideo();
-        return;
-    }
+    if (!video) return;
     if (currentVideo === video.name && !player.paused && !player.ended) {
         player.pause();
         return;
@@ -964,6 +1188,43 @@ function onAction() {
     if (document.getElementById('message').textContent !== BACKGROUND_NOTE) {
         setMessage('');
     }
+}
+
+function stepFrame(delta) {
+    if (creating || confirming) return;
+    const last = lastFrame();
+    if (last < 0) return;
+    const player = document.getElementById('player');
+    if (!player.paused && !player.ended) player.pause();
+    let frame = pendingFrame >= 0
+        ? pendingFrame
+        : Math.floor((player.currentTime || 0) * FRAME_RATE + 1e-4);
+    if (frame > last) frame = last;
+    if (frame < 0) frame = 0;
+    seekFrame(Math.min(last, Math.max(0, frame + delta)));
+}
+
+function onPlaybackKey(ev) {
+    if (confirming || creating) return;
+    if (ev.key === ' ' || ev.code === 'Space') {
+        ev.preventDefault();
+        togglePlayback();
+    } else if (ev.key === 'ArrowLeft') {
+        ev.preventDefault();
+        stepFrame(-1);
+    } else if (ev.key === 'ArrowRight') {
+        ev.preventDefault();
+        stepFrame(1);
+    }
+}
+
+function onAction() {
+    if (creating || confirming) return;
+    if (!trialVideo(document.getElementById('trial').value)) {
+        createVideo();
+        return;
+    }
+    togglePlayback();
 }
 
 async function refreshEyes() {
@@ -1102,13 +1363,31 @@ async function init() {
     watchPlayback();
     document.getElementById('trial').addEventListener('change', onTrialChange);
     document.getElementById('action').addEventListener('click', onAction);
+    document.querySelector('.tv-screen').addEventListener('pointermove', onScreenPointer);
+    document.querySelector('.tv-screen').addEventListener('pointerleave', hideCoordTip);
+    document.querySelector('.tv-screen').addEventListener('click', () => {
+        if (creating || confirming) return;
+        if (!trialVideo(document.getElementById('trial').value)) return;
+        togglePlayback();
+    });
+    document.addEventListener('keydown', onPlaybackKey);
     document.getElementById('download').addEventListener('click', onDownload);
     document.getElementById('layers-button').addEventListener('click', () => {
         setTrialOpen(false);
         setLayersOpen(document.getElementById('layers-menu').hidden);
     });
-    document.getElementById('trial-button').addEventListener('click', () => {
-        if (document.getElementById('trial-button').disabled) return;
+    document.getElementById('trial-menu').addEventListener('scroll', hideTrialTip);
+    const trialButton = document.getElementById('trial-button');
+    trialButton.addEventListener('mouseenter', () => {
+        if (!document.getElementById('trial-menu').hidden) return;
+        const trial = document.getElementById('trial');
+        if (trial.value === '') return;
+        scheduleTrialTip(trialButton, trialTip(trial.value));
+    });
+    trialButton.addEventListener('mouseleave', hideTrialTip);
+    trialButton.addEventListener('click', () => {
+        if (trialButton.disabled) return;
+        hideTrialTip();
         setLayersOpen(false);
         setTrialOpen(document.getElementById('trial-menu').hidden);
     });
