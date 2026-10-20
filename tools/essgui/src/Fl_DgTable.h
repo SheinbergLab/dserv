@@ -170,7 +170,7 @@ public:
       break;
     case DF_CHAR:
       {
-	char *vals = (char *) DYN_LIST_VALS(dl);
+	unsigned char *vals = (unsigned char *) DYN_LIST_VALS(dl);
 	snprintf(valstr, sizeof(valstr), "%d", vals[R]);
       }
       break;

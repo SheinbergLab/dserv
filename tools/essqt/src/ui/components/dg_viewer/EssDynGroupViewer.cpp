@@ -816,8 +816,8 @@ QString EssDynGroupViewer::formatCellValue(DYN_LIST* dl, int row) const
             return QString::number(vals[row], 'g', 6);
         }
         case DF_CHAR: {
-            char* vals = (char*)DYN_LIST_VALS(dl);
-            return QString::number(vals[row]);
+            unsigned char* vals = (unsigned char*)DYN_LIST_VALS(dl);
+            return QString::number((int) vals[row]);  // bytes are 0..255
         }
         case DF_INT64: {
             int64_t* vals = (int64_t*)DYN_LIST_VALS(dl);
