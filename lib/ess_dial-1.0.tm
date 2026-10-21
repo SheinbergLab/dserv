@@ -252,6 +252,32 @@ namespace eval ess {
     # configuration.
     variable dial_mouse_locked   0
 
+    # MOUSE MODE, per trial (dial_set_mouse_mode), reset to pointer by
+    # dial_init:
+    #
+    #   pointer  the dot goes where the hand is and a click on the ring band
+    #            reports (dial_mouse_sample). The default.
+    #   arc      the catcher is CONSTRAINED to the arc and steered by
+    #            horizontal travel alone, for a hidden pointer (holding
+    #            fixation, say), where an invisible reach to the ring is not
+    #            a task. Crossing half the mouse extent sweeps from the arc
+    #            centre to an arc end, times -mouse_scale.
+    #
+    # Arc mode draws NOTHING when the window opens -- the protocol signals
+    # "the dial is live" its own way. The first movement shows the catcher
+    # at the arc centre, and from then on it moves by the travel since that
+    # first sample. RELATIVE, not absolute: an absolute map puts the catcher
+    # wherever the device cursor happens to sit, so if the arm-time
+    # recentre did not take (it is a fire-and-forget send), the first
+    # movement WARPED the catcher there -- to the last trial's answer. Taken
+    # from the first sample, it cannot. A click before any movement reports
+    # nothing: no catcher has been shown, so nothing has been chosen.
+    variable dial_mouse_mode     pointer
+    # arc mode: device x at the first movement of this window; "" = none yet
+    variable dial_mouse_arc_ref  ""
+    # half the declared horizontal extent, device units (dial_mouse_range)
+    variable dial_mouse_halfspan_x 0.0
+
     # --- dpad source (travelling cursor from a 4-switch d-pad) -----------
     #
     # The SAME four switches as the joystick source, read differently, so
@@ -915,6 +941,7 @@ namespace eval ess {
         variable dial_astick_commit
         variable dial_astick_pub_ms
         variable dial_astick_min_step
+        variable dial_mouse_mode
 
         # defaults on every init, so a protocol that omits an option gets
         # the documented value rather than whatever the previous protocol
@@ -935,6 +962,7 @@ namespace eval ess {
         set dial_radius         0.0
         set dial_ring_tolerance 0.0
         set dial_mouse_scale      1.0
+        set dial_mouse_mode       pointer
         set dial_dpad_rate        8.0
         set dial_dpad_accel       0.0
         set dial_dpad_rate_max    0.0
@@ -1245,6 +1273,22 @@ namespace eval ess {
         dial_pointer_update 0 0 0 0
     }
 
+    # ::ess::dial_set_mouse_mode ?pointer|arc?
+    #
+    # Per trial, like dial_set_arc (see dial_mouse_mode for what the two
+    # mean). Takes effect at the next dial_arm. Called with no argument it
+    # REPORTS the current mode.
+    proc dial_set_mouse_mode { args } {
+        variable dial_mouse_mode
+        if { [llength $args] == 0 } { return $dial_mouse_mode }
+        set mode [lindex $args 0]
+        if { $mode ni {pointer arc} } {
+            error "::ess::dial_set_mouse_mode: mode must be pointer or arc, not '$mode'"
+        }
+        set dial_mouse_mode $mode
+        return $dial_mouse_mode
+    }
+
     # Per-trial geometry. Separate from dial_init because the arc and the
     # ring radius usually come from stimdg and change every trial, while the
     # deadband and source list do not.
@@ -1435,7 +1479,17 @@ namespace eval ess {
             # The ghost clear is not merely deferred, it is UNNECESSARY:
             # ess/cursor is not written by anything now, so there is no
             # second indicator left to take down.
-            dial_pointer_update 0 0 1 0
+            #
+            # Arc mode is the exception: nothing is shown until the first
+            # movement (see dial_mouse_mode), so the one publish HIDES.
+            variable dial_mouse_mode
+            variable dial_mouse_arc_ref; set dial_mouse_arc_ref ""
+            if { $dial_mouse_mode eq "arc" && "mouse" in $dial_sources } {
+                set dial_pointer_shown 0
+                dial_pointer_update 0 0 0 0
+            } else {
+                dial_pointer_update 0 0 1 0
+            }
         }
     }
 
@@ -1710,6 +1764,8 @@ namespace eval ess {
 
         set dial_mouse_cx [expr {($minx + $maxx)/2.0}]
         set dial_mouse_cy [expr {($miny + $maxy)/2.0}]
+        variable dial_mouse_halfspan_x
+        set dial_mouse_halfspan_x [expr {$spanx/2.0}]
 
         # The screen's half-extent in degrees, from the DATAPOINTS ::ess
         # publishes at init. Not $::ess::screen_halfx -- there is no such
@@ -1787,6 +1843,12 @@ namespace eval ess {
         if { $x eq "" || $y eq "" } return
         if { $ev == 2 } return   ;# button-up is not a second response
 
+        variable dial_mouse_mode
+        if { $dial_mouse_mode eq "arc" } {
+            dial_mouse_arc_sample $x $ev
+            return
+        }
+
         # Published y grows DOWNWARD (mouse_reader keeps REL_Y's sense, the
         # same as a touchscreen's ABS_Y), so flip it into the dial's world.
         set px [expr {($x - $dial_mouse_cx)*$dial_mouse_dpp_x}]
@@ -1828,6 +1890,53 @@ namespace eval ess {
             set dial_pointer_band  $band
             set dial_pointer_shown 1
             dial_pointer_update $px $py 1 $band
+        }
+    }
+
+    # Arc mode (see dial_mouse_mode): the catcher rides the arc, steered by
+    # horizontal travel since the window's first movement. Rightward travel
+    # turns it counter-clockwise, which at the bottom of the ring is to the
+    # right; a full sweep from centre to end is half the declared extent
+    # (divided by -mouse_scale). Clamped to the arc ends, so it is always
+    # in band and a click always reports where the catcher is drawn.
+    proc dial_mouse_arc_sample { x ev } {
+        variable dial_mouse_arc_ref
+        variable dial_mouse_halfspan_x
+        variable dial_mouse_scale
+        variable dial_arc_center
+        variable dial_arc_halfwidth
+        variable dial_radius
+        variable dial_pi
+        variable dial_pending
+        variable dial_pointer_x
+        variable dial_pointer_y
+        variable dial_pointer_shown
+        variable dial_pointer_band
+        variable dial_pointer_deadband
+
+        if { $dial_mouse_arc_ref eq "" } {
+            # no catcher yet: a click chooses nothing, a movement engages
+            if { $ev == 0 } return
+            set dial_mouse_arc_ref $x
+        }
+        if { $dial_mouse_halfspan_x <= 0 } return
+        set f [expr {($x - $dial_mouse_arc_ref)*$dial_mouse_scale/$dial_mouse_halfspan_x}]
+        if { $f >  1.0 } { set f  1.0 }
+        if { $f < -1.0 } { set f -1.0 }
+        set angle [dial_norm2pi \
+            [expr {($dial_arc_center + $f*$dial_arc_halfwidth)*$dial_pi/180.0}]]
+
+        if { $ev == 0 } {
+            set dial_pending [list $angle mouse]
+            do_update
+            return
+        }
+        set px [expr {$dial_radius*cos($angle)}]
+        set py [expr {$dial_radius*sin($angle)}]
+        if { !$dial_pointer_shown || $dial_pointer_band != 1 ||
+             abs($px - $dial_pointer_x) > $dial_pointer_deadband ||
+             abs($py - $dial_pointer_y) > $dial_pointer_deadband } {
+            dial_cursor_update $angle 1
         }
     }
 

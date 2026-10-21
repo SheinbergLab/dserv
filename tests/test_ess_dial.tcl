@@ -187,6 +187,47 @@ feed 511 50 3
 check "dot hidden" [pointer] "0.0000,0.0000,0,0"
 check "ess/cursor still never written" [dservExists ess/cursor] 0
 
+puts "\narc mode: hidden at arm, relative from the first movement:"
+::ess::dial_init -sources mouse -ring_tolerance 2.0
+::ess::dial_mouse_range mouse/event/range {0 1023 0 599}
+::ess::dial_set_radius 8.0
+::ess::dial_set_arc 270.0 120.0
+check "pointer mode by default" [::ess::dial_set_mouse_mode] pointer
+check "a bad mode is loud" [catch { ::ess::dial_set_mouse_mode free }] 1
+::ess::dial_set_mouse_mode arc
+::ess::dial_arm
+check "nothing drawn when the window opens" [lindex [split [pointer] ,] 2] 0
+set before $::UPDATES
+feed 1000 300 0                    ;# click before any movement
+check "a click before moving chooses nothing" $::UPDATES $before
+check "nothing pending" [set ::ess::dial_pending] ""
+# the device cursor sits FAR from centre (a recentre that did not take):
+# the first movement must still show the catcher at the arc centre
+feed 1000 300 3
+lassign [split [pointer] ,] px py show band
+check  "first movement shows the catcher" $show 1
+check  "in band" $band 1
+approx "at the arc centre, x" $px 0.0 0.01
+approx "at the arc centre, y" $py -8.0 0.01
+feed 900 300 3                     ;# 100 counts LEFT of the first sample
+lassign [split [pointer] ,] px py show band
+approx_ang "moves by travel: -100/511.5 of the half-arc" \
+    [expr {atan2($py, $px)}] [expr {(270.0 - 120.0*100/511.5)*3.14159265358979/180}]
+feed 0 300 3                       ;# far left: clamped at the arc end
+lassign [split [pointer] ,] px py show band
+approx_ang "clamped to the left end (150 deg)" [expr {atan2($py, $px)}] \
+    [expr {150.0*3.14159265358979/180}]
+feed 0 300 0
+approx_ang "a click reports where the catcher is" [::ess::dial_response] \
+    [expr {150.0*3.14159265358979/180}]
+::ess::dial_arm
+check "the next window is hidden again" [lindex [split [pointer] ,] 2] 0
+feed 200 300 3
+lassign [split [pointer] ,] px py show band
+approx "and re-anchors at its own first movement" $px 0.0 0.01
+::ess::dial_init -sources mouse -ring_tolerance 2.0
+check "dial_init resets to pointer" [::ess::dial_set_mouse_mode] pointer
+
 puts "\nwhy these sources, not just which:"
 ::ess::dial_bind {}                     ;# no rig declaration
 ::ess::dial_init -ring_tolerance 2.0
