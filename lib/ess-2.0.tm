@@ -3504,16 +3504,15 @@ namespace eval ess {
             dservLoggerAddMatch $filename $_ip
         }
 
-        # Screen geometry + timing. These are dservSet once at configure (before
-        # the file opens), so add the match and dservTouch each to re-emit its
-        # current value into THIS file -- offline tools (e.g. the sync audit)
-        # can then read the actual refresh / frame_duration instead of deriving
-        # it, and reconstruct dva geometry.
+        # Screen geometry + timing. Published once at configure, before any
+        # file exists. Subscribe here. The re-emit is after the logger
+        # resumes: a touch while the log is still paused is discarded unless
+        # an obs-limited stream is already subscribed, which is why a
+        # match-to-sample file was losing the half-angles and the refresh.
         foreach _sp {screen_refresh_rate screen_frame_duration \
                      screen_halfx screen_halfy screen_w screen_h} {
             if {[dservExists ess/$_sp]} {
                 dservLoggerAddMatch $filename ess/$_sp
-                dservTouch ess/$_sp
             }
         }
 
@@ -3646,6 +3645,14 @@ namespace eval ess {
 	    dservTouch em/source_active
 	}
 	dservTouch ess/ain/recorded   ;# re-emit into THIS file (set before the match)
+        # Same re-emit for the screen points subscribed above. The logger
+        # is running now, so the touch is stored.
+        foreach _sp {screen_refresh_rate screen_frame_duration \
+                     screen_halfx screen_halfy screen_w screen_h} {
+            if {[dservExists ess/$_sp]} {
+                dservTouch ess/$_sp
+            }
+        }
 	
 	::ess::evt_put TIME OPEN [now] [clock seconds]
         ::ess::evt_put ID ESS [now] $current(system)

@@ -251,23 +251,27 @@ if {[info exists ::dservhost] && $::dservhost ne ""} {
                     reset_frames $wiped show $show]
     }
 
-    # Display period of one observation, in milliseconds. The median gap
-    # between tape times that looks like a single swap. A 60 Hz grid is
-    # the fallback when the tape has no such gap.
-    proc swap_period {recs} {
-        set prev ""
-        set gaps {}
-        foreach rec $recs {
-            set tk [dict get $rec ticks]
-            if {$prev ne ""} {
-                set d [expr {$tk - $prev}]
-                if {$d >= 8.0 && $d <= 40.0} { lappend gaps $d }
+    # Milliseconds between invented redraws. Stim's period is 1000/RefreshRate.
+    # The stored frame duration is that number after a short print and a
+    # 32-bit float, long enough to land a picture on the next movie frame.
+    # Walk 1000/refresh. A file with no refresh uses the movie's 60 Hz grid.
+    proc frame_step {g names ts end} {
+        variable frame_ms
+        set best ""
+        set best_t -1e300
+        set i 0
+        foreach name $names t $ts {
+            if {$name eq "ess/screen_refresh_rate" && $t <= $end && $t >= $best_t} {
+                set raw [lindex [dl_tcllist [dl_get $g:vals $i]] 0]
+                if {[string is double -strict $raw] && $raw > 0} {
+                    set best $raw
+                    set best_t $t
+                }
             }
-            if {$prev eq "" || $tk > $prev} { set prev $tk }
+            incr i
         }
-        if {[llength $gaps] == 0} { return [expr {1000.0 / 60.0}] }
-        set gaps [lsort -real $gaps]
-        return [lindex $gaps [expr {[llength $gaps] / 2}]]
+        if {$best eq ""} { return $frame_ms }
+        return [expr {1000.0 / $best}]
     }
 
     # "setBackground r g b" from one inbox command, or "" when it is not one.
@@ -534,6 +538,7 @@ if {[info exists ::dservhost] && $::dservhost ne ""} {
         file mkdir $work
         set dgbin [file join $work stimdg.bin]
         write_stimdg $g $stimdg_i $dgbin
+        set step_ms [frame_step $g $names $ts $end]
         catch {dg_delete $g}
         set g ""
 
@@ -581,14 +586,18 @@ if {[info exists ::dservhost] && $::dservhost ne ""} {
             if {$t_end < $t_swap} { set t_end $t_swap }
             set t0 [origin_tick $pairs $begin_t $t_first $t_swap]
             set t1 $t_swap
-            # One redraw per original swap. A longer quiet stretch is split
-            # into steps of that same period so the clock never jumps far
-            # enough for an object to throw the step away.
-            set step_ms [swap_period $recs]
+            # One redraw per original swap. A quiet stretch is split into
+            # steps of the monitor period so the clock never jumps far
+            # enough for an object to throw the step away. The times are
+            # start + n * period, the same product as the movie slots. A
+            # running sum on the raw stim tick sits a fraction past that
+            # product, and the picture then waits for the next frame.
             set times [list $t0]
+            set nstep 0
             set T $t0
             while {1} {
-                set next [expr {$T + $step_ms}]
+                incr nstep
+                set next [expr {$t0 + $nstep * $step_ms}]
                 if {$next >= $t1 - 0.5} {
                     if {$t1 > $T + 0.01} { lappend times $t1 }
                     break
@@ -1089,10 +1098,13 @@ if {[info exists ::dservhost] && $::dservhost ne ""} {
     # stimTimeSet from just after `from` through `to`, in steps of step_ms.
     # No picture is captured. A single jump across an interblock is what
     # the clock check rejects, so the seed walks the same period as playback.
+    # Steps are from + n * period, matching the captured grid.
     proc write_clock_steps {fd base base_ticks from to step_ms} {
+        set n 0
         set T $from
         while {1} {
-            set next [expr {$T + $step_ms}]
+            incr n
+            set next [expr {$from + $n * $step_ms}]
             if {$next >= $to - 0.5} {
                 if {$to > $T + 0.01} {
                     set pin [expr {$base + ($to - $base_ticks)}]
