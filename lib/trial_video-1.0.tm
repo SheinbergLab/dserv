@@ -184,23 +184,30 @@ if {[info exists ::dservhost] && $::dservhost ne ""} {
         return $err
     }
 
-    proc emit_record {fd rec} {
+    # The line a record contributes to the replay, and 2 when it is
+    # show_response. An empty line is a record the picture does not eval.
+    proc record_line {rec} {
         set kind [dict get $rec kind]
         set body [dict get $rec body]
         if {$kind eq "cmd"} {
-            if {[string match "omitted *" $body]} { return 0 }
-            puts $fd $body
-            if {[lindex $body 0] eq "show_response"} { return 2 }
-            return 1
+            if {[string match "omitted *" $body]} { return [list "" 0] }
+            set code 1
+            if {[lindex $body 0] eq "show_response"} { set code 2 }
+            return [list $body $code]
         }
         if {$kind eq "ds"} {
             if {$body eq "stimdg" || [string match "stimdg *" $body]} {
-                return 0
+                return [list "" 0]
             }
-            puts $fd [list _tape_ds $body]
-            return 1
+            return [list [list _tape_ds $body] 1]
         }
-        return 0
+        return [list "" 0]
+    }
+
+    proc emit_record {fd rec} {
+        lassign [record_line $rec] line code
+        if {$line ne ""} { puts $fd $line }
+        return $code
     }
 
     proc check_clock {seenfile} {
@@ -395,6 +402,394 @@ if {[info exists ::dservhost] && $::dservhost ne ""} {
         return [dict create missing 0 color $rgb]
     }
 
+    proc add_tcl_step {stepsVar text} {
+        upvar $stepsVar steps
+        lappend steps [dict create kind tcl text $text]
+    }
+
+    proc add_time_step {stepsVar pin clock mark} {
+        upvar $stepsVar steps
+        lappend steps [dict create kind tcl text [list stimTimeSet $pin] \
+                           pin $pin clock $clock mark $mark]
+    }
+
+    # The play.tcl sequence, as steps. A tcl step is eval'd. A capture
+    # step is one redraw, then that picture repeated nrep times so the
+    # file stays 60 fps through ENDOBS. clock 1 marks a pin the playback
+    # check counts. This is the same walk render writes into play.tcl.
+    proc build_replay_steps {recs bg_missing bg_rgb step_ms begin_t end} {
+        variable frame_ms
+        set t_first [dict get [lindex $recs 0] ticks]
+        set t_swap [dict get [lindex $recs end] ticks]
+        set pairs [clock_pairs $recs]
+        set t_end [ticks_at $pairs $end]
+        if {$t_end < $t_swap} { set t_end $t_swap }
+        set t0 [origin_tick $pairs $begin_t $t_first $t_swap]
+        set t1 $t_swap
+        set times [list $t0]
+        set nstep 0
+        set Tcur $t0
+        while {1} {
+            incr nstep
+            set next [expr {$t0 + $nstep * $step_ms}]
+            if {$next >= $t1 - 0.5} {
+                if {$t1 > $Tcur + 0.01} { lappend times $t1 }
+                break
+            }
+            lappend times $next
+            set Tcur $next
+        }
+        set n_native [llength $times]
+        set n_out [expr {int(ceil(($t_end - $t0) / $frame_ms)) + 1}]
+        if {$n_out < 1} { set n_out 1 }
+        set reps {}
+        set out_k 0
+        for {set i 0} {$i < $n_native} {incr i} {
+            if {$i + 1 < $n_native} {
+                set limit [lindex $times [expr {$i + 1}]]
+            } else {
+                set limit [expr {$t1 + $frame_ms}]
+            }
+            set nrep 0
+            while {$out_k < $n_out} {
+                set tk [expr {$t0 + $out_k * $frame_ms}]
+                if {$i + 1 < $n_native && $tk >= $limit} break
+                incr nrep
+                incr out_k
+            }
+            lappend reps $nrep
+        }
+
+        set steps {}
+        add_tcl_step steps "stimPlayback 1"
+        if {$bg_missing} {
+            add_tcl_step steps [list setBackground 0 0 0]
+        } else {
+            add_tcl_step steps [list setBackground {*}$bg_rgb]
+        }
+
+        set rec0 [lindex $recs 0]
+        set base [dict get $rec0 timef]
+        set base_ticks [dict get $rec0 ticks]
+        if {[dict get $rec0 kind] eq "reset"} { set base 0.0 }
+        set show_cmd_time ""
+        set show_pin ""
+        set idx 0
+        set nrec [llength $recs]
+        set stepped ""
+        while {$idx < $nrec} {
+            set rec [lindex $recs $idx]
+            if {[dict get $rec ticks] >= $t0} break
+            set rt [dict get $rec ticks]
+            if {$stepped ne "" && $rt > $stepped + 0.01} {
+                foreach pin [clock_step_pins $base $base_ticks \
+                                 $stepped $rt $step_ms] {
+                    add_time_step steps $pin 0 0
+                }
+            }
+            set base_ticks $rt
+            if {[dict get $rec kind] eq "reset"} {
+                set base 0.0
+            } else {
+                set base [dict get $rec timef]
+            }
+            lassign [record_line $rec] line code
+            if {$line ne ""} { add_tcl_step steps $line }
+            set pin [expr {$base + ($rt - $base_ticks)}]
+            add_time_step steps $pin 0 0
+            set stepped $rt
+            incr idx
+        }
+        if {$stepped ne "" && $t0 > $stepped + 0.01} {
+            foreach pin [clock_step_pins $base $base_ticks \
+                             $stepped $t0 $step_ms] {
+                add_time_step steps $pin 0 0
+            }
+        }
+
+        for {set fi 0} {$fi < $n_native} {incr fi} {
+            set T [lindex $times $fi]
+            set marked 0
+            while {$idx < $nrec} {
+                set rec [lindex $recs $idx]
+                if {[dict get $rec ticks] > $T} break
+                set base_ticks [dict get $rec ticks]
+                if {[dict get $rec kind] eq "reset"} {
+                    set base 0.0
+                } else {
+                    set base [dict get $rec timef]
+                }
+                lassign [record_line $rec] line code
+                if {$line ne ""} { add_tcl_step steps $line }
+                if {$code == 2} {
+                    set marked 1
+                    set show_cmd_time [dict get $rec timef]
+                }
+                incr idx
+            }
+            set pin [expr {$base + ($T - $base_ticks)}]
+            if {$marked} { set show_pin $pin }
+            set nrep [lindex $reps $fi]
+            add_tcl_step steps [list set ::tape_mark $marked]
+            add_time_step steps $pin 1 $marked
+            lappend steps [dict create kind capture nrep $nrep T $T pin $pin]
+        }
+
+        return [dict create steps $steps show_pin $show_pin \
+                    show_tape $show_cmd_time frames $n_native \
+                    output_frames $n_out step_ms $step_ms]
+    }
+
+    # Latest positive number stored for varname at or before end.
+    # Empty when the file has none.
+    proc latest_number {g names ts end varname} {
+        set best ""
+        set best_t -1e300
+        set i 0
+        foreach name $names t $ts {
+            if {$name eq $varname && $t <= $end && $t >= $best_t} {
+                set raw [lindex [dl_tcllist [dl_get $g:vals $i]] 0]
+                if {[string is double -strict $raw] && $raw > 0} {
+                    set best $raw
+                    set best_t $t
+                }
+            }
+            incr i
+        }
+        return $best
+    }
+
+    proc write_replay_json {path built bg bg_missing need width height halfx halfy refresh} {
+        set json [yajl create #auto]
+        $json map_open
+        $json string width number $width
+        $json string height number $height
+        $json string halfx string $halfx
+        $json string halfy string $halfy
+        $json string refresh string $refresh
+        $json string background array_open
+        foreach c $bg { $json string $c }
+        $json array_close
+        $json string background_missing number $bg_missing
+        $json string need array_open
+        foreach n $need { $json string $n }
+        $json array_close
+        $json string step_ms string [dict get $built step_ms]
+        $json string frames number [dict get $built frames]
+        $json string show_pin string [dict get $built show_pin]
+        $json string show_tape string [dict get $built show_tape]
+        $json string steps array_open
+        foreach step [dict get $built steps] {
+            $json map_open
+            if {[dict get $step kind] eq "tcl"} {
+                $json string tcl string [dict get $step text]
+                if {[dict exists $step pin]} {
+                    $json string pin string [dict get $step pin]
+                    $json string clock number [dict get $step clock]
+                    $json string mark number [dict get $step mark]
+                }
+            } else {
+                $json string capture number [dict get $step nrep]
+            }
+            $json map_close
+        }
+        $json array_close
+        $json map_close
+        set text [$json get]
+        $json delete
+        set fd [open $path w]
+        puts -nonewline $fd $text
+        close $fd
+    }
+
+    # Files the browser fetches and plays. No stim process, no fifo.
+    proc replay_bundle {ess_path trial dir} {
+        if {![file exists $ess_path]} {
+            return -code error "trial_video: no such file $ess_path"
+        }
+        if {![string is integer -strict $trial] || $trial < 0} {
+            return -code error "trial_video: trial must be a non-negative integer"
+        }
+
+        catch {dg_delete $ess_path}
+        set g [dslog::read $ess_path]
+        set names [dl_tcllist $g:varname]
+        set ts [dl_tcllist $g:timestamp]
+        if {[lsearch -exact $names stim/inbox] < 0} {
+            catch {dg_delete $g}
+            return -code error "trial_video: no stim/inbox tape in [file tail $ess_path]"
+        }
+
+        set ends {}
+        set begins {}
+        set stimdg_i -1
+        set stimdg_t -1e300
+        set i 0
+        foreach name $names t $ts {
+            if {[string match {evt:19:*} $name]} {
+                lappend begins $t
+            } elseif {[string match {evt:20:*} $name]} {
+                lappend ends $t
+            } elseif {$name eq "stimdg" && $t >= $stimdg_t} {
+                set stimdg_i $i
+                set stimdg_t $t
+            }
+            incr i
+        }
+        if {$trial >= [llength $ends]} {
+            catch {dg_delete $g}
+            return -code error \
+                "trial_video: trial $trial outside 0..[expr {[llength $ends] - 1}]"
+        }
+
+        set start -1e300
+        if {$trial > 0} { set start [lindex $ends [expr {$trial - 1}]] }
+        set end [lindex $ends $trial]
+        set begin_t [begin_logger $begins $start $end]
+
+        set path ""
+        set path_t -1e300
+        set script_body ""
+        set body_t -1e300
+        set i 0
+        foreach name $names t $ts {
+            if {$name eq "ess/stim_script_body" && $t <= $end && $t >= $body_t} {
+                set script_body [lindex [dl_tcllist [dl_get $g:vals $i]] 0]
+                set body_t $t
+            } elseif {$name eq "ess/stim_script_path" && $t <= $end && $t >= $path_t} {
+                set path [lindex [dl_tcllist [dl_get $g:vals $i]] 0]
+                set path_t $t
+            }
+            incr i
+        }
+        if {$script_body eq ""} {
+            if {$path eq ""} {
+                catch {dg_delete $g}
+                return -code error "trial_video: tape has no stim script"
+            }
+            if {![file exists $path]} {
+                catch {dg_delete $g}
+                return -code error "trial_video: stim script not found: $path"
+            }
+        }
+
+        set recs {}
+        set i 0
+        foreach name $names t $ts {
+            if {$name eq "stim/inbox" && $t > $start && $t <= $end} {
+                set rec [parse_inbox [lindex [dl_tcllist [dl_get $g:vals $i]] 0]]
+                dict set rec t $t
+                lappend recs $rec
+            }
+            incr i
+        }
+        if {[llength $recs] == 0} {
+            catch {dg_delete $g}
+            return -code error "trial_video: trial $trial has no stim/inbox records"
+        }
+        set recs [lsort -command {apply {{a b} {
+            set d [expr {[dict get $a seq] - [dict get $b seq]}]
+            expr {$d < 0 ? -1 : $d > 0 ? 1 : 0}
+        }}} $recs]
+
+        set next_t $end
+        foreach rec $recs {
+            if {[dict get $rec kind] eq "cmd" &&
+                [lindex [dict get $rec body] 0] eq "nexttrial"} {
+                set next_t [dict get $rec t]
+                break
+            }
+        }
+        if {$stimdg_i < 0 || $stimdg_t > $next_t} {
+            set stimdg_i -1
+            set stimdg_t -1e300
+            set i 0
+            foreach name $names t $ts {
+                if {$name eq "stimdg" && $t <= $next_t && $t >= $stimdg_t} {
+                    set stimdg_i $i
+                    set stimdg_t $t
+                }
+                incr i
+            }
+        }
+        if {$stimdg_i < 0} {
+            catch {dg_delete $g}
+            return -code error "trial_video: no stimdg at or before trial $trial"
+        }
+
+        set need {}
+        foreach rec $recs {
+            if {[dict get $rec kind] ne "ds"} continue
+            set body [dict get $rec body]
+            if {$body eq "stimdg" || [string match "stimdg *" $body]} continue
+            set pname [lindex $body 0]
+            if {$pname ni $need} { lappend need $pname }
+        }
+
+        if {[catch {set bg_rgb [background_before $g $names $ts $trial]} err]} {
+            catch {dg_delete $g}
+            return -code error $err
+        }
+        set bg_missing [expr {$bg_rgb eq ""}]
+        set width [latest_number $g $names $ts $end ess/screen_w]
+        set height [latest_number $g $names $ts $end ess/screen_h]
+        set halfx [latest_number $g $names $ts $end ess/screen_halfx]
+        set halfy [latest_number $g $names $ts $end ess/screen_halfy]
+        set refresh [latest_number $g $names $ts $end ess/screen_refresh_rate]
+        set step_ms [frame_step $g $names $ts $end]
+        # Files opened before the screen was logged have no ess/screen_*.
+        # The live renderer used the open stim window for those, so the
+        # bundle does the same read and still does not source into stim.
+        if {$width eq "" || $height eq "" || $halfx eq "" || $halfy eq ""} {
+            if {[catch {
+                if {$width eq ""} { set width [stim {return [screen_set WinWidth]}] }
+                if {$height eq ""} { set height [stim {return [screen_set WinHeight]}] }
+                if {$halfx eq ""} { set halfx [stim {return [screen_set HalfScreenDegreeX]}] }
+                if {$halfy eq ""} { set halfy [stim {return [screen_set HalfScreenDegreeY]}] }
+                if {$refresh eq ""} { set refresh [stim {return [screen_set RefreshRate]}] }
+            } stim_err]} {
+                catch {dg_delete $g}
+                return -code error "trial_video: ess has no screen width or height"
+            }
+        }
+        if {$width eq "" || $height eq "" || $halfx eq "" || $halfy eq "" ||
+            ![string is double -strict $width] || ![string is double -strict $height] ||
+            ![string is double -strict $halfx] || ![string is double -strict $halfy]} {
+            catch {dg_delete $g}
+            return -code error "trial_video: ess has no screen width or height"
+        }
+        if {$refresh eq "" || ![string is double -strict $refresh]} { set refresh 60.0 }
+        set step_ms [expr {1000.0 / $refresh}]
+        set width [expr {int($width)}]
+        set height [expr {int($height)}]
+
+        file mkdir $dir
+        set dgbin [file join $dir stimdg.bin]
+        write_stimdg $g $stimdg_i $dgbin
+        catch {dg_delete $g}
+        set g ""
+
+        set stimfile [file join $dir stim.tcl]
+        if {$script_body ne ""} {
+            set fd [open $stimfile w]
+            puts -nonewline $fd $script_body
+            close $fd
+        } else {
+            file copy -force $path $stimfile
+        }
+
+        set built [build_replay_steps $recs $bg_missing $bg_rgb \
+                       $step_ms $begin_t $end]
+        set bg_json $bg_rgb
+        if {$bg_missing} { set bg_json {0 0 0} }
+        write_replay_json [file join $dir replay.json] $built $bg_json \
+            $bg_missing $need $width $height $halfx $halfy $refresh
+        return [dict create \
+                    frames [dict get $built frames] \
+                    background_missing $bg_missing \
+                    width $width height $height]
+    }
+
     proc render {ess_path trial out_mp4} {
         variable frame_ms
         if {![file exists $ess_path]} {
@@ -575,60 +970,11 @@ if {[info exists ::dservhost] && $::dservhost ne ""} {
             set w [expr {int([stim {return [screen_set WinWidth]}])}]
             set h [expr {int([stim {return [screen_set WinHeight]}])}]
 
-            set t_first [dict get [lindex $recs 0] ticks]
-            set t_swap [dict get [lindex $recs end] ticks]
-            # ENDOBS is later than the last swap when the display sits still.
-            # Hold that last picture until the observation ends. Sample times
-            # stay on the swaps, so stim time is not run past the tape.
-            # Time zero is BEGINOBS. nexttrial is earlier, and is only a seed.
-            set pairs [clock_pairs $recs]
-            set t_end [ticks_at $pairs $end]
-            if {$t_end < $t_swap} { set t_end $t_swap }
-            set t0 [origin_tick $pairs $begin_t $t_first $t_swap]
-            set t1 $t_swap
-            # One redraw per original swap. A quiet stretch is split into
-            # steps of the monitor period so the clock never jumps far
-            # enough for an object to throw the step away. The times are
-            # start + n * period, the same product as the movie slots. A
-            # running sum on the raw stim tick sits a fraction past that
-            # product, and the picture then waits for the next frame.
-            set times [list $t0]
-            set nstep 0
-            set T $t0
-            while {1} {
-                incr nstep
-                set next [expr {$t0 + $nstep * $step_ms}]
-                if {$next >= $t1 - 0.5} {
-                    if {$t1 > $T + 0.01} { lappend times $t1 }
-                    break
-                }
-                lappend times $next
-                set T $next
-            }
-            set n_native [llength $times]
-            # The file stays 60 fps. Each captured picture is repeated across
-            # the output slots it covers, so a 50 Hz swap still plays in the
-            # viewer without a second object update. The last picture also
-            # fills every slot through ENDOBS.
-            set n_out [expr {int(ceil(($t_end - $t0) / $frame_ms)) + 1}]
-            if {$n_out < 1} { set n_out 1 }
-            set reps {}
-            set out_k 0
-            for {set i 0} {$i < $n_native} {incr i} {
-                if {$i + 1 < $n_native} {
-                    set limit [lindex $times [expr {$i + 1}]]
-                } else {
-                    set limit [expr {$t1 + $frame_ms}]
-                }
-                set nrep 0
-                while {$out_k < $n_out} {
-                    set tk [expr {$t0 + $out_k * $frame_ms}]
-                    if {$i + 1 < $n_native && $tk >= $limit} break
-                    incr nrep
-                    incr out_k
-                }
-                lappend reps $nrep
-            }
+            set built [build_replay_steps $recs $bg_missing $bg_rgb \
+                           $step_ms $begin_t $end]
+            set n_out [dict get $built output_frames]
+            set show_cmd_time [dict get $built show_tape]
+            set show_pin [dict get $built show_pin]
 
             set seenfile [file join $work clock.txt]
             set ff_log [file join $work ffmpeg.log]
@@ -651,80 +997,17 @@ if {[info exists ::dservhost] && $::dservhost ne ""} {
                 -movflags +faststart $out_mp4 2> $ff_log] w]
             fconfigure $ff -translation binary -blocking 1
 
-            set rec0 [lindex $recs 0]
-            set base [dict get $rec0 timef]
-            set base_ticks [dict get $rec0 ticks]
-            if {[dict get $rec0 kind] eq "reset"} { set base 0.0 }
-            set show_cmd_time ""
-            set show_pin ""
-            set idx 0
-            set nrec [llength $recs]
             set play_path [file join $work play.tcl]
             set play_fd [open $play_path w]
-            puts $play_fd "stimPlayback 1"
-            # The color is the last one the tape set by trial start. Black is
-            # stim's own start, used only when the tape never set one.
-            if {$bg_missing} {
-                puts $play_fd [list setBackground 0 0 0]
-            } else {
-                puts $play_fd [list setBackground {*}$bg_rgb]
-            }
-
-            # Inbox records before BEGINOBS set the scene (background, the
-            # hidden object list). Step the stim clock across that gap so a
-            # long interblock is not one jump, and do not capture it.
-            set stepped ""
-            while {$idx < $nrec} {
-                set rec [lindex $recs $idx]
-                if {[dict get $rec ticks] >= $t0} break
-                set rt [dict get $rec ticks]
-                if {$stepped ne "" && $rt > $stepped + 0.01} {
-                    write_clock_steps $play_fd $base $base_ticks \
-                        $stepped $rt $step_ms
-                }
-                set base_ticks $rt
-                if {[dict get $rec kind] eq "reset"} {
-                    set base 0.0
+            foreach step [dict get $built steps] {
+                if {[dict get $step kind] eq "tcl"} {
+                    puts $play_fd [dict get $step text]
                 } else {
-                    set base [dict get $rec timef]
+                    puts $play_fd "diagShow off"
+                    puts $play_fd [list captureFrame $fifo [dict get $step nrep]]
+                    puts $play_fd [list _tape_seen $seenfile \
+                                       [dict get $step T] [dict get $step pin]]
                 }
-                emit_record $play_fd $rec
-                set pin [expr {$base + ($rt - $base_ticks)}]
-                puts $play_fd [list stimTimeSet $pin]
-                set stepped $rt
-                incr idx
-            }
-            if {$stepped ne "" && $t0 > $stepped + 0.01} {
-                write_clock_steps $play_fd $base $base_ticks \
-                    $stepped $t0 $step_ms
-            }
-
-            for {set fi 0} {$fi < $n_native} {incr fi} {
-                set T [lindex $times $fi]
-                set marked 0
-                while {$idx < $nrec} {
-                    set rec [lindex $recs $idx]
-                    if {[dict get $rec ticks] > $T} break
-                    set base_ticks [dict get $rec ticks]
-                    if {[dict get $rec kind] eq "reset"} {
-                        set base 0.0
-                    } else {
-                        set base [dict get $rec timef]
-                    }
-                    if {[emit_record $play_fd $rec] == 2} {
-                        set marked 1
-                        set show_cmd_time [dict get $rec timef]
-                    }
-                    incr idx
-                }
-                set pin [expr {$base + ($T - $base_ticks)}]
-                if {$marked} { set show_pin $pin }
-                set nrep [lindex $reps $fi]
-                puts $play_fd [list set ::tape_mark $marked]
-                puts $play_fd [list stimTimeSet $pin]
-                puts $play_fd "diagShow off"
-                puts $play_fd [list captureFrame $fifo $nrep]
-                puts $play_fd [list _tape_seen $seenfile $T $pin]
             }
             close $play_fd
             stim_run $play_path
@@ -822,7 +1105,8 @@ if {[info exists ::dservhost] && $::dservhost ne ""} {
             return -code error "trial_video: ffprobe: $out"
         }
         set out [string trim $out]
-        if {![regexp {^(\d+),(\d+)$} $out -> w h]} {
+        # JPEG sources add an ICC side-data field, so ffprobe prints "1280,800,".
+        if {![regexp {^(\d+),(\d+),?$} $out -> w h]} {
             return -code error "trial_video: bad video size '$out'"
         }
         return [list $w $h]
@@ -1095,11 +1379,12 @@ if {[info exists ::dservhost] && $::dservhost ne ""} {
         return $t_begin
     }
 
-    # stimTimeSet from just after `from` through `to`, in steps of step_ms.
-    # No picture is captured. A single jump across an interblock is what
-    # the clock check rejects, so the seed walks the same period as playback.
-    # Steps are from + n * period, matching the captured grid.
-    proc write_clock_steps {fd base base_ticks from to step_ms} {
+    # stimTimeSet pins from just after `from` through `to`, in steps of
+    # step_ms. No picture is captured. A single jump across an interblock
+    # is what the clock check rejects, so the seed walks the same period
+    # as playback. Steps are from + n * period, matching the captured grid.
+    proc clock_step_pins {base base_ticks from to step_ms} {
+        set pins {}
         set n 0
         set T $from
         while {1} {
@@ -1107,14 +1392,18 @@ if {[info exists ::dservhost] && $::dservhost ne ""} {
             set next [expr {$from + $n * $step_ms}]
             if {$next >= $to - 0.5} {
                 if {$to > $T + 0.01} {
-                    set pin [expr {$base + ($to - $base_ticks)}]
-                    puts $fd [list stimTimeSet $pin]
+                    lappend pins [expr {$base + ($to - $base_ticks)}]
                 }
-                return
+                return $pins
             }
-            set pin [expr {$base + ($next - $base_ticks)}]
-            puts $fd [list stimTimeSet $pin]
+            lappend pins [expr {$base + ($next - $base_ticks)}]
             set T $next
+        }
+    }
+
+    proc write_clock_steps {fd base base_ticks from to step_ms} {
+        foreach pin [clock_step_pins $base $base_ticks $from $to $step_ms] {
+            puts $fd [list stimTimeSet $pin]
         }
     }
 

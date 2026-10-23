@@ -660,6 +660,48 @@ async function reloadSelectedTask(onReload) {
     return true;
 }
 
+function bytesToBase64(bytes) {
+    let s = '';
+    const step = 0x8000;
+    for (let i = 0; i < bytes.length; i += step) {
+        s += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + step, bytes.length)));
+    }
+    return btoa(s);
+}
+
+async function dfOk(cmd, timeoutMs) {
+    const raw = await dfEval(cmd, timeoutMs);
+    const data = JSON.parse(raw);
+    if (data.status !== 'ok') {
+        throw new Error(data.error || 'Render failed');
+    }
+    return data;
+}
+
+async function saveMp4(filename, trial, mp4, info) {
+    const name = '{' + filename + '}';
+    await dfOk('trial_video_save_begin ' + name + ' ' + trial, 60000);
+    const raw = mp4 instanceof Uint8Array ? mp4 : new Uint8Array(mp4);
+    const size = 18000;
+    try {
+        for (let i = 0; i < raw.length; i += size) {
+            const part = bytesToBase64(raw.subarray(i, i + size));
+            await dfOk('trial_video_save_chunk ' + name + ' ' + trial + ' {' + part + '}', 60000);
+        }
+        return await dfOk(
+            'trial_video_save_finish ' + name + ' ' + trial + ' ' +
+            info.frames + ' ' + info.background_missing + ' ' +
+            info.clock_held + ' ' + info.reset_frames,
+            60000
+        );
+    } catch (e) {
+        try {
+            await dfEval('trial_video_save_cancel ' + name + ' ' + trial, 30000);
+        } catch (err) {}
+        throw e;
+    }
+}
+
 async function createVideo() {
     const file = selectedFile();
     const trial = document.getElementById('trial').value;
@@ -670,49 +712,80 @@ async function createVideo() {
         setMessage(e.message, true);
         return;
     }
-    let status = '';
-    try {
-        status = await essValue('ess/status');
-    } catch (e) {
-        setMessage(e.message, true);
-        return;
-    }
-    if (status === 'loading') {
-        setMessage('The system is still loading.', true);
-        return;
-    }
-    if (status === 'running') {
-        const stop = await askToStopTask();
-        if (!stop) return;
-    }
     creating = true;
     syncButtons();
-    setMessage('Rendering trial ' + trial + '. This holds stim2 until the trial finishes.');
+    setMessage('Rendering trial ' + trial + '.');
+    let jpeg = false;
+    const jpegName = '{' + file.filename + '}';
     try {
-        if (status === 'running') {
-            await connection.evalAsync('send ess {ess::stop}', 60000);
-        }
-        const raw = await dfEval(
-            'trial_video_make {' + file.filename + '} ' + trial,
-            600000
+        const spec = await dfOk(
+            'trial_video_replay {' + file.filename + '} ' + trial,
+            120000
         );
-        const data = JSON.parse(raw);
-        if (data.status !== 'ok') {
-            throw new Error(data.error || 'Render failed');
+        const stamp = Date.now();
+        const replayResp = await fetch('/' + spec.replay + '?v=' + stamp);
+        if (!replayResp.ok) throw new Error('Could not load the replay');
+        const replay = await replayResp.json();
+        const stimResp = await fetch('/' + spec.stim + '?v=' + stamp);
+        if (!stimResp.ok) throw new Error('Could not load the stim script');
+        const stimText = await stimResp.text();
+        const dgResp = await fetch('/' + spec.stimdg + '?v=' + stamp);
+        if (!dgResp.ok) throw new Error('Could not load stimdg');
+        const info = {
+            frames: 0,
+            background_missing: Number(replay.background_missing) ? 1 : 0,
+            clock_held: 0,
+            reset_frames: 0
+        };
+        const name = jpegName;
+        const made = await TrialWasm.render({
+            replay: replay,
+            stimText: stimText,
+            stimdg: new Uint8Array(await dgResp.arrayBuffer()),
+            onProgress: function (i, n) {
+                setMessage('Rendering trial ' + trial + '. ' + i + ' / ' + n);
+            },
+            saveFrame: async function (bytes, nrep) {
+                if (!jpeg) {
+                    await dfOk(
+                        'trial_video_jpeg_begin ' + name + ' ' + trial + ' ' +
+                        replay.width + ' ' + replay.height,
+                        60000
+                    );
+                    jpeg = true;
+                }
+                await dfOk(
+                    'trial_video_jpeg_frame ' + name + ' ' + trial + ' ' + nrep +
+                    ' {' + bytesToBase64(bytes) + '}',
+                    60000
+                );
+            }
+        });
+        info.frames = made.frames;
+        info.clock_held = made.clock_held;
+        info.reset_frames = made.reset_frames;
+        let saved;
+        if (made.server) {
+            saved = await dfOk(
+                'trial_video_jpeg_finish ' + name + ' ' + trial + ' ' +
+                info.frames + ' ' + info.background_missing + ' ' +
+                info.clock_held + ' ' + info.reset_frames,
+                600000
+            );
+            jpeg = false;
+        } else {
+            saved = await saveMp4(file.filename, trial, made.mp4, info);
         }
         await loadVideos();
-        backgroundMissing = Number(data.background_missing) === 1;
+        backgroundMissing = Number(replay.background_missing) === 1;
         backgroundKey = file.filename + '#' + trial;
-        const wrote = 'Wrote ' + (data.path || ('trial_' + trial + '.mp4'));
-        try {
-            const restored = await reloadSelectedTask(function () {
-                setMessage('Restoring the selected task.');
-            });
-            setMessage(restored ? wrote + '. Reloaded the selected task.' : wrote);
-        } catch (e) {
-            setMessage(wrote + '. The selected task was not restored. ' + e.message, true);
-        }
+        setMessage('Wrote ' + (saved.path || ('trial_' + trial + '.mp4')));
     } catch (e) {
+        if (jpeg) {
+            try {
+                await dfEval('trial_video_jpeg_cancel ' + jpegName + ' ' + trial, 30000);
+            } catch (err) {}
+        }
         setMessage(e.message, true);
     } finally {
         creating = false;

@@ -259,6 +259,273 @@ proc trial_video_make {filename trial} {
     return [_json_ok $ok]
 }
 
+# Source the package again so a long-lived df sees new procs.
+proc trial_video_reload {} {
+    set candidates [list /home/lab/systems/dserv/lib/trial_video-1.0.tm]
+    global dspath
+    if {[info exists dspath] && $dspath ne ""} {
+        lappend candidates [file join $dspath lib trial_video-1.0.tm]
+    }
+    foreach path $candidates {
+        if {[file exists $path]} {
+            source $path
+            return
+        }
+    }
+    error "trial_video package not found"
+}
+
+# Write the replay files and return their URLs. Does not use stim2.
+proc trial_video_replay {filename trial} {
+    set root [trial_video_export_root]
+    if {$root eq ""} {
+        return [_json_error "Export is not configured"]
+    }
+    if {![string is integer -strict $trial] || $trial < 0} {
+        return [_json_error "trial must be a non-negative integer"]
+    }
+    set filepath [dfdb eval {SELECT filepath FROM datafiles WHERE filename = $filename}]
+    if {$filepath eq "" || ![file exists $filepath]} {
+        return [_json_error "No datafile $filename"]
+    }
+    set link_err [trial_video_ensure_link $root]
+    if {$link_err ne ""} {
+        return $link_err
+    }
+    if {[catch {trial_video_reload} load_err]} {
+        return [_json_error $load_err]
+    }
+
+    set base [trial_video_basename $filename]
+    set dir [file join $root $base _replay]
+    file delete -force $dir
+    file mkdir $dir
+    if {[catch {set info [::trial_video::replay_bundle $filepath $trial $dir]} err]} {
+        catch {file delete -force $dir}
+        return [_json_error $err]
+    }
+    set ok [dict create \
+                replay "trial_video/$base/_replay/replay.json" \
+                stim "trial_video/$base/_replay/stim.tcl" \
+                stimdg "trial_video/$base/_replay/stimdg.bin" \
+                frames [dict get $info frames] \
+                background_missing [dict get $info background_missing] \
+                width [dict get $info width] \
+                height [dict get $info height]]
+    return [_json_ok $ok]
+}
+
+proc trial_video_save_path {filename trial} {
+    set root [trial_video_export_root]
+    if {$root eq ""} {
+        return -code error "Export is not configured"
+    }
+    if {![string is integer -strict $trial] || $trial < 0} {
+        return -code error "trial must be a non-negative integer"
+    }
+    set base [trial_video_basename $filename]
+    set dir [file join $root $base]
+    file mkdir $dir
+    return [file join $dir trial_${trial}.mp4]
+}
+
+# Start a chunked write of trial_N.mp4. A previous bake of this trial,
+# including layered copies, is removed.
+proc trial_video_save_begin {filename trial} {
+    if {[catch {set path [trial_video_save_path $filename trial]} err]} {
+        return [_json_error $err]
+    }
+    if {[catch {trial_video_reload} load_err]} {
+        return [_json_error $load_err]
+    }
+    set link_err [trial_video_ensure_link [trial_video_export_root]]
+    if {$link_err ne ""} {
+        return $link_err
+    }
+    ::trial_video::forget_layered $path
+    catch {file delete -force $path}
+    if {[info exists ::trial_video_save_fd] && $::trial_video_save_fd ne ""} {
+        catch {close $::trial_video_save_fd}
+    }
+    set ::trial_video_save_fd [open $path wb]
+    fconfigure $::trial_video_save_fd -translation binary
+    set ::trial_video_save_path $path
+    return [_json_ok [dict create path $path]]
+}
+
+proc trial_video_save_chunk {filename trial data} {
+    if {![info exists ::trial_video_save_fd] || $::trial_video_save_fd eq ""} {
+        return [_json_error "no save in progress"]
+    }
+    if {[catch {puts -nonewline $::trial_video_save_fd [binary decode base64 $data]} err]} {
+        return [_json_error $err]
+    }
+    return [_json_ok [dict create]]
+}
+
+proc trial_video_save_cancel {filename trial} {
+    if {[info exists ::trial_video_save_fd] && $::trial_video_save_fd ne ""} {
+        catch {close $::trial_video_save_fd}
+    }
+    set ::trial_video_save_fd ""
+    if {[info exists ::trial_video_save_path] && $::trial_video_save_path ne ""} {
+        catch {file delete -force $::trial_video_save_path}
+    }
+    set ::trial_video_save_path ""
+    return [_json_ok [dict create]]
+}
+
+# Browsers on plain HTTP have no VideoEncoder. They upload one JPEG per
+# picture and ffmpeg writes the same mp4 the WebCodecs path would.
+proc trial_video_jpeg_begin {filename trial w h} {
+    if {[catch {set path [trial_video_save_path $filename $trial]} err]} {
+        return [_json_error $err]
+    }
+    if {![string is integer -strict $w] || $w < 1 ||
+        ![string is integer -strict $h] || $h < 1} {
+        return [_json_error "bad frame size"]
+    }
+    set dir [file join [file dirname $path] _jpeg]
+    file delete -force $dir
+    file mkdir $dir
+    if {[info exists ::tv_jpeg_fd] && $::tv_jpeg_fd ne ""} {
+        catch {close $::tv_jpeg_fd}
+    }
+    set ::tv_jpeg_dir $dir
+    set ::tv_jpeg_out $path
+    set ::tv_jpeg_index 0
+    set ::tv_jpeg_fd ""
+    return [_json_ok [dict create path $path]]
+}
+
+proc trial_video_jpeg_frame {filename trial nrep data} {
+    if {![info exists ::tv_jpeg_dir] || $::tv_jpeg_dir eq ""} {
+        return [_json_error "no jpeg encode in progress"]
+    }
+    if {![string is integer -strict $nrep] || $nrep < 1} {
+        return [_json_error "nrep must be a positive integer"]
+    }
+    if {[catch {set bytes [binary decode base64 $data]} err]} {
+        return [_json_error $err]
+    }
+    set first $::tv_jpeg_index
+    set path [file join $::tv_jpeg_dir [format frame_%06d.jpg $first]]
+    set fd [open $path wb]
+    fconfigure $fd -translation binary
+    puts -nonewline $fd $bytes
+    close $fd
+    for {set k 1} {$k < $nrep} {incr k} {
+        file copy -force $path [file join $::tv_jpeg_dir \
+            [format frame_%06d.jpg [expr {$first + $k}]]]
+    }
+    incr ::tv_jpeg_index $nrep
+    return [_json_ok [dict create n $::tv_jpeg_index]]
+}
+
+proc trial_video_jpeg_cancel {filename trial} {
+    if {[info exists ::tv_jpeg_fd] && $::tv_jpeg_fd ne ""} {
+        catch {close $::tv_jpeg_fd}
+    }
+    set ::tv_jpeg_fd ""
+    if {[info exists ::tv_jpeg_dir] && $::tv_jpeg_dir ne ""} {
+        catch {file delete -force $::tv_jpeg_dir}
+    }
+    set ::tv_jpeg_dir ""
+    if {[info exists ::tv_jpeg_out] && $::tv_jpeg_out ne ""} {
+        catch {file delete -force $::tv_jpeg_out}
+    }
+    set ::tv_jpeg_out ""
+    set ::tv_jpeg_index 0
+    return [_json_ok [dict create]]
+}
+
+proc trial_video_jpeg_finish {filename trial frames background_missing clock_held reset_frames} {
+    if {![string is integer -strict $frames] || $frames < 1} {
+        return [_json_error "frames must be a positive integer"]
+    }
+    foreach n [list $background_missing $clock_held $reset_frames] {
+        if {![string is integer -strict $n] || $n < 0} {
+            return [_json_error "save counters must be non-negative integers"]
+        }
+    }
+    if {![info exists ::tv_jpeg_dir] || $::tv_jpeg_dir eq "" ||
+        ![info exists ::tv_jpeg_out] || $::tv_jpeg_out eq ""} {
+        return [_json_error "no jpeg encode in progress"]
+    }
+    if {[catch {trial_video_reload} load_err]} {
+        return [_json_error $load_err]
+    }
+    set dir $::tv_jpeg_dir
+    set out $::tv_jpeg_out
+    ::trial_video::forget_layered $out
+    catch {file delete -force $out}
+    set log [file join $dir ffmpeg.log]
+    set pattern [file join $dir frame_%06d.jpg]
+    if {[catch {
+        exec ffmpeg -y -loglevel error -framerate 60 -start_number 0 -i $pattern \
+            -c:v libx264 -pix_fmt yuv420p \
+            -bf 0 -g 60 -keyint_min 60 -sc_threshold 0 \
+            -use_editlist 0 -movie_timescale 15360 \
+            -movflags +faststart $out 2> $log
+    } err]} {
+        set detail $err
+        if {[file exists $log]} {
+            catch {
+                set fd [open $log r]
+                set detail "$err\n[read $fd]"
+                close $fd
+            }
+        }
+        catch {file delete -force $out}
+        return [_json_error $detail]
+    }
+    file delete -force $dir
+    set ::tv_jpeg_dir ""
+    set ::tv_jpeg_out ""
+    set ::tv_jpeg_index 0
+    set base [trial_video_basename $filename]
+    set ok [dict create \
+                path $out \
+                url "trial_video/$base/trial_${trial}.mp4" \
+                trial $trial \
+                frames $frames \
+                clock_held $clock_held \
+                reset_frames $reset_frames \
+                background_missing $background_missing]
+    return [_json_ok $ok]
+}
+
+# Close the mp4 and return the same object trial_video_make returns.
+proc trial_video_save_finish {filename trial frames background_missing clock_held reset_frames} {
+    if {![string is integer -strict $frames] || $frames < 1} {
+        return [_json_error "frames must be a positive integer"]
+    }
+    foreach n [list $background_missing $clock_held $reset_frames] {
+        if {![string is integer -strict $n] || $n < 0} {
+            return [_json_error "save counters must be non-negative integers"]
+        }
+    }
+    if {![info exists ::trial_video_save_fd] || $::trial_video_save_fd eq ""} {
+        return [_json_error "no save in progress"]
+    }
+    if {[catch {close $::trial_video_save_fd} err]} {
+        set ::trial_video_save_fd ""
+        return [_json_error $err]
+    }
+    set ::trial_video_save_fd ""
+    set path $::trial_video_save_path
+    set base [trial_video_basename $filename]
+    set ok [dict create \
+                path $path \
+                url "trial_video/$base/trial_${trial}.mp4" \
+                trial $trial \
+                frames $frames \
+                clock_held $clock_held \
+                reset_frames $reset_frames \
+                background_missing $background_missing]
+    return [_json_ok $ok]
+}
+
 # Whether the tape set a background by the start of this trial.
 # missing 1 means the capture starts from black and the viewer says so.
 proc trial_video_background {filename trial} {
