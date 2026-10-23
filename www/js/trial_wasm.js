@@ -14,10 +14,8 @@
   let gl = null;
   let shapeMod = null;
   let starting = null;
-  let encodeMod = null;
-  let encodeStarting = null;
-  let rgbaPtr = 0;
-  let rgbaCap = 0;
+  let pool = null;
+  let poolStarting = null;
   let rgbaScratch = null;
   let present = function () {};
   let dropShapeTextures = function () {};
@@ -239,45 +237,224 @@ void main() { o = texture(u, v) * uOpacity; }`));
     });
   }
 
-  function ensureEncoder() {
-    if (encodeMod) return Promise.resolve(true);
-    if (encodeStarting) return encodeStarting;
-    encodeStarting = (async function () {
-      if (typeof createTrialEncode !== "function") {
-        await loadScript("trial_encode.js?v=20261023c");
-      }
-      encodeMod = await createTrialEncode({
-        locateFile: function (path) { return path + "?v=20261023c"; }
-      });
-      return true;
-    })();
-    return encodeStarting.catch(function () {
-      encodeStarting = null;
-      encodeMod = null;
-      return false;
-    });
+  const ENCODE_REV = "20261023e";
+  const CHUNK_FRAMES = 60;
+  let msgId = 0;
+
+  function workerCount() {
+    const cores = (navigator.hardwareConcurrency || 4) - 1;
+    return Math.max(2, Math.min(4, cores));
   }
 
-  function encError() {
-    const ptr = encodeMod._enc_error();
-    if (!ptr) return "";
-    const mem = encodeMod.HEAPU8;
-    let s = "";
-    for (let i = ptr; mem[i]; i++) s += String.fromCharCode(mem[i]);
-    return s;
+  function sameBytes(a, b) {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+    return true;
+  }
+
+  function EncoderPool(count) {
+    this.count = count;
+    this.slots = [];
+    this.idle = [];
+    this.waiters = [];
+    this.jobs = [];
+    this.current = null;
+    this.chunkSeq = 0;
+    this.description = null;
+    this.w = 0;
+    this.h = 0;
+    this.preset = 0;
+    this.dead = null;
+  }
+
+  EncoderPool.prototype.start = function () {
+    const scriptUrl = new URL("trial_encode.js?v=" + ENCODE_REV, location.href).href;
+    const wasmUrl = new URL("trial_encode.wasm?v=20261023c", location.href).href;
+    const workerUrl = new URL("js/trial_encode_worker.js?v=" + ENCODE_REV, location.href).href;
+    const ready = [];
+    for (let i = 0; i < this.count; i++) {
+      ready.push(new Promise(function (resolve, reject) {
+        const worker = new Worker(workerUrl);
+        const slot = { worker: worker, pending: new Map(), failed: null };
+        worker.onmessage = function (ev) {
+          const msg = ev.data || {};
+          if (msg.type === "error") {
+            const err = new Error(msg.error || "encoder failed");
+            slot.failed = err;
+            slot.pending.forEach(function (op) { op.reject(err); });
+            slot.pending.clear();
+            reject(err);
+            return;
+          }
+          if (msg.type === "ready") {
+            resolve(slot);
+            return;
+          }
+          const op = slot.pending.get(msg.id);
+          if (!op) return;
+          slot.pending.delete(msg.id);
+          op.resolve(msg);
+        };
+        worker.onerror = function () {
+          const err = new Error("encoder worker failed to load");
+          slot.failed = err;
+          slot.pending.forEach(function (op) { op.reject(err); });
+          slot.pending.clear();
+          reject(err);
+        };
+        slot.call = function (msg, transfers) {
+          if (slot.failed) return Promise.reject(slot.failed);
+          return new Promise(function (resolveCall, rejectCall) {
+            msg.id = ++msgId;
+            slot.pending.set(msg.id, { resolve: resolveCall, reject: rejectCall });
+            worker.postMessage(msg, transfers || []);
+          });
+        };
+        worker.postMessage({
+          type: "init",
+          id: ++msgId,
+          scriptUrl: scriptUrl,
+          wasmUrl: wasmUrl
+        });
+      }));
+    }
+    const poolRef = this;
+    return Promise.all(ready).then(function (slots) {
+      poolRef.slots = slots;
+      poolRef.idle = slots.slice();
+      return true;
+    });
+  };
+
+  EncoderPool.prototype.kill = function () {
+    for (let i = 0; i < this.slots.length; i++) {
+      try { this.slots[i].worker.terminate(); } catch (e) { /* already gone */ }
+    }
+    this.slots = [];
+    this.idle = [];
+    this.waiters = [];
+    this.current = null;
+    this.dead = new Error("encoder stopped");
+  };
+
+  EncoderPool.prototype.configure = function (w, h, preset) {
+    this.w = w;
+    this.h = h;
+    this.preset = preset;
+    this.jobs = [];
+    this.current = null;
+    this.description = null;
+    this.chunkSeq = 0;
+    this.dead = null;
+  };
+
+  EncoderPool.prototype.acquire = function () {
+    if (this.dead) return Promise.reject(this.dead);
+    if (this.idle.length) return Promise.resolve(this.idle.pop());
+    const poolRef = this;
+    return new Promise(function (resolve, reject) {
+      poolRef.waiters.push({ resolve: resolve, reject: reject });
+    });
+  };
+
+  EncoderPool.prototype.release = function (slot) {
+    if (this.dead || slot.failed) return;
+    if (this.waiters.length) this.waiters.shift().resolve(slot);
+    else this.idle.push(slot);
+  };
+
+  EncoderPool.prototype.fail = function (err) {
+    if (this.dead) return;
+    this.dead = err;
+    while (this.waiters.length) this.waiters.shift().reject(err);
+  };
+
+  EncoderPool.prototype.seal = function (chunk) {
+    const poolRef = this;
+    const job = chunk.slot.call({ type: "flush" }).then(function (msg) {
+      const samples = [];
+      const raw = msg.samples || [];
+      for (let i = 0; i < raw.length; i++) {
+        samples.push({
+          data: new Uint8Array(raw[i].data),
+          key: !!raw[i].key,
+          dur: raw[i].dur
+        });
+      }
+      if (!samples.length || !samples[0].key) {
+        throw new Error("encoder chunk did not start on a keyframe");
+      }
+      poolRef.release(chunk.slot);
+      return { seq: chunk.seq, samples: samples };
+    }, function (err) {
+      poolRef.fail(err);
+      throw err;
+    });
+    this.jobs.push(job);
+    this.current = null;
+  };
+
+  EncoderPool.prototype.submit = async function (buffer, dur) {
+    if (this.dead) throw this.dead;
+    if (this.current && this.current.displayFrames > 0 &&
+        this.current.displayFrames + dur > CHUNK_FRAMES) {
+      this.seal(this.current);
+    }
+    if (!this.current) {
+      const slot = await this.acquire();
+      if (slot.failed) throw slot.failed;
+      const opened = await slot.call({
+        type: "open", w: this.w, h: this.h, preset: this.preset
+      });
+      const header = new Uint8Array(opened.description);
+      if (!this.description) this.description = new Uint8Array(header);
+      else if (!sameBytes(this.description, header)) {
+        throw new Error("encoders disagreed on the video header");
+      }
+      this.current = { slot: slot, displayFrames: 0, seq: this.chunkSeq++ };
+    }
+    this.current.displayFrames += dur;
+    this.current.slot.worker.postMessage(
+      { type: "frame", id: ++msgId, buffer: buffer, dur: dur },
+      [buffer]
+    );
+    if (this.current.displayFrames >= CHUNK_FRAMES) this.seal(this.current);
+  };
+
+  EncoderPool.prototype.finish = async function () {
+    if (this.current) this.seal(this.current);
+    const parts = await Promise.all(this.jobs);
+    parts.sort(function (a, b) { return a.seq - b.seq; });
+    const samples = [];
+    for (let i = 0; i < parts.length; i++) {
+      for (let j = 0; j < parts[i].samples.length; j++) samples.push(parts[i].samples[j]);
+    }
+    return { samples: samples, description: this.description };
+  };
+
+  function ensureEncoder() {
+    if (pool && !pool.dead) return Promise.resolve(true);
+    if (pool && pool.dead) {
+      pool.kill();
+      pool = null;
+      poolStarting = null;
+    }
+    if (poolStarting) return poolStarting;
+    const created = new EncoderPool(workerCount());
+    poolStarting = created.start().then(function () {
+      pool = created;
+      return true;
+    }).catch(function () {
+      created.kill();
+      pool = null;
+      poolStarting = null;
+      return false;
+    });
+    return poolStarting;
   }
 
   function moviePreset(script) {
     return /\b(?:videoInfo|videoPause|videoRepeat|videoHide|videoSeek|videoEofCallback|videoGrayscale|videoBrightness|videoContrast|videoGamma|videoOpacity|videoColorGains|videoInvert|videoThreshold|videoMask|videoAudio|video)\b/.test(String(script || "")) ? 1 : 0;
-  }
-
-  function takeSample(samples, dur) {
-    const n = encodeMod._enc_sample_size();
-    const p = encodeMod._enc_sample();
-    if (!p || n < 1) throw new Error(encError() || "encoder returned an empty frame");
-    const data = new Uint8Array(n);
-    data.set(encodeMod.HEAPU8.subarray(p, p + n));
-    samples.push({ data: data, key: encodeMod._enc_sample_key() !== 0, dur: dur });
   }
 
   function clockOnly(tcl) {
@@ -289,31 +466,6 @@ void main() { o = texture(u, v) * uOpacity; }`));
     const nbytes = screenW * screenH * 4;
     if (!rgbaScratch || rgbaScratch.length !== nbytes) rgbaScratch = new Uint8Array(nbytes);
     gl.readPixels(0, 0, screenW, screenH, gl.RGBA, gl.UNSIGNED_BYTE, rgbaScratch);
-    if (rgbaCap < nbytes) {
-      if (rgbaPtr) encodeMod._free(rgbaPtr);
-      rgbaPtr = encodeMod._malloc(nbytes);
-      rgbaCap = rgbaPtr ? nbytes : 0;
-    }
-    if (!rgbaPtr) throw new Error("encoder is out of memory");
-    encodeMod.HEAPU8.set(rgbaScratch, rgbaPtr);
-  }
-
-  function feedFrame(samples, holds, nrep) {
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    const nbytes = screenW * screenH * 4;
-    if (!rgbaScratch || rgbaScratch.length !== nbytes) rgbaScratch = new Uint8Array(nbytes);
-    gl.readPixels(0, 0, screenW, screenH, gl.RGBA, gl.UNSIGNED_BYTE, rgbaScratch);
-    if (rgbaCap < nbytes) {
-      if (rgbaPtr) encodeMod._free(rgbaPtr);
-      rgbaPtr = encodeMod._malloc(nbytes);
-      rgbaCap = rgbaPtr ? nbytes : 0;
-    }
-    if (!rgbaPtr) throw new Error("encoder is out of memory");
-    encodeMod.HEAPU8.set(rgbaScratch, rgbaPtr);
-    holds.push(nrep);
-    const ready = encodeMod._enc_rgba(rgbaPtr, nrep);
-    if (ready < 0) throw new Error(encError() || "encode failed");
-    if (ready === 1) takeSample(samples, holds.shift());
   }
 
   function cString(text) {
@@ -612,18 +764,8 @@ void main() { o = texture(u, v) * uOpacity; }`));
     if (showPin != null && showTape != null && Math.abs(showPin - showTape) > stepMs + 1) {
       throw new Error("show_response pin " + showPin + " is more than a frame from tape time " + showTape);
     }
-    encodeMod._enc_close();
-    if (encodeMod._enc_open(screenW, screenH, moviePreset(stimText)) !== 0) {
-      throw new Error(encError() || "encoder failed to open");
-    }
-    const avccN = encodeMod._enc_avcc_size();
-    const avccP = encodeMod._enc_avcc();
-    if (!avccP || avccN < 8) throw new Error(encError() || "encoder did not return avcC");
-    const description = new Uint8Array(avccN);
-    description.set(encodeMod.HEAPU8.subarray(avccP, avccP + avccN));
+    pool.configure(screenW, screenH, moviePreset(stimText));
 
-    const samples = [];
-    const holds = [];
     let held = 0;
     let wiped = 0;
     let captures = 0;
@@ -633,17 +775,16 @@ void main() { o = texture(u, v) * uOpacity; }`));
     const total = Number(replay.frames) || replay.steps.length;
     const steps = replay.steps;
 
-    function submitHold(hold) {
-      holds.push(hold);
-      const ready = encodeMod._enc_rgba(rgbaPtr, hold);
-      if (ready < 0) throw new Error(encError() || "encode failed");
-      if (ready === 1) takeSample(samples, holds.shift());
+    async function submitHold(hold) {
+      const copy = new Uint8Array(rgbaScratch);
+      await pool.submit(copy.buffer, hold);
     }
 
-    function flushRun() {
+    async function flushRun() {
       if (!run) return;
-      submitHold(run.hold);
+      const hold = run.hold;
       run = null;
+      await submitHold(hold);
     }
 
     function notePin(pin, count) {
@@ -673,7 +814,7 @@ void main() { o = texture(u, v) * uOpacity; }`));
         const nrep = Number(step.capture) || 0;
         const animating = shapeMod._stim_scene_moves() !== 0;
         if (dirty || animating) {
-          flushRun();
+          await flushRun();
           const draws = animating && nrep > 1 ? nrep : 1;
           for (let r = 0; r < draws; r++) {
             present();
@@ -681,7 +822,7 @@ void main() { o = texture(u, v) * uOpacity; }`));
               notePin(Number(steps[i - 1].pin), true);
             }
             if (nrep > 0) readFrame();
-            if (nrep > 0 && animating) submitHold(1);
+            if (nrep > 0 && animating) await submitHold(1);
           }
           dirty = false;
           if (nrep > 0 && !animating) run = { hold: nrep };
@@ -696,18 +837,19 @@ void main() { o = texture(u, v) * uOpacity; }`));
           await new Promise(function (resolve) { requestAnimationFrame(resolve); });
         }
       }
-      flushRun();
-      for (;;) {
-        const ready = encodeMod._enc_flush();
-        if (ready === 0) break;
-        if (ready < 0) throw new Error(encError() || "encoder flush failed");
-        if (!holds.length) throw new Error("encoder emitted an extra frame");
-        takeSample(samples, holds.shift());
+      await flushRun();
+      var encoded = await pool.finish();
+    } catch (err) {
+      if (pool) {
+        pool.kill();
+        pool = null;
+        poolStarting = null;
       }
-      if (holds.length) throw new Error("encoder dropped " + holds.length + " frames");
-    } finally {
-      encodeMod._enc_close();
+      throw err;
     }
+    const samples = encoded.samples;
+    const description = encoded.description;
+    if (!description) throw new Error("encoder did not return an avcC description");
     if (outIndex < 1) throw new Error("playback produced no frames");
     let shown = 0;
     for (let s = 0; s < samples.length; s++) shown += samples[s].dur;

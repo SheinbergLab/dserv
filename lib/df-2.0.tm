@@ -1482,6 +1482,77 @@ namespace eval df {
             size [file size $outpath]]
     }
     
+    # Append one JSON datapoint to an existing dslog. Opening a dslog for
+    # writing truncates it, so this writes the record directly, in the
+    # layout dpoint_write uses, and leaves every earlier point in place.
+    proc append_json_point {path name text} {
+        if {![file exists $path]} {
+            error "ess file not found: $path"
+        }
+        set payload [encoding convertto utf-8 $text]
+        set rec [binary format {t a* m n n n a*} \
+            [string length $name] \
+            $name \
+            [clock microseconds] \
+            0 \
+            11 \
+            [string length $payload] \
+            $payload]
+        set fd [open $path a]
+        fconfigure $fd -translation binary
+        puts -nonewline $fd $rec
+        close $fd
+    }
+
+    # Kept attempt -> [first extracted id, last extracted id], the same
+    # pairing the trial menu reads. "" means this table has no obsid
+    # column. "{}" means the extractor kept nothing.
+    proc extracted_map_json {trials} {
+        set names [dg_tclListnames $trials]
+        if {[lsearch -exact $names obsid] < 0} {
+            return ""
+        }
+        set obsids [dl_tcllist $trials:obsid]
+        if {[lsearch -exact $names trialid] >= 0} {
+            set ids [dl_tcllist $trials:trialid]
+        } else {
+            set ids {}
+            set i 0
+            foreach _ $obsids {
+                lappend ids $i
+                incr i
+            }
+        }
+        array set span {}
+        foreach obs $obsids id $ids {
+            if {![string is integer -strict $obs] || ![string is integer -strict $id]} {
+                continue
+            }
+            if {![info exists span($obs)]} {
+                set span($obs) [list $id $id]
+            } else {
+                lassign $span($obs) lo hi
+                if {$id < $lo} { set lo $id }
+                if {$id > $hi} { set hi $id }
+                set span($obs) [list $lo $hi]
+            }
+        }
+        set parts {}
+        foreach obs [lsort -integer [array names span]] {
+            lassign $span($obs) lo hi
+            lappend parts "\"$obs\":\[$lo,$hi\]"
+        }
+        return "{[join $parts ,]}"
+    }
+
+    proc stamp_extracted {ess_path trials} {
+        set json [extracted_map_json $trials]
+        if {$json eq ""} {
+            return
+        }
+        append_json_point $ess_path ess/extracted $json
+    }
+
     #
     # Level 2: Trials - full extraction with system/protocol extractors
     # This is the "analysis-ready" format users want
@@ -1512,6 +1583,15 @@ namespace eval df {
         set n_trials 0
         if {[llength $cols] > 0} {
             set n_trials [dl_length $g:[lindex $cols 0]]
+        }
+
+        # Download builds this table when the catalog has no trials file.
+        # Record the map on the ess too. A later extraction appends another
+        # point, and the reader keeps the last one.
+        if {[string match "*.ess" $source_path]} {
+            if {[catch {stamp_extracted $source_path $g} stamp_err]} {
+                puts "df: could not write extracted trials into $source_path: $stamp_err"
+            }
         }
         
         # Save compressed

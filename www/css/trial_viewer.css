@@ -32,6 +32,42 @@ body {
 
 .tv-spacer { flex: 1; }
 
+.tv-source {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    max-width: 46%;
+    font-size: 13px;
+}
+
+.tv-source #source-label,
+.tv-source #source-back {
+    white-space: nowrap;
+}
+
+.tv-source #source-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: #a0a0a0;
+}
+
+.tv-source button {
+    height: 28px;
+    padding: 0 10px;
+    border: 1px solid #3d3d4d;
+    border-radius: 4px;
+    background: #1a1a24;
+    color: #e0e0e0;
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.tv-source button:hover { border-color: #6a6a80; }
+
 .tv-main {
     max-width: 960px;
     margin: 0 auto;

@@ -38,6 +38,11 @@ let filesAgain = false;
 // no extracted table. An object maps an attempt to [first, last] saved ids.
 let savedMap;
 let savedGen = 0;
+let localEss = null;
+let folderMode = false;
+let folderName = '';
+let machineFiles = [];
+let machineDir = '';
 let trialTipTimer = 0;
 // null until this block's half-angles are read, and when the file has none.
 let screenHalf = null;
@@ -177,7 +182,7 @@ function fillTrials() {
     trial.innerHTML = '';
     // The option value is the attempt: the Nth ENDOBS in the raw file.
     // A saved trial id, when a table exists, is only a label.
-    const n = file ? (Number(file.n_obs) || 0) : 0;
+    const n = localEss ? localEss.attempts.length : (file ? (Number(file.n_obs) || 0) : 0);
     for (let i = 0; i < n; i++) {
         const opt = document.createElement('option');
         opt.value = String(i);
@@ -201,6 +206,10 @@ function trialSpan(index) {
 }
 
 function trialLabel(index) {
+    if (localEss && savedMap == null) {
+        const name = 'Attempt ' + index;
+        return trialVideo(index) ? name + ' \u2713' : name;
+    }
     const saved = trialSpan(index);
     let trial = saved === null ? '-' : '?';
     if (saved && saved[0] === saved[1]) trial = String(saved[0]);
@@ -210,6 +219,9 @@ function trialLabel(index) {
 }
 
 function trialTip(index) {
+    if (localEss && savedMap == null) {
+        return 'This is attempt ' + index + ' in ' + localEss.name + '.';
+    }
     const n = String(index);
     const saved = trialSpan(index);
     if (saved === undefined) {
@@ -306,7 +318,7 @@ function syncButtons() {
     const player = document.getElementById('player');
     const trial = document.getElementById('trial');
     const video = trialVideo(trial.value);
-    const file = selectedFile();
+    const file = localEss ? { filename: localEss.name } : selectedFile();
     const layered = selectedLayers().length > 0;
     document.querySelector('.tv-screen').classList.toggle(
         'is-playable',
@@ -317,6 +329,11 @@ function syncButtons() {
         download.removeAttribute('href');
         download.removeAttribute('download');
         download.setAttribute('aria-disabled', 'true');
+    } else if (video.blobUrl) {
+        const block = file.filename.replace(/\.[^.]+$/, '');
+        download.href = video.blobUrl;
+        download.download = block + '-' + video.name;
+        download.removeAttribute('aria-disabled');
     } else if (layered) {
         download.removeAttribute('href');
         download.removeAttribute('download');
@@ -394,6 +411,26 @@ function ensureLoaded(video) {
     currentVideo = video.name;
     player.pause();
     const job = (async () => {
+        if (video.blobUrl) {
+            if (objectUrl && objectUrl !== video.blobUrl) URL.revokeObjectURL(objectUrl);
+            objectUrl = '';
+            player.src = video.blobUrl;
+            await new Promise((resolve, reject) => {
+                if (gen !== loadGen) {
+                    resolve();
+                    return;
+                }
+                const cleanup = () => {
+                    player.removeEventListener('loadedmetadata', ok);
+                    player.removeEventListener('error', bad);
+                };
+                const ok = () => { cleanup(); resolve(); };
+                const bad = () => { cleanup(); reject(new Error('Could not load video')); };
+                player.addEventListener('loadedmetadata', ok);
+                player.addEventListener('error', bad);
+            });
+            return;
+        }
         const resp = await fetch('/' + video.url + '?v=' + Date.now());
         if (gen !== loadGen) return;
         if (!resp.ok) throw new Error('Could not load video');
@@ -474,12 +511,18 @@ async function ensureBackground(file, trial, popup) {
     await showModal(BACKGROUND_MISSING, { cancel: false, okLabel: 'OK', warn: true });
 }
 
-function applyBackgroundNote() {
+function blockName() {
+    if (localEss) return localEss.name;
     const file = selectedFile();
+    return file ? file.filename : '';
+}
+
+function applyBackgroundNote() {
+    const name = blockName();
     const trial = document.getElementById('trial').value;
     const el = document.getElementById('message');
-    const key = file ? file.filename + '#' + trial : '';
-    if (file && trialVideo(trial) && backgroundKey === key && backgroundMissing) {
+    const key = name ? name + '#' + trial : '';
+    if (name && trialVideo(trial) && backgroundKey === key && backgroundMissing) {
         if (!el.classList.contains('error')) setMessage(BACKGROUND_NOTE);
         return;
     }
@@ -487,6 +530,10 @@ function applyBackgroundNote() {
 }
 
 async function noteBackground(index) {
+    if (localEss) {
+        applyBackgroundNote();
+        return;
+    }
     const file = selectedFile();
     if (!file || index === '' || index === undefined || !trialVideo(index)) {
         applyBackgroundNote();
@@ -535,6 +582,7 @@ async function showTrial(index, autoplay) {
 }
 
 async function loadVideos() {
+    if (localEss) return;
     const gen = ++videoLoadGen;
     const file = selectedFile();
     videosReady = false;
@@ -600,19 +648,148 @@ async function loadScreen() {
     }
 }
 
-async function onDatafileChange() {
-    clearPlayer();
+function revokeLocalVideos() {
+    for (let i = 0; i < videos.length; i++) {
+        if (videos[i].blobUrl) URL.revokeObjectURL(videos[i].blobUrl);
+    }
+}
+
+function clearLocalEss() {
+    if (!localEss) return;
+    revokeLocalVideos();
+    localEss = null;
+}
+
+function directoryOf(path) {
+    const text = String(path || '');
+    const cut = Math.max(text.lastIndexOf('/'), text.lastIndexOf('\\'));
+    return cut > 0 ? text.slice(0, cut) : '';
+}
+
+function paintSource() {
+    const label = document.getElementById('source-label');
+    const name = document.getElementById('source-name');
+    const back = document.getElementById('source-back');
+    if (folderMode) {
+        label.textContent = 'Folder you chose';
+        name.textContent = folderName;
+        name.title = folderName;
+        back.hidden = false;
+    } else {
+        label.textContent = 'Recording machine';
+        name.textContent = machineDir;
+        name.title = machineDir;
+        back.hidden = true;
+    }
+}
+
+function bindFolderSelection() {
+    revokeLocalVideos();
     videos = [];
-    savedMap = undefined;
+    videosReady = true;
+    const file = selectedFile();
+    if (!file || !file.ess) {
+        localEss = null;
+        savedMap = null;
+        availableLayers = new Set();
+        eyeVirtual = false;
+        layersKey = '';
+        screenHalf = null;
+        fillTrials();
+        fillLayers();
+        refreshTouches();
+        refreshEyes();
+        return;
+    }
+    file.ess.name = file.filename;
+    localEss = file.ess;
+    savedMap = file.ess.extracted || null;
+    availableLayers = new Set(file.ess.layers || []);
+    eyeVirtual = !!file.ess.eyeVirtual;
+    layersKey = file.filename;
+    screenHalf = file.ess.halfx != null && file.ess.halfy != null
+        ? { halfx: file.ess.halfx, halfy: file.ess.halfy }
+        : null;
+    touchKey = '';
+    eyeKey = '';
+    touches = [];
+    eyes = [];
+    fillTrials();
+    fillLayers();
+    refreshTouches();
+    refreshEyes();
+}
+
+async function chooseFolder(fileList) {
+    const rows = [];
+    let skipped = 0;
+    let name = '';
+    for (const file of fileList) {
+        const rel = file.webkitRelativePath || file.name;
+        const parts = rel.split(/[/\\]/);
+        if (parts.length > 2) continue;
+        if (!file.name.toLowerCase().endsWith('.ess')) continue;
+        if (!name && parts.length > 1) name = parts[0];
+        try {
+            const ess = EssReader.readEss(await file.arrayBuffer());
+            rows.push(EssReader.catalogRow(ess, file.name));
+        } catch (e) {
+            skipped += 1;
+        }
+    }
+    if (!rows.length) {
+        setMessage(skipped
+            ? 'No recordings with a stim tape in that folder.'
+            : 'That folder has no .ess files.', true);
+        return;
+    }
+    folderMode = true;
+    folderName = name || 'folder';
+    files = rows;
+    paintSource();
+    clearPlayer();
     hideTrialTip();
     hideCoordTip();
+    localEss = null;
+    applyFilters();
+    bindFolderSelection();
+    let msg = rows.length + (rows.length === 1 ? ' recording' : ' recordings');
+    if (skipped) {
+        msg += '. ' + skipped + (skipped === 1 ? ' file was' : ' files were') + ' left out.';
+    }
+    setMessage(msg);
+}
+
+function showRecordingMachine() {
+    if (!folderMode) return;
+    folderMode = false;
+    folderName = '';
+    files = machineFiles;
+    paintSource();
+    onDatafileChange();
+}
+
+async function onDatafileChange() {
+    clearPlayer();
+    hideTrialTip();
+    hideCoordTip();
+    if (folderMode) {
+        localEss = null;
+        applyFilters();
+        bindFolderSelection();
+        return;
+    }
+    clearLocalEss();
+    videos = [];
+    savedMap = undefined;
     applyFilters();
     const saved = loadSaved();
     const screen = loadScreen();
     try {
         await loadVideos();
         const el = document.getElementById('message');
-        if (!el.classList.contains('error')) {
+        if (files.length === 0) setMessage('no blocks with tape');
+        else if (!el.classList.contains('error')) {
             setMessage('');
             applyBackgroundNote();
         }
@@ -702,7 +879,92 @@ async function saveMp4(filename, trial, mp4, info) {
     }
 }
 
+function rememberLocalVideo(trial, bytes) {
+    const name = 'trial_' + trial + '.mp4';
+    videos = videos.filter(function (video) {
+        if (String(video.trial) !== String(trial)) return true;
+        if (video.blobUrl) URL.revokeObjectURL(video.blobUrl);
+        return false;
+    });
+    videos.push({
+        name: name,
+        trial: Number(trial),
+        blobUrl: URL.createObjectURL(new Blob([bytes], { type: 'video/mp4' }))
+    });
+}
+
+async function createFromEss() {
+    const trial = document.getElementById('trial').value;
+    if (!localEss || trial === '') return;
+    const index = Number(trial);
+    let built;
+    try {
+        built = EssReader.readEssTrial(localEss, index);
+    } catch (e) {
+        setMessage(e.message, true);
+        return;
+    }
+    if (built.replay.background_missing) {
+        await showModal(BACKGROUND_MISSING, { cancel: false, okLabel: 'OK', warn: true });
+    }
+    creating = true;
+    syncButtons();
+    setMessage('Rendering attempt ' + index + '.');
+    try {
+        const made = await TrialWasm.render({
+            replay: built.replay,
+            stimText: built.stimText,
+            stimdg: built.stimdg,
+            onProgress: function (i, n) {
+                setMessage('Rendering attempt ' + index + '. ' + i + ' / ' + n);
+            }
+        });
+        rememberLocalVideo(index, made.mp4);
+        backgroundMissing = !!built.replay.background_missing;
+        backgroundKey = localEss.name + '#' + index;
+        paintTrials();
+        await showTrial(String(index), false);
+        setMessage('trial_' + index + '.mp4 is ready');
+        applyBackgroundNote();
+    } catch (e) {
+        setMessage(e.message, true);
+    } finally {
+        creating = false;
+        paintTrials();
+    }
+}
+
+async function openEssFile(file) {
+    const buf = await file.arrayBuffer();
+    const ess = EssReader.readEss(buf);
+    if (!ess.attempts.length) throw new Error('this file has no attempts');
+    videoLoadGen++;
+    clearPlayer();
+    revokeLocalVideos();
+    ess.name = file.name;
+    localEss = ess;
+    videos = [];
+    videosReady = true;
+    savedMap = ess.extracted;
+    availableLayers = new Set(ess.layers);
+    eyeVirtual = !!ess.eyeVirtual;
+    layersKey = ess.name;
+    screenHalf = ess.halfx != null && ess.halfy != null
+        ? { halfx: ess.halfx, halfy: ess.halfy }
+        : null;
+    touchKey = '';
+    eyeKey = '';
+    touches = [];
+    eyes = [];
+    fillLayers();
+    fillTrials();
+    refreshTouches();
+    refreshEyes();
+    setMessage(file.name + ' — ' + ess.attempts.length + ' attempts');
+}
+
 async function createVideo() {
+    if (localEss) return createFromEss();
     const file = selectedFile();
     const trial = document.getElementById('trial').value;
     if (!file || trial === '') return;
@@ -794,11 +1056,13 @@ async function createVideo() {
 }
 
 function touchAvailable() {
+    if (localEss) return localEss.layers.indexOf('touch') >= 0;
     const file = selectedFile();
     return !!file && file.filename === layersKey && availableLayers.has('touch');
 }
 
 function eyeAvailable() {
+    if (localEss) return localEss.layers.indexOf('eye') >= 0;
     const file = selectedFile();
     return !!file && file.filename === layersKey && availableLayers.has('eye');
 }
@@ -1105,7 +1369,7 @@ function paintMarks() {
 
 async function refreshTouches() {
     const gen = ++touchGen;
-    const file = selectedFile();
+    const file = localEss ? { filename: localEss.name } : selectedFile();
     const trial = document.getElementById('trial').value;
     const show = touchOn && touchAvailable() && file && trial !== '';
     if (!show) {
@@ -1122,6 +1386,15 @@ async function refreshTouches() {
     touches = [];
     paintMarks();
     try {
+        if (localEss) {
+            const data = EssReader.trialMarks(localEss, Number(trial));
+            if (gen !== touchGen) return;
+            touches = data.touches;
+            touchSpace = { w: data.width, h: data.height };
+            touchKey = key;
+            paintMarks();
+            return;
+        }
         const raw = await dfEval('trial_video_touches {' + file.filename + '} ' + trial, 30000);
         if (gen !== touchGen) return;
         const data = JSON.parse(raw);
@@ -1302,7 +1575,7 @@ function onAction() {
 
 async function refreshEyes() {
     const gen = ++eyeGen;
-    const file = selectedFile();
+    const file = localEss ? { filename: localEss.name } : selectedFile();
     const trial = document.getElementById('trial').value;
     const show = eyeOn && eyeAvailable() && file && trial !== '';
     if (!show) {
@@ -1319,6 +1592,15 @@ async function refreshEyes() {
     eyes = [];
     paintMarks();
     try {
+        if (localEss) {
+            const data = EssReader.trialMarks(localEss, Number(trial));
+            if (gen !== eyeGen) return;
+            eyes = data.eyes;
+            touchSpace = { w: data.width, h: data.height };
+            eyeKey = key;
+            paintMarks();
+            return;
+        }
         const raw = await dfEval('trial_video_eyes {' + file.filename + '} ' + trial, 30000);
         if (gen !== eyeGen) return;
         const data = JSON.parse(raw);
@@ -1349,6 +1631,7 @@ function layerStatusText() {
 }
 
 async function onDownload(ev) {
+    if (localEss) return;
     const layers = selectedLayers();
     if (!layers.length) return;
     ev.preventDefault();
@@ -1398,9 +1681,13 @@ async function refreshFileList() {
         throw new Error(taped.error || 'Could not list tapes');
     }
     const have = new Set(taped);
+    machineFiles = parsed.filter(file => have.has(file.filename));
+    machineDir = directoryOf(machineFiles.length ? machineFiles[0].filepath : '');
+    paintSource();
+    if (folderMode) return;
     const block = document.getElementById('block');
     const previous = block.value;
-    files = parsed.filter(file => have.has(file.filename));
+    files = machineFiles;
     applyFilters();
     if (block.value !== previous) {
         await onDatafileChange();
@@ -1437,6 +1724,25 @@ async function init() {
     watchPlayback();
     document.getElementById('trial').addEventListener('change', onTrialChange);
     document.getElementById('action').addEventListener('click', onAction);
+    document.getElementById('source-choose').addEventListener('click', () => {
+        if (creating || confirming) return;
+        document.getElementById('source-folder').click();
+    });
+    document.getElementById('source-folder').addEventListener('change', async (ev) => {
+        const list = ev.target.files ? Array.from(ev.target.files) : [];
+        ev.target.value = '';
+        if (!list.length) return;
+        setMessage('Reading folder…');
+        try {
+            await chooseFolder(list);
+        } catch (e) {
+            setMessage(e.message, true);
+        }
+    });
+    document.getElementById('source-back').addEventListener('click', () => {
+        if (creating || confirming) return;
+        showRecordingMachine();
+    });
     document.querySelector('.tv-screen').addEventListener('pointermove', onScreenPointer);
     document.querySelector('.tv-screen').addEventListener('pointerleave', hideCoordTip);
     document.querySelector('.tv-screen').addEventListener('click', () => {

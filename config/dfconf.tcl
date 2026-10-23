@@ -659,13 +659,13 @@ proc create_trials_file {obs_path file_id basename system protocol} {
         # Get metadata from obs
         set meta [df::extract_metadata_from_obs $g]
         
+        set ess_path [dfdb eval {SELECT filepath FROM datafiles WHERE id = $file_id}]
+
         # Try obs-aware extractor first, fall back to File-based
         set trials_proc "::${system}::extract_trials_from_obs"
         if {[info commands $trials_proc] ne ""} {
             set trials [{*}$trials_proc $g $meta]
         } else {
-            # Fall back: get ess path and use original load_data
-            set ess_path [dfdb eval {SELECT filepath FROM datafiles WHERE id = $file_id}]
             dg_delete $g
             set trials [df::load_data $ess_path]
         }
@@ -679,6 +679,11 @@ proc create_trials_file {obs_path file_id basename system protocol} {
         
         # Write output
         dg_write $trials $trials_path
+        if {$ess_path ne "" && [file exists $ess_path]} {
+            if {[catch {df::stamp_extracted $ess_path $trials} stamp_err]} {
+                puts "dfconf: could not write extracted trials into $ess_path: $stamp_err"
+            }
+        }
         
         catch {dg_delete $g}
         dg_delete $trials

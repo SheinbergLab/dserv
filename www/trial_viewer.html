@@ -5,13 +5,21 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Trial Viewer</title>
     <link rel="stylesheet" href="css/page_nav.css">
-    <link rel="stylesheet" href="css/trial_viewer.css?v=20261022a">
+    <link rel="stylesheet" href="css/trial_viewer.css?v=20261023j">
 </head>
 <body>
     <header class="tv-bar">
         <h1>Trial Viewer</h1>
         <span id="status-dot" class="tv-dot"></span>
         <span id="status-text">Connecting...</span>
+        <div class="tv-spacer"></div>
+        <div class="tv-source">
+            <span id="source-label">Recording machine</span>
+            <span id="source-name"></span>
+            <button id="source-choose" type="button">Choose a folder</button>
+            <button id="source-back" type="button" hidden>Recording machine</button>
+            <input id="source-folder" type="file" webkitdirectory directory multiple hidden>
+        </div>
         <div class="tv-spacer"></div>
         <div id="page-nav-container"></div>
     </header>
@@ -77,10 +85,11 @@
 
     <canvas id="view" class="tv-render" width="1280" height="800" aria-hidden="true"></canvas>
     <script src="js/mp4mux.js?v=20261023c"></script>
-    <script src="js/trial_wasm.js?v=20261023d"></script>
+    <script src="js/trial_wasm.js?v=20261023e"></script>
+    <script src="js/ess_reader.js?v=20261023j"></script>
     <script src="js/ws_manager.js"></script>
     <script src="js/DatapointManager.js"></script>
     <script src="js/PageNav.js"></script>
-    <script src="js/trial_viewer.js?v=20261023d"></script>
+    <script src="js/trial_viewer.js?v=20261023j"></script>
 </body>
 </html>
