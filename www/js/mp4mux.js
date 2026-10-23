@@ -32,10 +32,21 @@
   }
 
   function muxMp4(samples, description, width, height, fps) {
-    const timescale = 60000;
+    const timescale = 15360;
     const delta = timescale / fps;
-    if (delta !== Math.floor(delta)) throw new Error("fps does not divide 60000");
-    const duration = samples.length * delta;
+    if (delta !== Math.floor(delta)) throw new Error("fps does not divide 15360");
+    let frameCount = 0;
+    const runs = [];
+    for (let i = 0; i < samples.length; i++) {
+      const hold = samples[i].dur == null ? 1 : samples[i].dur;
+      if (!Number.isInteger(hold) || hold < 1) throw new Error("bad frame hold");
+      frameCount += hold;
+      const ticks = delta * hold;
+      const last = runs.length ? runs[runs.length - 1] : null;
+      if (last && last.ticks === ticks) last.count += 1;
+      else runs.push({ count: 1, ticks: ticks });
+    }
+    const duration = frameCount * delta;
     const desc = description instanceof Uint8Array ? description : new Uint8Array(description);
 
     const matrix = u8([
@@ -76,9 +87,11 @@
     ]);
     const avc1 = box("avc1", avc1Body);
     const stsd = fullbox("stsd", 0, 0, u8([be(1, 4), avc1]));
-    const stts = fullbox("stts", 0, 0, u8([
-      be(1, 4), be(samples.length, 4), be(delta, 4)
-    ]));
+    const sttsBytes = [be(runs.length, 4)];
+    for (let i = 0; i < runs.length; i++) {
+      sttsBytes.push(be(runs[i].count, 4), be(runs[i].ticks, 4));
+    }
+    const stts = fullbox("stts", 0, 0, u8(sttsBytes));
     const keys = [];
     for (let i = 0; i < samples.length; i++) if (samples[i].key) keys.push(i + 1);
     if (!keys.length) keys.push(1);

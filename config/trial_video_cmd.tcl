@@ -332,7 +332,7 @@ proc trial_video_save_path {filename trial} {
 # Start a chunked write of trial_N.mp4. A previous bake of this trial,
 # including layered copies, is removed.
 proc trial_video_save_begin {filename trial} {
-    if {[catch {set path [trial_video_save_path $filename trial]} err]} {
+    if {[catch {set path [trial_video_save_path $filename $trial]} err]} {
         return [_json_error $err]
     }
     if {[catch {trial_video_reload} load_err]} {

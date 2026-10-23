@@ -14,6 +14,11 @@
   let gl = null;
   let shapeMod = null;
   let starting = null;
+  let encodeMod = null;
+  let encodeStarting = null;
+  let rgbaPtr = 0;
+  let rgbaCap = 0;
+  let rgbaScratch = null;
   let present = function () {};
   let dropShapeTextures = function () {};
   let paintClear = function () {};
@@ -214,10 +219,10 @@ void main() { o = texture(u, v) * uOpacity; }`));
     starting = (async function () {
       initGl();
       if (typeof createShapeRaster !== "function") {
-        await loadScript("shape_raster.js?v=12");
+        await loadScript("shape_raster.js?v=13");
       }
       const mod = await createShapeRaster({
-        locateFile: function (path) { return path + "?v=12"; },
+        locateFile: function (path) { return path + "?v=13"; },
         canvas: canvas,
         preinitializedWebGLContext: gl
       });
@@ -232,6 +237,83 @@ void main() { o = texture(u, v) * uOpacity; }`));
       starting = null;
       throw err;
     });
+  }
+
+  function ensureEncoder() {
+    if (encodeMod) return Promise.resolve(true);
+    if (encodeStarting) return encodeStarting;
+    encodeStarting = (async function () {
+      if (typeof createTrialEncode !== "function") {
+        await loadScript("trial_encode.js?v=20261023c");
+      }
+      encodeMod = await createTrialEncode({
+        locateFile: function (path) { return path + "?v=20261023c"; }
+      });
+      return true;
+    })();
+    return encodeStarting.catch(function () {
+      encodeStarting = null;
+      encodeMod = null;
+      return false;
+    });
+  }
+
+  function encError() {
+    const ptr = encodeMod._enc_error();
+    if (!ptr) return "";
+    const mem = encodeMod.HEAPU8;
+    let s = "";
+    for (let i = ptr; mem[i]; i++) s += String.fromCharCode(mem[i]);
+    return s;
+  }
+
+  function moviePreset(script) {
+    return /\b(?:videoInfo|videoPause|videoRepeat|videoHide|videoSeek|videoEofCallback|videoGrayscale|videoBrightness|videoContrast|videoGamma|videoOpacity|videoColorGains|videoInvert|videoThreshold|videoMask|videoAudio|video)\b/.test(String(script || "")) ? 1 : 0;
+  }
+
+  function takeSample(samples, dur) {
+    const n = encodeMod._enc_sample_size();
+    const p = encodeMod._enc_sample();
+    if (!p || n < 1) throw new Error(encError() || "encoder returned an empty frame");
+    const data = new Uint8Array(n);
+    data.set(encodeMod.HEAPU8.subarray(p, p + n));
+    samples.push({ data: data, key: encodeMod._enc_sample_key() !== 0, dur: dur });
+  }
+
+  function clockOnly(tcl) {
+    return tcl.startsWith("stimTimeSet") || tcl.startsWith("set ::tape_mark ");
+  }
+
+  function readFrame() {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    const nbytes = screenW * screenH * 4;
+    if (!rgbaScratch || rgbaScratch.length !== nbytes) rgbaScratch = new Uint8Array(nbytes);
+    gl.readPixels(0, 0, screenW, screenH, gl.RGBA, gl.UNSIGNED_BYTE, rgbaScratch);
+    if (rgbaCap < nbytes) {
+      if (rgbaPtr) encodeMod._free(rgbaPtr);
+      rgbaPtr = encodeMod._malloc(nbytes);
+      rgbaCap = rgbaPtr ? nbytes : 0;
+    }
+    if (!rgbaPtr) throw new Error("encoder is out of memory");
+    encodeMod.HEAPU8.set(rgbaScratch, rgbaPtr);
+  }
+
+  function feedFrame(samples, holds, nrep) {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    const nbytes = screenW * screenH * 4;
+    if (!rgbaScratch || rgbaScratch.length !== nbytes) rgbaScratch = new Uint8Array(nbytes);
+    gl.readPixels(0, 0, screenW, screenH, gl.RGBA, gl.UNSIGNED_BYTE, rgbaScratch);
+    if (rgbaCap < nbytes) {
+      if (rgbaPtr) encodeMod._free(rgbaPtr);
+      rgbaPtr = encodeMod._malloc(nbytes);
+      rgbaCap = rgbaPtr ? nbytes : 0;
+    }
+    if (!rgbaPtr) throw new Error("encoder is out of memory");
+    encodeMod.HEAPU8.set(rgbaScratch, rgbaPtr);
+    holds.push(nrep);
+    const ready = encodeMod._enc_rgba(rgbaPtr, nrep);
+    if (ready < 0) throw new Error(encError() || "encode failed");
+    if (ready === 1) takeSample(samples, holds.shift());
   }
 
   function cString(text) {
@@ -523,6 +605,127 @@ void main() { o = texture(u, v) * uOpacity; }`));
     };
   }
 
+  async function encodeX264(replay, onProgress, stimText) {
+    const showPin = replay.show_pin === "" || replay.show_pin == null ? null : Number(replay.show_pin);
+    const showTape = replay.show_tape === "" || replay.show_tape == null ? null : Number(replay.show_tape);
+    const stepMs = Number(replay.step_ms);
+    if (showPin != null && showTape != null && Math.abs(showPin - showTape) > stepMs + 1) {
+      throw new Error("show_response pin " + showPin + " is more than a frame from tape time " + showTape);
+    }
+    encodeMod._enc_close();
+    if (encodeMod._enc_open(screenW, screenH, moviePreset(stimText)) !== 0) {
+      throw new Error(encError() || "encoder failed to open");
+    }
+    const avccN = encodeMod._enc_avcc_size();
+    const avccP = encodeMod._enc_avcc();
+    if (!avccP || avccN < 8) throw new Error(encError() || "encoder did not return avcC");
+    const description = new Uint8Array(avccN);
+    description.set(encodeMod.HEAPU8.subarray(avccP, avccP + avccN));
+
+    const samples = [];
+    const holds = [];
+    let held = 0;
+    let wiped = 0;
+    let captures = 0;
+    let outIndex = 0;
+    let dirty = true;
+    let run = null;
+    const total = Number(replay.frames) || replay.steps.length;
+    const steps = replay.steps;
+
+    function submitHold(hold) {
+      holds.push(hold);
+      const ready = encodeMod._enc_rgba(rgbaPtr, hold);
+      if (ready < 0) throw new Error(encError() || "encode failed");
+      if (ready === 1) takeSample(samples, holds.shift());
+    }
+
+    function flushRun() {
+      if (!run) return;
+      submitHold(run.hold);
+      run = null;
+    }
+
+    function notePin(pin, count) {
+      const seen = stimTime();
+      if (Math.abs(seen - pin) < 0.05) {
+        if (count) held += 1;
+        return;
+      }
+      if (Math.abs(seen) < 0.5) {
+        if (count) {
+          wiped += 1;
+          return;
+        }
+      }
+      throw new Error("StimTimeF " + seen + " did not hold tape pin " + pin);
+    }
+
+    try {
+      for (let i = 0; i < steps.length; i++) {
+        const step = steps[i];
+        if (step.tcl != null) {
+          applyTcl(step.tcl);
+          if (!clockOnly(step.tcl)) dirty = true;
+          if (step.pin != null && !Number(step.clock)) notePin(Number(step.pin), false);
+          continue;
+        }
+        const nrep = Number(step.capture) || 0;
+        const animating = shapeMod._stim_scene_moves() !== 0;
+        if (dirty || animating) {
+          flushRun();
+          const draws = animating && nrep > 1 ? nrep : 1;
+          for (let r = 0; r < draws; r++) {
+            present();
+            if (r === 0 && i > 0 && steps[i - 1].pin != null && Number(steps[i - 1].clock)) {
+              notePin(Number(steps[i - 1].pin), true);
+            }
+            if (nrep > 0) readFrame();
+            if (nrep > 0 && animating) submitHold(1);
+          }
+          dirty = false;
+          if (nrep > 0 && !animating) run = { hold: nrep };
+        } else if (nrep > 0) {
+          if (!run) throw new Error("quiet frames arrived before a picture");
+          run.hold += nrep;
+        }
+        outIndex += nrep;
+        captures += 1;
+        if (onProgress && captures % 10 === 0) {
+          onProgress(captures, total);
+          await new Promise(function (resolve) { requestAnimationFrame(resolve); });
+        }
+      }
+      flushRun();
+      for (;;) {
+        const ready = encodeMod._enc_flush();
+        if (ready === 0) break;
+        if (ready < 0) throw new Error(encError() || "encoder flush failed");
+        if (!holds.length) throw new Error("encoder emitted an extra frame");
+        takeSample(samples, holds.shift());
+      }
+      if (holds.length) throw new Error("encoder dropped " + holds.length + " frames");
+    } finally {
+      encodeMod._enc_close();
+    }
+    if (outIndex < 1) throw new Error("playback produced no frames");
+    let shown = 0;
+    for (let s = 0; s < samples.length; s++) shown += samples[s].dur;
+    if (shown !== outIndex) {
+      throw new Error("encoder covers " + shown + " frames, the tape asked for " + outIndex);
+    }
+    if (captures < 1 || held < 1) throw new Error("StimTimeF never held the tape pin");
+    if (wiped > 4) {
+      throw new Error("StimTimeF was cleared on " + wiped + " frames; the tape pin is not sticking");
+    }
+    return {
+      mp4: root.muxMp4(samples, description, canvas.width, canvas.height, 60),
+      frames: captures,
+      clock_held: held,
+      reset_frames: wiped
+    };
+  }
+
   async function render(opts) {
     await ensureModule();
     dropShapeTextures();
@@ -540,14 +743,19 @@ void main() { o = texture(u, v) * uOpacity; }`));
       }
     }
     loadDg(opts.stimdg);
-    if (typeof VideoEncoder !== "function") {
-      if (typeof opts.saveFrame !== "function") {
-        throw new Error("this browser has no VideoEncoder, so it cannot build an mp4");
-      }
+    if (await ensureEncoder()) return encodeX264(opts.replay, opts.onProgress, opts.stimText);
+    if (typeof opts.saveFrame === "function") {
       return encodeStill(opts.replay, opts.onProgress, opts.saveFrame);
     }
-    return encodeTrial(opts.replay, opts.onProgress);
+    throw new Error("the trial encoder did not load");
   }
 
-  root.TrialWasm = { render: render };
+  function warmup() {
+    return Promise.all([
+      ensureModule().catch(function () {}),
+      ensureEncoder()
+    ]);
+  }
+
+  root.TrialWasm = { render: render, warmup: warmup };
 })(typeof globalThis !== "undefined" ? globalThis : this);

@@ -1429,6 +1429,7 @@ async function loadFiles() {
 }
 
 async function init() {
+    if (window.TrialWasm && typeof TrialWasm.warmup === "function") TrialWasm.warmup();
     PageNav.init('page-nav-container', 'trial_viewer');
     for (const id of ['subject', 'system', 'protocol', 'block']) {
         document.getElementById(id).addEventListener('change', onDatafileChange);
