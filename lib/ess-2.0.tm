@@ -496,7 +496,10 @@ namespace eval ess {
     # stim2's ::dservhost), so the writer and the command socket point at
     # the same dserv.
     #
-    #   configure_stim          stim_frame_enable $host, right after the ACK
+    #   configure_stim          stim_frame_enable [dservGet ess/ipaddr] (the
+    #                           address stim2 sends datapoints back to; $host
+    #                           is the stim2 host and is only a fallback when
+    #                           ess/ipaddr is unset), right after the ACK
     #                           header probe (raw command, so like the probe
     #                           it is not a stim/cmd record). Sets
     #                           stim_frame_log to 1 when stim2 took it (the
@@ -961,8 +964,15 @@ oo::class create System {
 
         # Start stim2's per-frame record (the stim_frame_log block) towards
         # this dserv; a no-op, flag 0, on a stim2 without stimFrameLog. It
-        # stays on until unload_system.
-        ::ess::stim_frame_enable $host
+        # stays on until unload_system. The writer runs INSIDE stim2 and
+        # connects back to dserv, so it needs dserv's address as stim2
+        # reaches it (ess/ipaddr, the same address the return socket and
+        # `set dservhost` below use), NOT $host, which is the stim2 host.
+        # Passing $host only works when both run on one machine: on a rig
+        # with a separate display box it told stim2 to stream to itself.
+        set frame_sink [dservGet ess/ipaddr]
+        if { $frame_sink eq "" } { set frame_sink $host }
+        ::ess::stim_frame_enable $frame_sink
 
         # Drop the previous stim script's datapoint bindings (stim2's stimess
         # package, see the stim_bind block) so this load starts clean; the

@@ -150,9 +150,14 @@ assert {$::ess::stim_frame_log == 0} "stim_frame_log starts 0"
 # probe (before anything the logged wrapper sends), records 0 when not
 # connected; unload_system disables after the system deinit callback;
 # open_datafile calls the factored match step next to the stim/cmd match
-set enable_at [string first "::ess::stim_frame_enable \$host" $src]
+set enable_at [string first "::ess::stim_frame_enable \$frame_sink" $src]
 assert {$enable_at > [string first "::ess::stim_cmd_probe" $src] && $enable_at < $unbind_at} \
-    "configure_stim calls stim_frame_enable \$host right after the probe"
+    "configure_stim calls stim_frame_enable \$frame_sink right after the probe"
+# the sink is dserv's address as stim2 reaches it, never the stim2 host:
+# on a rig with a separate display box, $host would point stim2 at itself
+set sink_at [string first "set frame_sink \[dservGet ess/ipaddr\]" $src]
+assert {$sink_at > 0 && $sink_at < $enable_at} \
+    "configure_stim takes the frame sink from ess/ipaddr, not \$host"
 assert {[string first "set ::ess::stim_frame_log 0" $src] > $fe &&
         [string first "set ::ess::stim_frame_log 0" $src] < $enable_at} \
     "configure_stim records flag 0 on the not-connected branch"
