@@ -1888,7 +1888,8 @@ int Dataserver::add_new_log_client(std::string filename, bool overwrite)
   fd = open_log_file(filename, overwrite);
   if (fd < 0) return -1;
     
-  log_client = new LogClient(filename, fd);
+  /* header timestamp on the datapoint clock (see LogClient.h) */
+  log_client = new LogClient(filename, fd, (uint64_t) now());
 
   // give access to log_table so it can remove itself
   log_client->log_table = &log_table;

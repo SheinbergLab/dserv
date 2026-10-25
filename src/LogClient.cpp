@@ -35,7 +35,8 @@ include <io.h>
 #include "LogTable.h"
 #include "LogClient.h"
   
-LogClient::LogClient(std::string filename, int fd): fd(fd), filename(filename)
+LogClient::LogClient(std::string filename, int fd, uint64_t open_us):
+  fd(fd), filename(filename)
 {
   active = 1;
   initialized = 0;		/* set to 1 after process thread set */
@@ -62,23 +63,13 @@ LogClient::LogClient(std::string filename, int fd): fd(fd), filename(filename)
 
   state = LOGGER_CLIENT_PAUSED;
   
-  if (fd >= 0) write_header(now());
+  if (fd >= 0) write_header(open_us);
 }
 
 LogClient::~LogClient()
 {
   if (fd >= 0) close(fd);
   matches.clear();
-}
-
-
-uint64_t LogClient::now(void) {
-  std::chrono::time_point<std::chrono::high_resolution_clock> now = 
-    std::chrono::high_resolution_clock::now();    
-  auto duration = now.time_since_epoch();
-  return
-    ((int64_t) std::chrono::duration_cast<std::chrono::microseconds>(duration).
-     count());
 }
 
 int LogClient::write_header(uint64_t timestamp)

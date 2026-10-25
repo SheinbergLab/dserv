@@ -50,9 +50,13 @@ class LogClient {
 
   static void log_client_process(LogClient *);
   
-  LogClient(std::string filename, int fd);
+  /* open_us: the file's header timestamp, on the SAME clock as the
+     datapoint timestamps (Dataserver::now(), epoch microseconds).  It
+     used to be taken from std::chrono::high_resolution_clock here, which
+     is the steady clock on macOS, so a Mac-written header held time since
+     boot and readers that anchor on it (dslog::read) got nonsense. */
+  LogClient(std::string filename, int fd, uint64_t open_us);
   ~LogClient();
-  uint64_t now(void);
   int write_header(uint64_t timestamp);
   void flush_dpoints(void);
   void log_pause(void);
