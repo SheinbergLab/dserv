@@ -153,7 +153,8 @@ namespace eval ess {
     #
     # ticks are stim2's free-running clock in ms (%.3f), swapcount its
     # frame counter, flipwall_us the hardware flip time (CLOCK_REALTIME us;
-    # 0 unless the command was a '!' swap-acked one -- "＠!cmd"), and
+    # 0 unless the command was a '!' swap-acked one -- "＠!cmd" -- and -1
+    # when the swapsync strategy has no flip time to report), and
     # <result> is byte-for-byte what the reply would have been without the
     # prefix (possibly empty, possibly "!TCL_ERROR ..."). The wrapper
     # strips the header, so EVERY EXISTING CALLER SEES EXACTLY THE REPLY
@@ -179,8 +180,11 @@ namespace eval ess {
     #   dq       stim2 ms when the command was dequeued; null without header
     #   done     stim2 ms when its evaluation finished; null without header
     #   swap     stim2 frame counter at completion; null without header
-    #   flip     integer us CLOCK_REALTIME of the acked flip, 0 when the
-    #            command was not swap-acked; null without header
+    #   flip     integer us CLOCK_REALTIME of the acked flip; null without
+    #            header, and null whenever stim2 had none to give -- it
+    #            sends 0 for a command that was not swap-acked and -1 when
+    #            its swapsync strategy cannot time the flip (glfinish on a
+    #            Mac), so any value <= 0 is stored as null
     #   status   "ok"; "error" when the result starts with "!TCL_ERROR";
     #            "io" when the exchange failed (not connected, EOF, short
     #            read: rmt.c closes the socket and returns an empty reply);
@@ -316,6 +320,11 @@ namespace eval ess {
             set ack [stim_cmd_parse_ack $reply]
             if { [lindex $ack 0] } {
                 lassign $ack - dq done swap flip reply
+                # stim2 reports 0 when the command was not swap-acked and
+                # -1 when its swapsync strategy has no hardware flip time
+                # (glfinish on a Mac): neither is a timestamp, so neither
+                # reaches a reader as one
+                if { $flip <= 0 } { set flip null }
             } else {
                 set status nohdr
             }

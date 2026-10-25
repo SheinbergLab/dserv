@@ -11,7 +11,10 @@
 # Replies:
 #   stimAckHeader          "1" while ack mode is on, else the error string a
 #                          stim2 without the command would return
-#   ＠<cmd>            header + echo:  "ACK1 100.000 101.500 42 0\n<echo>"
+#   ＠<cmd>            header + echo:  "ACK1 100.000 101.500 42 <flip>\n<echo>"
+#                          (<flip> is 0 until "fake_flip <n>" sets it; -1 is
+#                          what stim2 sends when its swapsync strategy has
+#                          no hardware flip time)
 #                          (in raw-echo mode: the echo alone, header omitted,
 #                          to stand in for a stim2 that ignores the prefix)
 #   <cmd>                  the echo alone
@@ -19,12 +22,13 @@
 # command) and of anything else is the command text itself.
 #
 # Control commands (never echoed): "fake_ack 0|1", "fake_rawecho 0|1",
-# "fake_quit". The process also exits on its own after 60 s so a crashed
+# "fake_flip <n>", "fake_quit". The process also exits on its own after 60 s so a crashed
 # test cannot leave it behind.
 
 set portfile [lindex $argv 0]
 set ::ack 1
 set ::rawecho 0
+set ::flip 0
 
 proc reply_for { cmd } {
     set hdr 0
@@ -35,6 +39,7 @@ proc reply_for { cmd } {
     switch -glob -- $cmd {
         "fake_ack *"     { set ::ack [lindex $cmd 1]; return "" }
         "fake_rawecho *" { set ::rawecho [lindex $cmd 1]; return "" }
+        "fake_flip *"    { set ::flip [lindex $cmd 1]; return "" }
         "fake_quit"      { after 50 exit; return "" }
         "stimAckHeader"  {
             if { $::ack } { return 1 }
@@ -47,7 +52,7 @@ proc reply_for { cmd } {
         set echo $cmd
     }
     if { $hdr && !$::rawecho } {
-        return "ACK1 100.000 101.500 42 0\n$echo"
+        return "ACK1 100.000 101.500 42 $::flip\n$echo"
     }
     return $echo
 }

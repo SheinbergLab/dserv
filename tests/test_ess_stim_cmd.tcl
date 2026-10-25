@@ -117,7 +117,7 @@ assert {[field $j status] eq "\"ok\""} "status ok"
 assert {[field $j dq] == 100.0} "dq 100.0 ([field $j dq])"
 assert {[field $j done] == 101.5} "done 101.5 ([field $j done])"
 assert {[field $j swap] == 42} "swap 42"
-assert {[field $j flip] == 0} "flip 0 (not swap-acked)"
+assert {[field $j flip] eq "null"} "flip null when stim2 sent 0 (not swap-acked)"
 set ts [field $j t_send]; set tr [field $j t_ret]
 assert {[string is wideinteger -strict $ts] && [string is wideinteger -strict $tr] && $tr >= $ts} \
     "t_send/t_ret are integers, t_ret >= t_send"
@@ -128,6 +128,20 @@ set r [rmtSend "!flip_now"]
 assert {$r eq "!flip_now"} "swap-acked command: echo intact"
 assert {[field [rec] cmd] eq "\"!flip_now\""} "swap-acked command recorded as sent"
 assert {[field [rec] seq] == 2} "seq advances"
+
+# flip: -1 (a swapsync strategy without a hardware flip time) is not a
+# timestamp either; a positive value is stored as given
+rmtSend "fake_flip -1"
+set r [rmtSend "show_stim 5"]
+assert {$r eq "show_stim 5"} "negative flip: header still stripped"
+set j [rec]
+assert {[field $j flip] eq "null"} "flip null when stim2 sent -1 ([field $j flip])"
+assert {[field $j status] eq "\"ok\""} "status ok with flip -1"
+assert {[field $j swap] == 42} "other header fields intact with flip -1"
+rmtSend "fake_flip 1761350400123456"
+rmtSend "!flip_timed"
+assert {[field [rec] flip] == 1761350400123456} "a real flip time is stored as given"
+rmtSend "fake_flip 0"
 
 # an empty result under the header is still an empty result to the caller
 set r [rmtSend "fake_ack 1"]
@@ -202,6 +216,8 @@ assert {[::ess::stim_cmd_parse_ack "ACK1 1.000 2.000 3 4\nres"] eq {1 1.000 2.00
     "parse_ack splits header and result"
 assert {[::ess::stim_cmd_parse_ack "ACK1 1.000 2.000 3 4"] eq {1 1.000 2.000 3 4 {}}} \
     "parse_ack: header with no newline has an empty result"
+assert {[::ess::stim_cmd_parse_ack "ACK1 100.000 101.500 42 -1\nres"] eq {1 100.000 101.500 42 -1 res}} \
+    "parse_ack accepts a signed flip"
 assert {[::ess::stim_cmd_parse_ack "ACK1 x y z w\nres"] eq 0} "parse_ack rejects non-numeric fields"
 assert {[::ess::stim_cmd_parse_ack "ACK2 1 2 3 4\nres"] eq 0} "parse_ack rejects another tag"
 assert {[::ess::json_escape {plain}] eq {plain}} "json_escape fast path"
