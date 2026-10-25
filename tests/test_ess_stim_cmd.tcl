@@ -318,21 +318,27 @@ if { $::stim_bind_parser eq "tcljson" } {
 }
 
 # --- 7b. a stim2 with stimFrameLog: the per-frame record -----------------
-# enable: raw command (no stim/cmd record), flag 1, the fake saw the host
+# enable: raw command (no stim/cmd record), flag 1, the fake saw the host.
+# stim2 answers the start with its status dict (connected 0 until the
+# writer thread has connected): anything but an error means "taken"
 proc fake_frame_state {} { return [::ess::rmtSend_raw fake_frame_state] }
 set seq0 [field [rec] seq]
+set r [::ess::rmtSend_raw [list stimFrameLog stimhost.local 1]]
+assert {[dict get $r enabled] == 1 && [dict get $r connected] == 0} \
+    "a start answers the status dict, connected 0 at once ($r)"
+assert {[::ess::rmtSend_raw [list stimFrameLog stimhost.local 0]] ne ""} "a stop answers the status dict too"
 assert {[::ess::stim_frame_enable stimhost.local] == 1} "stim_frame_enable returns 1 on a stim2 with the command"
 assert {$::ess::stim_frame_log == 1} "stim_frame_log is 1"
 assert {$::ess::stim_frame_host eq "stimhost.local"} "stim_frame_host remembered"
 set st [fake_frame_state]
-assert {[dict get $st enabled] == 1 && [dict get $st host] eq "stimhost.local" && [dict get $st enables] == 1} \
+assert {[dict get $st enabled] == 1 && [dict get $st host] eq "stimhost.local" && [dict get $st enables] == 2} \
     "the fake saw stimFrameLog stimhost.local 1 ($st)"
 assert {[field [rec] seq] == $seq0} "the enable is not a stim/cmd record"
-# the status query a real stim2 answers (what an operator would type)
-set status [::ess::rmtSend_raw [list stimFrameLog stimhost.local]]
+# the bare status query (stim2's probe form; what an operator would type)
+set status [::ess::rmtSend_raw stimFrameLog]
 assert {[dict get $status enabled] == 1 && [dict get $status host] eq "stimhost.local" &&
         [dict exists $status sent] && [dict exists $status dropped] && [dict get $status connected] == 1} \
-    "stimFrameLog <host> answers the status dict ($status)"
+    "bare stimFrameLog answers the status dict ($status)"
 # the open_datafile step: with the flag 1 exactly one match, the documented one
 set ::matches {}
 proc ::ess::dservLoggerAddMatch { args } { lappend ::matches $args }
@@ -343,10 +349,10 @@ assert {$::matches eq {{/tmp/x.ess stim/frame 0 100 1}}} \
 assert {[::ess::stim_frame_disable] == 1} "stim_frame_disable sends the stop when the flag is 1"
 assert {$::ess::stim_frame_log == 0} "flag 0 after disable"
 set st [fake_frame_state]
-assert {[dict get $st enabled] == 0 && [dict get $st disables] == 1} "the fake saw stimFrameLog stimhost.local 0 ($st)"
+assert {[dict get $st enabled] == 0 && [dict get $st disables] == 2} "the fake saw stimFrameLog stimhost.local 0 ($st)"
 assert {[field [rec] seq] == $seq0} "the disable is not a stim/cmd record either"
 assert {[::ess::stim_frame_disable] == 0} "a second disable is a no-op"
-assert {[dict get [fake_frame_state] disables] == 1} "... and sends nothing"
+assert {[dict get [fake_frame_state] disables] == 2} "... and sends nothing"
 set ::matches {}
 assert {[::ess::stim_frame_log_match /tmp/x.ess] == 0 && $::matches eq {}} \
     "stim_frame_log_match adds nothing when the flag is 0"
@@ -393,8 +399,8 @@ assert {[catch {::ess::stim_frame_enable stimhost.local} r] == 0 && $r == 0} \
     "old stim2: stim_frame_enable returns 0 without error"
 assert {$::ess::stim_frame_log == 0} "old stim2: stim_frame_log is 0"
 assert {[dict get [fake_frame_state] enables] == $enables0} "old stim2: nothing was enabled"
-assert {[string match "!TCL_ERROR*" [::ess::rmtSend_raw [list stimFrameLog stimhost.local]]]} \
-    "old stim2: the status query errors too"
+assert {[string match "!TCL_ERROR*" [::ess::rmtSend_raw stimFrameLog]]} \
+    "old stim2: the bare probe errors too"
 set ::matches {}
 assert {[::ess::stim_frame_log_match /tmp/x.ess] == 0 && $::matches eq {}} "old stim2: no stim/frame match"
 assert {[::ess::stim_frame_disable] == 0} "old stim2: disable is a no-op"

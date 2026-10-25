@@ -32,15 +32,15 @@
 # (the ACK1 header still applies to both when requested).
 #
 # The per-frame record command (the stim2 side of the stim_frame_log
-# block), while frame mode is on:
-#   stimFrameLog <host> 1  "" -- and remembers enabled 1, the host, and
-#                          counts the enables (::frame_enables)
-#   stimFrameLog <host> 0  "" -- enabled 0, counts the disables
-#   stimFrameLog <host>    the status dict a real stim2 answers:
-#                          {enabled <0|1> host <host> sent <n> dropped <n>
-#                           connected <0|1>} (sent/dropped stay 0 here --
-#                          the fake never pushes a frame -- and connected
-#                          mirrors enabled)
+# block), while frame mode is on -- EVERY form answers the status dict a
+# real stim2 answers, {enabled <0|1> host <host> sent <n> dropped <n>
+# connected <0|1>} (sent/dropped stay 0 here, the fake never pushes a
+# frame; connected is 0 in the reply to a start, as in stim2, whose writer
+# thread connects asynchronously, and mirrors enabled afterwards):
+#   stimFrameLog <host> 1  enabled 1, remembers the host, counts the
+#                          enables (::frame_enables)
+#   stimFrameLog <host> 0  enabled 0, counts the disables
+#   stimFrameLog           the status (stim2's probe form)
 # and after "fake_frame 0", all three: "!TCL_ERROR invalid command name
 # \"stimFrameLog\"" (a stim2 without the command). "fake_frame_state"
 # answers {enabled <0|1> host <host> enables <n> disables <n>} for the
@@ -65,28 +65,30 @@ set ::frame_host {}
 set ::frame_enables 0
 set ::frame_disables 0
 
-# stimFrameLog <host> ?0|1?, as a stim2 with the command answers it
+# stimFrameLog ?<host> 0|1?, as a stim2 with the command answers it
+proc frame_status { connected } {
+    return [list enabled $::frame_enabled host $::frame_host \
+                sent 0 dropped 0 connected $connected]
+}
 proc frame_log { args } {
     if { !$::frame } {
         return "!TCL_ERROR invalid command name \"stimFrameLog\""
     }
-    lassign $args host flag
-    if { [llength $args] == 1 } {
-        return [list enabled $::frame_enabled host $::frame_host \
-                    sent 0 dropped 0 connected $::frame_enabled]
-    }
+    if { [llength $args] == 0 } { return [frame_status $::frame_enabled] }
     if { [llength $args] != 2 } {
-        return "!TCL_ERROR wrong # args: should be \"stimFrameLog host ?0|1?\""
+        return "!TCL_ERROR wrong # args: should be \"stimFrameLog ?host 0|1?\""
     }
+    lassign $args host flag
     set ::frame_host $host
     if { $flag } {
         set ::frame_enabled 1
         incr ::frame_enables
-    } else {
-        set ::frame_enabled 0
-        incr ::frame_disables
+        # a start answers before the writer thread has connected
+        return [frame_status 0]
     }
-    return ""
+    set ::frame_enabled 0
+    incr ::frame_disables
+    return [frame_status 0]
 }
 
 proc reply_for { cmd } {
@@ -123,6 +125,8 @@ proc reply_for { cmd } {
         }
     } elseif { [string trim $cmd] eq "catch {stim::unbind_all}" } {
         set echo [expr {$::stimess ? 0 : 1}]
+    } elseif { [string trim $cmd] eq "stimFrameLog" } {
+        set echo [frame_log]
     } elseif { [string match "stimFrameLog *" $cmd] } {
         # (string match first: an arbitrary command text need not be a list)
         set echo [frame_log {*}[lrange $cmd 1 end]]

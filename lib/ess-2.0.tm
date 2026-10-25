@@ -477,22 +477,32 @@ namespace eval ess {
     # stim2's per-frame record, stim/frame, switched on by ESS for as long
     # as a system is loaded and written into every datafile.
     #
-    # stim2 (new enough) has `stimFrameLog <host> ?0|1?`: with 1 it starts a
+    # stim2 (new enough) has `stimFrameLog ?<host> 0|1?`: with 1 it starts a
     # background writer that pushes ONE stim/frame datapoint per buffer
-    # swap to dserv's binary return port (4620) -- a DSERV_INT64 array of 7
-    # values {frame swapcount flip_us ticks_us missed cmds_applied
-    # ds_dispatched}; with 0 it stops the writer; with no flag it answers a
-    # status dict {enabled host sent dropped connected}. An older stim2
-    # answers "!TCL_ERROR invalid command name ...", and then nothing here
-    # does anything. <host> is the dserv host as stim2 knows it: the same
-    # value configure_stim connects with ($host, stim2's ::dservhost), so
-    # the writer and the command socket point at the same dserv.
+    # swap to dserv's binary return port (4620; <host> may be host:port) --
+    # a DSERV_INT64 array of 7 values {frame swapcount flip_us ticks_us
+    # missed cmds_applied ds_dispatched}, where frame is 1-based and
+    # contiguous as received (drops show as swapcount gaps), flip_us is the
+    # hardware flip time (CLOCK_REALTIME us; -1 on a glfinish Mac) and
+    # ticks_us is stim2's free-running clock in MICROseconds -- the ACK1
+    # header's dq/done and StimTicksF are the same clock in ms, so
+    # ticks_us / 1000.0 lines up with them. With 0 it stops the writer.
+    # EVERY form answers the status dict {enabled 0|1 host <h> sent <n>
+    # dropped <n> connected 0|1} (a start answers at once with connected 0:
+    # the writer thread connects asynchronously); the bare form is the
+    # probe. An older stim2 answers "!TCL_ERROR invalid command name ...",
+    # and then nothing here does anything. <host> is the dserv host as
+    # stim2 knows it: the same value configure_stim connects with ($host,
+    # stim2's ::dservhost), so the writer and the command socket point at
+    # the same dserv.
     #
     #   configure_stim          stim_frame_enable $host, right after the ACK
     #                           header probe (raw command, so like the probe
     #                           it is not a stim/cmd record). Sets
-    #                           stim_frame_log to 1 when stim2 took it, 0 on
-    #                           an error reply; remembers the host. Re-done
+    #                           stim_frame_log to 1 when stim2 took it (the
+    #                           status dict, or anything that is not an
+    #                           error), 0 on an error reply; remembers the
+    #                           host. Re-done
     #                           on every connect, so a restarted stim2 of
     #                           another version is picked up. The not-
     #                           connected branch records 0.
