@@ -44,6 +44,12 @@ public:
         if (suffix && strcmp(suffix, ".ess") == 0) {
             dfuFreeDynGroup(dg);  // don't need the pre-allocated one
             DYN_GROUP* essdg = nullptr;
+            // Keep wide payloads: without this an int64 datapoint (e.g. the
+            // seven-field stim/frame record) has no narrower dg type to land
+            // in and shows up with an empty payload, doubles are narrowed to
+            // float32, and the timestamp column is float32 seconds. The table
+            // renders DF_INT64 and DF_DOUBLE, so there is no reason to narrow.
+            dslog_set_wide_types(1);
             int rc = dslog_to_dg(const_cast<char*>(filename), &essdg);
             if (rc != DSLOG_OK || !essdg) {
                 if (errorMsg) {

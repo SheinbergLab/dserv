@@ -164,8 +164,12 @@ void DgTable::formatCellValue(char* buf, size_t bufsize, int row, int col) const
             double v = vals[row];
             if (v == (long long)v && fabs(v) < 1e15) {
                 snprintf(buf, bufsize, "%.1f", v);
-            } else if (fabs(v) < 0.001 || fabs(v) >= 10000) {
+            } else if (fabs(v) < 0.001 || fabs(v) >= 1e12) {
                 snprintf(buf, bufsize, "%.6e", v);
+            } else if (fabs(v) >= 10000) {
+                // seconds into a long session, or milliseconds: keep the
+                // microsecond fraction rather than six significant digits
+                snprintf(buf, bufsize, "%.6f", v);
             } else {
                 snprintf(buf, bufsize, "%.8g", v);
             }

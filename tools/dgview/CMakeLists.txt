@@ -58,8 +58,16 @@ elseif(APPLE)
     find_library(LIBLZ4 NAMES "liblz4.a" lz4)
     find_library(LIBFLTK NAMES "libfltk.a")
     find_library(LIBFLTK_ZLIB NAMES "libfltk_z.a")
-    set(LIBDG "dg")
-    
+    # libdg: -DLIBDG_PATH=<dir> links a specific build (e.g. the dlsh tree's
+    # build/libdg) instead of whatever /usr/local/lib holds; CI installs a
+    # fresh one, a developer Mac may have a stale one.
+    if(DEFINED LIBDG_PATH)
+        find_library(LIBDG NAMES "libdg.a" dg PATHS ${LIBDG_PATH} NO_DEFAULT_PATH)
+    endif()
+    if(NOT LIBDG)
+        set(LIBDG "dg")
+    endif()
+
     # For app bundle
     set(MACOSX_BUNDLE_ICON_FILE dgview.icns)
 else()
