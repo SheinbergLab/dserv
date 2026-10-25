@@ -11,7 +11,7 @@
 # Replies:
 #   stimAckHeader          "1" while ack mode is on, else the error string a
 #                          stim2 without the command would return
-#   ＠<cmd>            header + echo:  "ACK1 100.000 101.500 42 <flip>\n<echo>"
+#   @<cmd>            header + echo:  "ACK1 100.000 101.500 42 <flip>\n<echo>"
 #                          (<flip> is 0 until "fake_flip <n>" sets it; -1 is
 #                          what stim2 sends when its swapsync strategy has
 #                          no hardware flip time)
@@ -32,7 +32,7 @@ set ::flip 0
 
 proc reply_for { cmd } {
     set hdr 0
-    if { [string index $cmd 0] eq "\uFF20" } {
+    if { [string index $cmd 0] eq "@" } {
         set hdr 1
         set cmd [string range $cmd 1 end]
     }

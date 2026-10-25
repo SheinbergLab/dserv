@@ -147,13 +147,13 @@ namespace eval ess {
     # carries a complete per-command record including the ones between
     # trials. Zero cost on stim2's render thread: the timing fields come
     # from an opt-in reply header stim2 prepends when a command's first
-    # char is U+FF20 ('＠'):
+    # char is ASCII '@' (0x40):
     #
     #     ACK1 <ticks_dequeue> <ticks_done> <swapcount> <flipwall_us>\n<result>
     #
     # ticks are stim2's free-running clock in ms (%.3f), swapcount its
     # frame counter, flipwall_us the hardware flip time (CLOCK_REALTIME us;
-    # 0 unless the command was a '!' swap-acked one -- "＠!cmd" -- and -1
+    # 0 unless the command was a '!' swap-acked one -- "@!cmd" -- and -1
     # when the swapsync strategy has no flip time to report), and
     # <result> is byte-for-byte what the reply would have been without the
     # prefix (possibly empty, possibly "!TCL_ERROR ..."). The wrapper
@@ -292,7 +292,7 @@ namespace eval ess {
         variable stim_cmd_seq
         set cmd [lindex $args 0]
         set hdr $stim_ack_header
-        if { $hdr } { lset args 0 \uFF20$cmd }
+        if { $hdr } { lset args 0 @$cmd }
 
         set t_send [now]
         set reply [::ess::rmtSend_raw {*}$args]
