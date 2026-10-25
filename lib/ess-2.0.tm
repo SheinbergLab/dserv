@@ -934,9 +934,12 @@ oo::class create System {
             ::ess::stim_bind_publish 0
             set ::ess::stim_frame_log 0
             # ... and no script sent: stim/script is the empty record
-            # (stim_script block), with no stim2 version to report
+            # (stim_script block), with no stim2 version to report. The
+            # variant is ::ess::current(variant): configure_stim runs
+            # inside protocol_init, before set_variant, so _variantname
+            # is not this load's yet (same for the two publishes below).
             set ::ess::stim2_version {}
-            ::ess::stim_script_publish {} {} [now] $_systemname $_protocolname $_variantname
+            ::ess::stim_script_publish {} {} [now] $_systemname $_protocolname $::ess::current(variant)
             if { [::ess::stim_required] } {
                 ::ess::ess_error \
                     "STIM REQUIRED but not connected: no display at $host" "stim"
@@ -970,7 +973,7 @@ oo::class create System {
         ::ess::stim_bind_publish 0
         # Same for the script text (stim_script block): the empty record
         # until this load's script has gone out and been asked about.
-        ::ess::stim_script_publish {} {} [now] $_systemname $_protocolname $_variantname
+        ::ess::stim_script_publish {} {} [now] $_systemname $_protocolname $::ess::current(variant)
 
         variable screen_halfx [rmtSend "screen_set HalfScreenDegreeX"]
         variable screen_halfy [rmtSend "screen_set HalfScreenDegreeY"]
@@ -1335,7 +1338,7 @@ oo::class create System {
         # "package" tells which stimess the script ran against; timestamped
         # at the send. Its hash is the one the load's stim/cmd record holds.
         ::ess::stim_script_publish $stimfile $script $t_script \
-            $_systemname $_protocolname $_variantname
+            $_systemname $_protocolname $::ess::current(variant)
         return 1
     }
 

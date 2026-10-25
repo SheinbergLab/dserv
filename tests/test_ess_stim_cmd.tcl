@@ -187,7 +187,9 @@ assert {$::ess::stim2_version eq ""} "stim2_version starts empty"
 set version_at [string first "::ess::stim_script_version\n" $src $se]
 assert {$version_at > [string first "::ess::stim_cmd_probe" $src] && $version_at < $enable_at} \
     "configure_stim calls stim_script_version right after the probe"
-set empty_pub "::ess::stim_script_publish {} {} \[now\] \$_systemname \$_protocolname \$_variantname\n"
+# (the variant is ::ess::current(variant), not the System's _variantname:
+# configure_stim runs inside protocol_init, before set_variant)
+set empty_pub "::ess::stim_script_publish {} {} \[now\] \$_systemname \$_protocolname \$::ess::current(variant)\n"
 set empty1_at [string first $empty_pub $src $se]
 set empty2_at [string first $empty_pub $src [expr {$empty1_at + 1}]]
 assert {$empty1_at > $se && $empty1_at < $enable_at &&
@@ -202,8 +204,9 @@ assert {$tscript_at > [string first "set script \[read \$f\]" $src] && $tscript_
     "configure_stim takes t_script just before sending the script"
 set full_pub_at [string first "::ess::stim_script_publish \$stimfile \$script \$t_script" $src]
 assert {$full_pub_at > [string first "\n        ::ess::stim_bind_publish\n" $src] &&
-        [string first "\$_systemname \$_protocolname \$_variantname" $src $full_pub_at] > $full_pub_at} \
-    "configure_stim publishes the full record after stim_bind_publish, with the load's names"
+        [string first "\$_systemname \$_protocolname \$::ess::current(variant)" $src $full_pub_at] > $full_pub_at &&
+        [string first "stim_script_publish \$stimfile \$script \$t_script \\\n            \$_systemname \$_protocolname \$_variantname" $src] < 0} \
+    "configure_stim publishes the full record after stim_bind_publish, with the load's names (variant from current)"
 set script_match_at [string first "dservLoggerAddMatch \$filename stim/script 0 0 1" $src]
 assert {$script_match_at > [string first "dservLoggerAddMatch \$filename stim/cmd 0 0 1" $src] &&
         $script_match_at < $match_at} \
