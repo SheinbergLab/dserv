@@ -2,7 +2,9 @@
 # sent to stim2 as a stim/cmd JSON datapoint (lib/ess-2.0.tm, the block
 # between "# BEGIN stim_cmd_log" and "# END stim_cmd_log"), and the stim2
 # binding table it publishes as stim/bind (the "# BEGIN stim_bind" block:
-# stim_bind_publish, the query-and-publish step configure_stim calls).
+# stim_bind_publish, the query-and-publish step configure_stim calls), and
+# the per-frame record it switches on in stim2 (the "# BEGIN stim_frame_log"
+# block: stim_frame_enable / stim_frame_disable / stim_frame_log_match).
 #
 # Run by ctest as:
 #     dserv -c tests/test_ess_stim_cmd.tcl
@@ -14,10 +16,14 @@
 # wrapper's own code, evaluated from the source file. What is fake: stim2
 # (tests/fake_stim2.tcl, a child tclsh speaking the length-prefixed
 # protocol). Not covered: configure_stim's calls of the probe, of
-# `catch {stim::unbind_all}` and of stim_bind_publish, and open_datafile's
+# stim_frame_enable, of `catch {stim::unbind_all}` and of
+# stim_bind_publish, unload_system's stim_frame_disable, and open_datafile's
 # logger matches -- those lines are read from the source below instead,
 # since the whole of ess-2.0.tm needs dlsh and a systems tree; the
-# ess_stim_source test exercises configure_stim itself. The stim_bind
+# ess_stim_source test exercises configure_stim itself. The factored
+# open_datafile step for stim/frame, stim_frame_log_match, IS run here,
+# against a recording stand-in for dservLoggerAddMatch (the real command
+# wants an open logger). The stim_bind
 # parser is tcljson (dlsh.zip): where the installed dlsh.zip exists it is
 # mounted and the real parser runs; elsewhere (CI) the documented regexp
 # fallback does, and the test says which.
@@ -127,6 +133,37 @@ assert {[string first "dservLoggerAddMatch \$filename \$_bound 1 0 1" $src] > 0}
     "open_datafile subscribes each bound stream obs-limited, unbuffered, every record"
 assert {[string first "dservTouch stim/bind" $src] > [string first "dservLoggerResume \$filename" $src]} \
     "open_datafile re-emits stim/bind after the logger is running"
+
+# --- the stim_frame_log block, same way --------------------------------
+set fb [string first "# BEGIN stim_frame_log" $src]
+set fe [string first "# END stim_frame_log" $src]
+assert {$fb > $be && $fe > $fb} "found the stim_frame_log block in lib/ess-2.0.tm"
+namespace eval ess [string range $src $fb [expr {$fe - 1}]]
+assert {[info procs ::ess::stim_frame_enable] ne "" && [info procs ::ess::stim_frame_disable] ne "" &&
+        [info procs ::ess::stim_frame_log_match] ne ""} "stim_frame_{enable,disable,log_match} defined"
+assert {$::ess::stim_frame_log == 0} "stim_frame_log starts 0"
+
+# the call sites outside the block: configure_stim enables right after the
+# probe (before anything the logged wrapper sends), records 0 when not
+# connected; unload_system disables after the system deinit callback;
+# open_datafile calls the factored match step next to the stim/cmd match
+set enable_at [string first "::ess::stim_frame_enable \$host" $src]
+assert {$enable_at > [string first "::ess::stim_cmd_probe" $src] && $enable_at < $unbind_at} \
+    "configure_stim calls stim_frame_enable \$host right after the probe"
+assert {[string first "set ::ess::stim_frame_log 0" $src] > $fe &&
+        [string first "set ::ess::stim_frame_log 0" $src] < $enable_at} \
+    "configure_stim records flag 0 on the not-connected branch"
+set deinit_at [string first "catch {\$s deinit}" $src]
+set disable_at [string first "\n            stim_frame_disable\n" $src]
+assert {$deinit_at > 0 && $disable_at > $deinit_at &&
+        $disable_at < [string first "set current(open_system) 0" $src $deinit_at]} \
+    "unload_system calls stim_frame_disable after the system deinit callback"
+set match_at [string first "\n        stim_frame_log_match \$filename\n" $src]
+assert {$match_at > [string first "dservLoggerAddMatch \$filename stim/cmd 0 0 1" $src] &&
+        $match_at < [string first "dservLoggerAddMatch \$filename stim/bind 0 0 1" $src]} \
+    "open_datafile calls stim_frame_log_match next to the stim/cmd match"
+assert {[regexp {(?s)proc stim_frame_log_match \{ filename \} \{.*?dservLoggerAddMatch \$filename stim/frame 0 100 1} $src]} \
+    "stim_frame_log_match subscribes stim/frame not obs-limited, buffered 100, every record"
 
 # --- the fake stim2 -------------------------------------------------------
 set tclsh $::env(ESS_TEST_TCLSH)
@@ -280,6 +317,49 @@ if { $::stim_bind_parser eq "tcljson" } {
     assert {[dservGet stim/bind] eq $table} "stim/bind is the table again"
 }
 
+# --- 7b. a stim2 with stimFrameLog: the per-frame record -----------------
+# enable: raw command (no stim/cmd record), flag 1, the fake saw the host
+proc fake_frame_state {} { return [::ess::rmtSend_raw fake_frame_state] }
+set seq0 [field [rec] seq]
+assert {[::ess::stim_frame_enable stimhost.local] == 1} "stim_frame_enable returns 1 on a stim2 with the command"
+assert {$::ess::stim_frame_log == 1} "stim_frame_log is 1"
+assert {$::ess::stim_frame_host eq "stimhost.local"} "stim_frame_host remembered"
+set st [fake_frame_state]
+assert {[dict get $st enabled] == 1 && [dict get $st host] eq "stimhost.local" && [dict get $st enables] == 1} \
+    "the fake saw stimFrameLog stimhost.local 1 ($st)"
+assert {[field [rec] seq] == $seq0} "the enable is not a stim/cmd record"
+# the status query a real stim2 answers (what an operator would type)
+set status [::ess::rmtSend_raw [list stimFrameLog stimhost.local]]
+assert {[dict get $status enabled] == 1 && [dict get $status host] eq "stimhost.local" &&
+        [dict exists $status sent] && [dict exists $status dropped] && [dict get $status connected] == 1} \
+    "stimFrameLog <host> answers the status dict ($status)"
+# the open_datafile step: with the flag 1 exactly one match, the documented one
+set ::matches {}
+proc ::ess::dservLoggerAddMatch { args } { lappend ::matches $args }
+assert {[::ess::stim_frame_log_match /tmp/x.ess] == 1} "stim_frame_log_match adds a match when the flag is 1"
+assert {$::matches eq {{/tmp/x.ess stim/frame 0 100 1}}} \
+    "the match is stim/frame, not obs-limited, buffered 100, every record ($::matches)"
+# disable: once, raw, flag back to 0; a second disable sends nothing
+assert {[::ess::stim_frame_disable] == 1} "stim_frame_disable sends the stop when the flag is 1"
+assert {$::ess::stim_frame_log == 0} "flag 0 after disable"
+set st [fake_frame_state]
+assert {[dict get $st enabled] == 0 && [dict get $st disables] == 1} "the fake saw stimFrameLog stimhost.local 0 ($st)"
+assert {[field [rec] seq] == $seq0} "the disable is not a stim/cmd record either"
+assert {[::ess::stim_frame_disable] == 0} "a second disable is a no-op"
+assert {[dict get [fake_frame_state] disables] == 1} "... and sends nothing"
+set ::matches {}
+assert {[::ess::stim_frame_log_match /tmp/x.ess] == 0 && $::matches eq {}} \
+    "stim_frame_log_match adds nothing when the flag is 0"
+# re-enable with another host (a reconnect to a different display), then
+# a disable when stim2 has gone away must not throw
+assert {[::ess::stim_frame_enable 10.0.0.7] == 1 && [dict get [fake_frame_state] host] eq "10.0.0.7"} \
+    "re-enable towards another host reaches the fake"
+rmtClose
+assert {[catch {::ess::stim_frame_disable} r] == 0 && $r == 1 && $::ess::stim_frame_log == 0} \
+    "disable with stim2 gone: no error, flag 0"
+assert {[rmtOpen localhost $port] == 1} "reconnected after the disable"
+assert {[::ess::stim_frame_disable] == 0} "nothing left to disable after the reconnect"
+
 # --- 8. old stim2: probe fails, nothing prefixed -----------------------
 rmtSend "fake_ack 0"
 assert {[::ess::stim_cmd_probe] == 0} "probe: an old stim2 errors on stimAckHeader"
@@ -304,6 +384,22 @@ assert {[dservGet stim/bind] eq $empty} "old stim2: stim/bind is the empty table
 assert {[field [rec] cmd] eq "\"stim::bindings_json\"" && [field [rec] status] eq "\"error\""} \
     "old stim2: the failed query is a stim/cmd error record"
 rmtSend "fake_stimess 1"
+
+# ... and no stimFrameLog: the enable records 0, no error propagates,
+# nothing reaches the fake's writer, the datafile gets no match
+rmtSend "fake_frame 0"
+set enables0 [dict get [fake_frame_state] enables]
+assert {[catch {::ess::stim_frame_enable stimhost.local} r] == 0 && $r == 0} \
+    "old stim2: stim_frame_enable returns 0 without error"
+assert {$::ess::stim_frame_log == 0} "old stim2: stim_frame_log is 0"
+assert {[dict get [fake_frame_state] enables] == $enables0} "old stim2: nothing was enabled"
+assert {[string match "!TCL_ERROR*" [::ess::rmtSend_raw [list stimFrameLog stimhost.local]]]} \
+    "old stim2: the status query errors too"
+set ::matches {}
+assert {[::ess::stim_frame_log_match /tmp/x.ess] == 0 && $::matches eq {}} "old stim2: no stim/frame match"
+assert {[::ess::stim_frame_disable] == 0} "old stim2: disable is a no-op"
+rmtSend "fake_frame 1"
+rename ::ess::dservLoggerAddMatch {}
 
 # --- 9. pure helpers ----------------------------------------------------
 assert {[::ess::stim_bind_names $table] eq {ess/dial/pointer planko/catcher}} \

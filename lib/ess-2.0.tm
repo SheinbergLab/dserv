@@ -472,6 +472,90 @@ namespace eval ess {
     }
     # END stim_bind
 
+    # BEGIN stim_frame_log
+    #
+    # stim2's per-frame record, stim/frame, switched on by ESS for as long
+    # as a system is loaded and written into every datafile.
+    #
+    # stim2 (new enough) has `stimFrameLog <host> ?0|1?`: with 1 it starts a
+    # background writer that pushes ONE stim/frame datapoint per buffer
+    # swap to dserv's binary return port (4620) -- a DSERV_INT64 array of 7
+    # values {frame swapcount flip_us ticks_us missed cmds_applied
+    # ds_dispatched}; with 0 it stops the writer; with no flag it answers a
+    # status dict {enabled host sent dropped connected}. An older stim2
+    # answers "!TCL_ERROR invalid command name ...", and then nothing here
+    # does anything. <host> is the dserv host as stim2 knows it: the same
+    # value configure_stim connects with ($host, stim2's ::dservhost), so
+    # the writer and the command socket point at the same dserv.
+    #
+    #   configure_stim          stim_frame_enable $host, right after the ACK
+    #                           header probe (raw command, so like the probe
+    #                           it is not a stim/cmd record). Sets
+    #                           stim_frame_log to 1 when stim2 took it, 0 on
+    #                           an error reply; remembers the host. Re-done
+    #                           on every connect, so a restarted stim2 of
+    #                           another version is picked up. The not-
+    #                           connected branch records 0.
+    #   unload_system           stim_frame_disable, after the system's deinit
+    #                           callback: `stimFrameLog <host> 0`, only when
+    #                           the flag is 1, under catch (stim2 may be gone
+    #                           -- the reply is ignored either way), and the
+    #                           flag goes back to 0. A reload is unload then
+    #                           configure_stim, so the writer is off between
+    #                           systems and on again with the next one.
+    #   stim/frame              stim2's record, as it arrives on 4620.
+    #
+    # Logging policy (open_datafile, stim_frame_log_match): NOT obs-limited
+    # -- a frame-time gap between trials is exactly what the record is for
+    # -- every record, BUFFERED 100. Unlike the stim/bind streams this is a
+    # fixed-width binary sample (7 int64 = 56 bytes), so the log buffer's
+    # concatenation of successive points is what it was made for: one
+    # record per ~1.7 s at 60 Hz instead of 60 writes a second, and a reader
+    # splits the buffered array back into 7-column rows. Added only when the
+    # flag is 1 (an old stim2 never sends the stream). The record is an int64
+    # array: dslog::read exposes it only under `dslog::wideTypes 1` -- the
+    # default read (dslog.c, wide types off) DROPS DSERV_INT64 values, so a
+    # <ds>stim/frame column is empty there.
+    #
+    # Self-contained like the two blocks above: tests/test_ess_stim_cmd.tcl
+    # evaluates the text between these markers in `namespace eval ess`.
+    #
+    variable stim_frame_log 0
+    variable stim_frame_host {}
+
+    # Ask stim2 to start its per-frame writer towards <host>. Returns the
+    # flag it set.
+    proc stim_frame_enable { host } {
+        variable stim_frame_log
+        variable stim_frame_host
+        set stim_frame_host $host
+        set r "!TCL_ERROR not sent"
+        catch { set r [::ess::rmtSend_raw [list stimFrameLog $host 1]] }
+        set stim_frame_log [expr {[string match "!TCL_ERROR*" $r] ? 0 : 1}]
+        return $stim_frame_log
+    }
+
+    # Stop the writer, if this ESS started one. Never throws; returns 1 when
+    # a stop was sent.
+    proc stim_frame_disable {} {
+        variable stim_frame_log
+        variable stim_frame_host
+        if { !$stim_frame_log } { return 0 }
+        set stim_frame_log 0
+        catch { ::ess::rmtSend_raw [list stimFrameLog $stim_frame_host 0] }
+        return 1
+    }
+
+    # The datafile match for stim/frame (open_datafile): see the logging
+    # policy above. Returns 1 when a match was added.
+    proc stim_frame_log_match { filename } {
+        variable stim_frame_log
+        if { !$stim_frame_log } { return 0 }
+        dservLoggerAddMatch $filename stim/frame 0 100 1
+        return 1
+    }
+    # END stim_frame_log
+
     #
     # stimdg validation
     #
@@ -718,8 +802,9 @@ oo::class create System {
             # stim2 dies between system loads.
             #
             # no stim2, no bindings: stim/bind is the empty table (and the
-            # datafile adds no stream matches)
+            # datafile adds no stream matches), and no per-frame record
             ::ess::stim_bind_publish 0
+            set ::ess::stim_frame_log 0
             if { [::ess::stim_required] } {
                 ::ess::ess_error \
                     "STIM REQUIRED but not connected: no display at $host" "stim"
@@ -734,6 +819,11 @@ oo::class create System {
         # block)? Re-probed on every connect, so a restarted stim2 of another
         # version is picked up; everything below is then recorded with it.
         ::ess::stim_cmd_probe
+
+        # Start stim2's per-frame record (the stim_frame_log block) towards
+        # this dserv; a no-op, flag 0, on a stim2 without stimFrameLog. It
+        # stays on until unload_system.
+        ::ess::stim_frame_enable $host
 
         # Drop the previous stim script's datapoint bindings (stim2's stimess
         # package, see the stim_bind block) so this load starts clean; the
@@ -2010,6 +2100,10 @@ namespace eval ess {
             if {[catch {$s deinit} err]} {
                 ess_warning "system deinit failed: $err" "system"
             }
+
+            # stop stim2's per-frame record (the stim_frame_log block): only
+            # when configure_stim turned it on, never throws
+            stim_frame_disable
 
             set current(open_system) 0
             set current(system) {}
@@ -3941,6 +4035,13 @@ namespace eval ess {
         # and NOT obs-limited, so the records between trials -- the ones
         # that set the next trial up -- are kept too.
         dservLoggerAddMatch $filename stim/cmd 0 0 1
+
+        # stim2's per-frame record (the stim_frame_log block), only when this
+        # stim2 produces it: not obs-limited, buffered 100, every record --
+        # `dservLoggerAddMatch $filename stim/frame 0 100 1`. The record is
+        # an int64 array; dslog::read exposes it only under
+        # `dslog::wideTypes 1`.
+        stim_frame_log_match $filename
 
         # stim2's datapoint bindings (the stim_bind block): the table itself,
         # unbuffered and not obs-limited (set at configure, re-emitted by the
