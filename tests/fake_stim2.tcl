@@ -53,12 +53,18 @@
 #   set StimVersion        "20" (stim2's Tcl-linked version int), or after
 #                          "fake_version 0" the "can't read" error a stim2
 #                          without the variable would give
+#   package present dlsh   "0.20.3" (the dlsh package stim2 loaded), or
+#                          after "fake_dlsh 0" the "package dlsh is not
+#                          present" error an interp without it gives
+#
+# A library shipped by configure_stim -libs (the stim_lib block) is just a
+# large command text: echoed like any other command.
 #
 # Control commands (never echoed): "fake_ack 0|1", "fake_rawecho 0|1",
 # "fake_flip <n>", "fake_stimess 0|1", "fake_bindings <json>" (replaces the
 # table; "fake_bindings" alone restores the default), "fake_frame 0|1",
 # "fake_frame_state", "fake_version 0|1", "fake_stimversion 0|1",
-# "fake_quit". The process also
+# "fake_dlsh 0|1", "fake_quit". The process also
 # exits on its own after 60 s so a crashed test cannot leave it behind.
 
 set portfile [lindex $argv 0]
@@ -75,6 +81,7 @@ set ::frame_enables 0
 set ::frame_disables 0
 set ::version 1
 set ::stimversion 1
+set ::dlsh 1
 
 # stimFrameLog ?<host> 0|1?, as a stim2 with the command answers it
 proc frame_status { connected } {
@@ -139,6 +146,13 @@ proc reply_for { cmd } {
             # version query; raw, so never under a header)
             if { $::version } { return 20 }
             return "!TCL_ERROR can't read \"StimVersion\": no such variable"
+        }
+        "fake_dlsh *"    { set ::dlsh [lindex $cmd 1]; return "" }
+        "package present dlsh" {
+            # the dlsh package version stim2 loaded (the stim_script block's
+            # "dlsh" field; raw, so never under a header)
+            if { $::dlsh } { return 0.20.3 }
+            return "!TCL_ERROR package dlsh is not present"
         }
     }
     if { [string match "error *" $cmd] } {

@@ -95,9 +95,11 @@ namespace eval ess {
     # for shipping to the stim host (configure_stim -libs). Resolves
     # <name>-<ver>.tm, highest version wins; errors if there is none. A
     # plain proc (not a method) so a headless harness can check what would
-    # be shipped without a stim connection.
+    # be shipped without a stim connection. With pathvar, the name of a
+    # variable in the caller, the resolved path is stored there too: the
+    # stim/lib/<name> record (stim_lib block) carries it, and its version.
     #
-    proc stim_lib_script { name } {
+    proc stim_lib_script { name {pathvar {}} } {
         variable system_path
         variable project
         set dir [file join $system_path $project lib]
@@ -111,6 +113,10 @@ namespace eval ess {
             if { $best eq "" || [package vcompare $v $bestv] > 0 } {
                 set best $c; set bestv $v
             }
+        }
+        if { $pathvar ne "" } {
+            upvar 1 $pathvar resolved
+            set resolved $best
         }
         set f [open $best]
         set script [read $f]
@@ -600,10 +606,19 @@ namespace eval ess {
     #             reported ("1.0" from "package":"stimess 1.0" in stim/bind),
     #             "" when the table names no package (an old stim2, a script
     #             that did not require it, not connected)
+    #   dlsh      string; the dlsh package version stim2 has loaded -- the
+    #             reply to the raw `package present dlsh` ("0.20.3"), "" when
+    #             it errored (no dlsh in that interp) or nothing answered.
+    #             The pure-Tcl packages the stim script requires from
+    #             dlsh.zip (mp_sim, traj, colorcal, ...) are deliberately
+    #             NOT recorded: a replay mounts the dlsh.zip of this version
+    #             and gets them all. (Paradigm libraries from the systems
+    #             tree ARE recorded, as stim/lib/<name>: the stim_lib block.)
     #
-    #   configure_stim          stim_script_version right after the ACK
-    #                           header probe (raw command, so like the probe
-    #                           it is not a stim/cmd record). Then, like
+    #   configure_stim          stim_script_version, then stim_script_dlsh,
+    #                           right after the ACK header probe (raw
+    #                           commands, so like the probe they are not
+    #                           stim/cmd records). Then, like
     #                           stim/bind, the EMPTY record (path "", body
     #                           "") is published on the not-connected branch
     #                           and again before the script goes out, so a
@@ -649,6 +664,20 @@ namespace eval ess {
         return $stim2_version
     }
 
+    # Ask stim2 which dlsh it has loaded (raw, not a stim/cmd record): the
+    # reply to `package present dlsh`; remembers and returns it, "" on an
+    # error reply (dlsh not present in that interp) or no reply.
+    variable stim2_dlsh {}
+    proc stim_script_dlsh {} {
+        variable stim2_dlsh
+        set r ""
+        catch { set r [::ess::rmtSend_raw {package present dlsh}] }
+        set r [string trim $r]
+        if { [string match "!TCL_ERROR*" $r] } { set r "" }
+        set stim2_dlsh $r
+        return $stim2_dlsh
+    }
+
     # The stimess version a stim/bind table reports: "1.0" from
     # "package":"stimess 1.0", "" otherwise. Textual on purpose (the table
     # is stim2's pure-ASCII JSON; see the stim_bind block on parsers).
@@ -660,7 +689,7 @@ namespace eval ess {
     }
 
     # The stim/script record text.
-    proc stim_script_json { path body system protocol variant stim2 stimess } {
+    proc stim_script_json { path body system protocol variant stim2 stimess dlsh } {
         set bytes [encoding convertto utf-8 $body]
         set json "\{\"path\":\"[json_escape $path]\""
         if { $body eq "" } {
@@ -676,26 +705,128 @@ namespace eval ess {
         append json ",\"protocol\":\"[json_escape $protocol]\""
         append json ",\"variant\":\"[json_escape $variant]\""
         append json ",\"stim2\":\"[json_escape $stim2]\""
-        append json ",\"stimess\":\"[json_escape $stimess]\"\}"
+        append json ",\"stimess\":\"[json_escape $stimess]\""
+        append json ",\"dlsh\":\"[json_escape $dlsh]\"\}"
         return $json
     }
 
     # Publish stim/script at timestamp t: the script text sent (body, read
-    # from path) under the named load. stim2 is the remembered version,
-    # stimess comes from the stim/bind table as published. Never throws;
-    # returns the record text.
+    # from path) under the named load. stim2 and dlsh are the remembered
+    # versions, stimess comes from the stim/bind table as published. Never
+    # throws; returns the record text.
     proc stim_script_publish { path body t system protocol variant } {
         variable stim2_version
+        variable stim2_dlsh
         set stimess ""
         catch { set stimess [stim_script_stimess [dservGet stim/bind]] }
         set json [stim_script_json $path $body $system $protocol $variant \
-                      $stim2_version $stimess]
+                      $stim2_version $stimess $stim2_dlsh]
         if { [catch { dservSetData stim/script $t 11 $json } err] } {
             catch { ess_warning "stim/script not written: $err" "stim" }
         }
         return $json
     }
     # END stim_script
+
+    # BEGIN stim_lib
+    #
+    # The paradigm libraries configure_stim -libs shipped to stim2, each
+    # published as stim/lib/<name> (DSERV_JSON, type 11) at the moment it
+    # is sent and re-emitted into every datafile, so a .ess carries what a
+    # replay needs to write the text to its module path as
+    # <name>-<version>.tm and let the stim script's `package require <name>`
+    # resolve. Only libraries from <systems>/<project>/lib are recorded: a
+    # pure-Tcl package from dlsh.zip (mp_sim, traj, colorcal, ...) is NOT --
+    # a replay mounts the dlsh.zip of the version stim/script's "dlsh"
+    # field names, and gets them all.
+    #
+    # As with the stim script, the stim/cmd record of the ship itself holds
+    # only the sha256 when the text is over the 4096-char limit; the same
+    # hash is here, so a reader joins the two. The record (field by field):
+    #   name      string; the library name as given to -libs ("runner")
+    #   version   string; parsed from the resolved file name
+    #             <name>-<version>.tm ("1.0" from runner-1.0.tm), "" when
+    #             the file name does not have that shape
+    #   path      string; the resolved file stim_lib_script read
+    #   hash      sha256 hex of the UTF-8 text EXACTLY as rmtSend sent it
+    #             (dserv's `sha256` on the Tcl string, the same call
+    #             stim_cmd_json makes); "" with a "hash_note" field where no
+    #             in-process sha256 exists (a harness without dserv's
+    #             command), never on a real dserv
+    #   len       integer; UTF-8 byte length of the text
+    #   body      string; the full text, JSON-escaped (json_escape, so the
+    #             record is pure ASCII as dservSetData requires)
+    #
+    #   configure_stim          clears stim_lib_names first thing (every
+    #                           configure starts from no libraries), then in
+    #                           the -libs loop calls stim_lib_publish for
+    #                           each library right before the rmtSend that
+    #                           ships it (after the `package forget`), with
+    #                           the timestamp of the send
+    #   stim/lib/<name>         one datapoint per library, so several
+    #                           coexist and each is re-emitted into each
+    #                           datafile at open (dservTouch, like
+    #                           stim/script)
+    #   stim_lib_names          the names published by the current
+    #                           configure, for open_datafile's touches
+    #
+    # Logging policy (open_datafile): unbuffered, not obs-limited, every
+    # record, under ONE wildcard match next to the stim/script match --
+    # `dservLoggerAddMatch $filename stim/lib/* 0 0 1` (the logger's
+    # matches are globs, LogMatchDict MATCH_KRAUSS, like dservAddMatch) --
+    # and `dservTouch stim/lib/<name>` for each name in stim_lib_names after
+    # the logger is running, guarded by dservExists.
+    #
+    # Self-contained like the blocks above: tests/test_ess_stim_cmd.tcl
+    # evaluates the text between these markers in `namespace eval ess`.
+    #
+    variable stim_lib_names {}
+
+    # The version a library file name carries: <name>-<version>.tm gives
+    # <version> ("1.0" for runner-1.0.tm, "1.0.2" for runner-1.0.2.tm); ""
+    # when the tail does not start with "<name>-".
+    proc stim_lib_version { name path } {
+        set root [file rootname [file tail $path]]
+        set prefix "${name}-"
+        if { [string range $root 0 [expr {[string length $prefix] - 1}]] ne $prefix } {
+            return ""
+        }
+        return [string range $root [string length $prefix] end]
+    }
+
+    # The stim/lib/<name> record text.
+    proc stim_lib_json { name version path body } {
+        set bytes [encoding convertto utf-8 $body]
+        set json "\{\"name\":\"[json_escape $name]\""
+        append json ",\"version\":\"[json_escape $version]\""
+        append json ",\"path\":\"[json_escape $path]\""
+        if { $body eq "" } {
+            append json ",\"hash\":\"\""
+        } elseif { [info commands ::sha256] ne "" } {
+            append json ",\"hash\":\"[::sha256 $body]\""
+        } else {
+            append json ",\"hash\":\"\",\"hash_note\":\"no sha256 command in this interp\""
+        }
+        append json ",\"len\":[string length $bytes]"
+        append json ",\"body\":\"[json_escape $body]\"\}"
+        return $json
+    }
+
+    # Publish stim/lib/<name>: the library text about to be sent (body,
+    # read from path, whose file name gives the version), at timestamp t
+    # ([now] when omitted). Remembers the name in stim_lib_names. Never
+    # throws; returns the record text.
+    proc stim_lib_publish { name path body {t {}} } {
+        variable stim_lib_names
+        if { $t eq "" } { set t [now] }
+        set json [stim_lib_json $name [stim_lib_version $name $path] $path $body]
+        if { [catch { dservSetData stim/lib/$name $t 11 $json } err] } {
+            catch { ess_warning "stim/lib/$name not written: $err" "stim" }
+        }
+        if { $name ni $stim_lib_names } { lappend stim_lib_names $name }
+        return $json
+    }
+    # END stim_lib
 
     # BEGIN stim_late_draw
     #
@@ -971,6 +1102,10 @@ oo::class create System {
             my add_variable $var
         }
 
+        # every configure starts from no shipped libraries (stim_lib block):
+        # open_datafile re-emits only the ones THIS load published
+        set ::ess::stim_lib_names {}
+
         ::ess::ess_info "Configuring stimulus host: $host" "stim"
 
         if { ![rmtOpen $host] } {
@@ -1001,6 +1136,7 @@ oo::class create System {
             # inside protocol_init, before set_variant, so _variantname
             # is not this load's yet (same for the two publishes below).
             set ::ess::stim2_version {}
+            set ::ess::stim2_dlsh {}
             ::ess::stim_script_publish {} {} [now] $_systemname $_protocolname $::ess::current(variant)
             if { [::ess::stim_required] } {
                 ::ess::ess_error \
@@ -1017,9 +1153,10 @@ oo::class create System {
         # version is picked up; everything below is then recorded with it.
         ::ess::stim_cmd_probe
 
-        # Which stim2 this is (the stim_script block): raw, like the probe,
-        # and recorded in stim/script below.
+        # Which stim2 this is, and which dlsh it loaded (the stim_script
+        # block): raw, like the probe, and recorded in stim/script below.
         ::ess::stim_script_version
+        ::ess::stim_script_dlsh
 
         # Start stim2's per-frame record (the stim_frame_log block) towards
         # this dserv; a no-op, flag 0, on a stim2 without stimFrameLog. It
@@ -1328,9 +1465,11 @@ oo::class create System {
         dpointSetScript stim/tagevt ::ess::stim_tag_evt
 
         # ship the paradigm libraries the stim script will require (see the
-        # method comment); a failure here is a failed stim load
+        # method comment); a failure here is a failed stim load. Each one
+        # is recorded as stim/lib/<name> (the stim_lib block) with the text
+        # as sent, right before it goes out.
         foreach lib $stim_libs {
-            if { [catch { set libscript [::ess::stim_lib_script $lib] } msg] } {
+            if { [catch { set libscript [::ess::stim_lib_script $lib libpath] } msg] } {
                 set summary "stimulus library $lib for [set ::ess::project]/$_systemname:\
  $msg -- the stim script will not find it"
                 dservSet ess/stim_script_error $summary
@@ -1340,6 +1479,7 @@ oo::class create System {
                 continue
             }
             rmtSend "catch {package forget $lib}"
+            ::ess::stim_lib_publish $lib $libpath $libscript [now]
             set result [rmtSend $libscript]
             if { [string match "!TCL_ERROR*" $result] } {
                 set msg [string trim [string range $result 11 end]]
@@ -4263,6 +4403,12 @@ namespace eval ess {
         # hash joins it to the load's stim/cmd record.
         dservLoggerAddMatch $filename stim/script 0 0 1
 
+        # The paradigm libraries shipped before it (the stim_lib block): one
+        # stim/lib/<name> record each, set at configure and re-emitted by
+        # the dservTouch below; one wildcard match covers them all (the
+        # logger's matches are globs, like dservAddMatch's).
+        dservLoggerAddMatch $filename stim/lib/* 0 0 1
+
         # stim2's per-frame record (the stim_frame_log block), only when this
         # stim2 produces it: not obs-limited, buffered 100, every record --
         # `dservLoggerAddMatch $filename stim/frame 0 100 1`. The record is
@@ -4415,6 +4561,10 @@ namespace eval ess {
         dservTouch stimdg
         if {[dservExists stim/bind]} { dservTouch stim/bind }
         if {[dservExists stim/script]} { dservTouch stim/script }
+        variable stim_lib_names
+        foreach _lib $stim_lib_names {
+            if {[dservExists stim/lib/$_lib]} { dservTouch stim/lib/$_lib }
+        }
 	dservTouch em/settings
 	dservTouch em/biquadratic
 	dservTouch ess/ain/recorded   ;# re-emit into THIS file (set before the match)

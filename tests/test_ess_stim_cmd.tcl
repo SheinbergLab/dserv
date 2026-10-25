@@ -6,8 +6,12 @@
 # the per-frame record it switches on in stim2 (the "# BEGIN stim_frame_log"
 # block: stim_frame_enable / stim_frame_disable / stim_frame_log_match), and
 # the stim script record it publishes as stim/script (the "# BEGIN
-# stim_script" block: stim_script_version / stim_script_json /
-# stim_script_publish, whose hash joins the record to the load's stim/cmd).
+# stim_script" block: stim_script_version / stim_script_dlsh /
+# stim_script_json / stim_script_publish, whose hash joins the record to the
+# load's stim/cmd), and the paradigm libraries configure_stim -libs ships,
+# one stim/lib/<name> record each (the "# BEGIN stim_lib" block:
+# stim_lib_version / stim_lib_json / stim_lib_publish), plus the
+# stim_lib_script resolver they are read through.
 #
 # Run by ctest as:
 #     dserv -c tests/test_ess_stim_cmd.tcl
@@ -179,9 +183,11 @@ set se [string first "# END stim_script" $src]
 assert {$sb > $fe && $se > $sb} "found the stim_script block in lib/ess-2.0.tm"
 namespace eval ess [string range $src $sb [expr {$se - 1}]]
 assert {[info procs ::ess::stim_script_version] ne "" && [info procs ::ess::stim_script_json] ne "" &&
-        [info procs ::ess::stim_script_publish] ne "" && [info procs ::ess::stim_script_stimess] ne ""} \
-    "stim_script_{version,json,publish,stimess} defined"
+        [info procs ::ess::stim_script_publish] ne "" && [info procs ::ess::stim_script_stimess] ne "" &&
+        [info procs ::ess::stim_script_dlsh] ne ""} \
+    "stim_script_{version,dlsh,json,publish,stimess} defined"
 assert {$::ess::stim2_version eq ""} "stim2_version starts empty"
+assert {$::ess::stim2_dlsh eq ""} "stim2_dlsh starts empty"
 
 # the call sites outside the block: configure_stim asks the version right
 # after the probe; publishes the empty record on the not-connected branch
@@ -192,6 +198,12 @@ assert {$::ess::stim2_version eq ""} "stim2_version starts empty"
 set version_at [string first "::ess::stim_script_version\n" $src $se]
 assert {$version_at > [string first "::ess::stim_cmd_probe" $src] && $version_at < $enable_at} \
     "configure_stim calls stim_script_version right after the probe"
+set dlsh_at [string first "::ess::stim_script_dlsh\n" $src $se]
+assert {$dlsh_at > $version_at && $dlsh_at < $enable_at} \
+    "configure_stim calls stim_script_dlsh right after the version"
+assert {[string first "set ::ess::stim2_dlsh {}" $src $se] > $se &&
+        [string first "set ::ess::stim2_dlsh {}" $src $se] < $enable_at} \
+    "configure_stim clears the dlsh version when not connected"
 # (the variant is ::ess::current(variant), not the System's _variantname:
 # configure_stim runs inside protocol_init, before set_variant)
 set empty_pub "::ess::stim_script_publish {} {} \[now\] \$_systemname \$_protocolname \$::ess::current(variant)\n"
@@ -219,6 +231,50 @@ assert {$script_match_at > [string first "dservLoggerAddMatch \$filename stim/cm
 assert {[string first "if {\[dservExists stim/script\]} { dservTouch stim/script }" $src] > \
             [string first "dservLoggerResume \$filename" $src]} \
     "open_datafile re-emits stim/script, guarded by dservExists, after the logger is running"
+
+# --- the stim_lib block, same way ----------------------------------------
+set lb [string first "# BEGIN stim_lib" $src]
+set le [string first "# END stim_lib" $src]
+assert {$lb > $se && $le > $lb} "found the stim_lib block in lib/ess-2.0.tm"
+namespace eval ess [string range $src $lb [expr {$le - 1}]]
+assert {[info procs ::ess::stim_lib_version] ne "" && [info procs ::ess::stim_lib_json] ne "" &&
+        [info procs ::ess::stim_lib_publish] ne ""} "stim_lib_{version,json,publish} defined"
+assert {$::ess::stim_lib_names eq {}} "stim_lib_names starts empty"
+
+# ... and the resolver the libraries are read through, a plain proc outside
+# the blocks (it needs only a systems tree): its text, from `proc
+# stim_lib_script` to the first line that is exactly four spaces and a brace
+set rb [string first "    proc stim_lib_script " $src]
+set re [string first "\n    \}\n" $src $rb]
+assert {$rb > 0 && $re > $rb} "found stim_lib_script in lib/ess-2.0.tm"
+namespace eval ess [string range $src $rb [expr {$re + 6}]]
+assert {[info procs ::ess::stim_lib_script] ne ""} "stim_lib_script defined"
+
+# the call sites outside the block: configure_stim clears the names first
+# thing (before the not-connected branch), and in the -libs loop publishes
+# each library after the `package forget` and before the rmtSend that ships
+# it, with the path stim_lib_script resolved; open_datafile adds one
+# wildcard match next to stim/script and re-emits each published name,
+# guarded, once the logger runs
+set names_reset_at [string first "set ::ess::stim_lib_names {}" $src $le]
+assert {$names_reset_at > $le && $names_reset_at < [string first "if { !\[rmtOpen \$host\] }" $src $le]} \
+    "configure_stim clears stim_lib_names before the not-connected branch"
+set lib_read_at [string first "set libscript \[::ess::stim_lib_script \$lib libpath\]" $src]
+set forget_at [string first "rmtSend \"catch {package forget \$lib}\"" $src]
+set lib_pub_at [string first "::ess::stim_lib_publish \$lib \$libpath \$libscript \[now\]" $src]
+set lib_send_at [string first "set result \[rmtSend \$libscript\]" $src]
+assert {$lib_read_at > $le && $forget_at > $lib_read_at && $lib_pub_at > $forget_at && $lib_send_at > $lib_pub_at &&
+        $lib_send_at < $script_at} \
+    "configure_stim publishes stim/lib/<name> in the -libs loop, after package forget, before the ship"
+# (searched past the block: its comment quotes the same line)
+set lib_match_at [string first "dservLoggerAddMatch \$filename stim/lib/* 0 0 1" $src $le]
+assert {$lib_match_at > $script_match_at && $lib_match_at < $match_at} \
+    "open_datafile subscribes stim/lib/* unbuffered, not obs-limited, every record, next to stim/script"
+set lib_touch_at [string first "if {\[dservExists stim/lib/\$_lib\]} { dservTouch stim/lib/\$_lib }" $src]
+assert {$lib_touch_at > [string first "dservLoggerResume \$filename" $src] &&
+        [string first "foreach _lib \$stim_lib_names \{" $src] > 0 &&
+        [string first "foreach _lib \$stim_lib_names \{" $src] < $lib_touch_at} \
+    "open_datafile re-emits each stim/lib/<name> in stim_lib_names, guarded by dservExists, after the logger is running"
 
 # --- the fake stim2 -------------------------------------------------------
 set tclsh $::env(ESS_TEST_TCLSH)
@@ -432,6 +488,11 @@ rmtSend "fake_stimversion 0"
 assert {[::ess::stim_script_version] eq "20"} "stim_script_version falls back to StimVersion"
 rmtSend "fake_stimversion 1"
 assert {[::ess::stim_script_version] eq "0.27.3"} "stimVersion preferred again"
+# the dlsh stim2 loaded: raw command (no stim/cmd record), remembered
+set seq0 [field [rec] seq]
+assert {[::ess::stim_script_dlsh] eq "0.20.3"} "stim_script_dlsh answers the fake's package present dlsh"
+assert {$::ess::stim2_dlsh eq "0.20.3"} "stim2_dlsh remembered"
+assert {[field [rec] seq] == $seq0} "the dlsh query is not a stim/cmd record"
 assert {[::ess::stim_script_stimess $table] eq "1.0"} "stim_script_stimess reads 1.0 off the table"
 assert {[::ess::stim_script_stimess $empty] eq ""} "stim_script_stimess: empty table, no version"
 assert {[::ess::stim_script_stimess {{"package":"other 2.0","bindings":[]}}] eq ""} \
@@ -472,6 +533,7 @@ assert {[field $j system] eq "\"sysA\"" && [field $j protocol] eq "\"protoB\"" &
     "system/protocol/variant recorded"
 assert {[field $j stim2] eq "\"0.27.3\""} "stim2 is the remembered version"
 assert {[field $j stimess] eq "\"1.0\""} "stimess comes from the stim/bind table"
+assert {[field $j dlsh] eq "\"0.20.3\""} "dlsh is the remembered dlsh version"
 assert {[field $j hash_note] eq "<absent>"} "no hash_note where sha256 exists"
 assert {[field [rec] seq] == [field $load seq]} "publishing sends nothing to stim2"
 # an independent sha256 of the same bytes
@@ -491,8 +553,9 @@ if { [auto_execok shasum] ne "" } {
 if { $::stim_bind_parser eq "tcljson" } {
     set d [::json_to_dict $j]
     assert {[dict get $d body] eq $body} "tcljson parses the record and gives the body back exactly"
-    assert {[dict get $d len] == [string length $body_bytes] && [dict get $d stim2] eq "0.27.3"} \
-        "tcljson: len and stim2 as expected"
+    assert {[dict get $d len] == [string length $body_bytes] && [dict get $d stim2] eq "0.27.3" &&
+            [dict get $d dlsh] eq "0.20.3"} \
+        "tcljson: len, stim2 and dlsh as expected"
 }
 # the empty record (not connected / before the script is sent)
 set t [now]
@@ -509,9 +572,109 @@ assert {[field [dservGet stim/script] stimess] eq "\"\""} "stimess empty when th
 assert {[field [dservGet stim/script] len] == 7 && [field [dservGet stim/script] body] eq "\"puts hi\""} \
     "a short plain body is stored as is"
 # the pure record builder
-set jj [::ess::stim_script_json "p\"q" "a\tb" s p v 20 1.0]
-assert {[field $jj path] eq {"p\"q"} && [field $jj body] eq {"a\tb"} && [field $jj len] == 3} \
-    "stim_script_json escapes path and body, counts bytes"
+set jj [::ess::stim_script_json "p\"q" "a\tb" s p v 20 1.0 0.20.3]
+assert {[field $jj path] eq {"p\"q"} && [field $jj body] eq {"a\tb"} && [field $jj len] == 3 &&
+        [field $jj dlsh] eq {"0.20.3"}} \
+    "stim_script_json escapes path and body, counts bytes, carries dlsh"
+
+# --- 7d. the shipped paradigm libraries: stim/lib/<name> ----------------
+# a systems tree in a temp dir: <systems>/<project>/lib/runner-1.0.tm and
+# runner-1.2.tm (the resolver must pick 1.2), and chaser-0.3.tm
+set libroot [file join [pwd] stim_lib_[pid]]
+set libdir [file join $libroot myproj lib]
+file mkdir $libdir
+# (no \r: the resolver reads the file with Tcl's auto translation, as
+# configure_stim does, so a CRLF file would be sent -- and recorded -- as LF)
+set lib_body "# runner \"quoted\" \\ back\\slash\n\tpackage provide runner 1.2\n\tproc run_step {} {\n\t\tputs \"café\"\n\t}\n"
+append lib_body [string repeat "set y \"2\";\n" 500]      ;# > 4096 chars: hash, not cmd
+set lib_bytes [encoding convertto utf-8 $lib_body]
+foreach { tail text } [list runner-1.0.tm "package provide runner 1.0\n" \
+                            runner-1.2.tm $lib_body \
+                            chaser-0.3.tm "package provide chaser 0.3\n"] {
+    set lf [open [file join $libdir $tail] w]
+    fconfigure $lf -encoding utf-8 -translation lf
+    puts -nonewline $lf $text
+    close $lf
+}
+set ::ess::system_path $libroot
+set ::ess::project myproj
+# the resolver: highest version, text verbatim, path handed back alongside
+set libpath ""
+set got [::ess::stim_lib_script runner libpath]
+assert {$got eq $lib_body} "stim_lib_script returns the text of the highest version"
+assert {$libpath eq [file join $libdir runner-1.2.tm]} "stim_lib_script hands the resolved path back ($libpath)"
+assert {[::ess::stim_lib_script chaser] eq "package provide chaser 0.3\n"} "stim_lib_script without pathvar still works"
+set nosuch_rc [catch {::ess::stim_lib_script nosuch} msg]
+assert {$nosuch_rc == 1 && [string match "no nosuch-<version>.tm*" $msg]} \
+    "stim_lib_script errors for a library that is not there ($msg)"
+# the version off the file name
+assert {[::ess::stim_lib_version runner /a/b/runner-1.0.tm] eq "1.0"} "stim_lib_version: runner-1.0.tm -> 1.0"
+assert {[::ess::stim_lib_version runner $libpath] eq "1.2"} "stim_lib_version: the resolved path -> 1.2"
+assert {[::ess::stim_lib_version runner /a/b/runner-1.0.2.tm] eq "1.0.2"} "stim_lib_version: a three-part version"
+assert {[::ess::stim_lib_version runner /a/b/other-1.0.tm] eq ""} "stim_lib_version: another name gives empty"
+assert {[::ess::stim_lib_version run /a/b/runner-1.0.tm] eq ""} "stim_lib_version: a prefix of the name is not the name"
+# what configure_stim does per library: forget, publish, ship
+set seq0 [field [rec] seq]
+rmtSend "catch {package forget runner}"
+set t [now]
+set json [::ess::stim_lib_publish runner $libpath $lib_body $t]
+set r [rmtSend $lib_body]
+assert {$r eq $lib_body} "the library ship echoes back (a large body is a command like any other)"
+set ship [rec]
+assert {[field $ship cmd] eq "<absent>" && [string length [string trim [field $ship hash] \"]] == 64} \
+    "the ship's stim/cmd record carries hash, not cmd"
+assert {[field [rec] seq] == $seq0 + 2} "publishing sends nothing to stim2 (forget + ship only)"
+set j [dservGet stim/lib/runner]
+assert {$j eq $json} "stim/lib/runner holds the record stim_lib_publish returned"
+assert {[dservTimestamp stim/lib/runner] == $t} "stim/lib/runner timestamp is the one given"
+assert {![regexp {[^ -~]} $j]} "the record is pure ASCII"
+assert {[field $j name] eq "\"runner\""} "name recorded"
+assert {[field $j version] eq "\"1.2\""} "version parsed from the resolved file name"
+assert {[field $j path] eq "\"[::ess::json_escape $libpath]\""} "path recorded"
+assert {[field $j hash] eq [field $ship hash]} "hash equals the ship's stim/cmd hash (the join key)"
+assert {[field $j hash] eq "\"[sha256 $lib_body]\""} "hash is sha256 of the text"
+assert {[field $j len] == [string length $lib_bytes]} "len is the UTF-8 byte length ([field $j len])"
+assert {[field $j len] > [string length $lib_body]} "... which exceeds the char count (non-ASCII inside)"
+assert {[json_unquote [field $j body]] eq $lib_body} "body round-trips through the escaper"
+assert {[string first "\\u00e9" [field $j body]] > 0 && [string first "\\n\\t" [field $j body]] > 0 &&
+        [string first "\\\\ back\\\\slash" [field $j body]] > 0 && [string first "\\\"quoted\\\"" [field $j body]] > 0} \
+    "body is escaped (\\u00e9, \\n, \\t, backslashes, quotes present)"
+assert {[field $j hash_note] eq "<absent>"} "no hash_note where sha256 exists"
+assert {$::ess::stim_lib_names eq {runner}} "stim_lib_names holds the published name"
+# an independent sha256 of the file as written (the same bytes)
+if { [auto_execok shasum] ne "" } {
+    set independent [lindex [exec {*}[auto_execok shasum] -a 256 $libpath] 0]
+    assert {[field $j hash] eq "\"$independent\""} "hash matches shasum -a 256 of the library file"
+} else {
+    puts "  (no shasum here: independent hash check skipped)"
+}
+# the real parser, where there is one
+if { $::stim_bind_parser eq "tcljson" } {
+    set d [::json_to_dict $j]
+    assert {[dict get $d body] eq $lib_body} "tcljson parses the record and gives the body back exactly"
+    assert {[dict get $d name] eq "runner" && [dict get $d version] eq "1.2" &&
+            [dict get $d len] == [string length $lib_bytes]} "tcljson: name, version and len as expected"
+}
+# a second library: its own datapoint, both names remembered, the first intact
+set chaser_path ""
+set chaser_body [::ess::stim_lib_script chaser chaser_path]
+::ess::stim_lib_publish chaser $chaser_path $chaser_body
+set jc [dservGet stim/lib/chaser]
+assert {[field $jc name] eq "\"chaser\"" && [field $jc version] eq "\"0.3\"" &&
+        [field $jc body] eq "\"package provide chaser 0.3\\n\"" && [field $jc len] == 27} \
+    "stim/lib/chaser is its own record"
+assert {[dservGet stim/lib/runner] eq $json} "stim/lib/runner is untouched by the second publish"
+assert {$::ess::stim_lib_names eq {runner chaser}} "stim_lib_names holds both, in ship order"
+assert {[dservTimestamp stim/lib/chaser] >= $t} "a publish without t stamps now"
+# re-publishing a name (a reload) does not duplicate it
+::ess::stim_lib_publish runner $libpath $lib_body
+assert {$::ess::stim_lib_names eq {runner chaser}} "a re-publish keeps one entry per name"
+# the pure record builder: an unparseable file name gives version ""
+set jj [::ess::stim_lib_json "r\"q" "" "/p/x.tm" "a\tb"]
+assert {[field $jj name] eq {"r\"q"} && [field $jj version] eq {""} && [field $jj body] eq {"a\tb"} &&
+        [field $jj len] == 3} \
+    "stim_lib_json escapes name and body, counts bytes, keeps an empty version"
+file delete -force $libroot
 
 # --- 8. old stim2: probe fails, nothing prefixed -----------------------
 rmtSend "fake_ack 0"
@@ -562,6 +725,16 @@ assert {$::ess::stim2_version eq ""} "old stim2: stim2_version cleared"
 ::ess::stim_script_publish /x.tcl "puts hi" [now] s p v
 assert {[field [dservGet stim/script] stim2] eq "\"\""} "old stim2: stim2 field empty"
 rmtSend "fake_version 1"
+
+# ... and no dlsh present in stim2's interp: the dlsh field is "", no error
+rmtSend "fake_dlsh 0"
+assert {[catch {::ess::stim_script_dlsh} r] == 0 && $r eq ""} \
+    "no dlsh: stim_script_dlsh returns empty without error"
+assert {$::ess::stim2_dlsh eq ""} "no dlsh: stim2_dlsh cleared"
+::ess::stim_script_publish /x.tcl "puts hi" [now] s p v
+assert {[field [dservGet stim/script] dlsh] eq "\"\""} "no dlsh: dlsh field empty"
+rmtSend "fake_dlsh 1"
+assert {[::ess::stim_script_dlsh] eq "0.20.3"} "dlsh back after the switch"
 
 # --- 9. pure helpers ----------------------------------------------------
 assert {[::ess::stim_bind_names $table] eq {ess/dial/pointer planko/catcher}} \
