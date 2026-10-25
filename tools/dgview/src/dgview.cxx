@@ -701,6 +701,23 @@ private:
                 snprintf(buf, bufsize, "%.6g", vals[row]);
                 break;
             }
+            case DF_CHAR: {
+                char* vals = (char*)DYN_LIST_VALS(dl);
+                snprintf(buf, bufsize, "%d", (int)vals[row]);
+                break;
+            }
+            case DF_INT64: {
+                // wide types (dslog_set_wide_types): e.g. the stim/frame
+                // record's microsecond timestamps and counters
+                int64_t* vals = (int64_t*)DYN_LIST_VALS(dl);
+                snprintf(buf, bufsize, "%lld", (long long)vals[row]);
+                break;
+            }
+            case DF_DOUBLE: {
+                double* vals = (double*)DYN_LIST_VALS(dl);
+                snprintf(buf, bufsize, "%.10g", vals[row]);
+                break;
+            }
             case DF_STRING: {
                 char** vals = (char**)DYN_LIST_VALS(dl);
                 snprintf(buf, bufsize, "%s", vals[row] ? vals[row] : "");
@@ -716,13 +733,15 @@ private:
                 break;
         }
     }
-    
+
     const char* getTypeString(int dtype) {
         switch (dtype) {
             case DF_LONG:   return "int";
             case DF_SHORT:  return "short";
             case DF_FLOAT:  return "float";
             case DF_CHAR:   return "char";
+            case DF_INT64:  return "int64";
+            case DF_DOUBLE: return "double";
             case DF_STRING: return "string";
             case DF_LIST:   return "list";
             default:        return "?";
