@@ -631,10 +631,20 @@ namespace eval ess {
     # and returns it, "" on an error reply or no reply.
     proc stim_script_version {} {
         variable stim2_version
+        # stimVersion (stim2 >= 0.27.3) answers the release the binary was
+        # built from, e.g. "0.27.3". Older builds only have the Tcl-linked
+        # StimVersion global, the wire-level format number (20); keep that
+        # as the fallback so the field is never empty on a stim2 that has
+        # a command port at all.
         set r ""
-        catch { set r [::ess::rmtSend_raw {set StimVersion}] }
+        catch { set r [::ess::rmtSend_raw stimVersion] }
         set r [string trim $r]
-        if { [string match "!TCL_ERROR*" $r] } { set r "" }
+        if { $r eq "" || [string match "!TCL_ERROR*" $r] } {
+            set r ""
+            catch { set r [::ess::rmtSend_raw {set StimVersion}] }
+            set r [string trim $r]
+            if { [string match "!TCL_ERROR*" $r] } { set r "" }
+        }
         set stim2_version $r
         return $stim2_version
     }

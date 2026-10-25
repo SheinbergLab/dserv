@@ -424,9 +424,14 @@ assert {[::ess::stim_frame_disable] == 0} "nothing left to disable after the rec
 # --- 7c. the stim script record ------------------------------------------
 # version: raw command (no stim/cmd record), remembered
 set seq0 [field [rec] seq]
-assert {[::ess::stim_script_version] eq "20"} "stim_script_version answers the fake's StimVersion"
-assert {$::ess::stim2_version eq "20"} "stim2_version remembered"
+assert {[::ess::stim_script_version] eq "0.27.3"} "stim_script_version answers the fake's stimVersion release"
+assert {$::ess::stim2_version eq "0.27.3"} "stim2_version remembered"
 assert {[field [rec] seq] == $seq0} "the version query is not a stim/cmd record"
+# a 0.27.x stim2: no stimVersion command, but the StimVersion global
+rmtSend "fake_stimversion 0"
+assert {[::ess::stim_script_version] eq "20"} "stim_script_version falls back to StimVersion"
+rmtSend "fake_stimversion 1"
+assert {[::ess::stim_script_version] eq "0.27.3"} "stimVersion preferred again"
 assert {[::ess::stim_script_stimess $table] eq "1.0"} "stim_script_stimess reads 1.0 off the table"
 assert {[::ess::stim_script_stimess $empty] eq ""} "stim_script_stimess: empty table, no version"
 assert {[::ess::stim_script_stimess {{"package":"other 2.0","bindings":[]}}] eq ""} \
@@ -465,7 +470,7 @@ assert {[string first "\\u00e9" [field $j body]] > 0 && [string first "\\n\\t" [
     "body is escaped (\\u00e9, \\n, \\t present)"
 assert {[field $j system] eq "\"sysA\"" && [field $j protocol] eq "\"protoB\"" && [field $j variant] eq "\"varC\""} \
     "system/protocol/variant recorded"
-assert {[field $j stim2] eq "\"20\""} "stim2 is the remembered version"
+assert {[field $j stim2] eq "\"0.27.3\""} "stim2 is the remembered version"
 assert {[field $j stimess] eq "\"1.0\""} "stimess comes from the stim/bind table"
 assert {[field $j hash_note] eq "<absent>"} "no hash_note where sha256 exists"
 assert {[field [rec] seq] == [field $load seq]} "publishing sends nothing to stim2"
@@ -486,7 +491,7 @@ if { [auto_execok shasum] ne "" } {
 if { $::stim_bind_parser eq "tcljson" } {
     set d [::json_to_dict $j]
     assert {[dict get $d body] eq $body} "tcljson parses the record and gives the body back exactly"
-    assert {[dict get $d len] == [string length $body_bytes] && [dict get $d stim2] eq "20"} \
+    assert {[dict get $d len] == [string length $body_bytes] && [dict get $d stim2] eq "0.27.3"} \
         "tcljson: len and stim2 as expected"
 }
 # the empty record (not connected / before the script is sent)

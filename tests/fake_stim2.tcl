@@ -47,6 +47,9 @@
 # test's own bookkeeping, in either mode.
 #
 # The version query (the stim2 side of the stim_script block):
+#   stimVersion            "0.27.3" (the release string, stim2 >= 0.27.3), or
+#                          after "fake_stimversion 0" (a 0.27.x build) or
+#                          "fake_version 0" the "invalid command name" error
 #   set StimVersion        "20" (stim2's Tcl-linked version int), or after
 #                          "fake_version 0" the "can't read" error a stim2
 #                          without the variable would give
@@ -54,7 +57,8 @@
 # Control commands (never echoed): "fake_ack 0|1", "fake_rawecho 0|1",
 # "fake_flip <n>", "fake_stimess 0|1", "fake_bindings <json>" (replaces the
 # table; "fake_bindings" alone restores the default), "fake_frame 0|1",
-# "fake_frame_state", "fake_version 0|1", "fake_quit". The process also
+# "fake_frame_state", "fake_version 0|1", "fake_stimversion 0|1",
+# "fake_quit". The process also
 # exits on its own after 60 s so a crashed test cannot leave it behind.
 
 set portfile [lindex $argv 0]
@@ -70,6 +74,7 @@ set ::frame_host {}
 set ::frame_enables 0
 set ::frame_disables 0
 set ::version 1
+set ::stimversion 1
 
 # stimFrameLog ?<host> 0|1?, as a stim2 with the command answers it
 proc frame_status { connected } {
@@ -121,6 +126,14 @@ proc reply_for { cmd } {
             return "!TCL_ERROR invalid command name \"stimAckHeader\""
         }
         "fake_version *" { set ::version [lindex $cmd 1]; return "" }
+        "fake_stimversion *" { set ::stimversion [lindex $cmd 1]; return "" }
+        "stimVersion" {
+            # stim2 >= 0.27.3: the release string. A 0.27.x build has only
+            # StimVersion (fake_stimversion 0); an older one has neither
+            # (fake_version 0).
+            if { $::version && $::stimversion } { return 0.27.3 }
+            return "!TCL_ERROR invalid command name \"stimVersion\""
+        }
         "set StimVersion" {
             # stim2's Tcl-linked version int (the stim_script block's
             # version query; raw, so never under a header)
