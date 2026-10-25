@@ -1,6 +1,8 @@
 # test_ess_stim_cmd.tcl -- the rmtSend wrapper that records every command
 # sent to stim2 as a stim/cmd JSON datapoint (lib/ess-2.0.tm, the block
-# between "# BEGIN stim_cmd_log" and "# END stim_cmd_log").
+# between "# BEGIN stim_cmd_log" and "# END stim_cmd_log"), and the stim2
+# binding table it publishes as stim/bind (the "# BEGIN stim_bind" block:
+# stim_bind_publish, the query-and-publish step configure_stim calls).
 #
 # Run by ctest as:
 #     dserv -c tests/test_ess_stim_cmd.tcl
@@ -11,10 +13,14 @@
 # dserv's `now`, `dservSetData`, `sha256` and datapoint table, and the
 # wrapper's own code, evaluated from the source file. What is fake: stim2
 # (tests/fake_stim2.tcl, a child tclsh speaking the length-prefixed
-# protocol). Not covered: configure_stim's call of the probe and
-# open_datafile's logger match -- those lines are read from the source
-# below instead, since the whole of ess-2.0.tm needs dlsh and a systems
-# tree; the ess_stim_source test exercises configure_stim itself.
+# protocol). Not covered: configure_stim's calls of the probe, of
+# `catch {stim::unbind_all}` and of stim_bind_publish, and open_datafile's
+# logger matches -- those lines are read from the source below instead,
+# since the whole of ess-2.0.tm needs dlsh and a systems tree; the
+# ess_stim_source test exercises configure_stim itself. The stim_bind
+# parser is tcljson (dlsh.zip): where the installed dlsh.zip exists it is
+# mounted and the real parser runs; elsewhere (CI) the documented regexp
+# fallback does, and the test says which.
 #
 # ONE verdict line, as the other dserv-hosted tests: listener bind-retry
 # noise from a live dserv on the same box interleaves with output.
@@ -77,6 +83,50 @@ assert {[info commands ::ess::rmtSend_raw] ne ""} "the C command was renamed to 
 assert {[string first "::ess::stim_cmd_probe" $src] > $e} "configure_stim calls the probe"
 assert {[string first "dservLoggerAddMatch \$filename stim/cmd 0 0 1" $src] > 0} \
     "open_datafile subscribes stim/cmd unbuffered, not obs-limited, every record"
+
+# --- the stim_bind block, same way --------------------------------------
+# its parser, tcljson, lives in dlsh.zip: mount the installed one where
+# there is one (as config/dsconf.tcl does) so the real parser is what runs
+# here; without it the block falls back to its regexp extraction
+set dlshzip /usr/local/dlsh/dlsh.zip
+# (ESS_TEST_NO_DLSH=1 in the environment skips the mount, to run the
+# fallback path on a machine that has dlsh)
+if { [file exists $dlshzip] && ![info exists ::env(ESS_TEST_NO_DLSH)] } {
+    catch {
+        set base [file join [zipfs root] dlsh]
+        zipfs mount $dlshzip $base
+        set ::auto_path [linsert $::auto_path 0 [file join $base lib]]
+    }
+}
+set bb [string first "# BEGIN stim_bind" $src]
+set be [string first "# END stim_bind" $src]
+assert {$bb > $e && $be > $bb} "found the stim_bind block in lib/ess-2.0.tm"
+namespace eval ess [string range $src $bb [expr {$be - 1}]]
+assert {[info procs ::ess::stim_bind_publish] ne ""} "stim_bind_publish defined"
+assert {$::ess::stim_bound_names eq {}} "stim_bound_names starts empty"
+set ::stim_bind_parser [expr {[catch {package require tcljson}] ? "regexp fallback" : "tcljson"}]
+puts "  (stim_bind json parser here: $::stim_bind_parser)"
+
+# the call sites outside the block: configure_stim unbinds right after the
+# probe and before the stim script goes out, publishes the empty table
+# until the script has been asked (twice: not connected, and pre-source),
+# and asks once after the script section; open_datafile matches the table
+# and every bound stream, and re-emits the table once the logger runs
+set unbind_at [string first "rmtSend {catch {stim::unbind_all}}" $src $be]
+set script_at [string first "set result \[rmtSend \$script\]" $src]
+assert {$unbind_at > [string first "::ess::stim_cmd_probe" $src] && $unbind_at < $script_at} \
+    "configure_stim sends catch {stim::unbind_all} after the probe, before the stim script"
+assert {[regexp -all {::ess::stim_bind_publish 0\n} $src] == 2} \
+    "configure_stim publishes the empty table when not connected and before sourcing"
+assert {[regexp -all {\n\s+::ess::stim_bind_publish\n} $src] == 1 &&
+        [string first "\n        ::ess::stim_bind_publish\n" $src] > $script_at} \
+    "configure_stim queries stim2 once, after the stim script section"
+assert {[string first "dservLoggerAddMatch \$filename stim/bind 0 0 1" $src] > 0} \
+    "open_datafile subscribes stim/bind unbuffered, not obs-limited, every record"
+assert {[string first "dservLoggerAddMatch \$filename \$_bound 1 0 1" $src] > 0} \
+    "open_datafile subscribes each bound stream obs-limited, unbuffered, every record"
+assert {[string first "dservTouch stim/bind" $src] > [string first "dservLoggerResume \$filename" $src]} \
+    "open_datafile re-emits stim/bind after the logger is running"
 
 # --- the fake stim2 -------------------------------------------------------
 set tclsh $::env(ESS_TEST_TCLSH)
@@ -197,7 +247,40 @@ assert {[field [rec] status] eq "\"nohdr\""} "status nohdr"
 assert {[field [rec] swap] eq "null"} "swap null on nohdr"
 rmtSend "fake_rawecho 0"
 
-# --- 7. old stim2: probe fails, nothing prefixed -----------------------
+# --- 7. a stim2 with the stimess package: the binding table ------------
+# (header mode is still on: the table comes back under an ACK1 header,
+# which the wrapper strips before stim_bind_publish sees it)
+set table {{"package":"stimess 1.0","bindings":[{"name":"ess/dial/pointer","fields":["x","y","show","band"],"mode":"latest","sep":","},{"name":"planko/catcher","fields":["x","y"],"mode":"latest","sep":","}]}}
+set empty {{"package":"","bindings":[]}}
+set r [rmtSend {catch {stim::unbind_all}}]
+assert {$r eq "0"} "catch {stim::unbind_all} answers 0 when the package is there ($r)"
+set seq0 [field [rec] seq]
+set names [::ess::stim_bind_publish]
+assert {$names eq {ess/dial/pointer planko/catcher}} "stim_bind_publish returns the bound names ($names)"
+assert {$::ess::stim_bound_names eq {ess/dial/pointer planko/catcher}} "stim_bound_names holds them"
+assert {[dservGet stim/bind] eq $table} "stim/bind is the fake's table, verbatim"
+assert {[dservTimestamp stim/bind] > 0} "stim/bind carries a timestamp"
+assert {[field [rec] cmd] eq "\"stim::bindings_json\"" && [field [rec] seq] == $seq0 + 1} \
+    "the query is itself one stim/cmd record"
+assert {[field [rec] status] eq "\"ok\""} "the query's record is ok"
+# query 0: the empty table, without asking stim2
+set seq0 [field [rec] seq]
+assert {[::ess::stim_bind_publish 0] eq {}} "stim_bind_publish 0 returns no names"
+assert {[dservGet stim/bind] eq $empty} "stim_bind_publish 0 publishes the empty table"
+assert {$::ess::stim_bound_names eq {}} "stim_bind_publish 0 clears the names"
+assert {[field [rec] seq] == $seq0} "stim_bind_publish 0 sends nothing to stim2"
+# a reply that is not JSON: empty table, no names (tcljson validates the
+# document; the regexp fallback only extracts names, so only under tcljson)
+if { $::stim_bind_parser eq "tcljson" } {
+    rmtSend {fake_bindings {"package":"stimess 1.0","bindings":[{"name":"x",}]}}
+    assert {[::ess::stim_bind_publish] eq {}} "unparseable table: no names"
+    assert {[dservGet stim/bind] eq $empty} "unparseable table: the empty table is published"
+    rmtSend fake_bindings
+    assert {[::ess::stim_bind_publish] eq {ess/dial/pointer planko/catcher}} "default table restored"
+    assert {[dservGet stim/bind] eq $table} "stim/bind is the table again"
+}
+
+# --- 8. old stim2: probe fails, nothing prefixed -----------------------
 rmtSend "fake_ack 0"
 assert {[::ess::stim_cmd_probe] == 0} "probe: an old stim2 errors on stimAckHeader"
 set r [rmtSend "show_stim 4"]
@@ -211,7 +294,32 @@ set r [rmtSend "error boom2"]
 assert {$r eq "!TCL_ERROR boom2"} "error string returned without header too"
 assert {[field [rec] status] eq "\"error\""} "status error without header"
 
-# --- 8. pure helpers ----------------------------------------------------
+# ... and no stimess package either: nothing is bound, the table is empty
+rmtSend "fake_stimess 0"
+set r [rmtSend {catch {stim::unbind_all}}]
+assert {$r eq "1"} "catch {stim::unbind_all} answers 1 without the package ($r)"
+assert {[::ess::stim_bind_publish] eq {}} "old stim2: stim_bind_publish returns no names"
+assert {$::ess::stim_bound_names eq {}} "old stim2: stim_bound_names empty"
+assert {[dservGet stim/bind] eq $empty} "old stim2: stim/bind is the empty table"
+assert {[field [rec] cmd] eq "\"stim::bindings_json\"" && [field [rec] status] eq "\"error\""} \
+    "old stim2: the failed query is a stim/cmd error record"
+rmtSend "fake_stimess 1"
+
+# --- 9. pure helpers ----------------------------------------------------
+assert {[::ess::stim_bind_names $table] eq {ess/dial/pointer planko/catcher}} \
+    "stim_bind_names ($::stim_bind_parser) extracts the names in order"
+assert {[::ess::stim_bind_names $empty] eq {}} "stim_bind_names: empty table"
+if { $::stim_bind_parser eq "tcljson" } {
+    assert {[catch {::ess::stim_bind_names {{"package":"x","bindings":[{"name":"a",}]}}}] == 1} \
+        "stim_bind_names throws on invalid JSON (tcljson)"
+    assert {[::ess::stim_bind_names {{"package":"x"}}] eq {}} "stim_bind_names: no bindings key"
+}
+assert {[::ess::stim_bind_names_regexp $table] eq {ess/dial/pointer planko/catcher}} \
+    "regexp fallback extracts the names in order"
+assert {[::ess::stim_bind_names_regexp $empty] eq {}} "regexp fallback: empty table"
+set esc {{"bindings":[{"name":"a\"b\\c"}]}}
+# (lindex: the list's string rep would re-escape the backslash)
+assert {[lindex [::ess::stim_bind_names_regexp $esc] 0] eq "a\"b\\c"} "regexp fallback unescapes \\\" and \\\\"
 assert {[::ess::stim_cmd_parse_ack "ACK1 1.000 2.000 3 4\nres"] eq {1 1.000 2.000 3 4 res}} \
     "parse_ack splits header and result"
 assert {[::ess::stim_cmd_parse_ack "ACK1 1.000 2.000 3 4"] eq {1 1.000 2.000 3 4 {}}} \

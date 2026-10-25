@@ -350,6 +350,128 @@ namespace eval ess {
     proc ::rmtSend { args } { tailcall ::ess::stim_cmd_send {*}$args }
     # END stim_cmd_log
 
+    # BEGIN stim_bind
+    #
+    # Which dserv streams stim2 is bound to, published as stim/bind
+    # (DSERV_JSON, type 11) on every configure_stim and logged into the
+    # datafile along with the streams themselves.
+    #
+    # A stim script that uses stim2's stimess package (stim::bind and
+    # friends) subscribes to datapoints -- the dial pointer, planko's
+    # catcher -- and reads them at frame time. Those streams ARE the
+    # subject's behaviour as the display saw it, yet whether they reached
+    # the .ess file depended on each protocol remembering its own
+    # dservLoggerAddMatch. stim2 knows exactly what it is bound to, so ESS
+    # asks it and logs that:
+    #
+    #   configure_stim          rmtSend {catch {stim::unbind_all}} right after
+    #                           the probe, so a reload starts with no
+    #                           bindings left over from the previous script
+    #                           (the catch makes it a no-op on a stim2 without
+    #                           the package); then, after the stim script
+    #                           section, stim_bind_publish asks
+    #                           `stim::bindings_json` and publishes the reply.
+    #   stim/bind               the table stim2 answered, verbatim:
+    #                             {"package":"stimess 1.0",
+    #                              "bindings":[{"name":"ess/dial/pointer",
+    #                                           "fields":["x","y","show","band"],
+    #                                           "mode":"latest","sep":","}, ...]}
+    #                           or {"package":"","bindings":[]} when stim2 has
+    #                           no stimess (an old stim2 answers the query with
+    #                           "!TCL_ERROR invalid command name ..."), when it
+    #                           is not connected, or when its reply did not
+    #                           parse. Timestamp [now]. Re-emitted into each
+    #                           datafile at open (dservTouch, like stimdg).
+    #   stim_bound_names        the "name" of every binding, in table order --
+    #                           what open_datafile adds matches for.
+    #
+    # Logging policy for the bound streams (open_datafile): obs_limited,
+    # every record, UNBUFFERED. The log buffer concatenates the raw data
+    # bytes of successive points and keeps only the first timestamp; that is
+    # fine for fixed-width samples (eyetracking/raw, em/*) and destructive
+    # for these, which are delimited text ("x,y,show,band" -- the table's
+    # "sep" is there because they are) of varying length: two buffered
+    # points would fuse into one unreadable string. A protocol that adds its
+    # own match for the same name (its file_open callback runs after these)
+    # replaces ours: LogMatchDict::insert keys by the match string, so a
+    # repeated pattern never yields duplicate records.
+    #
+    # Parsing: tcljson's json_to_dict (in dlsh.zip, already required at the
+    # top of this file in the ess interp). stim_bind_names_regexp is a LAST
+    # RESORT for an interp without dlsh -- the ctest harness in CI -- and
+    # extracts "name":"..." values textually, without validating the rest
+    # of the document. It is never reached where tcljson loads.
+    #
+    # Self-contained like the stim_cmd_log block: tests/test_ess_stim_cmd.tcl
+    # evaluates the text between these markers in `namespace eval ess`.
+    #
+    variable stim_bound_names {}
+    variable stim_bind_empty {{"package":"","bindings":[]}}
+
+    # Minimal textual extraction of the "name" values -- see the block
+    # comment: only for an interp where tcljson cannot be loaded.
+    proc stim_bind_names_regexp { json } {
+        set names {}
+        foreach { - n } [regexp -all -inline {"name"\s*:\s*"((?:[^"\\]|\\.)*)"} $json] {
+            lappend names [string map {{\"} \" {\\} \\ {\/} /} $n]
+        }
+        return $names
+    }
+
+    # The bound names in a bindings_json table. Throws on a document
+    # tcljson rejects (the caller publishes the empty table then).
+    proc stim_bind_names { json } {
+        if { [info commands ::json_to_dict] eq "" } {
+            catch { package require tcljson }
+        }
+        if { [info commands ::json_to_dict] eq "" } {
+            return [stim_bind_names_regexp $json]
+        }
+        set d [::json_to_dict $json]
+        set names {}
+        if { [dict exists $d bindings] } {
+            foreach b [dict get $d bindings] {
+                if { [dict exists $b name] } { lappend names [dict get $b name] }
+            }
+        }
+        return $names
+    }
+
+    # Ask stim2 for its binding table and publish it as stim/bind; set
+    # stim_bound_names from it. With query 0 nothing is asked (stim2 is not
+    # connected, or a load is about to re-source the stim script): the empty
+    # table is published so stim/bind never carries a previous load's
+    # bindings. Returns the names.
+    proc stim_bind_publish { {query 1} } {
+        variable stim_bound_names
+        variable stim_bind_empty
+        set reply ""
+        if { $query } {
+            catch { set reply [::rmtSend stim::bindings_json] }
+        }
+        set reply [string trim $reply]
+        set names {}
+        set table $stim_bind_empty
+        if { [string index $reply 0] eq "\{" } {
+            if { [catch { set names [stim_bind_names $reply] } err] } {
+                catch { ess_warning "stim/bind: binding table from stim2 did not parse ($err); published empty" "stim" }
+                set names {}
+            } else {
+                set table $reply
+            }
+        }
+        set stim_bound_names $names
+        # dservSetData wants a byte string (Tcl_GetByteArrayFromObj): the
+        # UTF-8 bytes are what a JSON reader expects anyway
+        if { [catch {
+            dservSetData stim/bind [now] 11 [encoding convertto utf-8 $table]
+        } err] } {
+            catch { ess_warning "stim/bind not written: $err" "stim" }
+        }
+        return $stim_bound_names
+    }
+    # END stim_bind
+
     #
     # stimdg validation
     #
@@ -594,6 +716,10 @@ oo::class create System {
             # ess/rmt_connected is published by the rmt module itself, on every
             # transition -- do NOT set it here, or it goes stale the moment
             # stim2 dies between system loads.
+            #
+            # no stim2, no bindings: stim/bind is the empty table (and the
+            # datafile adds no stream matches)
+            ::ess::stim_bind_publish 0
             if { [::ess::stim_required] } {
                 ::ess::ess_error \
                     "STIM REQUIRED but not connected: no display at $host" "stim"
@@ -608,6 +734,14 @@ oo::class create System {
         # block)? Re-probed on every connect, so a restarted stim2 of another
         # version is picked up; everything below is then recorded with it.
         ::ess::stim_cmd_probe
+
+        # Drop the previous stim script's datapoint bindings (stim2's stimess
+        # package, see the stim_bind block) so this load starts clean; the
+        # catch makes it a no-op on a stim2 without the package. Until the
+        # new script has been sourced and asked, stim/bind is the empty
+        # table -- a load that fails below must not leave the old table up.
+        rmtSend {catch {stim::unbind_all}}
+        ::ess::stim_bind_publish 0
 
         variable screen_halfx [rmtSend "screen_set HalfScreenDegreeX"]
         variable screen_halfy [rmtSend "screen_set HalfScreenDegreeY"]
@@ -956,6 +1090,12 @@ oo::class create System {
         } else {
             ::ess::ess_warning "No stimulus script found: $stimfile" "stim"
         }
+
+        # What the script just sourced bound itself to (stim_bind block):
+        # publish stim/bind and remember the names for open_datafile. Asked
+        # whether or not the source succeeded -- a script that bound streams
+        # before failing has them bound still, and the table should say so.
+        ::ess::stim_bind_publish
         return 1
     }
 
@@ -3802,6 +3942,19 @@ namespace eval ess {
         # that set the next trial up -- are kept too.
         dservLoggerAddMatch $filename stim/cmd 0 0 1
 
+        # stim2's datapoint bindings (the stim_bind block): the table itself,
+        # unbuffered and not obs-limited (set at configure, re-emitted by the
+        # dservTouch below), and every stream it names -- obs_limited, every
+        # record, UNBUFFERED: these are delimited text of varying length,
+        # and the log buffer would fuse successive points into one string.
+        # A protocol's own match for the same name (its file_open callback
+        # runs after this) replaces ours rather than duplicating it.
+        variable stim_bound_names
+        dservLoggerAddMatch $filename stim/bind 0 0 1
+        foreach _bound $stim_bound_names {
+            dservLoggerAddMatch $filename $_bound 1 0 1
+        }
+
         # Screen geometry + timing. These are dservSet once at configure (before
         # the file opens), so add the match and dservTouch each to re-emit its
         # current value into THIS file -- offline tools (e.g. the sync audit)
@@ -3932,6 +4085,7 @@ namespace eval ess {
         ::ess::store_evt_names
 
         dservTouch stimdg
+        if {[dservExists stim/bind]} { dservTouch stim/bind }
 	dservTouch em/settings
 	dservTouch em/biquadratic
 	dservTouch ess/ain/recorded   ;# re-emit into THIS file (set before the match)
