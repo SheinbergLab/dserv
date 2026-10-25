@@ -154,6 +154,24 @@ else()
 endif()
 
 #
+# The rmtSend wrapper that records every stim2 command as a stim/cmd JSON
+# datapoint (lib/ess-2.0.tm, stim_cmd_log block): a real dserv interp with
+# the real rmt module loaded, against a fake stim2 (tests/fake_stim2.tcl,
+# a child tclsh -- the dserv interps run no event loop, a socket server
+# needs one). Needs tclsh for the fake only.
+#
+if(TCLSH_EXECUTABLE)
+  add_test(
+      NAME ess_stim_cmd
+      COMMAND dserv -c "${CMAKE_SOURCE_DIR}/tests/test_ess_stim_cmd.tcl"
+  )
+  set_property(TEST ess_stim_cmd PROPERTY ENVIRONMENT
+      "DSERV_RMT_MODULE=$<TARGET_FILE:rmt>;ESS_TEST_TCLSH=${TCLSH_EXECUTABLE}")
+  set_property(TEST ess_stim_cmd PROPERTY TIMEOUT 60)
+  set_property(TEST ess_stim_cmd PROPERTY PASS_REGULAR_EXPRESSION "STIM CMD TEST: ALL PASS")
+endif()
+
+#
 # modules/mdns -- the `_dserv._tcp` DNS-SD advertisement.
 #
 # A C module, not a .tm, and it binds tclserver_* from whatever loads it, so

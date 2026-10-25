@@ -139,6 +139,208 @@ namespace eval ess {
         return $stim_required
     }
 
+    # BEGIN stim_cmd_log
+    #
+    # Every command ESS sends to stim2 is recorded as a stim/cmd datapoint
+    # (DSERV_JSON, type 11), one per rmtSend, and the datafile subscribes to
+    # it unbuffered and not obs-limited (see open_datafile), so the .ess
+    # carries a complete per-command record including the ones between
+    # trials. Zero cost on stim2's render thread: the timing fields come
+    # from an opt-in reply header stim2 prepends when a command's first
+    # char is U+FF20 ('＠'):
+    #
+    #     ACK1 <ticks_dequeue> <ticks_done> <swapcount> <flipwall_us>\n<result>
+    #
+    # ticks are stim2's free-running clock in ms (%.3f), swapcount its
+    # frame counter, flipwall_us the hardware flip time (CLOCK_REALTIME us;
+    # 0 unless the command was a '!' swap-acked one -- "＠!cmd"), and
+    # <result> is byte-for-byte what the reply would have been without the
+    # prefix (possibly empty, possibly "!TCL_ERROR ..."). The wrapper
+    # strips the header, so EVERY EXISTING CALLER SEES EXACTLY THE REPLY
+    # IT SAW BEFORE. Whether stim2 understands the prefix is probed once
+    # per configure_stim (stim_cmd_probe: `stimAckHeader` answers 1 on a
+    # new stim2, errors on an old one); against an old stim2 nothing is
+    # prefixed and the header fields are null.
+    #
+    # The JSON record (field by field):
+    #   seq      integer; ESS-assigned counter, continuous across stim2
+    #            restarts, reset only when ESS starts
+    #   cmd      string; the command text as sent, WITHOUT the prefix.
+    #            Omitted for commands over 4096 chars (a stim script, a
+    #            shipped library) -- those carry instead:
+    #   hash     sha256 hex of the UTF-8 command text, and
+    #   len      its UTF-8 byte length
+    #            (where no in-process sha256 exists -- a harness without
+    #            dserv's command -- cmd_head holds the first 256 chars
+    #            instead of hash; len is present either way)
+    #   t_send   integer us, dserv clock ([now], the evt_put clock), taken
+    #            just before the blocking send
+    #   t_ret    integer us, same clock, just after the reply arrived
+    #   dq       stim2 ms when the command was dequeued; null without header
+    #   done     stim2 ms when its evaluation finished; null without header
+    #   swap     stim2 frame counter at completion; null without header
+    #   flip     integer us CLOCK_REALTIME of the acked flip, 0 when the
+    #            command was not swap-acked; null without header
+    #   status   "ok"; "error" when the result starts with "!TCL_ERROR";
+    #            "io" when the exchange failed (not connected, EOF, short
+    #            read: rmt.c closes the socket and returns an empty reply);
+    #            "timeout" when such a failure took at least the rmtTimeout
+    #            deadline; "nohdr" when a header was requested but the reply
+    #            did not start with "ACK1 " (the reply is then returned to
+    #            the caller unchanged)
+    #
+    # This block is self-contained on purpose: tests/test_ess_stim_cmd.tcl
+    # evaluates exactly the text between the BEGIN/END markers inside
+    # `namespace eval ess`, against the real rmt module and a fake stim2,
+    # so keep it free of references to the rest of this file.
+    #
+    variable stim_ack_header 0
+    variable stim_cmd_seq
+    if { ![info exists stim_cmd_seq] } { set stim_cmd_seq 0 }
+    variable stim_cmd_maxlen 4096
+
+    # JSON string escaping WITHOUT any Tcl evaluation of the text. The
+    # output is pure printable ASCII: besides being what JSON requires for
+    # quotes, backslashes and control characters, dservSetData hands the
+    # value to Tcl_GetByteArrayFromObj, which refuses (or mangles) a string
+    # with chars outside 0..255 -- so non-ASCII must be \uXXXX-escaped too.
+    proc json_escape { s } {
+        # fast path: nothing to escape (the common case for stim commands)
+        if { ![regexp {[^\u0020-\u007e]|[\\"]} $s] } { return $s }
+        set s [string map [list \\ \\\\ \" \\\" \n \\n \r \\r \t \\t \b \\b \f \\f] $s]
+        if { ![regexp {[^\u0020-\u007e]} $s] } { return $s }
+        set out ""
+        foreach ch [split $s ""] {
+            scan $ch %c code
+            if { $code >= 0x20 && $code < 0x7f } {
+                append out $ch
+            } elseif { $code > 0xffff } {
+                set code [expr {$code - 0x10000}]
+                append out [format {\u%04x\u%04x} \
+                                [expr {0xd800 + ($code >> 10)}] \
+                                [expr {0xdc00 + ($code & 0x3ff)}]]
+            } else {
+                append out [format {\u%04x} $code]
+            }
+        }
+        return $out
+    }
+
+    # Split an ACK1 header off a reply. Returns {1 dq done swap flip result}
+    # when the reply carries a well-formed header, {0} otherwise.
+    proc stim_cmd_parse_ack { reply } {
+        if { [string range $reply 0 4] ne "ACK1 " } { return 0 }
+        set nl [string first \n $reply]
+        if { $nl < 0 } {
+            set line $reply
+            set result ""
+        } else {
+            set line [string range $reply 0 [expr {$nl - 1}]]
+            set result [string range $reply [expr {$nl + 1}] end]
+        }
+        if { ![regexp {^ACK1 (\S+) (\S+) (\S+) (\S+)$} $line -> dq done swap flip] } {
+            return 0
+        }
+        if { ![string is double -strict $dq] || ![string is double -strict $done] ||
+             ![string is wideinteger -strict $swap] ||
+             ![string is wideinteger -strict $flip] } {
+            return 0
+        }
+        return [list 1 $dq $done $swap $flip $result]
+    }
+
+    # The stim/cmd record text. Header fields are passed as "null" when
+    # there was no header; numbers are emitted as given.
+    proc stim_cmd_json { seq cmd t_send t_ret dq done swap flip status } {
+        variable stim_cmd_maxlen
+        set json "\{\"seq\":$seq"
+        if { [string length $cmd] > $stim_cmd_maxlen } {
+            set bytes [encoding convertto utf-8 $cmd]
+            if { [info commands ::sha256] ne "" } {
+                append json ",\"hash\":\"[::sha256 $cmd]\""
+            } else {
+                append json ",\"cmd_head\":\"[json_escape [string range $cmd 0 255]]\""
+            }
+            append json ",\"len\":[string length $bytes]"
+        } else {
+            append json ",\"cmd\":\"[json_escape $cmd]\""
+        }
+        append json ",\"t_send\":$t_send,\"t_ret\":$t_ret"
+        append json ",\"dq\":$dq,\"done\":$done,\"swap\":$swap,\"flip\":$flip"
+        append json ",\"status\":\"$status\"\}"
+        return $json
+    }
+
+    # Ask stim2 whether it speaks the header. Called from configure_stim on
+    # every (re)connect so a restarted stim2 of another version is picked up;
+    # uses the raw command, so the probe itself is not a stim/cmd record.
+    proc stim_cmd_probe {} {
+        variable stim_ack_header
+        set r ""
+        catch { set r [::ess::rmtSend_raw stimAckHeader] }
+        set stim_ack_header [expr {$r eq "1"}]
+        return $stim_ack_header
+    }
+
+    # The rmtSend wrapper proper (::rmtSend tailcalls here).
+    proc stim_cmd_send { args } {
+        variable stim_ack_header
+        variable stim_cmd_seq
+        set cmd [lindex $args 0]
+        set hdr $stim_ack_header
+        if { $hdr } { lset args 0 \uFF20$cmd }
+
+        set t_send [now]
+        set reply [::ess::rmtSend_raw {*}$args]
+        set t_ret [now]
+
+        set seq [incr stim_cmd_seq]
+        set dq null; set done null; set swap null; set flip null
+        set status ok
+        if { $reply eq "" } {
+            # an empty reply is also what a failed exchange looks like
+            # (rmt.c: "so a system can run with no display attached"); the
+            # link state tells them apart. rmtConnected is a non-blocking
+            # peek, paid only on empty replies.
+            set connected 1
+            catch { set connected [rmtConnected] }
+            if { $connected eq "0" } {
+                set status io
+                set deadline_ms 0
+                catch { set deadline_ms [rmtTimeout] }
+                if { $deadline_ms > 0 && $t_ret - $t_send >= $deadline_ms * 1000 } {
+                    set status timeout
+                }
+            }
+        } elseif { $hdr } {
+            set ack [stim_cmd_parse_ack $reply]
+            if { [lindex $ack 0] } {
+                lassign $ack - dq done swap flip reply
+            } else {
+                set status nohdr
+            }
+        }
+        if { $status eq "ok" && [string match "!TCL_ERROR*" $reply] } {
+            set status error
+        }
+
+        if { [catch {
+            dservSetData stim/cmd $t_ret 11 \
+                [stim_cmd_json $seq $cmd $t_send $t_ret $dq $done $swap $flip $status]
+        } err] } {
+            catch { ess_warning "stim/cmd record $seq not written: $err" "stim" }
+        }
+        return $reply
+    }
+
+    # Take over the rmt module's C command once; a reload of this file
+    # finds rmtSend_raw already in place and only redefines the wrapper.
+    if { [info commands ::ess::rmtSend_raw] eq "" && [info commands ::rmtSend] ne "" } {
+        rename ::rmtSend ::ess::rmtSend_raw
+    }
+    proc ::rmtSend { args } { tailcall ::ess::stim_cmd_send {*}$args }
+    # END stim_cmd_log
+
     #
     # stimdg validation
     #
@@ -393,6 +595,10 @@ oo::class create System {
             return 0
         }
 
+        # Does this stim2 speak the ACK1 reply header (see the stim_cmd_log
+        # block)? Re-probed on every connect, so a restarted stim2 of another
+        # version is picked up; everything below is then recorded with it.
+        ::ess::stim_cmd_probe
 
         variable screen_halfx [rmtSend "screen_set HalfScreenDegreeX"]
         variable screen_halfy [rmtSend "screen_set HalfScreenDegreeY"]
@@ -3581,6 +3787,11 @@ namespace eval ess {
         dservLoggerAddMatch $filename eventlog/events
         dservLoggerAddMatch $filename eventlog/names
         dservLoggerAddMatch $filename stimdg
+
+        # Every command sent to stim2 (the stim_cmd_log block): unbuffered
+        # and NOT obs-limited, so the records between trials -- the ones
+        # that set the next trial up -- are kept too.
+        dservLoggerAddMatch $filename stim/cmd 0 0 1
 
         # Screen geometry + timing. These are dservSet once at configure (before
         # the file opens), so add the match and dservTouch each to re-emit its
