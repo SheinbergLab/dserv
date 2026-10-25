@@ -697,6 +697,55 @@ namespace eval ess {
     }
     # END stim_script
 
+    # BEGIN stim_late_draw
+    #
+    # stim2's draw-late scheduler (stim2 >= 0.28, `stimLateDraw ms`,
+    # stim2 docs/late-draw.md): with a dynamic group it defers the step and
+    # draw of each frame to ms before the vblank and stays awake until then,
+    # answering commands and taking datapoints, so a frame shows what
+    # arrived during it rather than what had arrived a frame earlier. ms is
+    # the draw budget; at 120 Hz a budget of 3 leaves about 5 ms of
+    # listening per frame. 0 = stim2's default, draw right after the flip.
+    #
+    # A protocol declares `add_param late_draw_ms 3.0 time float` and calls
+    # `::ess::stim_late_draw $late_draw_ms` from its init callback, after
+    # configure_stim, and `::ess::stim_late_draw 0` from deinit so stim2 is
+    # left as found. Sent through the rmtSend wrapper on purpose, so the
+    # setting lands in the data file as a stim/cmd record (the param itself
+    # is logged at file open with every other param).
+    #
+    # Never fatal: an older stim2 answers "invalid command name", one
+    # without hardware flip timestamps (a Mac's glfinish strategy) refuses,
+    # and either way the task runs exactly as before, a frame later; it
+    # only says so. stim2 also refuses until it has confirmed one flip, so
+    # on that refusal a `!redraw` is sent once and the request retried.
+    # Returns 1 when stim2 took the setting, 0 otherwise.
+    proc stim_late_draw { ms {who stim} } {
+        if { [catch { rmtSend "stimLateDraw $ms" } r] } { set r "!TCL_ERROR $r" }
+        if { [string match "!TCL_ERROR*" $r] && $ms != 0 &&
+             [string match -nocase "*flip*" $r] } {
+            # no confirmed flip yet: give it one and ask again
+            catch { rmtSend "!redraw" }
+            if { [catch { rmtSend "stimLateDraw $ms" } r] } { set r "!TCL_ERROR $r" }
+        }
+        if { [string match "!TCL_ERROR*" $r] } {
+            if { $ms != 0 } {
+                ::ess::ess_warning "late_draw_ms $ms not applied, running\
+                    without draw-late: stim2 said '[string range $r 11 end]'" \
+                    $who
+            }
+            return 0
+        }
+        # the status dict stim2 answers with; enabled 1 means it took
+        if { $ms != 0 && [dict exists $r enabled] && ![dict get $r enabled] } {
+            ::ess::ess_warning "late_draw_ms $ms: stim2 reports draw-late\
+                still disabled ($r)" $who
+            return 0
+        }
+        return 1
+    }
+    # END stim_late_draw
+
     #
     # stimdg validation
     #
