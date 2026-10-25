@@ -46,11 +46,16 @@
 # answers {enabled <0|1> host <host> enables <n> disables <n>} for the
 # test's own bookkeeping, in either mode.
 #
+# The version query (the stim2 side of the stim_script block):
+#   set StimVersion        "20" (stim2's Tcl-linked version int), or after
+#                          "fake_version 0" the "can't read" error a stim2
+#                          without the variable would give
+#
 # Control commands (never echoed): "fake_ack 0|1", "fake_rawecho 0|1",
 # "fake_flip <n>", "fake_stimess 0|1", "fake_bindings <json>" (replaces the
 # table; "fake_bindings" alone restores the default), "fake_frame 0|1",
-# "fake_frame_state", "fake_quit". The process also exits on its own after
-# 60 s so a crashed test cannot leave it behind.
+# "fake_frame_state", "fake_version 0|1", "fake_quit". The process also
+# exits on its own after 60 s so a crashed test cannot leave it behind.
 
 set portfile [lindex $argv 0]
 set ::ack 1
@@ -64,6 +69,7 @@ set ::frame_enabled 0
 set ::frame_host {}
 set ::frame_enables 0
 set ::frame_disables 0
+set ::version 1
 
 # stimFrameLog ?<host> 0|1?, as a stim2 with the command answers it
 proc frame_status { connected } {
@@ -113,6 +119,13 @@ proc reply_for { cmd } {
         "stimAckHeader"  {
             if { $::ack } { return 1 }
             return "!TCL_ERROR invalid command name \"stimAckHeader\""
+        }
+        "fake_version *" { set ::version [lindex $cmd 1]; return "" }
+        "set StimVersion" {
+            # stim2's Tcl-linked version int (the stim_script block's
+            # version query; raw, so never under a header)
+            if { $::version } { return 20 }
+            return "!TCL_ERROR can't read \"StimVersion\": no such variable"
         }
     }
     if { [string match "error *" $cmd] } {

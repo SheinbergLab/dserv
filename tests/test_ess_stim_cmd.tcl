@@ -4,7 +4,10 @@
 # binding table it publishes as stim/bind (the "# BEGIN stim_bind" block:
 # stim_bind_publish, the query-and-publish step configure_stim calls), and
 # the per-frame record it switches on in stim2 (the "# BEGIN stim_frame_log"
-# block: stim_frame_enable / stim_frame_disable / stim_frame_log_match).
+# block: stim_frame_enable / stim_frame_disable / stim_frame_log_match), and
+# the stim script record it publishes as stim/script (the "# BEGIN
+# stim_script" block: stim_script_version / stim_script_json /
+# stim_script_publish, whose hash joins the record to the load's stim/cmd).
 #
 # Run by ctest as:
 #     dserv -c tests/test_ess_stim_cmd.tcl
@@ -164,6 +167,50 @@ assert {$match_at > [string first "dservLoggerAddMatch \$filename stim/cmd 0 0 1
     "open_datafile calls stim_frame_log_match next to the stim/cmd match"
 assert {[regexp {(?s)proc stim_frame_log_match \{ filename \} \{.*?dservLoggerAddMatch \$filename stim/frame 0 100 1} $src]} \
     "stim_frame_log_match subscribes stim/frame not obs-limited, buffered 100, every record"
+
+# --- the stim_script block, same way ------------------------------------
+set sb [string first "# BEGIN stim_script" $src]
+set se [string first "# END stim_script" $src]
+assert {$sb > $fe && $se > $sb} "found the stim_script block in lib/ess-2.0.tm"
+namespace eval ess [string range $src $sb [expr {$se - 1}]]
+assert {[info procs ::ess::stim_script_version] ne "" && [info procs ::ess::stim_script_json] ne "" &&
+        [info procs ::ess::stim_script_publish] ne "" && [info procs ::ess::stim_script_stimess] ne ""} \
+    "stim_script_{version,json,publish,stimess} defined"
+assert {$::ess::stim2_version eq ""} "stim2_version starts empty"
+
+# the call sites outside the block: configure_stim asks the version right
+# after the probe; publishes the empty record on the not-connected branch
+# (with the version cleared) and again before the script goes out; takes
+# the timestamp just before the send; publishes the full record after the
+# binding table has been asked for. open_datafile matches stim/script next
+# to stim/cmd and re-emits it, guarded, once the logger runs.
+set version_at [string first "::ess::stim_script_version\n" $src $se]
+assert {$version_at > [string first "::ess::stim_cmd_probe" $src] && $version_at < $enable_at} \
+    "configure_stim calls stim_script_version right after the probe"
+set empty_pub "::ess::stim_script_publish {} {} \[now\] \$_systemname \$_protocolname \$_variantname\n"
+set empty1_at [string first $empty_pub $src $se]
+set empty2_at [string first $empty_pub $src [expr {$empty1_at + 1}]]
+assert {$empty1_at > $se && $empty1_at < $enable_at &&
+        [string first "set ::ess::stim2_version {}" $src $se] > $se &&
+        [string first "set ::ess::stim2_version {}" $src $se] < $empty1_at} \
+    "configure_stim clears the version and publishes the empty record when not connected"
+assert {$empty2_at > $unbind_at && $empty2_at < $script_at &&
+        [string first $empty_pub $src [expr {$empty2_at + 1}]] < 0} \
+    "configure_stim publishes the empty record once more before sourcing, and only then"
+set tscript_at [string last "set t_script \[now\]" $src]
+assert {$tscript_at > [string first "set script \[read \$f\]" $src] && $tscript_at < $script_at} \
+    "configure_stim takes t_script just before sending the script"
+set full_pub_at [string first "::ess::stim_script_publish \$stimfile \$script \$t_script" $src]
+assert {$full_pub_at > [string first "\n        ::ess::stim_bind_publish\n" $src] &&
+        [string first "\$_systemname \$_protocolname \$_variantname" $src $full_pub_at] > $full_pub_at} \
+    "configure_stim publishes the full record after stim_bind_publish, with the load's names"
+set script_match_at [string first "dservLoggerAddMatch \$filename stim/script 0 0 1" $src]
+assert {$script_match_at > [string first "dservLoggerAddMatch \$filename stim/cmd 0 0 1" $src] &&
+        $script_match_at < $match_at} \
+    "open_datafile subscribes stim/script unbuffered, not obs-limited, every record, next to stim/cmd"
+assert {[string first "if {\[dservExists stim/script\]} { dservTouch stim/script }" $src] > \
+            [string first "dservLoggerResume \$filename" $src]} \
+    "open_datafile re-emits stim/script, guarded by dservExists, after the logger is running"
 
 # --- the fake stim2 -------------------------------------------------------
 set tclsh $::env(ESS_TEST_TCLSH)
@@ -366,6 +413,93 @@ assert {[catch {::ess::stim_frame_disable} r] == 0 && $r == 1 && $::ess::stim_fr
 assert {[rmtOpen localhost $port] == 1} "reconnected after the disable"
 assert {[::ess::stim_frame_disable] == 0} "nothing left to disable after the reconnect"
 
+# --- 7c. the stim script record ------------------------------------------
+# version: raw command (no stim/cmd record), remembered
+set seq0 [field [rec] seq]
+assert {[::ess::stim_script_version] eq "20"} "stim_script_version answers the fake's StimVersion"
+assert {$::ess::stim2_version eq "20"} "stim2_version remembered"
+assert {[field [rec] seq] == $seq0} "the version query is not a stim/cmd record"
+assert {[::ess::stim_script_stimess $table] eq "1.0"} "stim_script_stimess reads 1.0 off the table"
+assert {[::ess::stim_script_stimess $empty] eq ""} "stim_script_stimess: empty table, no version"
+assert {[::ess::stim_script_stimess {{"package":"other 2.0","bindings":[]}}] eq ""} \
+    "stim_script_stimess: another package is not stimess"
+# the table is up (as after a load whose script required stimess)
+::ess::stim_bind_publish
+assert {[dservGet stim/bind] eq $table} "stim/bind holds the table before the script record"
+
+# a body with everything the escaper must handle, and long enough that its
+# stim/cmd record carries the hash rather than the text (> 4096 chars)
+set body "# stim \"quoted\" \\ back\\slash\n\tproc stim_init {} {\n\t\tputs \"café\"\r\n\t}\n"
+append body [string repeat "set x \"1\";\n" 500]
+set body_bytes [encoding convertto utf-8 $body]
+# ... what the escaper gives back: subst's backslash rules ARE JSON's for
+# \" \\ \n \r \t \b \f \/ and \uXXXX
+proc json_unquote { q } { return [subst -nocommands -novariables [string range $q 1 end-1]] }
+
+set r [rmtSend $body]
+assert {$r eq $body} "the script load echoes back"
+set load [rec]
+assert {[field $load cmd] eq "<absent>" && [string length [string trim [field $load hash] \"]] == 64} \
+    "the load's stim/cmd record carries hash, not cmd"
+set t [now]
+set json [::ess::stim_script_publish /systems/ess/p/s/proto/proto_stim.tcl $body $t sysA protoB varC]
+set j [dservGet stim/script]
+assert {$j eq $json} "stim/script holds the record stim_script_publish returned"
+assert {[dservTimestamp stim/script] == $t} "stim/script timestamp is the one given"
+assert {![regexp {[^ -~]} $j]} "the record is pure ASCII"
+assert {[field $j path] eq "\"/systems/ess/p/s/proto/proto_stim.tcl\""} "path recorded"
+assert {[field $j hash] eq [field $load hash]} "hash equals the load's stim/cmd hash (the join key)"
+assert {[field $j hash] eq "\"[sha256 $body]\""} "hash is sha256 of the text"
+assert {[field $j len] == [string length $body_bytes]} "len is the UTF-8 byte length ([field $j len])"
+assert {[field $j len] > [string length $body]} "... which exceeds the char count (non-ASCII inside)"
+assert {[json_unquote [field $j body]] eq $body} "body round-trips through the escaper"
+assert {[string first "\\u00e9" [field $j body]] > 0 && [string first "\\n\\t" [field $j body]] > 0} \
+    "body is escaped (\\u00e9, \\n, \\t present)"
+assert {[field $j system] eq "\"sysA\"" && [field $j protocol] eq "\"protoB\"" && [field $j variant] eq "\"varC\""} \
+    "system/protocol/variant recorded"
+assert {[field $j stim2] eq "\"20\""} "stim2 is the remembered version"
+assert {[field $j stimess] eq "\"1.0\""} "stimess comes from the stim/bind table"
+assert {[field $j hash_note] eq "<absent>"} "no hash_note where sha256 exists"
+assert {[field [rec] seq] == [field $load seq]} "publishing sends nothing to stim2"
+# an independent sha256 of the same bytes
+if { [auto_execok shasum] ne "" } {
+    set tmp [file join [pwd] stim_script_[pid].tcl]
+    set tf [open $tmp w]
+    fconfigure $tf -encoding utf-8 -translation lf
+    puts -nonewline $tf $body
+    close $tf
+    set independent [lindex [exec {*}[auto_execok shasum] -a 256 $tmp] 0]
+    file delete -force $tmp
+    assert {[field $j hash] eq "\"$independent\""} "hash matches shasum -a 256 of the body"
+} else {
+    puts "  (no shasum here: independent hash check skipped)"
+}
+# the real parser, where there is one
+if { $::stim_bind_parser eq "tcljson" } {
+    set d [::json_to_dict $j]
+    assert {[dict get $d body] eq $body} "tcljson parses the record and gives the body back exactly"
+    assert {[dict get $d len] == [string length $body_bytes] && [dict get $d stim2] eq "20"} \
+        "tcljson: len and stim2 as expected"
+}
+# the empty record (not connected / before the script is sent)
+set t [now]
+::ess::stim_script_publish {} {} $t sysA protoB {}
+set j [dservGet stim/script]
+assert {[field $j path] eq "\"\"" && [field $j body] eq "\"\"" && [field $j hash] eq "\"\"" && [field $j len] == 0} \
+    "the empty record: path, body, hash empty, len 0"
+assert {[field $j variant] eq "\"\"" && [field $j stimess] eq "\"1.0\""} \
+    "the empty record still names the load and the table's package"
+# stimess follows the table: the empty table gives ""
+::ess::stim_bind_publish 0
+::ess::stim_script_publish /x.tcl "puts hi" [now] s p v
+assert {[field [dservGet stim/script] stimess] eq "\"\""} "stimess empty when the table names no package"
+assert {[field [dservGet stim/script] len] == 7 && [field [dservGet stim/script] body] eq "\"puts hi\""} \
+    "a short plain body is stored as is"
+# the pure record builder
+set jj [::ess::stim_script_json "p\"q" "a\tb" s p v 20 1.0]
+assert {[field $jj path] eq {"p\"q"} && [field $jj body] eq {"a\tb"} && [field $jj len] == 3} \
+    "stim_script_json escapes path and body, counts bytes"
+
 # --- 8. old stim2: probe fails, nothing prefixed -----------------------
 rmtSend "fake_ack 0"
 assert {[::ess::stim_cmd_probe] == 0} "probe: an old stim2 errors on stimAckHeader"
@@ -406,6 +540,15 @@ assert {[::ess::stim_frame_log_match /tmp/x.ess] == 0 && $::matches eq {}} "old 
 assert {[::ess::stim_frame_disable] == 0} "old stim2: disable is a no-op"
 rmtSend "fake_frame 1"
 rename ::ess::dservLoggerAddMatch {}
+
+# ... and no StimVersion: the version is "", no error, and the record says so
+rmtSend "fake_version 0"
+assert {[catch {::ess::stim_script_version} r] == 0 && $r eq ""} \
+    "old stim2: stim_script_version returns empty without error"
+assert {$::ess::stim2_version eq ""} "old stim2: stim2_version cleared"
+::ess::stim_script_publish /x.tcl "puts hi" [now] s p v
+assert {[field [dservGet stim/script] stim2] eq "\"\""} "old stim2: stim2 field empty"
+rmtSend "fake_version 1"
 
 # --- 9. pure helpers ----------------------------------------------------
 assert {[::ess::stim_bind_names $table] eq {ess/dial/pointer planko/catcher}} \

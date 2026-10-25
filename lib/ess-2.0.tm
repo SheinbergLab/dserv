@@ -566,6 +566,124 @@ namespace eval ess {
     }
     # END stim_frame_log
 
+    # BEGIN stim_script
+    #
+    # The stim script that was running, published as stim/script
+    # (DSERV_JSON, type 11) on every configure_stim and re-emitted into
+    # every datafile, so a .ess carries the text a replay needs.
+    #
+    # The stim/cmd record of the script load itself (stim_cmd_log block)
+    # stores only the sha256 of the text, since the load is far over the
+    # 4096-char limit; stim/script carries the text, and the same hash, so
+    # a reader joins the two by hash. The record (field by field):
+    #   path      string; the resolved stimfile path configure_stim read
+    #             ("" when nothing was looked for: stim2 not connected)
+    #   hash      sha256 hex of the UTF-8 text EXACTLY as rmtSend sent it
+    #             (dserv's `sha256` on the Tcl string, the same call
+    #             stim_cmd_json makes, so the two hashes are byte-identical);
+    #             "" when body is "" and -- see note -- where no in-process
+    #             sha256 exists (a harness without dserv's command), in which
+    #             case the record also carries "hash_note"
+    #   len       integer; UTF-8 byte length of the text
+    #   body      string; the full text, JSON-escaped (json_escape, so the
+    #             record is pure ASCII as dservSetData requires); "" when no
+    #             script was sent
+    #   system, protocol, variant   the names of the load that sent it
+    #   stim2     string; stim2's StimVersion (a Tcl-linked int every stim2
+    #             has, "20" since 2.0: the cheapest version a build of any age
+    #             answers) -- the reply to the raw `set StimVersion`, "" when
+    #             it errored or nothing answered
+    #   stimess   string; the stimess package version stim2's binding table
+    #             reported ("1.0" from "package":"stimess 1.0" in stim/bind),
+    #             "" when the table names no package (an old stim2, a script
+    #             that did not require it, not connected)
+    #
+    #   configure_stim          stim_script_version right after the ACK
+    #                           header probe (raw command, so like the probe
+    #                           it is not a stim/cmd record). Then, like
+    #                           stim/bind, the EMPTY record (path "", body
+    #                           "") is published on the not-connected branch
+    #                           and again before the script goes out, so a
+    #                           load that fails below never leaves the
+    #                           previous load's script up; the full record
+    #                           is published once stim_bind_publish has
+    #                           asked for the table (its "package" is where
+    #                           stimess comes from), with the timestamp
+    #                           taken just before the send -- the moment the
+    #                           script took effect on stim2.
+    #   stim/script             the record. Re-emitted into each datafile at
+    #                           open (dservTouch, like stimdg and stim/bind).
+    #
+    # Logging policy (open_datafile): unbuffered, not obs-limited, every
+    # record, next to the stim/cmd match: `dservLoggerAddMatch $filename
+    # stim/script 0 0 1`, and `dservTouch stim/script` after the logger is
+    # running. One record per file in the normal case.
+    #
+    # Self-contained like the blocks above: tests/test_ess_stim_cmd.tcl
+    # evaluates the text between these markers in `namespace eval ess`.
+    #
+    variable stim2_version {}
+
+    # Ask stim2 which version it is (raw, not a stim/cmd record); remembers
+    # and returns it, "" on an error reply or no reply.
+    proc stim_script_version {} {
+        variable stim2_version
+        set r ""
+        catch { set r [::ess::rmtSend_raw {set StimVersion}] }
+        set r [string trim $r]
+        if { [string match "!TCL_ERROR*" $r] } { set r "" }
+        set stim2_version $r
+        return $stim2_version
+    }
+
+    # The stimess version a stim/bind table reports: "1.0" from
+    # "package":"stimess 1.0", "" otherwise. Textual on purpose (the table
+    # is stim2's pure-ASCII JSON; see the stim_bind block on parsers).
+    proc stim_script_stimess { table } {
+        if { [regexp {"package"\s*:\s*"stimess\s+((?:[^"\\]|\\.)*)"} $table -> v] } {
+            return $v
+        }
+        return ""
+    }
+
+    # The stim/script record text.
+    proc stim_script_json { path body system protocol variant stim2 stimess } {
+        set bytes [encoding convertto utf-8 $body]
+        set json "\{\"path\":\"[json_escape $path]\""
+        if { $body eq "" } {
+            append json ",\"hash\":\"\""
+        } elseif { [info commands ::sha256] ne "" } {
+            append json ",\"hash\":\"[::sha256 $body]\""
+        } else {
+            append json ",\"hash\":\"\",\"hash_note\":\"no sha256 command in this interp\""
+        }
+        append json ",\"len\":[string length $bytes]"
+        append json ",\"body\":\"[json_escape $body]\""
+        append json ",\"system\":\"[json_escape $system]\""
+        append json ",\"protocol\":\"[json_escape $protocol]\""
+        append json ",\"variant\":\"[json_escape $variant]\""
+        append json ",\"stim2\":\"[json_escape $stim2]\""
+        append json ",\"stimess\":\"[json_escape $stimess]\"\}"
+        return $json
+    }
+
+    # Publish stim/script at timestamp t: the script text sent (body, read
+    # from path) under the named load. stim2 is the remembered version,
+    # stimess comes from the stim/bind table as published. Never throws;
+    # returns the record text.
+    proc stim_script_publish { path body t system protocol variant } {
+        variable stim2_version
+        set stimess ""
+        catch { set stimess [stim_script_stimess [dservGet stim/bind]] }
+        set json [stim_script_json $path $body $system $protocol $variant \
+                      $stim2_version $stimess]
+        if { [catch { dservSetData stim/script $t 11 $json } err] } {
+            catch { ess_warning "stim/script not written: $err" "stim" }
+        }
+        return $json
+    }
+    # END stim_script
+
     #
     # stimdg validation
     #
@@ -815,6 +933,10 @@ oo::class create System {
             # datafile adds no stream matches), and no per-frame record
             ::ess::stim_bind_publish 0
             set ::ess::stim_frame_log 0
+            # ... and no script sent: stim/script is the empty record
+            # (stim_script block), with no stim2 version to report
+            set ::ess::stim2_version {}
+            ::ess::stim_script_publish {} {} [now] $_systemname $_protocolname $_variantname
             if { [::ess::stim_required] } {
                 ::ess::ess_error \
                     "STIM REQUIRED but not connected: no display at $host" "stim"
@@ -830,6 +952,10 @@ oo::class create System {
         # version is picked up; everything below is then recorded with it.
         ::ess::stim_cmd_probe
 
+        # Which stim2 this is (the stim_script block): raw, like the probe,
+        # and recorded in stim/script below.
+        ::ess::stim_script_version
+
         # Start stim2's per-frame record (the stim_frame_log block) towards
         # this dserv; a no-op, flag 0, on a stim2 without stimFrameLog. It
         # stays on until unload_system.
@@ -842,6 +968,9 @@ oo::class create System {
         # table -- a load that fails below must not leave the old table up.
         rmtSend {catch {stim::unbind_all}}
         ::ess::stim_bind_publish 0
+        # Same for the script text (stim_script block): the empty record
+        # until this load's script has gone out and been asked about.
+        ::ess::stim_script_publish {} {} [now] $_systemname $_protocolname $_variantname
 
         variable screen_halfx [rmtSend "screen_set HalfScreenDegreeX"]
         variable screen_halfy [rmtSend "screen_set HalfScreenDegreeY"]
@@ -1155,9 +1284,14 @@ oo::class create System {
         # source this protocol's stim functions
         set stimfile [::ess::resolve_file [file join [set ::ess::project] \
                 $_systemname $_protocolname ${_protocolname}_stim.tcl]]
+        # what stim/script will carry (stim_script block): the text as sent
+        # and the moment it was sent; "" / now when there is no file
+        set script ""
+        set t_script [now]
         if { ![catch {set f [open $stimfile]}] } {
             set script [read $f]
             close $f
+            set t_script [now]
             # rmtSend does not throw on a remote failure: it hands back the
             # error as an "!TCL_ERROR <msg>" string. Sourcing the stim script
             # is where a version pin (package require traj 1.1 on a stim2
@@ -1196,6 +1330,12 @@ oo::class create System {
         # whether or not the source succeeded -- a script that bound streams
         # before failing has them bound still, and the table should say so.
         ::ess::stim_bind_publish
+
+        # The script text itself (stim_script block): after the table, whose
+        # "package" tells which stimess the script ran against; timestamped
+        # at the send. Its hash is the one the load's stim/cmd record holds.
+        ::ess::stim_script_publish $stimfile $script $t_script \
+            $_systemname $_protocolname $_variantname
         return 1
     }
 
@@ -4046,6 +4186,11 @@ namespace eval ess {
         # that set the next trial up -- are kept too.
         dservLoggerAddMatch $filename stim/cmd 0 0 1
 
+        # The stim script that was running (the stim_script block): the
+        # record set at configure, re-emitted by the dservTouch below; its
+        # hash joins it to the load's stim/cmd record.
+        dservLoggerAddMatch $filename stim/script 0 0 1
+
         # stim2's per-frame record (the stim_frame_log block), only when this
         # stim2 produces it: not obs-limited, buffered 100, every record --
         # `dservLoggerAddMatch $filename stim/frame 0 100 1`. The record is
@@ -4197,6 +4342,7 @@ namespace eval ess {
 
         dservTouch stimdg
         if {[dservExists stim/bind]} { dservTouch stim/bind }
+        if {[dservExists stim/script]} { dservTouch stim/script }
 	dservTouch em/settings
 	dservTouch em/biquadratic
 	dservTouch ess/ain/recorded   ;# re-emit into THIS file (set before the match)
