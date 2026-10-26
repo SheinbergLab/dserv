@@ -7,9 +7,27 @@ Description=Dataserver Service
 #   sudo systemctl mask systemd-networkd-wait-online NetworkManager-wait-online
 After=network-online.target seatd.service
 Wants=network-online.target
+# Ordered after chrony so the waitsync below has a daemon to ask. After= on a
+# unit that does not exist is harmless (timesyncd hosts, no NTP at all).
+After=chrony.service chronyd.service
 
 [Service]
 Type=simple
+# Do not start until chrony has settled the clock. dserv's now() is
+# CLOCK_MONOTONIC plus an epoch offset captured once at startup, and on
+# Linux CLOCK_MONOTONIC follows chrony's frequency slews. So a host that
+# boots a few hundred ms wrong and is slewed into place -- rig1-dserv,
+# 2026-10-26: 300 ms over ~50 min at maxslewrate 100 -- slides every
+# dserv timestamp against the display host's clock for the whole session,
+# and nothing in the file says so. waitsync blocks until the remaining
+# correction is under 1 ms, trying once a second for up to 60 s.
+# ALL FOUR arguments: the interval defaults to 10 s, so `waitsync 60 0.001`
+# alone is a 600 s stall. The `-` prefix keeps a host with no chronyc, or
+# no reachable time source (air-gapped, grandmaster down), starting anyway
+# once the 60 s are up -- late is recoverable, never starting is not.
+# Pair with `makestep 0.01 3` in chrony.conf so a boot-time error is
+# stepped before this runs instead of slewed under the session.
+ExecStartPre=-/usr/bin/chronyc waitsync 60 0.001 0 1
 ExecStart=/usr/local/dserv/dserv -c /usr/local/dserv/config/dsconf.tcl -t /usr/local/dserv/config/triggers.tcl
 Restart=on-failure
 RestartSec=10

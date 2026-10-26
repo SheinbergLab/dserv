@@ -337,6 +337,49 @@ Notes:
   stock Debian sets no `NTP=` at all, which is exactly how a rig grandmaster ended
   up steering off `ntp.aliyun.com`. It is a mitigation, not the fix.
 
+### dserv waits for chrony before it starts
+
+`dserv.service` runs `ExecStartPre=-/usr/bin/chronyc waitsync 60 0.001 0 1`:
+block until chrony's remaining correction is under 1 ms, trying once a second
+for up to 60 s, then start regardless. The stim2 units carry the same line.
+
+Why: dserv's `now()` is `CLOCK_MONOTONIC` plus an epoch offset captured once at
+startup, and on Linux `CLOCK_MONOTONIC` follows chrony's frequency slews. The
+first real training file on rig1 (2026-10-26, 52 min) showed every dserv
+timestamp sliding 300 ms against both display-host clocks: rig1-dserv had booted
+~300 ms wrong, the error was under chrony's default `makestep 1 3` threshold, and
+`maxslewrate 100` slewed it out over the whole session. The file itself gives no
+hint; only the cross-host `stim/frame` receipt − flip residual exposed it.
+
+Two settings together close this:
+
+- `makestep 0.01 3` in the chrony config (both the grandmaster and the
+  `ntp-client` tier), so a boot-time error above 10 ms is stepped during the
+  first three updates instead of slewed under a session.
+- the `waitsync` guard, so dserv does not start until what remains is under 1 ms
+  and settling at a rate that no longer matters.
+
+Traps, each one real:
+
+- **All four arguments.** `waitsync`'s interval defaults to 10 s, so
+  `waitsync 60 0.001` is a 600 s stall, not 60 s. The trailing `0 1` is
+  max-skew (0 = ignore) and the 1 s interval.
+- **The `-` prefix stays.** It makes a failed or missing `chronyc` equivalent to
+  success (verified on a CM5: exit 0 for both `/bin/false` and a nonexistent
+  path), so an air-gapped host, a host still on timesyncd, or a client whose
+  grandmaster is down starts 60 s late instead of never.
+- **The package never rewrites an installed unit** (absent-only install, see
+  `dpkg/postinst`), so an existing rig gets this as a drop-in, not by upgrading:
+
+      sudo mkdir -p /etc/systemd/system/dserv.service.d
+      printf '[Unit]\nAfter=chrony.service\n[Service]\nExecStartPre=-/usr/bin/chronyc waitsync 60 0.001 0 1\n' \
+        | sudo tee /etc/systemd/system/dserv.service.d/waitsync.conf
+      sudo systemctl daemon-reload          # takes effect at the next (re)start
+
+  Same shape for `stim2.service` on the display host.
+- `chronyc`'s monitoring commands work unprivileged over UDP 127.0.0.1:323, so
+  the stim2 X11 unit's `User=stim` is not a problem.
+
 ### What the helper refuses to do
 
 - enable a role on an interface with no PHC (`ptp4l` would run and report offsets
