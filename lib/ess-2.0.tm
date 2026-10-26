@@ -1421,7 +1421,12 @@ oo::class create System {
                 }
             }
 
-			rename puts _puts
+			# Second and later configures in the same stim2 process:
+			# _puts already exists and a bare rename fails, which
+			# aborted this whole block (stim/cmd showed the prelude
+			# command returning an error on every reload) and left
+			# stdout unredirected. Rename once; redefine puts always.
+			if { [info commands _puts] eq "" } { rename puts _puts }
 			proc puts {args} {
 				global dservhost
 				switch [llength $args] {
@@ -2480,6 +2485,17 @@ namespace eval ess {
     # calls) and final_init can all throw; without this the exception
     # unwinds with ess/status stuck at "loading" and the GUI wedged.
     proc load_system {{system {}} {protocol {}} {variant {}}} {
+        # Never reload under an open data file. A load tears the stim down
+        # and rebuilds it (unload, configure_stim, libs, script, stim_init,
+        # bindings, late-draw), and every one of those commands and their
+        # effects would land in the file that is recording; a reload by
+        # accident at the end of a session did exactly that. The operator
+        # closes the file first, deliberately.
+        variable open_datafile
+        if { $open_datafile ne "" } {
+            error "cannot load a system while data file [file tail $open_datafile]\
+                is open: close it first (ess::file_close)"
+        }
         clear_load_error
         try {
             load_system_body $system $protocol $variant
@@ -2679,6 +2695,13 @@ namespace eval ess {
     
     proc reload_variant {} {
 	variable current
+	# Same rule as load_system: a variant reload regenerates and re-pushes
+	# stimdg and re-runs variant init under a file that is recording.
+	variable open_datafile
+	if { $open_datafile ne "" } {
+	    error "cannot reload the variant while data file\
+	        [file tail $open_datafile] is open: close it first (ess::file_close)"
+	}
 	# Nothing loaded: nothing to reload. Do NOT consult query_state here --
 	# it runs `$current(state_system) status`, and with no system that is
 	# `"" status` -> "invalid command name" (it took essconf.tcl down at
