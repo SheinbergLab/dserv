@@ -50,7 +50,17 @@ if(WIN32)
         message(FATAL_ERROR "Could not find static zlib library (zs.lib or zlibstatic.lib)")
     endif()
     
-    set(WIN_LIBS fltk::fltk ${ZLIB_STATIC} ${LZ4_LIBRARIES} ${LIBDG})
+    # jansson: dslog.c (compiled from the dlsh tree below) parses JSON
+    # datapoints with it since dlsh 0.20.4 (dslog::jsonTable). The workflow
+    # installs it under CMAKE_PREFIX_PATH (C:/deps).
+    find_library(LIBJANSSON NAMES jansson libjansson PATHS ${CMAKE_PREFIX_PATH}/lib)
+    find_path(JANSSON_INCLUDE_DIR jansson.h PATHS ${CMAKE_PREFIX_PATH}/include)
+    if(NOT LIBJANSSON)
+        message(FATAL_ERROR "Could not find jansson (needed by dslog.c)")
+    endif()
+    include_directories(${JANSSON_INCLUDE_DIR})
+
+    set(WIN_LIBS fltk::fltk ${ZLIB_STATIC} ${LZ4_LIBRARIES} ${LIBDG} ${LIBJANSSON})
 elseif(APPLE)
     include_directories("/usr/local/include" "/opt/homebrew/include")
     link_directories("/usr/local/lib" "/opt/homebrew/lib")
@@ -67,6 +77,13 @@ elseif(APPLE)
     if(NOT LIBDG)
         set(LIBDG "dg")
     endif()
+    # jansson: dslog.c (compiled from the dlsh tree below) parses JSON
+    # datapoints with it since dlsh 0.20.4 (dslog::jsonTable); the workflow
+    # installs a static one under /usr/local
+    find_library(LIBJANSSON NAMES "libjansson.a" jansson)
+    if(NOT LIBJANSSON)
+        message(FATAL_ERROR "Could not find jansson (needed by dslog.c)")
+    endif()
 
     # For app bundle
     set(MACOSX_BUNDLE_ICON_FILE dgview.icns)
@@ -78,6 +95,11 @@ else()
     find_library(LIBFLTK NAMES "libfltk.a" fltk)
     find_library(LIBFLTK_ZLIB NAMES "libfltk_z.a" fltk_z)  # May not exist on all systems
     set(LIBDG "dg")
+    # jansson, as on macOS: static from /usr/local, needed by dslog.c
+    find_library(LIBJANSSON NAMES "libjansson.a" jansson)
+    if(NOT LIBJANSSON)
+        message(FATAL_ERROR "Could not find jansson (needed by dslog.c)")
+    endif()
     
     # Check for XXHash (needed on newer Debian/Ubuntu)
     find_library(LIBXXHASH NAMES "libxxhash.a" "xxhash")
@@ -149,7 +171,7 @@ if(WIN32)
         comctl32 ws2_32 kernel32 user32 gdi32 shell32 ole32 comdlg32 advapi32)
 elseif(APPLE)
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -framework Cocoa -weak_framework UniformTypeIdentifiers -weak_framework ScreenCaptureKit")
-    target_link_libraries(dgview ${LIBFLTK} ${LIBFLTK_ZLIB} ${LIBDG} ${LIBZ} ${LIBLZ4})
+    target_link_libraries(dgview ${LIBFLTK} ${LIBFLTK_ZLIB} ${LIBDG} ${LIBJANSSON} ${LIBZ} ${LIBLZ4})
     
     # App bundle configuration
     set_target_properties(dgview PROPERTIES
@@ -170,7 +192,7 @@ elseif(APPLE)
     endif()
 else()
     # Linux
-    set(LINUX_LIBS ${LIBFLTK} ${LIBDG} ${LIBZ} ${LIBLZ4})
+    set(LINUX_LIBS ${LIBFLTK} ${LIBDG} ${LIBJANSSON} ${LIBZ} ${LIBLZ4})
     if(LIBFLTK_ZLIB)
         list(APPEND LINUX_LIBS ${LIBFLTK_ZLIB})
     endif()
