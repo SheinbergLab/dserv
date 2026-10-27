@@ -208,6 +208,14 @@ proc on_ess_run_state_change {dpoint data} {
 dservAddExactMatch ess/run_state
 dpointSetScript ess/run_state on_ess_run_state_change
 
+# a held run (juice low, no stim) shows on the Queues tab
+proc on_ess_hold_change {dpoint data} {
+    ::ess_queues::on_ess_hold $data
+}
+
+dservAddExactMatch ess/hold
+dpointSetScript ess/hold on_ess_hold_change
+
 proc on_ess_snapshot_change {dpoint_name value} {
     if {$value ne "" && [json_get $value source] eq "config"} {
         # Config load completed on ESS side - finalize bookkeeping

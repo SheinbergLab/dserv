@@ -42,6 +42,7 @@ namespace eval ::ess_queues {
         auto_advance    1
         auto_datafile   1
         datafile_open   0
+        hold            ""
     }
     
     # Status values:
@@ -993,7 +994,20 @@ proc ::ess_queues::start_run {} {
         # 2026-08-04, office-stim). The truth is ours to stamp here; the
         # session sets "complete" itself when it genuinely finishes.
         dservSet ess/run_state running
-        ess_start
+        if {![ess_start]} {
+            # Refused (juice low, no stim): hold the run rather than abandon
+            # it. The datafile stays open and the queue stays `running`,
+            # exactly the manual-Go state below, so a human who fixes the
+            # cause and presses Go continues this run and the queue carries
+            # on from its completion. state(hold) (mirrored from ess/hold)
+            # is what the Queues tab shows meanwhile.
+            # read the datapoint, not state(hold): its change script is
+            # queued behind this very call and has not run yet
+            set why ""
+            catch { set why [dservGet ess/hold] }
+            if {$why eq ""} { set why "ESS refused to start" }
+            log warning "Run held, waiting for Go: $why"
+        }
     } else {
         set state(status) running
         set state(run_started) [clock seconds]
@@ -1162,6 +1176,20 @@ proc ::ess_queues::on_ess_run_state {run_state} {
     }
 }
 
+# ess/hold: why ESS refused Go or paused itself (juice low, no stim). For
+# an unattended queue this is THE state to see -- a run that is open but
+# going nowhere. Mirrored rather than polled; cleared by ESS on the next
+# good start, so the queue needs no state change of its own to resume.
+proc ::ess_queues::on_ess_hold {msg} {
+    variable state
+    if {$msg eq $state(hold)} return
+    set state(hold) $msg
+    if {$msg ne "" && $state(status) eq "running"} {
+        log warning "Run held: $msg"
+    }
+    publish_state
+}
+
 proc ::ess_queues::tick {} {
     variable state
     
@@ -1204,13 +1232,15 @@ proc ::ess_queues::tick {} {
 # ESS Control
 # =============================================================================
 
+# ESS's own answer, not "the send went through": ess::start returns 0 when
+# it refuses (juice gate, stim required), and ess/hold says why.
 proc ::ess_queues::ess_start {} {
     log info "Starting ESS"
-    if {[catch {send ess "ess::start"} err]} {
-        log error "Failed to start ESS: $err"
+    if {[catch {send ess "ess::start"} ok]} {
+        log error "Failed to start ESS: $ok"
         return 0
     }
-    return 1
+    return [expr {[string is true -strict $ok] ? 1 : 0}]
 }
 
 proc ::ess_queues::ess_stop {} {
@@ -1240,8 +1270,8 @@ proc ::ess_queues::publish_state {} {
     dservSet queues/global_run $state(global_run)
     
     # Combined JSON for JS clients
-    set json "{\"status\":\"$state(status)\",\"queue_name\":\"$state(queue_name)\",\"project_name\":\"$state(project_name)\",\"position\":$state(position),\"total_items\":$state(total_items),\"current_config\":\"$state(current_config_name)\",\"run_count\":$state(run_count),\"repeat_total\":$state(current_repeat_count),\"auto_start\":$state(auto_start),\"auto_advance\":$state(auto_advance)}"
-    
+    set json "{\"status\":\"$state(status)\",\"queue_name\":\"$state(queue_name)\",\"project_name\":\"$state(project_name)\",\"position\":$state(position),\"total_items\":$state(total_items),\"current_config\":\"$state(current_config_name)\",\"run_count\":$state(run_count),\"repeat_total\":$state(current_repeat_count),\"auto_start\":$state(auto_start),\"auto_advance\":$state(auto_advance),\"hold\":\"[string map {\\ \\\\ \" \\\" \n { } \t { }} $state(hold)]\"}"
+
     dservSet queues/state $json
 }
 

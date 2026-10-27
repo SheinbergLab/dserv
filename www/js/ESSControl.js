@@ -4545,7 +4545,8 @@ updateConfigRunButtons() {
         // Status text with styling
         const statusEl = this.elements.queueStatusText;
         statusEl.className = 'ess-queue-status-value';
-        
+        statusEl.title = '';
+
         // Show ESS loading state prominently
         if (essLoading && (qs.status === 'loading' || qs.status === 'ready')) {
             statusEl.textContent = 'loading...';
@@ -4553,6 +4554,12 @@ updateConfigRunButtons() {
         } else if (qs.status === 'between_runs') {
             statusEl.textContent = 'waiting';
             statusEl.classList.add('waiting');
+        } else if (qs.status === 'running' && qs.hold && !this.state.essRunning) {
+            // run open but ESS refused Go / paused itself (ess/hold):
+            // the unattended-queue state someone needs to notice
+            statusEl.textContent = 'held';
+            statusEl.classList.add('held');
+            statusEl.title = qs.hold;
         } else {
             statusEl.textContent = qs.status;
             if (qs.status === 'running') {

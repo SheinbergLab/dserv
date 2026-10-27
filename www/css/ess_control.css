@@ -4128,6 +4128,11 @@ select.ess-param-select {
     color: var(--ess-warning);
 }
 
+.ess-queue-status-value.held {
+    color: var(--ess-warning);
+    animation: pulse 1.2s infinite;
+}
+
 .ess-queue-status-value.ready {
     color: var(--ess-success);
 }
