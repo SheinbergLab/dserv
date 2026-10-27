@@ -184,6 +184,10 @@ class ESSControl {
                         <button id="ess-btn-stop" class="ess-state-btn stop" disabled>■ Stop</button>
                         <button id="ess-btn-reset" class="ess-state-btn reset" disabled>Reset</button>
                     </div>
+                    <div class="ess-hold-banner" id="ess-hold-banner" hidden>
+                        <span class="ess-hold-text" id="ess-hold-text"></span>
+                        <button class="ess-hold-dismiss" id="ess-hold-dismiss" title="Dismiss">×</button>
+                    </div>
                     <div class="ess-status-row">
                         <span class="ess-in-obs-indicator" id="ess-in-obs-indicator"></span>
                         <span class="ess-obs-label">Obs:</span>
@@ -529,6 +533,9 @@ class ESSControl {
             btnReset: this.container.querySelector('#ess-btn-reset'),
             btnGo: this.container.querySelector('#ess-btn-go'),
             btnStop: this.container.querySelector('#ess-btn-stop'),
+            holdBanner: this.container.querySelector('#ess-hold-banner'),
+            holdText: this.container.querySelector('#ess-hold-text'),
+            holdDismiss: this.container.querySelector('#ess-hold-dismiss'),
             btnJuice: this.container.querySelector('#ess-btn-juice'),
             btnJuiceSettings: this.container.querySelector('#ess-btn-juice-settings'),
             muteBtn: this.container.querySelector('#ess-btn-mute'),
@@ -692,7 +699,8 @@ class ESSControl {
         this.elements.btnReset.addEventListener('click', () => this.resetExperiment());
         this.elements.btnGo.addEventListener('click', () => this.startExperiment());
         this.elements.btnStop.addEventListener('click', () => this.stopExperiment());
-        
+        this.elements.holdDismiss.addEventListener('click', () => this.sendCommand('ess::clear_hold'));
+
         // Juice button
         this.elements.btnJuice.addEventListener('click', () => this.giveJuice());
         this.elements.btnJuiceSettings.addEventListener('click', () => this.showJuicerSettingsModal());
@@ -1086,6 +1094,21 @@ class ESSControl {
         
         this.dpManager.subscribe('ess/status', (data) => {
             this.updateEssStatus(data.value);
+        });
+
+        // Trial-boundary stop (`setting ess stop_after_trial`): "user" or
+        // "juice" while ESS finishes the current trial before stopping.
+        this.dpManager.subscribe('ess/stop_pending', (data) => {
+            this.state.stopPending = String(data.value ?? '').trim();
+            this.updateButtonStates();
+        });
+
+        // Why ESS refused Go or paused itself (juice low, stim missing).
+        // ESS clears it on the next good start.
+        this.dpManager.subscribe('ess/hold', (data) => {
+            const msg = String(data.value ?? '').trim();
+            this.elements.holdText.textContent = msg;
+            this.elements.holdBanner.hidden = !msg;
         });
 
         // A load that fails partway leaves the system unusable but the
@@ -1537,6 +1560,16 @@ updateConfigRunButtons() {
                 }
                 break;
         }
+
+        // Armed boundary stop: say so, and say what a second press does.
+        const pending = status === 'running' && this.state.stopPending;
+        const btn = this.elements.btnStop;
+        btn.classList.toggle('pending', !!pending);
+        btn.textContent = pending ? '■ Stopping…' : '■ Stop';
+        btn.title = !pending ? ''
+            : (this.state.stopPending === 'juice'
+               ? 'Juice low: stopping after this trial. Click to stop now.'
+               : 'Stopping after this trial. Click to stop now.');
     }
     
     updateObsDisplay() {
@@ -2643,8 +2676,11 @@ updateConfigRunButtons() {
         this.sendCommand('ess::start');
     }
     
+    // request_stop honors the rig's `ess stop_after_trial` opt-in (finish
+    // the current trial first; a second press stops now). Without the
+    // opt-in it is plain ess::stop.
     stopExperiment() {
-        this.sendCommand('ess::stop');
+        this.sendCommand('ess::request_stop');
     }
     
     resetExperiment() {
@@ -4338,6 +4374,7 @@ updateConfigRunButtons() {
             'ess/subject_ids', 'ess/subject', 'ess/systems', 'ess/system',
             'ess/protocols', 'ess/protocol', 'ess/variants', 'ess/variant',
             'ess/status', 'ess/load_error', 'ess/last_good_system',
+            'ess/stop_pending', 'ess/hold',
             'ess/variant_info_json', 'ess/param_settings',
             'ess/param', 'ess/params', 'ess/datafile',
             'ess/obs_id', 'ess/obs_total', 'ess/in_obs',

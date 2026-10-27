@@ -502,6 +502,31 @@ if { [settings::source_of ess obs_pin] ne "default" } {
     unset -nocomplain _op _cur _e
 }
 
+#
+# Two opt-in session behaviors, both built on the trial boundary (end_obs;
+# see request_stop in ess-2.0.tm). Off by default: a rig that has not said
+# otherwise keeps Stop meaning stop now. ess caches the values (-apply), so
+# the per-trial check costs a variable read, not a settings lookup.
+#
+settings::declare ess stop_after_trial -default 0 -type bool \
+    -apply ::ess::set_stop_after_trial \
+    -doc "make the control page's Stop button let the current trial
+finish, then stop before the next one begins. The button reads
+'Stopping...' meanwhile; pressing it again stops at once. Between
+trials, or in a system without obs periods, Stop is immediate
+either way. Queues and system loads always stop immediately."
+
+settings::declare ess juice_gate -default 0 -type bool \
+    -apply ::ess::set_juice_gate \
+    -doc "don't run trials on a low reservoir. Go asks the juicer for a
+fresh level and refuses if it reads low; during a session, a low
+reading (each reward reports one) stops ESS after that trial. The
+control page says why. Needs the usb juicer, the only one with a
+level sensor; with any other route, or no juicer, it never blocks."
+
+::ess::set_stop_after_trial [settings::get ess stop_after_trial]
+::ess::set_juice_gate       [settings::get ess juice_gate]
+
 # Pull the workgroup's subject list from the registry. This OVERRIDES the
 # env/hardcoded default that ess-2.0.tm set during load (which stays the
 # fallback); if the registry is unset/unreachable/empty the default remains.

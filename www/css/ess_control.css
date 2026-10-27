@@ -1277,6 +1277,54 @@ body.ess-app {
     border-color: var(--ess-error);
 }
 
+/* armed trial-boundary stop: waiting for the current trial to end */
+.ess-state-btn.stop.pending:not(:disabled) {
+    color: var(--ess-warning);
+    border-color: var(--ess-warning);
+    animation: ess-stop-pending 1.2s ease-in-out infinite;
+}
+
+@keyframes ess-stop-pending {
+    50% { opacity: 0.55; }
+}
+
+/* why ESS refused Go or paused itself (ess/hold) */
+.ess-hold-banner {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    margin-top: 6px;
+    padding: 5px 8px;
+    border: 1px solid var(--ess-warning);
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--ess-warning) 12%, var(--ess-bg-panel));
+    color: var(--ess-text-primary);
+    font-size: 12px;
+    line-height: 1.35;
+}
+
+.ess-hold-banner[hidden] {
+    display: none;
+}
+
+.ess-hold-text {
+    flex: 1;
+}
+
+.ess-hold-dismiss {
+    background: none;
+    border: none;
+    color: var(--ess-text-secondary);
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+    padding: 0 2px;
+}
+
+.ess-hold-dismiss:hover {
+    color: var(--ess-text-primary);
+}
+
 .ess-state-btn.init:hover:not(:disabled) {
     background: var(--ess-border);
     color: var(--ess-accent);

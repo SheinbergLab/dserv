@@ -2048,14 +2048,23 @@ oo::class create System {
 
     method status {} { return $_status }
 
+    # A trial-boundary stop (::ess::request_stop, the juice gate) is armed
+    # by end_obs and taken here, BETWEEN states: after the action that
+    # ended the obs has run to completion, before the next transition can
+    # lead into another trial. Checked on entry too, for an end_obs that
+    # ran outside this loop (a datapoint callback).
     method update {} {
         if { $_status eq "running" } {
+            if { $::ess::boundary_due } { return [::ess::stop_at_boundary] }
             while { [set next [my do_transition]] != {} &&
                 [dict exists $_states $next] } {
                     set _current_state [dict get $_states $next]
                     my do_action
                     if { $_current_state == $_end_state } {
                         return [my end]
+                    }
+                    if { $::ess::boundary_due } {
+                        return [::ess::stop_at_boundary]
                     }
                 }
             return
@@ -2939,6 +2948,9 @@ namespace eval ess {
         for {set i 0} {$i < $::nTimers} {incr i} {
             timerSetScript $i "[namespace current]::do_update"
         }
+        # a boundary stop armed against the outgoing system is moot
+        clear_boundary_stop
+
         # default to not tracking ems, but ::ess::em_init will turn on
         variable em_active
         set em_active 0
@@ -2998,12 +3010,29 @@ namespace eval ess {
             catch { set connected [rmtConnected] }
             if { !$connected } {
                 ess_error "Refusing to start: stim required but not connected" "stim"
+                set_hold "Not started: stim display required but not connected"
+                return 0
+            }
+        }
+
+        # Juice gate: ask the pump NOW rather than trust juicer/juice_low,
+        # which is only refreshed by a reward reply -- after a refill the
+        # last reading is still "low", and refusing on it would deadlock
+        # (no trial, so no reward, so no new reading).
+        variable juice_gate
+        if { $juice_gate } {
+            lassign [juice_check] jstate jlevel
+            if { $jstate eq "low" } {
+                ess_error "Refusing to start: juice low ($jlevel)" "juicer"
+                set_hold "Not started: juicer reports juice low ($jlevel). Refill, then Go."
                 return 0
             }
         }
 
         set current(state_system) [find_system $current(system)]
         if {$current(state_system) != ""} {
+            clear_boundary_stop
+            set_hold ""
             ::ess::evt_put USER START [now]
             $current(state_system) start
             dservSet ess/user_start 1
@@ -3012,6 +3041,9 @@ namespace eval ess {
         return 0
     }
 
+    # Immediate stop, mid-trial if need be. Internal callers (queues,
+    # loads, USER_STOP) rely on this being immediate; the page's Stop
+    # button goes through request_stop instead.
     proc stop {} {
         variable current
         if {$current(system) == ""} {print "no system set"; return 0}
@@ -3020,9 +3052,136 @@ namespace eval ess {
             $current(state_system) stop
             ::ess::evt_put USER QUIT [now]
             dservSet ess/user_quit 1
+            # after the system's stop: its quit callback's end_obs QUIT
+            # would otherwise re-arm the boundary
+            clear_boundary_stop
 	    return 1
         }
         return 0
+    }
+
+    ########################################################################
+    # Trial-boundary stop and the juice gate (2026-10-27).
+    #
+    # Both are opt-in per rig, declared in local/rig.tcl and cached here by
+    # essconf's -apply (settings::get publishes on every call, too much for
+    # once per trial):
+    #
+    #   setting ess stop_after_trial 1   Stop finishes the current trial
+    #   setting ess juice_gate 1         don't run trials on a low reservoir
+    #
+    # The boundary is end_obs: an armed stop is taken by the state system's
+    # update loop right after the action that ended the obs, so the trial's
+    # ENDOBS, feedback and save_trial_info all happen and the next begin_obs
+    # never does. Between trials (in_obs 0, no onset pending) there is
+    # nothing to wait for, so a request stops immediately; likewise for a
+    # system that never calls begin_obs. A second Stop while armed is an
+    # immediate stop -- the way out of a trial that won't end.
+    #
+    #   ess/stop_pending  ""|user|juice   armed boundary stop (page: Stop
+    #                                     button reads "Stopping...")
+    #   ess/hold          "" | one line   why ESS is not running when it
+    #                                     refused or paused on its own;
+    #                                     cleared by the next good start
+    ########################################################################
+    variable stop_after_trial 0
+    variable juice_gate 0
+    variable stop_pending ""
+    variable boundary_due 0
+
+    proc set_stop_after_trial {on} {
+        variable stop_after_trial [expr {$on ? 1 : 0}]
+    }
+
+    proc set_juice_gate {on} {
+        variable juice_gate [expr {$on ? 1 : 0}]
+    }
+
+    proc set_hold {msg} {
+        dservSet ess/hold $msg
+    }
+
+    proc clear_hold {} { set_hold "" }
+
+    proc arm_boundary_stop {reason} {
+        variable stop_pending
+        if { $stop_pending ne "" } return
+        set stop_pending $reason
+        dservSet ess/stop_pending $reason
+    }
+
+    proc clear_boundary_stop {} {
+        variable stop_pending ""
+        variable boundary_due 0
+        dservSet ess/stop_pending ""
+    }
+
+    proc request_stop {} {
+        variable current
+        variable stop_after_trial
+        variable stop_pending
+        variable in_obs
+        variable obs_pending
+        set sys $current(state_system)
+        if { !$stop_after_trial || $stop_pending ne "" || $sys eq "" ||
+             [$sys status] ne "running" || (!$in_obs && !$obs_pending) } {
+            return [stop]
+        }
+        arm_boundary_stop user
+        ess_info "Stop requested: stopping after the current trial" "system"
+        return 1
+    }
+
+    # end_obs calls this on every way out of an obs: the juice reading from
+    # this trial's reward (a synchronous send, so already published) is
+    # judged here, and an armed stop becomes due.
+    proc trial_boundary {} {
+        variable current
+        variable juice_gate
+        variable stop_pending
+        variable boundary_due
+        # a stop's own quit callback ends the obs too; nothing to arm then
+        set sys $current(state_system)
+        if { $sys eq "" || [$sys status] ne "running" } return
+        if { $juice_gate && $stop_pending eq "" && [juice_low] } {
+            arm_boundary_stop juice
+        }
+        if { $stop_pending ne "" } { set boundary_due 1 }
+    }
+
+    proc stop_at_boundary {} {
+        variable stop_pending
+        set why $stop_pending
+        stop
+        if { $why eq "juice" } {
+            set level ""
+            catch { set level [dservGet juicer/juice_level] }
+            ess_warning "Stopped after trial: juice low ($level)" "juicer"
+            set_hold "Paused after trial: juicer reports juice low ($level). Refill, then Go."
+        } else {
+            ess_info "Stopped after trial" "system"
+        }
+        return
+    }
+
+    # The juicer subprocess owns what "low" means (juicer/juice_low, set
+    # from the pump's own juice_level reading). Only a pump that answers
+    # can say low; no juicer, a non-usb route, or no sensor is "unknown",
+    # which never blocks.
+    proc juice_low {} {
+        set low 0
+        catch {
+            set low [expr {[dservExists juicer/juice_low] &&
+                           [dservGet juicer/juice_low] eq "1"}]
+        }
+        return $low
+    }
+
+    proc juice_check {} {
+        if { [catch { send juicer juicer_level_check } r] } {
+            return {unknown {}}
+        }
+        return $r
     }
 
     proc reset {} {
@@ -3644,6 +3803,7 @@ namespace eval ess {
             set obs_pending 0
             catch {dservSet $io_class/$obs_sched_box/cmd/do/$obs_sched_pin/at_abs 0}
             catch {dservSet $io_class/$obs_sched_box/cmd/do/$obs_sched_pin 0}
+            trial_boundary
             return
         }
         if {!$in_obs} {return}
@@ -3657,6 +3817,7 @@ namespace eval ess {
         ::ess::evt_put ENDOBS $status [now]
         set in_obs 0
         dservSet ess/in_obs 0
+        trial_boundary
     }
 
     proc query_state {} {
@@ -6418,6 +6579,10 @@ namespace eval ess {
     # before anything has been loaded (empty = no outstanding failure)
     dservSet ess/load_error {}
     dservSet ess/last_good_system {}
+
+    # trial-boundary stop / hold (see request_stop): same reason
+    dservSet ess/stop_pending {}
+    dservSet ess/hold {}
 
     # Data directory: set from environment, publish as datapoint.
     # The ess/data_dir datapoint is the single source of truth at runtime;

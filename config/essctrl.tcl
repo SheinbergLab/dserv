@@ -59,6 +59,10 @@ namespace eval ess {
     # Always allowed
     proc start {} { send ess ::ess::start }
     proc stop {} { send ess ::ess::stop }
+    # the page's Stop: after the current trial when `setting ess
+    # stop_after_trial` opts in, else the same as stop
+    proc request_stop {} { send ess ::ess::request_stop }
+    proc clear_hold {} { send ess ::ess::clear_hold }
     
     # Blocked when running + file open
     proc reset args { _protected_call reset 1 $args }

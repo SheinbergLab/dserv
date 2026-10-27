@@ -89,7 +89,37 @@ proc publish_juicer_fields {parsed {keys ""}} {
 	}
 	set value [dict get $parsed $key]
 	dservSet juicer/${key} $value
+	if { $key eq "juice_level" } {
+	    dservSet juicer/juice_low [juicer_level_is_low $value]
+	}
     }
+}
+
+# The pump's float sensor reads ">50mLs" or "<50mLs". juicer/juice_low is the
+# one interpretation ess's juice gate reads (`setting ess juice_gate`), so
+# the "<" convention lives here and nowhere downstream.
+proc juicer_level_is_low {level} {
+    return [string match "<*" [string trim $level]]
+}
+
+# Ask the pump for its reservoir level now, for ess::start's juice gate.
+# juicer/juice_level is otherwise only refreshed by reward replies, so after
+# a refill it still says low until the next reward. Returns {state level},
+# state ok | low | unknown; only a usb pump that answers can say low.
+proc juicer_level_check {} {
+    if { [$::juicer backend] ne "usb" || ![$::juicer is_open] } {
+	return {unknown {}}
+    }
+    if { [catch {
+	set parsed [::yajl::json2dict [$::juicer get juice_level]]
+    } err] } {
+	puts stderr "juicer: juice_level query failed: $err"
+	return {unknown {}}
+    }
+    if { ![dict exists $parsed juice_level] } { return {unknown {}} }
+    publish_juicer_fields $parsed juice_level
+    set level [dict get $parsed juice_level]
+    return [list [expr {[juicer_level_is_low $level] ? "low" : "ok"}] $level]
 }
 
 proc publish_juicer_response {response} {
@@ -155,6 +185,9 @@ oo::class create Juicer {
 	    gpio    { dservSet juicer/target host }
 	    default { dservSet juicer/target "" }
 	}
+	# only the usb pump has a level sensor; a reading from a pump that is
+	# no longer the route must not keep gating trials
+	if { $kind ne "usb" } { dservSet juicer/juice_low 0 }
     }
     method backend {} { return $_backend }
     method extio_target {} { return $_extio_target }

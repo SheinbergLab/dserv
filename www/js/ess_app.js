@@ -158,6 +158,7 @@ function requestInitialData() {
           ess/variant_info_json ess/param_settings
           ess/subject_ids ess/subject ess/state ess/status
           ess/load_error ess/last_good_system
+          ess/stop_pending ess/hold
           ess/sound/feedback_volume ess/sound/master_gain
           ess/obs_id ess/obs_total ess/in_obs
           ess/obs_schedule ess/obs_schedule_stats ess/health
