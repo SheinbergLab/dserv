@@ -174,8 +174,8 @@ set match_at [string first "\n        stim_frame_log_match \$filename\n" $src]
 assert {$match_at > [string first "dservLoggerAddMatch \$filename stim/cmd 0 0 1" $src] &&
         $match_at < [string first "dservLoggerAddMatch \$filename stim/bind 0 0 1" $src]} \
     "open_datafile calls stim_frame_log_match next to the stim/cmd match"
-assert {[regexp {(?s)proc stim_frame_log_match \{ filename \} \{.*?dservLoggerAddMatch \$filename stim/frame 0 100 1} $src]} \
-    "stim_frame_log_match subscribes stim/frame not obs-limited, buffered 100, every record"
+assert {[regexp {(?s)proc stim_frame_log_match \{ filename \} \{.*?dservLoggerAddMatch \$filename stim/frame 0 0 1} $src]} \
+    "stim_frame_log_match subscribes stim/frame not obs-limited, unbuffered (one frame per record), every record"
 
 # --- the stim_script block, same way ------------------------------------
 set sb [string first "# BEGIN stim_script" $src]
@@ -454,8 +454,8 @@ assert {[dict get $status enabled] == 1 && [dict get $status host] eq "stimhost.
 set ::matches {}
 proc ::ess::dservLoggerAddMatch { args } { lappend ::matches $args }
 assert {[::ess::stim_frame_log_match /tmp/x.ess] == 1} "stim_frame_log_match adds a match when the flag is 1"
-assert {$::matches eq {{/tmp/x.ess stim/frame 0 100 1}}} \
-    "the match is stim/frame, not obs-limited, buffered 100, every record ($::matches)"
+assert {$::matches eq {{/tmp/x.ess stim/frame 0 0 1}}} \
+    "the match is stim/frame, not obs-limited, unbuffered, every record ($::matches)"
 # disable: once, raw, flag back to 0; a second disable sends nothing
 assert {[::ess::stim_frame_disable] == 1} "stim_frame_disable sends the stop when the flag is 1"
 assert {$::ess::stim_frame_log == 0} "flag 0 after disable"

@@ -526,15 +526,28 @@ namespace eval ess {
     #
     # Logging policy (open_datafile, stim_frame_log_match): NOT obs-limited
     # -- a frame-time gap between trials is exactly what the record is for
-    # -- every record, BUFFERED 100. Unlike the stim/bind streams this is a
-    # fixed-width binary sample (7 int64 = 56 bytes), so the log buffer's
-    # concatenation of successive points is what it was made for: one
-    # record per ~1.7 s at 60 Hz instead of 60 writes a second, and a reader
-    # splits the buffered array back into 7-column rows. Added only when the
-    # flag is 1 (an old stim2 never sends the stream). The record is an int64
-    # array: dslog::read exposes it only under `dslog::wideTypes 1` -- the
-    # default read (dslog.c, wide types off) DROPS DSERV_INT64 values, so a
-    # <ds>stim/frame column is empty there.
+    # -- every record, UNBUFFERED, one frame per record.
+    #
+    # Deliberately so (2026-10-26). The buffer argument of
+    # dservLoggerAddMatch is BYTES, not points (LogClient.cpp: a point is
+    # appended while it fits and the buffer flushed when the next would not),
+    # and this match used to say 100, which with a 56-byte frame still gave
+    # one frame per record, only held until the next frame arrived. Batching
+    # 100 frames (5600) would cut a training file by about a quarter -- in a
+    # 52-minute motiondir file stim/frame was 258,705 records and two thirds
+    # of 34.6 MB -- but it was turned down because a batched record keeps
+    # only its first frame's dserv timestamp, and that per-frame receipt
+    # stamp is what places each frame against the commands and datapoints
+    # around it and what measures the cross-host clock (receipt minus
+    # flip_us) frame by frame; and because dslog::unpack / jsonTable expect
+    # one 7-field sample per record. If size ever matters, thin the stream
+    # at the source instead (stim2 sending only frames whose counters moved,
+    # plus a heartbeat), which keeps a true timestamp on every record.
+    #
+    # Added only when the flag is 1 (an old stim2 never sends the stream).
+    # The record is an int64 array: dslog::read exposes it only under
+    # `dslog::wideTypes 1` -- the default read (dslog.c, wide types off)
+    # DROPS DSERV_INT64 values, so a <ds>stim/frame column is empty there.
     #
     # Self-contained like the two blocks above: tests/test_ess_stim_cmd.tcl
     # evaluates the text between these markers in `namespace eval ess`.
@@ -570,7 +583,7 @@ namespace eval ess {
     proc stim_frame_log_match { filename } {
         variable stim_frame_log
         if { !$stim_frame_log } { return 0 }
-        dservLoggerAddMatch $filename stim/frame 0 100 1
+        dservLoggerAddMatch $filename stim/frame 0 0 1
         return 1
     }
     # END stim_frame_log
@@ -4433,10 +4446,11 @@ namespace eval ess {
         dservLoggerAddMatch $filename stim/lib/* 0 0 1
 
         # stim2's per-frame record (the stim_frame_log block), only when this
-        # stim2 produces it: not obs-limited, buffered 100, every record --
-        # `dservLoggerAddMatch $filename stim/frame 0 100 1`. The record is
-        # an int64 array; dslog::read exposes it only under
-        # `dslog::wideTypes 1`.
+        # stim2 produces it: not obs-limited, unbuffered, every record --
+        # `dservLoggerAddMatch $filename stim/frame 0 0 1`, one frame per
+        # record with its own receipt timestamp (why, and why not batched:
+        # the policy note in that block). The record is an int64 array;
+        # dslog::read exposes it only under `dslog::wideTypes 1`.
         stim_frame_log_match $filename
 
         # stim2's datapoint bindings (the stim_bind block): the table itself,
