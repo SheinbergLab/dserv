@@ -72,6 +72,7 @@ set ::ack 1
 set ::rawecho 0
 set ::flip 0
 set ::stimess 1
+set ::stimess_version 1.1   ;# what `package require stimess` answers (fake_stimess_version)
 set ::bindings_default {{"package":"stimess 1.0","bindings":[{"name":"ess/dial/pointer","fields":["x","y","show","band"],"mode":"latest","sep":","},{"name":"planko/catcher","fields":["x","y"],"mode":"latest","sep":","}]}}
 set ::bindings_json $::bindings_default
 set ::frame 1
@@ -148,6 +149,13 @@ proc reply_for { cmd } {
             return "!TCL_ERROR can't read \"StimVersion\": no such variable"
         }
         "fake_dlsh *"    { set ::dlsh [lindex $cmd 1]; return "" }
+        "fake_stimess_version *" { set ::stimess_version [lindex $cmd 1]; return "" }
+        "package require stimess" {
+            # the stim_script block's prelude probe (raw): the package
+            # version, or the error a stim2 without the package gives
+            if { $::stimess } { return $::stimess_version }
+            return "!TCL_ERROR can't find package stimess"
+        }
         "package present dlsh" {
             # the dlsh package version stim2 loaded (the stim_script block's
             # "dlsh" field; raw, so never under a header)

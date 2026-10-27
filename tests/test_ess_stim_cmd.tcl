@@ -134,6 +134,18 @@ assert {[regexp -all {::ess::stim_bind_publish 0\n} $src] == 2} \
 assert {[regexp -all {\n\s+::ess::stim_bind_publish\n} $src] == 1 &&
         [string first "\n        ::ess::stim_bind_publish\n" $src] > $script_at} \
     "configure_stim queries stim2 once, after the stim script section"
+# the prelude: configure_stim sends `stim::prelude live` when stim2's
+# stimess is 1.1 or newer (stim_prelude_version, stim_script block) and the
+# inline block otherwise, after the mouse-bridge flag and before the
+# libraries and the stim script go out
+set prelude_at [string first "rmtSend \[list stim::prelude live -host \[dservGet ess/ipaddr\]\]" $src]
+set inline_at  [string first "rmtSend \$rmtcmd" $src]
+assert {$prelude_at > [string first "set ::mouse_bridge_mouse" $src] && $inline_at > $prelude_at &&
+        $inline_at < $script_at} \
+    "configure_stim sends stim::prelude live, with the inline block as fallback, before the stim script"
+assert {[string first "if { \[::ess::stim_prelude_version\] ne \"\" }" $src] > 0 &&
+        [string first "if { \[::ess::stim_prelude_version\] ne \"\" }" $src] < $prelude_at} \
+    "the inline/package choice is stim_prelude_version"
 assert {[string first "dservLoggerAddMatch \$filename stim/bind 0 0 1" $src] > 0} \
     "open_datafile subscribes stim/bind unbuffered, not obs-limited, every record"
 assert {[string first "dservLoggerAddMatch \$filename \$_bound 1 0 1" $src] > 0} \
@@ -493,6 +505,15 @@ set seq0 [field [rec] seq]
 assert {[::ess::stim_script_dlsh] eq "0.20.3"} "stim_script_dlsh answers the fake's package present dlsh"
 assert {$::ess::stim2_dlsh eq "0.20.3"} "stim2_dlsh remembered"
 assert {[field [rec] seq] == $seq0} "the dlsh query is not a stim/cmd record"
+# the prelude probe: raw, the stimess version when it is 1.1 or newer
+set seq0 [field [rec] seq]
+assert {[::ess::stim_prelude_version] eq "1.1"} "stim_prelude_version answers the fake's stimess 1.1"
+assert {[field [rec] seq] == $seq0} "the prelude probe is not a stim/cmd record"
+rmtSend "fake_stimess_version 1.0"
+assert {[::ess::stim_prelude_version] eq ""} "stimess 1.0 (bindings only, no prelude) reads as empty"
+rmtSend "fake_stimess_version 2.0"
+assert {[::ess::stim_prelude_version] eq "2.0"} "a newer stimess still carries the prelude"
+rmtSend "fake_stimess_version 1.1"
 assert {[::ess::stim_script_stimess $table] eq "1.0"} "stim_script_stimess reads 1.0 off the table"
 assert {[::ess::stim_script_stimess $empty] eq ""} "stim_script_stimess: empty table, no version"
 assert {[::ess::stim_script_stimess {{"package":"other 2.0","bindings":[]}}] eq ""} \
@@ -699,6 +720,8 @@ assert {$::ess::stim_bound_names eq {}} "old stim2: stim_bound_names empty"
 assert {[dservGet stim/bind] eq $empty} "old stim2: stim/bind is the empty table"
 assert {[field [rec] cmd] eq "\"stim::bindings_json\"" && [field [rec] status] eq "\"error\""} \
     "old stim2: the failed query is a stim/cmd error record"
+assert {[catch {::ess::stim_prelude_version} r] == 0 && $r eq ""} \
+    "old stim2: stim_prelude_version returns empty without error (configure_stim sends the inline block)"
 rmtSend "fake_stimess 1"
 
 # ... and no stimFrameLog: the enable records 0, no error propagates,

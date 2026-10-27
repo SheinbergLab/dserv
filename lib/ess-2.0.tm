@@ -691,6 +691,22 @@ namespace eval ess {
         return $stim2_dlsh
     }
 
+    # Does this stim2 carry the configure prelude? stimess 1.1 added
+    # `stim::prelude live|playback`: the dserv plumbing configure_stim used
+    # to send inline (register, stimdg match, return socket, dserv_send*,
+    # mouse bridge, puts -> stim/stdout), as one recorded line, with a
+    # playback form a replay installs instead. Returns the stimess version
+    # when it is 1.1 or newer, "" for an older stim2 or none; configure_stim
+    # then sends the inline block. Raw, like the other probes: the prelude
+    # line itself goes through rmtSend and is in stim/cmd.
+    proc stim_prelude_version {} {
+        set r ""
+        catch { set r [::ess::rmtSend_raw {package require stimess}] }
+        if { $r eq "" || [string match "!TCL_ERROR*" $r] } { return "" }
+        if { [catch { package vcompare $r 1.1 } c] || $c < 0 } { return "" }
+        return $r
+    }
+
     # The stimess version a stim/bind table reports: "1.0" from
     # "package":"stimess 1.0", "" otherwise. Textual on purpose (the table
     # is stim2's pure-ASCII JSON; see the stim_bind block on parsers).
@@ -1472,7 +1488,20 @@ oo::class create System {
         catch { set _emulated [dservGet mouse/event/emulated] }
         set _real_mouse [expr {[dservExists mouse/event/range] && !$_emulated}]
         rmtSend "set ::mouse_bridge_mouse [expr {$_real_mouse ? 0 : 1}]"
-        rmtSend $rmtcmd
+
+        # The prelude itself. A stim2 whose stimess is 1.1 or newer carries
+        # it as `stim::prelude live` (modules/stimess-1.1.tm, the same text
+        # as the block above), so the data file records one line a replay
+        # can recognise and answer with `stim::prelude playback`: no
+        # registration, no return socket, send helpers that do nothing,
+        # bound datapoints fed by stim::inject. The inline block stays for an
+        # older stim2 and is byte-for-byte what the package does in live
+        # mode; change them together.
+        if { [::ess::stim_prelude_version] ne "" } {
+            rmtSend [list stim::prelude live -host [dservGet ess/ipaddr]]
+        } else {
+            rmtSend $rmtcmd
+        }
 
         # Frame-tag events: swapTag payloads arrive from dserv_tag_evt
         # (above, in the stim2 interp) on the single stim/tagevt datapoint;
