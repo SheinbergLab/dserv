@@ -60,11 +60,19 @@
 # A library shipped by configure_stim -libs (the stim_lib block) is just a
 # large command text: echoed like any other command.
 #
+# The screen snapshot (the stim2 side of the screen_snapshot block), the
+# nine-value query `list [screen_set HalfScreenDegreeX] ... [setBackground]`:
+# answered with ::screen_reply -- stim2's own formatting, screen_set's
+# floats with leading spaces, as a Retina-like 2x window (3840x2160 pixels,
+# ScaleX/Y 2) on a 120 Hz display with a 40 40 40 background. After
+# "fake_screen 0" the error a stim2 that cannot answer gives; after
+# "fake_screen short" eight values (a malformed reply).
+#
 # Control commands (never echoed): "fake_ack 0|1", "fake_rawecho 0|1",
 # "fake_flip <n>", "fake_stimess 0|1", "fake_bindings <json>" (replaces the
 # table; "fake_bindings" alone restores the default), "fake_frame 0|1",
 # "fake_frame_state", "fake_version 0|1", "fake_stimversion 0|1",
-# "fake_dlsh 0|1", "fake_quit". The process also
+# "fake_dlsh 0|1", "fake_screen 1|0|short", "fake_quit". The process also
 # exits on its own after 60 s so a crashed test cannot leave it behind.
 
 set portfile [lindex $argv 0]
@@ -83,6 +91,8 @@ set ::frame_disables 0
 set ::version 1
 set ::stimversion 1
 set ::dlsh 1
+set ::screen 1
+set ::screen_reply [list " 23.4453" " 13.2651" 3840 2160 " 2.0000" " 2.0000" 120 " 8.3333" "40 40 40"]
 
 # stimFrameLog ?<host> 0|1?, as a stim2 with the command answers it
 proc frame_status { connected } {
@@ -149,6 +159,7 @@ proc reply_for { cmd } {
             return "!TCL_ERROR can't read \"StimVersion\": no such variable"
         }
         "fake_dlsh *"    { set ::dlsh [lindex $cmd 1]; return "" }
+        "fake_screen *"  { set ::screen [lindex $cmd 1]; return "" }
         "fake_stimess_version *" { set ::stimess_version [lindex $cmd 1]; return "" }
         "package require stimess" {
             # the stim_script block's prelude probe (raw): the package
@@ -173,6 +184,12 @@ proc reply_for { cmd } {
         }
     } elseif { [string trim $cmd] eq "catch {stim::unbind_all}" } {
         set echo [expr {$::stimess ? 0 : 1}]
+    } elseif { [string first {list [screen_set HalfScreenDegreeX]} $cmd] == 0 } {
+        switch -- $::screen {
+            1       { set echo $::screen_reply }
+            short   { set echo [lrange $::screen_reply 0 end-1] }
+            default { set echo "!TCL_ERROR invalid command name \"screen_set\"" }
+        }
     } elseif { [string trim $cmd] eq "stimFrameLog" } {
         set echo [frame_log]
     } elseif { [string match "stimFrameLog *" $cmd] } {

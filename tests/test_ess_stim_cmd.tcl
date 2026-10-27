@@ -189,6 +189,20 @@ assert {$match_at > [string first "dservLoggerAddMatch \$filename stim/cmd 0 0 1
 assert {[regexp {(?s)proc stim_frame_log_match \{ filename \} \{.*?dservLoggerAddMatch \$filename stim/frame 0 0 1} $src]} \
     "stim_frame_log_match subscribes stim/frame not obs-limited, unbuffered (one frame per record), every record"
 
+# --- the screen_snapshot block, same way --------------------------------
+set sb [string first "# BEGIN screen_snapshot" $src]
+set se [string first "# END screen_snapshot" $src]
+assert {$sb > $fe && $se > $sb} "found the screen_snapshot block in lib/ess-2.0.tm"
+namespace eval ess [string range $src $sb [expr {$se - 1}]]
+assert {[info procs ::ess::screen_snapshot] ne ""} "screen_snapshot defined"
+# the call sites outside the block: file_open asks just before the logger
+# opens, and logs + re-emits ess/screen_bg with the geometry
+set snap_at [string first "\n        ::ess::screen_snapshot\n" $src]
+assert {$snap_at > 0 && $snap_at < [string first "dservLoggerOpen \$filename 1" $src]} \
+    "file_open takes the screen snapshot before the logger opens"
+assert {[regexp {foreach _sp \{screen_refresh_rate screen_frame_duration \\\s+screen_halfx screen_halfy screen_w screen_h screen_bg\}} $src]} \
+    "file_open logs and re-emits ess/screen_bg with the geometry"
+
 # --- the stim_script block, same way ------------------------------------
 set sb [string first "# BEGIN stim_script" $src]
 set se [string first "# END stim_script" $src]
@@ -488,6 +502,33 @@ assert {[catch {::ess::stim_frame_disable} r] == 0 && $r == 1 && $::ess::stim_fr
     "disable with stim2 gone: no error, flag 0"
 assert {[rmtOpen localhost $port] == 1} "reconnected after the disable"
 assert {[::ess::stim_frame_disable] == 0} "nothing left to disable after the reconnect"
+
+# --- 7e. the screen snapshot at file open ---------------------------------
+# raw (no stim/cmd record); all nine values in one request; the window size
+# divided by the scale as configure_stim does; the background as stim2
+# formats it; an unanswerable or malformed reply changes nothing
+set seq0 [field [rec] seq]
+foreach v {halfx halfy w h refresh_rate frame_duration bg} { catch { dservSet ess/screen_$v unset } }
+assert {[::ess::screen_snapshot] == 1} "screen_snapshot returns 1 against a stim2 that answers"
+assert {[field [rec] seq] == $seq0} "the snapshot query is not a stim/cmd record"
+assert {[dservGet ess/screen_halfx] eq "23.4453" && [dservGet ess/screen_halfy] eq "13.2651"} \
+    "half-screen degrees published, trimmed ([dservGet ess/screen_halfx] [dservGet ess/screen_halfy])"
+assert {[dservGet ess/screen_w] == 1920 && [dservGet ess/screen_h] == 1080} \
+    "window size is pixels / scale ([dservGet ess/screen_w]x[dservGet ess/screen_h])"
+assert {[dservGet ess/screen_refresh_rate] == 120 && [dservGet ess/screen_frame_duration] eq "8.3333"} \
+    "refresh and frame duration published"
+assert {[dservGet ess/screen_bg] eq "40 40 40"} "background published as r g b ([dservGet ess/screen_bg])"
+rmtSend "fake_screen 0"
+dservSet ess/screen_bg "1 2 3"
+assert {[::ess::screen_snapshot] == 0 && [dservGet ess/screen_bg] eq "1 2 3"} \
+    "a stim2 that cannot answer: 0, datapoints left as they were"
+rmtSend "fake_screen short"
+assert {[::ess::screen_snapshot] == 0 && [dservGet ess/screen_bg] eq "1 2 3"} \
+    "a malformed (eight-value) reply: 0, datapoints left as they were"
+rmtSend "fake_screen 1"
+rmtClose
+assert {[catch {::ess::screen_snapshot} r] == 0 && $r == 0} "no stim2 connected: 0, no error"
+assert {[rmtOpen localhost $port] == 1} "reconnected after the snapshot checks"
 
 # --- 7c. the stim script record ------------------------------------------
 # version: raw command (no stim/cmd record), remembered
