@@ -588,6 +588,51 @@ namespace eval ess {
     }
     # END stim_frame_log
 
+    # BEGIN screen_snapshot
+    #
+    # The display as the data file will see it, asked of stim2 when a file
+    # opens: half-screen degrees, window size, refresh and frame duration --
+    # the values configure_stim publishes as ess/screen_* -- and the current
+    # background colour, published as ess/screen_bg "r g b" (0-255).
+    #
+    # Asked fresh at open, not trusted from configure time: file_open logs
+    # ess/screen_* only if the datapoints exist, and files have been written
+    # without them on a dserv that had them hours before and after
+    # (human_emcalib_9point_261027163255.ess, officepi, 2026-10-27). The
+    # background is recorded nowhere else, and a stim script that never
+    # calls setBackground draws on whatever an earlier one left; a replay
+    # cannot know it otherwise.
+    #
+    # Sent with rmtSend_raw, before the file opens: not a stim/cmd record, so
+    # a replay never re-sends the query. One request for all nine values.
+    # With no stim2, or a reply that is not nine values, the datapoints are
+    # left as configure_stim set them and 0 is returned; 1 when refreshed.
+    variable screen_snapshot_query {list [screen_set HalfScreenDegreeX] [screen_set HalfScreenDegreeY] [screen_set WinWidth] [screen_set WinHeight] [screen_set ScaleX] [screen_set ScaleY] [screen_set RefreshRate] [screen_set FrameDuration] [setBackground]}
+
+    proc screen_snapshot {} {
+        variable screen_snapshot_query
+        set r "!TCL_ERROR not sent"
+        catch { set r [::ess::rmtSend_raw $screen_snapshot_query] }
+        if { [string match "!TCL_ERROR*" $r] || [catch {llength $r} n] || $n != 9 } {
+            return 0
+        }
+        lassign [lmap v $r {string trim $v}] hx hy ww wh sx sy hz fd bg
+        if { [catch {
+            set w [expr {int($ww / ($sx > 0 ? $sx : 1.0))}]
+            set h [expr {int($wh / ($sy > 0 ? $sy : 1.0))}]
+            if { [llength $bg] != 3 } { error "background \"$bg\"" }
+        }] } { return 0 }
+        dservSet ess/screen_halfx $hx
+        dservSet ess/screen_halfy $hy
+        dservSet ess/screen_w $w
+        dservSet ess/screen_h $h
+        dservSet ess/screen_refresh_rate $hz
+        dservSet ess/screen_frame_duration $fd
+        dservSet ess/screen_bg $bg
+        return 1
+    }
+    # END screen_snapshot
+
     # BEGIN stim_script
     #
     # The stim script that was running, published as stim/script
@@ -4606,6 +4651,11 @@ namespace eval ess {
                 }
             }
         }
+        # the display as this file will see it, asked of stim2 now
+        # (screen_snapshot block): ess/screen_* and ess/screen_bg, logged
+        # and re-emitted below
+        ::ess::screen_snapshot
+
         if {[catch {dservLoggerOpen $filename 1} err]} {
             print "Failed to open datafile $filename: $err"
             return -2
@@ -4656,13 +4706,15 @@ namespace eval ess {
             dservLoggerAddMatch $filename $_bound 1 0 1
         }
 
-        # Screen geometry + timing. These are dservSet once at configure (before
-        # the file opens), so add the match and dservTouch each to re-emit its
-        # current value into THIS file -- offline tools (e.g. the sync audit)
-        # can then read the actual refresh / frame_duration instead of deriving
-        # it, and reconstruct dva geometry.
+        # Screen geometry + timing, and the background colour. Set at
+        # configure and refreshed from stim2 just before the file opened
+        # (screen_snapshot), so add the match and dservTouch each to re-emit
+        # its current value into THIS file -- offline tools (e.g. the sync
+        # audit) can then read the actual refresh / frame_duration instead of
+        # deriving it, reconstruct dva geometry, and a replay can start from
+        # the background the display had.
         foreach _sp {screen_refresh_rate screen_frame_duration \
-                     screen_halfx screen_halfy screen_w screen_h} {
+                     screen_halfx screen_halfy screen_w screen_h screen_bg} {
             if {[dservExists ess/$_sp]} {
                 dservLoggerAddMatch $filename ess/$_sp
                 dservTouch ess/$_sp
