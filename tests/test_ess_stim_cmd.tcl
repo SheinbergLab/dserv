@@ -202,6 +202,22 @@ assert {$snap_at > 0 && $snap_at < [string first "dservLoggerOpen \$filename 1" 
     "file_open takes the screen snapshot before the logger opens"
 assert {[regexp {foreach _sp \{screen_refresh_rate screen_frame_duration \\\s+screen_halfx screen_halfy screen_w screen_h screen_bg\}} $src]} \
     "file_open logs and re-emits ess/screen_bg with the geometry"
+# the logger runs from the open: a paused logger drops every point unless
+# it already holds an obs-limited match, so a touch made while it was paused
+# reached the file only on a protocol that binds a stream. The resume comes
+# straight after the open, before any match; the starting values are touched
+# after every match is declared (after the system's file_open callback)
+set open_at   [string first "dservLoggerOpen \$filename 1" $src]
+set resume_at [string first "dservLoggerResume \$filename" $src]
+set first_match_at [string first "dservLoggerAddMatch \$filename eventlog/events" $src]
+assert {$open_at > 0 && $resume_at > $open_at && $resume_at < $first_match_at} \
+    "file_open resumes the logger right after opening it, before any match"
+assert {[regexp -all {dservLoggerResume \$filename} $src] == 1} "and resumes it only there"
+set reemit_at [string first "foreach _dp \$_reemit \{ dservTouch \$_dp \}" $src]
+assert {$reemit_at > [string first "\$current(state_system) file_open \$filename" $src]} \
+    "the geometry, background and obs_schedule are touched after every match is declared"
+assert {[string first "dservTouch ess/\$_sp" $src] < 0 && [string first "dservTouch ess/obs_schedule" $src] < 0} \
+    "no geometry or obs_schedule touch among the matches"
 
 # --- the stim_script block, same way ------------------------------------
 set sb [string first "# BEGIN stim_script" $src]
