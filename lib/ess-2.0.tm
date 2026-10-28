@@ -4660,6 +4660,21 @@ namespace eval ess {
             print "Failed to open datafile $filename: $err"
             return -2
         }
+        # Running from the start. The rule for everything below, and for a
+        # protocol's file_open callback: a datapoint is recorded from the
+        # moment its match is added; to put its CURRENT value in the file,
+        # dservTouch it after adding the match. So this proc declares every
+        # match first, then emits the starting values (the touches after
+        # the system callback), then the opening events.
+        #
+        # The logger opens paused, and this used to resume only after all
+        # the matches. A paused logger drops every point unless it already
+        # holds an obs-limited match (LogTable::forward_dpoint), so whether
+        # a touch made while matching reached the file depended on unrelated
+        # matches: a protocol that binds a stream got the screen geometry, one
+        # that binds none (emcalib 9point) lost it, silently. The pause
+        # covered only the few ms spent adding matches -- nothing to protect.
+        dservLoggerResume $filename
         set open_datafile $filename
 
         dservSet ess/datafile $f              ;# just filename for frontends
@@ -4708,16 +4723,19 @@ namespace eval ess {
 
         # Screen geometry + timing, and the background colour. Set at
         # configure and refreshed from stim2 just before the file opened
-        # (screen_snapshot), so add the match and dservTouch each to re-emit
-        # its current value into THIS file -- offline tools (e.g. the sync
-        # audit) can then read the actual refresh / frame_duration instead of
-        # deriving it, reconstruct dva geometry, and a replay can start from
-        # the background the display had.
+        # (screen_snapshot), so add the match here and re-emit each value
+        # into THIS file once the logger runs (below) -- offline tools (e.g.
+        # the sync audit) can then read the actual refresh / frame_duration
+        # instead of deriving it, reconstruct dva geometry, and a replay can
+        # start from the background the display had.
+        #
+        # Touched with the other starting values, once every match is in.
+        set _reemit {}
         foreach _sp {screen_refresh_rate screen_frame_duration \
                      screen_halfx screen_halfy screen_w screen_h screen_bg} {
             if {[dservExists ess/$_sp]} {
                 dservLoggerAddMatch $filename ess/$_sp
-                dservTouch ess/$_sp
+                lappend _reemit ess/$_sp
             }
         }
 
@@ -4731,7 +4749,7 @@ namespace eval ess {
         dservLoggerAddMatch $filename ess/obs_schedule_timing
         if {[dservExists ess/obs_schedule]} {
             dservLoggerAddMatch $filename ess/obs_schedule
-            dservTouch ess/obs_schedule
+            lappend _reemit ess/obs_schedule   ;# after the resume, as the geometry
         }
 
         variable em_active
@@ -4829,7 +4847,7 @@ namespace eval ess {
         #  to add matches
         $current(state_system) file_open $filename
 
-        dservLoggerResume $filename
+        # --- every match is declared; now the starting values -------------
 
         # reset system and output event names
         ::ess::reset
@@ -4838,6 +4856,8 @@ namespace eval ess {
         ::ess::store_evt_names
 
         dservTouch stimdg
+        # the geometry, background and obs-leader bind, matched above
+        foreach _dp $_reemit { dservTouch $_dp }
         if {[dservExists stim/bind]} { dservTouch stim/bind }
         if {[dservExists stim/script]} { dservTouch stim/script }
         variable stim_lib_names
