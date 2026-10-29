@@ -595,6 +595,11 @@ namespace eval ess {
     # the values configure_stim publishes as ess/screen_* -- and the current
     # background colour, published as ess/screen_bg "r g b" (0-255).
     #
+    # Asked again at the end of every load and variant reload, after the
+    # variant's init (which may set the background), so ess/screen_bg
+    # describes the display between files too -- what a live mirror that
+    # joins mid-session sets itself up from.
+    #
     # Asked fresh at open, not trusted from configure time: file_open logs
     # ess/screen_* only if the datapoints exist, and files have been written
     # without them on a dserv that had them hours before and after
@@ -2701,6 +2706,12 @@ namespace eval ess {
         # snapshot) already reflects them.
         variant_init $current(system) $current(protocol) $current(variant)
 
+        # the display as this load left it (screen_snapshot block): a
+        # variant's init may set the background (planko: rmtSend
+        # setBackground), and a mirror joining before the next file open
+        # has only ess/screen_bg to know it by
+        ::ess::screen_snapshot
+
         # Update various datapoints
         dservSet ess/state_table [get_state_transitions]
         dservSet ess/rmt_cmds [get_rmt_cmds]
@@ -2815,6 +2826,8 @@ namespace eval ess {
 	if {[catch {
 	    # initialize the variant by calling the appropriate loader
 	    variant_init $current(system) $current(protocol) $current(variant)
+	    # the display as the variant left it (see load_system_body)
+	    ::ess::screen_snapshot
 	    
 	    set current(trialid) 0
 	    if {[dg_exists trialdg]} {dg_delete trialdg}
