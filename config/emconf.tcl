@@ -501,11 +501,14 @@ namespace eval em {
     #   ok       the biquadratic is driving eyetracking/position
     #   off      use_biquadratic is 0
     #   nofit    no coefficients
-    #   refit    coefficients from before do_fit stamped them: run emcalib
+    #   legacy   coefficients from before do_fit stamped them. Applied
+    #            exactly as they always were (any source, no guard, no
+    #            drift), so a rig already running on one keeps doing so;
+    #            rerun emcalib to get recenter and the guard
     #   changed  invert/swap changed since the fit
     #   source   the active source is not the one the fit was made from
     variable bq_on 0                ;# coefficients usable as configured
-    variable bq_src ""              ;# ... for this source only
+    variable bq_src ""              ;# ... for this source only ("*": any, legacy)
     variable bq_hc {}
     variable bq_vc {}
     variable bq_dh 0.0
@@ -600,7 +603,16 @@ namespace eval em {
         if { $fit eq "" } {
             set state nofit
             foreach c [concat $bq_hc $bq_vc] {
-                if { $c != 0 } { set state refit; break }
+                if { $c != 0 } { set state legacy; break }
+            }
+            if { $state eq "legacy" } {
+                # what use_biquadratic always meant: the bare surface, on
+                # whichever source is publishing (bq(raw - 0), unclamped,
+                # is bit-for-bit the old transform)
+                set bq_on $use
+                set bq_src *
+                set bq_box {-Inf Inf -Inf Inf}
+                set bq_dh 0.0; set bq_dv 0.0
             }
         } elseif { ![bq_fit_matches] } {
             set state changed
@@ -632,10 +644,16 @@ namespace eval em {
             variable bq_log_t
             set now_ms [clock milliseconds]
             if { $bq_status_last ne "" && [dict get $bq_status_last state] ne $state
-                 && $use && $state ni {ok off} && $now_ms - $bq_log_t >= 1000 } {
+                 && $use && $state ni {ok off legacy} && $now_ms - $bq_log_t >= 1000 } {
                 set bq_log_t $now_ms
                 puts "em: biquadratic requested but not applied ($state);\
                       eye position is from the linear model"
+            }
+            if { $use && $state eq "legacy"
+                 && ($bq_status_last eq "" || [dict get $bq_status_last state] ne "legacy") } {
+                puts "em: biquadratic in use from a fit made before stamping\
+                      -- applied as before; rerun emcalib for recenter drift\
+                      and the edge guard"
             }
             set bq_status_last $status
             dservSet em/bq_status $status
@@ -732,7 +750,7 @@ namespace eval em {
                 set current_raw_v $raw_v
                 
                 # Convert to degrees
-                if {$bq_on && $bq_src eq "video"} {
+                if {$bq_on && ($bq_src eq "video" || $bq_src eq "*")} {
                     # Biquadratic fit: deg = f(raw - drift), guarded
                     lassign [bq_apply $raw_h $raw_v] h_deg v_deg
                 } else {
@@ -841,7 +859,7 @@ namespace eval em {
         variable bq_on
         variable bq_src
         set swap [dict get $settings swap_axes]
-        set bq   [expr {$bq_on && $bq_src eq "analog"}]
+        set bq   [expr {$bq_on && ($bq_src eq "analog" || $bq_src eq "*")}]
         if { !$bq } {
             set sh [dict get $settings scale_h]
             set sv [dict get $settings scale_v]

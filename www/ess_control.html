@@ -496,7 +496,7 @@
                  ok:      'in use',
                  off:     'fit available',
                  nofit:   'no fit: run emcalib',
-                 refit:   'old fit: rerun emcalib',
+                 legacy:  'old fit (no recenter): rerun emcalib',
                  changed: 'invert/swap changed since fit',
                  source:  'fit is for another source'
              };
@@ -508,7 +508,7 @@
              }
              el.textContent = text;
              el.title = p.dh !== undefined ? `drift (raw): h ${p.dh}, v ${p.dv}` : '';
-             el.classList.toggle('em-bq-blocked', p.use === '1' && p.state !== 'ok');
+             el.classList.toggle('em-bq-blocked', p.use === '1' && !['ok', 'legacy'].includes(p.state));
          }
          
          setupSubscriptions() {
