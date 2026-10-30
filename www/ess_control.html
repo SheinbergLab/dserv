@@ -255,12 +255,15 @@
                                                 title="Subject is fixating (0,0): resets the linear center and, when an emcalib fit applies, the biquadratic's drift">Recenter</button>
                                     </div>
                                 </div>
-                                <div class="ess-input-row">
+                                <div class="ess-input-row em-bq-row">
                                     <span class="ess-input-label" title="Use the last emcalib fit (biquadratic, raw to degrees) instead of center and gain. It applies only while the source and invert/swap match the fit.">Calib</span>
                                     <div class="ess-input-group">
                                         <label><input type="checkbox" id="eye-bq"> biquadratic</label>
-                                        <span id="eye-bq-status" class="ess-input-label"></span>
+                                        <button type="button" id="eye-bq-status" class="em-bq-chip"
+                                                aria-expanded="false" aria-controls="eye-bq-detail"
+                                                title="calibration details"></button>
                                     </div>
+                                    <div id="eye-bq-detail" class="em-bq-bubble" hidden></div>
                                 </div>
                             </div>
                         </div>
@@ -372,7 +375,37 @@
     <style>
      /* contention: two eye sources overwriting each other under `auto` */
      #eye-source-active.em-contended { color: var(--ess-danger, #f66); font-weight: 600; }
-     #eye-bq-status.em-bq-blocked { color: var(--ess-danger, #f66); font-weight: 600; }
+     /* the biquadratic's state: a short chip, details in a bubble on click */
+     .em-bq-chip {
+         display: inline-flex; align-items: center; gap: 5px;
+         padding: 1px 8px; font-size: 11px; line-height: 16px;
+         background: transparent; color: var(--ess-text-secondary);
+         border: 1px solid var(--ess-border); border-radius: 9px; cursor: pointer;
+     }
+     .em-bq-chip:empty { display: none; }
+     .em-bq-chip::before {
+         content: ""; width: 7px; height: 7px; border-radius: 50%;
+         background: var(--ess-text-muted);
+     }
+     .em-bq-chip:hover, .em-bq-chip[aria-expanded="true"] { background: var(--ess-bg-secondary); }
+     .em-bq-chip[data-tone="ok"]::before   { background: var(--ess-success); }
+     .em-bq-chip[data-tone="warn"]::before { background: var(--ess-warning); }
+     .em-bq-chip[data-tone="bad"]          { color: var(--ess-error); border-color: var(--ess-error); }
+     .em-bq-chip[data-tone="bad"]::before  { background: var(--ess-error); }
+     /* fixed, placed by showBqDetail: the Input Controls panel scrolls and
+        would clip anything positioned inside it */
+     .em-bq-bubble {
+         position: fixed; z-index: 1000;
+         width: 260px; max-width: calc(100vw - 32px); box-sizing: border-box;
+         padding: 8px 10px; font-size: 11px; line-height: 1.45;
+         background: var(--ess-bg-secondary); color: var(--ess-text-primary);
+         border: 1px solid var(--ess-border); border-radius: 6px;
+         box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+     }
+     .em-bq-bubble p { margin: 0 0 6px; }
+     .em-bq-bubble dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin: 0; }
+     .em-bq-bubble dt { color: var(--ess-text-muted); }
+     .em-bq-bubble dd { margin: 0; font-variant-numeric: tabular-nums; }
     </style>
     <!-- Eye settings class definition (initialized by ess_app.js) -->
     <script>
@@ -391,7 +424,8 @@
                  sourceActive: document.getElementById('eye-source-active'),
                  recenterBtn: document.getElementById('eye-recenter'),
                  bq: document.getElementById('eye-bq'),
-                 bqStatus: document.getElementById('eye-bq-status')
+                 bqStatus: document.getElementById('eye-bq-status'),
+                 bqDetail: document.getElementById('eye-bq-detail')
              };
              
              this.bindEvents();
@@ -479,36 +513,96 @@
              this.elements.bq?.addEventListener('change', (e) => {
                  this.sendEmCommand(`::em::set_use_biquadratic ${e.target.checked ? 1 : 0}`);
              });
+
+             // the status chip opens its details; a click elsewhere or Escape closes
+             this.elements.bqStatus?.addEventListener('click', (e) => {
+                 e.stopPropagation();
+                 this.showBqDetail(this.elements.bqDetail?.hidden);
+             });
+             this.elements.bqDetail?.addEventListener('click', (e) => e.stopPropagation());
+             document.addEventListener('click', () => this.showBqDetail(false));
+             document.addEventListener('keydown', (e) => {
+                 if (e.key === 'Escape') this.showBqDetail(false);
+             });
+             // anchored to where the chip was: any scroll or resize moves it
+             document.addEventListener('scroll', (e) => {
+                 if (!this.elements.bqDetail?.contains(e.target)) this.showBqDetail(false);
+             }, true);
+             window.addEventListener('resize', () => this.showBqDetail(false));
          }
 
-         /* em/bq_status: flat words, `use 0|1 state S [time T n N rms R] dh DH dv DV`.
+         showBqDetail(open) {
+             const { bqStatus, bqDetail } = this.elements;
+             if (!bqStatus || !bqDetail) return;
+             bqDetail.hidden = !open;
+             bqStatus.setAttribute('aria-expanded', open ? 'true' : 'false');
+             if (!open) return;
+             // below the chip, or above it if the window ends first;
+             // kept 8px inside the window either way
+             const r = bqStatus.getBoundingClientRect();
+             const w = bqDetail.offsetWidth, h = bqDetail.offsetHeight;
+             const below = r.bottom + 4 + h <= window.innerHeight - 8;
+             bqDetail.style.top = `${below ? r.bottom + 4 : Math.max(8, r.top - 4 - h)}px`;
+             bqDetail.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - w - 8))}px`;
+         }
+
+         /* em/bq_status: flat words,
+            `use 0|1 state S [time T n N rms R [src SRC]] dh DH dv DV`.
             The state says whether the biquadratic is actually driving the
             eye, which is not the same as the checkbox: a fit only applies
-            while the source and invert/swap match what it was made under. */
+            while the source and invert/swap match what it was made under.
+            The chip carries a word and a colour; the bubble says why. */
          updateBqStatus(str) {
              const p = this.parseTclDict(String(str ?? ''));
              if (this.elements.bq && p.use !== undefined) {
                  this.elements.bq.checked = p.use === '1';
              }
-             const el = this.elements.bqStatus;
-             if (!el) return;
-             const words = {
-                 ok:      'in use',
-                 off:     'fit available',
-                 nofit:   'no fit: run emcalib',
-                 legacy:  'old fit (no recenter): rerun emcalib',
-                 changed: 'invert/swap changed since fit',
-                 source:  'fit is for another source'
+             const { bqStatus: chip, bqDetail: bubble } = this.elements;
+             if (!chip || !bubble) return;
+
+             const on = p.use === '1';
+             const active = this._activeSource || 'another source';
+             const states = {
+                 ok:      ['in use',  'ok',   'Eye position is from this emcalib fit.'],
+                 off:     ['ready',   '',     'A fit is available. Tick biquadratic to use it instead of center and gain.'],
+                 nofit:   ['no fit',  '',     'No fit yet. Run emcalib (9point) to make one.'],
+                 legacy:  ['old fit', 'warn', 'Made before fits recorded their source and settings. ' +
+                                              (on ? 'Applied as before, without' : 'Would apply as before, without') +
+                                              ' recenter drift or the edge guard. Rerun emcalib to get both.'],
+                 changed: ['blocked', on ? 'bad' : 'warn',
+                                              'Invert or swap changed since this fit, so center and gain are used. ' +
+                                              'Restore them or rerun emcalib.'],
+                 source:  ['blocked', on ? 'bad' : 'warn',
+                                              `This fit was made from the ${p.src ?? 'other'} eye, and ${active} is ` +
+                                              'publishing now, so center and gain are used.'],
+                 virtual: ['n/a',     '',     'This fit was made from the virtual eye, which already reports degrees ' +
+                                              'and is never calibrated. Run emcalib with a real eye to use one.']
              };
-             let text = words[p.state] ?? p.state ?? '';
+             const [word, tone, why] = states[p.state] ?? [p.state ?? '', '', ''];
+             chip.textContent = word;
+             chip.dataset.tone = tone;
+
+             // details, built as nodes: the values come off the wire
+             const rows = [];
              if (p.time && p.state !== 'nofit') {
                  const when = new Date(Number(p.time) * 1000)
                      .toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-                 text += ` · ${when}, n=${p.n}, rms ${Number(p.rms).toFixed(2)}°`;
+                 rows.push(['Fit', when]);
+                 rows.push(['Quality', `${p.n} points, rms ${Number(p.rms).toFixed(2)}°`]);
              }
-             el.textContent = text;
-             el.title = p.dh !== undefined ? `drift (raw): h ${p.dh}, v ${p.dv}` : '';
-             el.classList.toggle('em-bq-blocked', p.use === '1' && !['ok', 'legacy'].includes(p.state));
+             if (p.src) rows.push(['Source', p.src]);
+             if (p.src && p.dh !== undefined && (Number(p.dh) !== 0 || Number(p.dv) !== 0)) {
+                 rows.push(['Drift', `h ${p.dh}, v ${p.dv} (raw, from Recenter)`]);
+             }
+             const para = document.createElement('p');
+             para.textContent = why;
+             const dl = document.createElement('dl');
+             for (const [k, v] of rows) {
+                 const dt = document.createElement('dt'); dt.textContent = k;
+                 const dd = document.createElement('dd'); dd.textContent = v;
+                 dl.append(dt, dd);
+             }
+             bubble.replaceChildren(para, ...(rows.length ? [dl] : []));
          }
          
          setupSubscriptions() {
@@ -518,6 +612,7 @@
              this.dpManager?.subscribe('em/source_active', (data) => {
                  if (!this.elements.sourceActive) return;
                  const v = String(data?.data ?? data ?? '');
+                 this._activeSource = v;
                  this.elements.sourceActive.textContent = v ? `\u2190 ${v}` : '';
                  this.noteSource(v);
              });

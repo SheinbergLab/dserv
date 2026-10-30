@@ -496,7 +496,7 @@ namespace eval em {
     # linear model out there.
     #
     # em/bq_status is flat words (no braces) so the panel can split it:
-    #   use 0|1  state S  [time T n N rms R]  dh DH dv DV
+    #   use 0|1  state S  [time T n N rms R [src SRC]]  dh DH dv DV
     # with S one of
     #   ok       the biquadratic is driving eyetracking/position
     #   off      use_biquadratic is 0
@@ -507,6 +507,9 @@ namespace eval em {
     #            rerun emcalib to get recenter and the guard
     #   changed  invert/swap changed since the fit
     #   source   the active source is not the one the fit was made from
+    #   virtual  the fit was made from the virtual eye, which is already
+    #            degrees and never calibrated: nothing to apply
+    # and, with a stamped fit, src (the source it was made from).
     variable bq_on 0                ;# coefficients usable as configured
     variable bq_src ""              ;# ... for this source only ("*": any, legacy)
     variable bq_hc {}
@@ -544,7 +547,8 @@ namespace eval em {
     proc bq_usable {} {
         variable settings
         variable source_last
-        expr {[bq_fit_matches] && [dict get $settings bq_fit source] eq $source_last}
+        expr {[bq_fit_matches] && $source_last ni {virtual ""}
+              && [dict get $settings bq_fit source] eq $source_last}
     }
 
     # r0: the raw point the fit sends to (0,0). Newton from the mean raw at
@@ -625,7 +629,12 @@ namespace eval em {
                             [expr {$vlo - $mv}] [expr {$vhi + $mv}]]
             set bq_src [dict get $fit source]
             set bq_on $use
-            if { $source_last ne "" && $source_last ne $bq_src } {
+            if { $bq_src in {virtual ""} } {
+                # the virtual eye publishes degrees and is never calibrated
+                # (process_virtual), so a fit made from it has nothing to drive
+                set bq_on 0
+                set state virtual
+            } elseif { $source_last ne "" && $source_last ne $bq_src } {
                 set state source
             } else {
                 set state [expr {$use ? "ok" : "off"}]
@@ -636,6 +645,9 @@ namespace eval em {
         if { $fit ne "" } {
             lappend status time [dict get $fit time] n [dict get $fit n] \
                 rms [dict get $fit rms]
+            if { [dict get $fit source] ne "" } {
+                lappend status src [dict get $fit source]
+            }
         }
         lappend status dh [format %.4g $bq_dh] dv [format %.4g $bq_dv]
         if { $status ne $bq_status_last } {
