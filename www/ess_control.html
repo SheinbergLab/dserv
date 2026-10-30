@@ -251,7 +251,15 @@
                                         <label><input type="checkbox" id="eye-h-invert"> h</label>
                                         <label><input type="checkbox" id="eye-v-invert"> v</label>
                                         <label title="swap H/V axes (stick mounted rotated)"><input type="checkbox" id="eye-swap"> swap</label>
-                                        <button id="eye-recenter" class="ess-input-btn">Recenter</button>
+                                        <button id="eye-recenter" class="ess-input-btn"
+                                                title="Subject is fixating (0,0): resets the linear center and, when an emcalib fit applies, the biquadratic's drift">Recenter</button>
+                                    </div>
+                                </div>
+                                <div class="ess-input-row">
+                                    <span class="ess-input-label" title="Use the last emcalib fit (biquadratic, raw to degrees) instead of center and gain. It applies only while the source and invert/swap match the fit.">Calib</span>
+                                    <div class="ess-input-group">
+                                        <label><input type="checkbox" id="eye-bq"> biquadratic</label>
+                                        <span id="eye-bq-status" class="ess-input-label"></span>
                                     </div>
                                 </div>
                             </div>
@@ -364,6 +372,7 @@
     <style>
      /* contention: two eye sources overwriting each other under `auto` */
      #eye-source-active.em-contended { color: var(--ess-danger, #f66); font-weight: 600; }
+     #eye-bq-status.em-bq-blocked { color: var(--ess-danger, #f66); font-weight: 600; }
     </style>
     <!-- Eye settings class definition (initialized by ess_app.js) -->
     <script>
@@ -380,7 +389,9 @@
                  swap: document.getElementById('eye-swap'),
                  source: document.getElementById('eye-source'),
                  sourceActive: document.getElementById('eye-source-active'),
-                 recenterBtn: document.getElementById('eye-recenter')
+                 recenterBtn: document.getElementById('eye-recenter'),
+                 bq: document.getElementById('eye-bq'),
+                 bqStatus: document.getElementById('eye-bq-status')
              };
              
              this.bindEvents();
@@ -464,6 +475,40 @@
              this.elements.recenterBtn?.addEventListener('click', () => {
                  this.sendEmCommand('::em::set_current_as_center');
              });
+
+             this.elements.bq?.addEventListener('change', (e) => {
+                 this.sendEmCommand(`::em::set_use_biquadratic ${e.target.checked ? 1 : 0}`);
+             });
+         }
+
+         /* em/bq_status: flat words, `use 0|1 state S [time T n N rms R] dh DH dv DV`.
+            The state says whether the biquadratic is actually driving the
+            eye, which is not the same as the checkbox: a fit only applies
+            while the source and invert/swap match what it was made under. */
+         updateBqStatus(str) {
+             const p = this.parseTclDict(String(str ?? ''));
+             if (this.elements.bq && p.use !== undefined) {
+                 this.elements.bq.checked = p.use === '1';
+             }
+             const el = this.elements.bqStatus;
+             if (!el) return;
+             const words = {
+                 ok:      'in use',
+                 off:     'fit available',
+                 nofit:   'no fit: run emcalib',
+                 refit:   'old fit: rerun emcalib',
+                 changed: 'invert/swap changed since fit',
+                 source:  'fit is for another source'
+             };
+             let text = words[p.state] ?? p.state ?? '';
+             if (p.time && p.state !== 'nofit') {
+                 const when = new Date(Number(p.time) * 1000)
+                     .toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+                 text += ` · ${when}, n=${p.n}, rms ${Number(p.rms).toFixed(2)}°`;
+             }
+             el.textContent = text;
+             el.title = p.dh !== undefined ? `drift (raw): h ${p.dh}, v ${p.dv}` : '';
+             el.classList.toggle('em-bq-blocked', p.use === '1' && p.state !== 'ok');
          }
          
          setupSubscriptions() {
@@ -481,6 +526,10 @@
 
              this.dpManager?.subscribe('em/settings', (data) => {
                  this.updateFromSettings(data.value);
+             });
+
+             this.dpManager?.subscribe('em/bq_status', (data) => {
+                 this.updateBqStatus(data.value);
              });
          }
          

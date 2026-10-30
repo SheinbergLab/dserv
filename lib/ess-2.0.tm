@@ -4771,6 +4771,9 @@ namespace eval ess {
 	    dservLoggerAddMatch $filename eyetracking/raw 1 80 1
             dservLoggerAddMatch $filename em/settings
             dservLoggerAddMatch $filename em/biquadratic
+            # the recenter drift, a raw-space step function the extractors
+            # apply ahead of the biquadratic (em::drift_streams in dlsh)
+            dservLoggerAddMatch $filename em/drift
 
 	    if { [dservExists eyetracking/results] } {
 		foreach v "pupil p1 p4" {
@@ -4879,6 +4882,7 @@ namespace eval ess {
         }
 	dservTouch em/settings
 	dservTouch em/biquadratic
+	if {[dservExists em/drift]} { dservTouch em/drift }  ;# the step in force at open
 	dservTouch ess/ain/recorded   ;# re-emit into THIS file (set before the match)
 	
 	::ess::evt_put TIME OPEN [now] [clock seconds]

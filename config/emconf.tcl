@@ -78,15 +78,53 @@ namespace eval biquadratic {
 }
 
 namespace eval em {
+    # The runtime fit, sent by emcalib 9point's finale with the sampler's
+    # per-target means of eyetracking/raw. Besides the 18 coefficients it
+    # records what they are only valid UNDER (bq_fit, see bq_refresh below):
+    # the source and the raw-shaping switches they were measured through, the
+    # raw extent the targets covered, and r0, the raw point the fit maps to
+    # (0,0) -- the reference a later recenter measures drift against. A new
+    # fit supersedes any drift, so bq_drift returns to zero.
     proc do_fit { raw_x raw_y target_x target_y } {
+        variable settings
+        variable source_last
+        set n [llength $raw_x]
+        if { $n < 9 } { error "biquadratic fit needs at least 9 points, have $n" }
 	lassign [biquadratic::fit $raw_x $raw_y $target_x $target_y] x_coeffs y_coeffs
-	set_bq_h_coeffs $x_coeffs
-	set_bq_v_coeffs $y_coeffs
+
+        set ss 0.0
+        foreach x $raw_x y $raw_y tx $target_x ty $target_y {
+            set ex [expr {[biquadratic_transform $x $y $x_coeffs] - $tx}]
+            set ey [expr {[biquadratic_transform $x $y $y_coeffs] - $ty}]
+            set ss [expr {$ss + $ex*$ex + $ey*$ey}]
+        }
+        set rms [expr {sqrt($ss / (2.0*$n))}]   ;# per axis, as emcalib_analyze's rms_error
+
+        set hs [lsort -real $raw_x]
+        set vs [lsort -real $raw_y]
+        set extent [list [lindex $hs 0] [lindex $hs end] [lindex $vs 0] [lindex $vs end]]
+
+        set fit [dict create \
+            time   [clock seconds] \
+            n      $n \
+            rms    [format %.4f $rms] \
+            source $source_last \
+            raw    [bq_conditioning $source_last] \
+            extent $extent \
+            r0     [bq_zero $x_coeffs $y_coeffs $raw_x $raw_y $target_x $target_y]]
+
+        dict set settings bq_h_coeffs $x_coeffs
+        dict set settings bq_v_coeffs $y_coeffs
+        dict set settings bq_fit $fit
+        dict set settings bq_drift {0.0 0.0}
+        update_settings
+        save_calibration
+        puts "em: biquadratic fit from '$source_last', n=$n, rms [format %.3f $rms] deg"
     }
 
     # Parameters for converting from raw Purkinje reflection differences to degrees
     # Linear model: degrees = scale * (raw_diff - raw_center)
-    # For biquadratic: add higher-order terms after running calibration
+    # Biquadratic: degrees = bq(raw - bq_drift), from the last do_fit
     variable settings [dict create \
         scale_h 1.0 \
         scale_v 1.0 \
@@ -98,7 +136,10 @@ namespace eval em {
         use_biquadratic 0 \
         source auto \
         bq_h_coeffs {0 0 0 0 0 0 0 0 0} \
-        bq_v_coeffs {0 0 0 0 0 0 0 0 0}]
+        bq_v_coeffs {0 0 0 0 0 0 0 0 0} \
+        bq_fit {} \
+        bq_drift {0.0 0.0} \
+        bq_margin 0.25]
     
     # Track current raw values for "set center" functionality
     variable current_raw_h 0.0
@@ -251,6 +292,7 @@ namespace eval em {
         set prev $source_last
         set source_last $name
         dservSet em/source_active $name
+        bq_refresh                          ;# a fit is only good for its source
         incr source_flips
 
         # no `after` in this interp (there is no Tcl event loop -- it would be
@@ -273,6 +315,7 @@ namespace eval em {
     proc update_settings {} {
         variable settings
         dservSet em/settings $settings
+        bq_refresh
     }
 
     # Set param values in our settings directory by name
@@ -386,12 +429,26 @@ namespace eval em {
     }
 
     # Set current eye position as center - call this when subject is fixating center
+    #
+    # One fixation of (0,0) is evidence for BOTH models, so it updates both:
+    # the linear centre, and -- when a fit for this source and raw shaping
+    # exists -- the biquadratic's drift, whichever of the two is driving the
+    # output right now. Keeping the drift current even in linear mode means a
+    # data file always carries the best estimate of it (em/drift is logged),
+    # so extraction can apply it whatever the rig was displaying.
     proc set_current_as_center {} {
         variable current_raw_h
         variable current_raw_v
-        
+        variable settings
+
         set_raw_center_h $current_raw_h
         set_raw_center_v $current_raw_v
+
+        if { [bq_usable] } {
+            lassign [dict get $settings bq_fit r0] r0h r0v
+            set_param bq_drift [list \
+                [expr {$current_raw_h - $r0h}] [expr {$current_raw_v - $r0v}]]
+        }
     }
 
     # Convert raw sub-pixel difference to degrees using full biquadratic fit
@@ -401,13 +458,225 @@ namespace eval em {
         set x2 [expr {$x * $x}]
         set y2 [expr {$y * $y}]
         set xy [expr {$x * $y}]
-        return [expr {$c0 + $c1*$x + $c2*$y + $c3*$x2 + $c4*$y2 + $c5*$xy + 
+        return [expr {$c0 + $c1*$x + $c2*$y + $c3*$x2 + $c4*$y2 + $c5*$xy +
                       $c6*$x2*$y + $c7*$x*$y2 + $c8*$x2*$y2}]
+    }
+
+    # Its gradient {d/dx d/dy}, for the edge guard and for bq_zero.
+    proc biquadratic_gradient {x y coeffs} {
+        lassign $coeffs c0 c1 c2 c3 c4 c5 c6 c7 c8
+        list [expr {$c1 + 2*$c3*$x + $c5*$y + 2*$c6*$x*$y + $c7*$y*$y + 2*$c8*$x*$y*$y}] \
+             [expr {$c2 + 2*$c4*$y + $c5*$x + $c6*$x*$x + 2*$c7*$x*$y + 2*$c8*$x*$x*$y}]
+    }
+
+    # ---- biquadratic in real time: provenance, drift, and the edge guard --
+    #
+    # PROVENANCE. The coefficients map eyetracking/raw as it was when they
+    # were fit, and raw is shaped upstream of them: the video path applies
+    # invert_h/v to P1-P4 before anything else, the analog path applies
+    # swap_axes to the ADC channels. Flip one of those after calibrating, or
+    # feed the fit a different source, and the surface is evaluated on the
+    # wrong signal -- silently, and with fixation windows on top of it. So
+    # do_fit stamps the source and those switches into bq_fit, and the
+    # biquadratic only drives the output while they still match. Otherwise
+    # the linear model does, and em/bq_status says why.
+    #
+    # DRIFT is a raw-space shift: deg = bq(raw - bq_drift). Measured in raw,
+    # it keeps the surface's curvature where the calibration put it, and it
+    # means the same thing under either fit of a session (em's runtime one,
+    # or emcalib_analyze's post-close em/biquadratic), which extraction may
+    # prefer. eyetracking/raw itself is never shifted.
+    #
+    # THE EDGE GUARD. 9point's grid is +/-5 deg, and past roughly one and a
+    # half times its span the x^2*y^2 terms bend the surface away, or fold it
+    # back on itself if one target was fixated off-centre. Raw is clamped to
+    # the fitted extent widened by bq_margin (a fraction of the span on each
+    # side), and beyond it the output continues along the surface's tangent
+    # plane at the clamp point: continuous, monotone, and as good as the
+    # linear model out there.
+    #
+    # em/bq_status is flat words (no braces) so the panel can split it:
+    #   use 0|1  state S  [time T n N rms R]  dh DH dv DV
+    # with S one of
+    #   ok       the biquadratic is driving eyetracking/position
+    #   off      use_biquadratic is 0
+    #   nofit    no coefficients
+    #   refit    coefficients from before do_fit stamped them: run emcalib
+    #   changed  invert/swap changed since the fit
+    #   source   the active source is not the one the fit was made from
+    variable bq_on 0                ;# coefficients usable as configured
+    variable bq_src ""              ;# ... for this source only
+    variable bq_hc {}
+    variable bq_vc {}
+    variable bq_dh 0.0
+    variable bq_dv 0.0
+    variable bq_box {}              ;# {hlo hhi vlo vhi}, the guard's clamp
+    variable bq_status_last ""
+    variable bq_drift_last ""
+    variable bq_log_t 0
+
+    # The settings that shape raw for a source, normalised to 0/1.
+    proc bq_conditioning { src } {
+        variable settings
+        switch -- $src {
+            video   { set keys {invert_h invert_v} }
+            analog  { set keys {swap_axes} }
+            default { set keys {} }
+        }
+        set out {}
+        foreach k $keys { lappend out $k [expr {!![dict get $settings $k]}] }
+        return $out
+    }
+
+    # Is there a stamped fit whose raw shaping still matches? (Source is
+    # checked separately: per sample by the processors, and by bq_usable.)
+    proc bq_fit_matches {} {
+        variable settings
+        set fit [dict get $settings bq_fit]
+        if { $fit eq "" } { return 0 }
+        expr {[bq_conditioning [dict get $fit source]] eq [dict get $fit raw]}
+    }
+
+    # ... and is the source feeding the rig the one it was fit from?
+    proc bq_usable {} {
+        variable settings
+        variable source_last
+        expr {[bq_fit_matches] && [dict get $settings bq_fit source] eq $source_last}
+    }
+
+    # r0: the raw point the fit sends to (0,0). Newton from the mean raw at
+    # the target nearest the origin (9point always has one there); if that
+    # fails to converge, the mean itself.
+    proc bq_zero { hc vc raw_x raw_y target_x target_y } {
+        set best {}
+        foreach x $raw_x y $raw_y tx $target_x ty $target_y {
+            lappend best [list [expr {hypot($tx, $ty)}] $x $y]
+        }
+        set best [lsort -real -index 0 $best]
+        set d0 [lindex $best 0 0]
+        set sx 0.0; set sy 0.0; set k 0
+        foreach b $best {
+            if { [lindex $b 0] > $d0 } break
+            set sx [expr {$sx + [lindex $b 1]}]
+            set sy [expr {$sy + [lindex $b 2]}]
+            incr k
+        }
+        set x0 [expr {$sx / $k}]; set y0 [expr {$sy / $k}]
+        set x $x0; set y $y0
+        for { set i 0 } { $i < 20 } { incr i } {
+            set fh [biquadratic_transform $x $y $hc]
+            set fv [biquadratic_transform $x $y $vc]
+            if { hypot($fh, $fv) < 1e-6 } { return [list $x $y] }
+            lassign [biquadratic_gradient $x $y $hc] a b
+            lassign [biquadratic_gradient $x $y $vc] c d
+            set det [expr {$a*$d - $b*$c}]
+            if { $det == 0 } break
+            set x [expr {$x - ( $d*$fh - $b*$fv) / $det}]
+            set y [expr {$y - (-$c*$fh + $a*$fv) / $det}]
+        }
+        return [list $x0 $y0]
+    }
+
+    # Re-derive the cached transform from settings; publish em/drift and
+    # em/bq_status when they change. Called from update_settings (every
+    # settings change) and source_mark (every source change), never per sample.
+    proc bq_refresh {} {
+        variable settings
+        variable source_last
+        variable bq_on; variable bq_src
+        variable bq_hc; variable bq_vc
+        variable bq_dh; variable bq_dv
+        variable bq_box
+        variable bq_status_last; variable bq_drift_last
+
+        set use [expr {!![dict get $settings use_biquadratic]}]
+        set fit [dict get $settings bq_fit]
+        set bq_hc [dict get $settings bq_h_coeffs]
+        set bq_vc [dict get $settings bq_v_coeffs]
+        lassign [dict get $settings bq_drift] bq_dh bq_dv
+
+        set bq_on 0
+        set bq_src ""
+        if { $fit eq "" } {
+            set state nofit
+            foreach c [concat $bq_hc $bq_vc] {
+                if { $c != 0 } { set state refit; break }
+            }
+        } elseif { ![bq_fit_matches] } {
+            set state changed
+        } else {
+            lassign [dict get $fit extent] hlo hhi vlo vhi
+            set m  [dict get $settings bq_margin]
+            set mh [expr {$m * ($hhi - $hlo)}]
+            set mv [expr {$m * ($vhi - $vlo)}]
+            set bq_box [list [expr {$hlo - $mh}] [expr {$hhi + $mh}] \
+                            [expr {$vlo - $mv}] [expr {$vhi + $mv}]]
+            set bq_src [dict get $fit source]
+            set bq_on $use
+            if { $source_last ne "" && $source_last ne $bq_src } {
+                set state source
+            } else {
+                set state [expr {$use ? "ok" : "off"}]
+            }
+        }
+
+        set status [list use $use state $state]
+        if { $fit ne "" } {
+            lappend status time [dict get $fit time] n [dict get $fit n] \
+                rms [dict get $fit rms]
+        }
+        lappend status dh [format %.4g $bq_dh] dv [format %.4g $bq_dv]
+        if { $status ne $bq_status_last } {
+            # throttled like source_mark's line: two sources contending
+            # under auto flip this state per sample
+            variable bq_log_t
+            set now_ms [clock milliseconds]
+            if { $bq_status_last ne "" && [dict get $bq_status_last state] ne $state
+                 && $use && $state ni {ok off} && $now_ms - $bq_log_t >= 1000 } {
+                set bq_log_t $now_ms
+                puts "em: biquadratic requested but not applied ($state);\
+                      eye position is from the linear model"
+            }
+            set bq_status_last $status
+            dservSet em/bq_status $status
+        }
+
+        # The logged record of the drift, for extraction: a step function,
+        # one record per change (and one re-emitted at each file open).
+        set drift [list $bq_dh $bq_dv]
+        if { $drift ne $bq_drift_last } {
+            set bq_drift_last $drift
+            dservSetData em/drift [now] 2 [binary format ff $bq_dh $bq_dv]
+        }
+    }
+
+    # deg {h v} from raw through the current fit: drift, guard, surface.
+    proc bq_apply { raw_h raw_v } {
+        variable bq_hc; variable bq_vc
+        variable bq_dh; variable bq_dv
+        variable bq_box
+        set x [expr {$raw_h - $bq_dh}]
+        set y [expr {$raw_v - $bq_dv}]
+        lassign $bq_box hlo hhi vlo vhi
+        set xc [expr {$x < $hlo ? $hlo : ($x > $hhi ? $hhi : $x)}]
+        set yc [expr {$y < $vlo ? $vlo : ($y > $vhi ? $vhi : $y)}]
+        set h [biquadratic_transform $xc $yc $bq_hc]
+        set v [biquadratic_transform $xc $yc $bq_vc]
+        if { $xc != $x || $yc != $y } {
+            set ex [expr {$x - $xc}]; set ey [expr {$y - $yc}]
+            lassign [biquadratic_gradient $xc $yc $bq_hc] hx hy
+            lassign [biquadratic_gradient $xc $yc $bq_vc] vx vy
+            set h [expr {$h + $hx*$ex + $hy*$ey}]
+            set v [expr {$v + $vx*$ex + $vy*$ey}]
+        }
+        list $h $v
     }
 
     proc process { dpoint data } {
         if { ![source_allows video] } return
         variable settings
+        variable bq_on
+        variable bq_src
         variable last_valid_h
         variable last_valid_v
         variable current_raw_h
@@ -463,10 +732,9 @@ namespace eval em {
                 set current_raw_v $raw_v
                 
                 # Convert to degrees
-                if {$use_biquadratic} {
-                    # Biquadratic fit: deg = f(raw_h, raw_v)
-                    set h_deg [biquadratic_transform $raw_h $raw_v $bq_h_coeffs]
-                    set v_deg [biquadratic_transform $raw_h $raw_v $bq_v_coeffs]
+                if {$bq_on && $bq_src eq "video"} {
+                    # Biquadratic fit: deg = f(raw - drift), guarded
+                    lassign [bq_apply $raw_h $raw_v] h_deg v_deg
                 } else {
                     # Simple linear mapping: degrees = scale * (raw - center)
                     # scale is in degrees per sub-pixel
@@ -570,12 +838,11 @@ namespace eval em {
         # argument as the `dict get` vs `dict with` note this replaces (dict with
         # copies all 10 keys in and writes them back; measured 5.18 us against
         # 0.91 us on a Pi 5) -- it just now also has to not repeat per scan.
+        variable bq_on
+        variable bq_src
         set swap [dict get $settings swap_axes]
-        set bq   [dict get $settings use_biquadratic]
-        if { $bq } {
-            set bqh [dict get $settings bq_h_coeffs]
-            set bqv [dict get $settings bq_v_coeffs]
-        } else {
+        set bq   [expr {$bq_on && $bq_src eq "analog"}]
+        if { !$bq } {
             set sh [dict get $settings scale_h]
             set sv [dict get $settings scale_v]
             set ch [dict get $settings raw_center_h]
@@ -594,8 +861,7 @@ namespace eval em {
             if { $swap } { lassign [list $raw_v $raw_h] raw_h raw_v }
 
             if { $bq } {
-                set h_deg [biquadratic_transform $raw_h $raw_v $bqh]
-                set v_deg [biquadratic_transform $raw_h $raw_v $bqv]
+                lassign [bq_apply $raw_h $raw_v] h_deg v_deg
             } else {
                 set h_deg [expr {$sh * ($raw_h - $ch)}]
                 set v_deg [expr {$sv * ($raw_v - $cv)}]
