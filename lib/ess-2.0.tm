@@ -612,6 +612,17 @@ namespace eval ess {
     # a replay never re-sends the query. One request for all nine values.
     # With no stim2, or a reply that is not nine values, the datapoints are
     # left as configure_stim set them and 0 is returned; 1 when refreshed.
+    #
+    # The window size is the one exception to "asked fresh": ess/screen_w|h
+    # are the pixel grid of this load, the size configure_stim recorded for
+    # the state system.  touch_init scales touch pixels to degrees by that
+    # size for the whole load, and stim2's mouse-as-touch bridge (stimess)
+    # reports in the grid it saw at configure, so a window resized since
+    # the load (a dev machine) must not move the datapoints onto another
+    # grid than the touches are in.  The degrees do not change with the
+    # window (a resize stretches the projection), so they, the refresh and
+    # the background are taken live.  With no recorded size (no state
+    # system), the live size stands.
     variable screen_snapshot_query {list [screen_set HalfScreenDegreeX] [screen_set HalfScreenDegreeY] [screen_set WinWidth] [screen_set WinHeight] [screen_set ScaleX] [screen_set ScaleY] [screen_set RefreshRate] [screen_set FrameDuration] [setBackground]}
 
     proc screen_snapshot {} {
@@ -627,6 +638,8 @@ namespace eval ess {
             set h [expr {int($wh / ($sy > 0 ? $sy : 1.0))}]
             if { [llength $bg] != 3 } { error "background \"$bg\"" }
         }] } { return 0 }
+        lassign [screen_recorded_size] rw rh
+        if { $rw ne "" } { set w $rw; set h $rh }
         dservSet ess/screen_halfx $hx
         dservSet ess/screen_halfy $hy
         dservSet ess/screen_w $w
@@ -635,6 +648,18 @@ namespace eval ess {
         dservSet ess/screen_frame_duration $fd
         dservSet ess/screen_bg $bg
         return 1
+    }
+    # the window size configure_stim recorded for the loaded state system
+    # (its screen_w and screen_h, what touch_init reads), as {w h}; {} when
+    # no system has one
+    proc screen_recorded_size {} {
+        variable current
+        if { ![info exists current(state_system)] } { return {} }
+        set s $current(state_system)
+        if { $s eq "" || ![info exists ${s}::screen_w] || ![info exists ${s}::screen_h] } { return {} }
+        set w [set ${s}::screen_w]; set h [set ${s}::screen_h]
+        if { ![string is integer -strict $w] || ![string is integer -strict $h] || $w <= 0 || $h <= 0 } { return {} }
+        list $w $h
     }
     # END screen_snapshot
 

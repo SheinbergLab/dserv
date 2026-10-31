@@ -534,6 +534,22 @@ assert {[dservGet ess/screen_w] == 1920 && [dservGet ess/screen_h] == 1080} \
 assert {[dservGet ess/screen_refresh_rate] == 120 && [dservGet ess/screen_frame_duration] eq "8.3333"} \
     "refresh and frame duration published"
 assert {[dservGet ess/screen_bg] eq "40 40 40"} "background published as r g b ([dservGet ess/screen_bg])"
+# with a state system loaded, the window size is the one configure_stim
+# recorded for it (touch_init's grid, and the grid stim2's mouse bridge
+# reports in), not the window as it is now; the rest stays live
+namespace eval ::fake_sys { variable screen_w 480; variable screen_h 270 }
+set ::ess::current(state_system) ::fake_sys
+dservSet ess/screen_bg "1 2 3"
+assert {[::ess::screen_snapshot] == 1} "screen_snapshot answers 1 with a recorded size"
+assert {[dservGet ess/screen_w] == 480 && [dservGet ess/screen_h] == 270} \
+    "window size is the recorded grid, not the live window ([dservGet ess/screen_w]x[dservGet ess/screen_h])"
+assert {[dservGet ess/screen_halfx] eq "23.4453" && [dservGet ess/screen_bg] eq "40 40 40"} \
+    "degrees and background still taken live"
+# a system without a recorded size (configure_stim never ran): live again
+namespace eval ::fake_sys { unset screen_w screen_h }
+assert {[::ess::screen_snapshot] == 1 && [dservGet ess/screen_w] == 1920} \
+    "no recorded size: the live window ([dservGet ess/screen_w])"
+unset ::ess::current(state_system)
 rmtSend "fake_screen 0"
 dservSet ess/screen_bg "1 2 3"
 assert {[::ess::screen_snapshot] == 0 && [dservGet ess/screen_bg] eq "1 2 3"} \
