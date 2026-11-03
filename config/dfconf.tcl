@@ -1480,17 +1480,19 @@ proc apply_wide_datafiles {enabled} {
     }
 }
 
-settings::declare df wide_datafiles -default 0 -type bool \
+settings::declare df wide_datafiles -default 1 -type bool \
     -doc "keep 8-byte datapoints at full width when a .ess is converted
 to a dg: DSERV_DOUBLE stays double and DSERV_INT64 stays int64 instead
 of being narrowed to float/long, and <dst>/<blobt> keep their
-microsecond fraction. OFF (the default) writes the classic format that
-every reader opens. On needs every consumer of this rig's .dgz files
-to be current -- dlsh >= 0.17, dgread >= 1.2.2 (Python/R), a rebuilt
-MATLAB MEX, a rebuilt dgview -- because older readers abort on the
-new column types. The .ess itself keeps full precision either way, so
-a file converted narrow can be re-converted wide later. Takes effect
-on the next conversion." \
+microsecond fraction. ON (the default since dserv 0.60.16) is what a
+frame-locked replay of the obs DG needs: stim/frame is int64, and a
+narrow conversion keeps its columns empty. Off writes the classic
+format that every reader opens; on needs every consumer of this rig's
+.dgz files to be current -- dlsh >= 0.17, dgread >= 1.2.2 (Python/R),
+a rebuilt MATLAB MEX, a rebuilt dgview -- because older readers abort
+on the new column types. The .ess itself keeps full precision either
+way, so a file converted narrow can be re-converted wide later. Takes
+effect on the next conversion." \
     -apply {::apply_wide_datafiles}
 
 
