@@ -223,6 +223,8 @@ proc setup_work_dir {work_dir} {
     file mkdir [file join $work_dir trials]
     
     df::set_work_dir $work_dir
+    # where dserv's /data/ route finds obs/ and trials/ for viewers
+    dservSet df/work_dir [file normalize $work_dir]
     puts "dfconf: Work directory set to: $work_dir"
 }
 
@@ -1038,6 +1040,47 @@ proc list_datafiles {{filters {}}} {
         $json map_close
     }
     
+    $json array_close
+    set result [$json get]
+    $json delete
+    return $result
+}
+
+# Sessions a viewer can open: those whose trials file is in the work
+# directory now (dserv serves it as /data/trials/NAME.trials.dgz), newest
+# first.  JSON: [{name, subject, system, protocol, variant, n_trials, date,
+# time, timestamp, trials_size, has_obs}].  Read only: a SELECT and a stat
+# per row.
+proc list_trials_files {{limit 1000}} {
+    global df_work_dir
+    if {![string is integer -strict $limit]} { set limit 1000 }
+    set tdir [file join $df_work_dir trials]
+    set odir [file join $df_work_dir obs]
+    set json [yajl create #auto]
+    $json array_open
+    set n 0
+    dfdb eval {
+        SELECT filename, subject, system, protocol, variant, n_trials,
+               date, time, timestamp
+        FROM datafiles
+        WHERE status = 'ok'
+        ORDER BY timestamp DESC, created_at DESC
+    } r {
+        set name [file rootname [file tail $r(filename)]]
+        set tf [file join $tdir $name.trials.dgz]
+        if {![file isfile $tf]} continue
+        if {[incr n] > $limit} break
+        $json map_open
+        $json string name string $name
+        foreach k {subject system protocol variant date time} {
+            $json string $k string $r($k)
+        }
+        $json string n_trials number [expr {$r(n_trials) ne "" ? $r(n_trials) : 0}]
+        $json string timestamp number [expr {$r(timestamp) ne "" ? $r(timestamp) : 0}]
+        $json string trials_size number [file size $tf]
+        $json string has_obs bool [file isfile [file join $odir $name.obs.dgz]]
+        $json map_close
+    }
     $json array_close
     set result [$json get]
     $json delete

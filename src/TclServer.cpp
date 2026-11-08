@@ -529,6 +529,65 @@ static void stream_file_response(auto *res, const std::string& file_path,
        ->end(content);
 }
 
+// Stream a file without holding the event loop, which also carries every
+// web client's datapoints: CHUNK bytes at a time, a few chunks per loop
+// turn, then the rest after everyone else (defer), or when the socket
+// drains (onWritable).  Each piece is read from the file at the response's
+// write offset, so a partial write resumes where it stopped.  Must be
+// called on the uWS loop's thread.
+struct FileStream {
+  std::ifstream f;
+  uintmax_t size = 0;
+  bool finished = false;    // done, aborted or failed: never touch res again
+};
+
+template <class R>
+static void file_stream_pump(R *res, std::shared_ptr<FileStream> fs) {
+  static constexpr size_t CHUNK = 64 * 1024;
+  static constexpr int PER_TURN = 4;
+  if (fs->finished) return;
+  std::vector<char> buf(CHUNK);
+  for (int k = 0; k < PER_TURN; k++) {
+    uintmax_t off = res->getWriteOffset();
+    size_t n = (size_t) std::min<uintmax_t>(CHUNK, fs->size - off);
+    fs->f.clear();
+    fs->f.seekg((std::streamoff) off);
+    fs->f.read(buf.data(), (std::streamsize) n);
+    if ((size_t) fs->f.gcount() != n) {       // the file changed under us
+      fs->finished = true;
+      res->close();
+      return;
+    }
+    auto [ok, done] = res->tryEnd(std::string_view(buf.data(), n), fs->size);
+    if (done) { fs->finished = true; return; }
+    if (!ok) {
+      res->onWritable([res, fs](uintmax_t) {
+        file_stream_pump(res, fs);
+        return true;
+      });
+      return;
+    }
+  }
+  uWS::Loop::get()->defer([res, fs]() { file_stream_pump(res, fs); });
+}
+
+template <class R>
+static void stream_file_async(R *res, const std::string &path, uintmax_t size,
+                              const char *content_type) {
+  auto fs = std::make_shared<FileStream>();
+  fs->f.open(path, std::ios::binary);
+  if (!fs->f) {
+    res->writeStatus("500 Internal Server Error")->end("Failed to open file");
+    return;
+  }
+  fs->size = size;
+  res->onAborted([fs]() { fs->finished = true; });
+  res->writeHeader("Content-Type", content_type)
+     ->writeHeader("Cache-Control", "no-cache")
+     ->writeHeader("Access-Control-Allow-Origin", "*");
+  file_stream_pump(res, fs);
+}
+
 // Get content type for data files
 static const char* get_download_content_type(const std::string& path) {
     size_t dot_pos = path.rfind('.');
@@ -832,6 +891,63 @@ void TclServer::start_websocket_server(void)
         }
     });
       
+    // ------------------------------------------------------------------
+    // Session data for viewers (dg_viewer, a stim2 render server):
+    //   GET /data/trials/NAME.trials.dgz
+    //   GET /data/obs/NAME.obs.dgz
+    // from the df work directory: the datapoint df/work_dir (set by
+    // dfconf), else www's sibling work/.  Read only, these two kinds
+    // only, plain file names only.  Any origin may read them, so a viewer
+    // or render host elsewhere can.
+    // ------------------------------------------------------------------
+    app.get("/data/*", [this](auto *res, auto *req) {
+        std::string rel(req->getUrl().substr(6));      // after "/data/"
+        std::string kind, name;
+        auto slash = rel.find('/');
+        if (slash != std::string::npos) {
+            kind = rel.substr(0, slash);
+            name = rel.substr(slash + 1);
+        }
+        const std::string suffix = "." + kind + ".dgz";
+        bool ok = (kind == "trials" || kind == "obs") &&
+            name.size() > suffix.size() && name[0] != '.' &&
+            name.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                                   "abcdefghijklmnopqrstuvwxyz"
+                                   "0123456789._-") == std::string::npos &&
+            name.compare(name.size() - suffix.size(), suffix.size(), suffix) == 0;
+        if (!ok) {
+            res->writeStatus("404 Not Found")
+               ->writeHeader("Content-Type", "text/plain")
+               ->writeHeader("Access-Control-Allow-Origin", "*")
+               ->end("Not found: /data/ serves trials/NAME.trials.dgz and obs/NAME.obs.dgz");
+            return;
+        }
+
+        std::string work;
+        ds_datapoint_t *dp = ds->get_datapoint((char *)"df/work_dir");
+        if (dp) {
+            if (dp->data.type == DSERV_STRING && dp->data.len)
+                work.assign((const char *)dp->data.buf, dp->data.len);
+            dpoint_free(dp);
+        }
+        while (!work.empty() && work.back() == '\0') work.pop_back();
+        if (work.empty() && !this->www_path.empty())
+            work = (std::filesystem::path(this->www_path).parent_path() / "work").string();
+
+        std::string file_path = work + "/" + kind + "/" + name;
+        struct stat st;
+        if (work.empty() || stat(file_path.c_str(), &st) != 0 || !S_ISREG(st.st_mode)) {
+            res->writeStatus("404 Not Found")
+               ->writeHeader("Content-Type", "text/plain")
+               ->writeHeader("Access-Control-Allow-Origin", "*")
+               ->end("Not found: " + kind + "/" + name);
+            return;
+        }
+        // streamed in pieces: never holds the loop that carries the
+        // web clients' datapoints for more than a few 64 KB reads
+        stream_file_async(res, file_path, (uintmax_t) st.st_size, "application/gzip");
+    });
+
       // Serve all other files from www_path
 app.get("/*", [this](auto *res, auto *req) {
     std::string url_path(req->getUrl());
