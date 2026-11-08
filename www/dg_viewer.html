@@ -40,6 +40,28 @@
   .main.drag-active::after{content:'Drop .dg / .dgz file';position:absolute;inset:0;background:rgba(10,14,23,0.85);border:2px dashed var(--acc);border-radius:8px;margin:8px;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:14px;color:var(--acc);z-index:100;pointer-events:none;}
 
   /* ── Drop zone (initial) ── */
+  .session-panel{position:absolute;inset:0;z-index:20;display:none;flex-direction:column;background:var(--bg0);}
+  .session-panel.open{display:flex;}
+  .sp-bar{display:flex;align-items:center;gap:10px;padding:10px 20px;border-bottom:1px solid var(--bdr);background:var(--bg1);flex-wrap:wrap;}
+  .sp-title{font-family:var(--mono);font-size:12px;font-weight:600;color:var(--t2);text-transform:uppercase;letter-spacing:1px;margin-right:6px;}
+  .sp-bar select,.sp-bar input{font-family:var(--mono);font-size:12px;background:var(--bg2);color:var(--t1);border:1px solid var(--bdr);border-radius:4px;padding:5px 8px;}
+  .sp-bar input{flex:1;min-width:160px;}
+  .sp-bar button{font-family:var(--mono);font-size:13px;background:var(--bg2);color:var(--t2);border:1px solid var(--bdr);border-radius:4px;padding:4px 9px;cursor:pointer;}
+  .sp-bar button:hover{color:var(--t1);border-color:var(--bdr-a);}
+  .sp-count{font-family:var(--mono);font-size:11px;color:var(--t3);}
+  .sp-list{flex:1;overflow-y:auto;padding:6px 0 20px;}
+  .sp-date{font-family:var(--mono);font-size:10px;font-weight:600;color:var(--t3);letter-spacing:1px;padding:12px 20px 4px;}
+  .sp-row{display:grid;grid-template-columns:48px 80px 1fr 90px 64px;gap:12px;align-items:baseline;padding:6px 20px;font-family:var(--mono);font-size:12px;color:var(--t1);cursor:pointer;border-left:2px solid transparent;}
+  .sp-row:hover{background:var(--bg2);}
+  .sp-row.current{border-left-color:var(--acc);background:var(--acc-g);}
+  .sp-row .sp-time,.sp-row .sp-size{color:var(--t3);}
+  .sp-row .sp-subj{color:var(--t2);}
+  .sp-row .sp-exp i{color:var(--t3);font-style:normal;padding:0 2px;}
+  .sp-row .sp-n{color:var(--t2);text-align:right;}
+  .sp-row .sp-size{text-align:right;}
+  .sp-empty,.sp-foot{font-family:var(--mono);font-size:12px;color:var(--t3);padding:16px 20px;}
+  .sp-foot:empty{display:none;}
+  @media (max-width:640px){.sp-row{grid-template-columns:40px 1fr 88px;}.sp-row .sp-subj,.sp-row .sp-size{display:none;}}
   .drop-zone{flex:1;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px;border:2px dashed var(--bdr);border-radius:12px;margin:40px;height:calc(100% - 80px);}
   .drop-zone.dragover{border-color:var(--acc);background:var(--acc-g);}
   .drop-zone svg{opacity:.3;}
@@ -135,6 +157,11 @@
   .trace-panel .no-eye{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:12px;color:var(--t3);}
   .world-panel{width:340px;min-width:260px;position:relative;overflow:hidden;background:#080c14;border-left:1px solid var(--bdr);}
   .world-panel canvas{position:absolute;top:0;left:0;}
+  .world-panel.stim2-on{width:48%;min-width:320px;}
+  .stim2-box{position:absolute;inset:0;display:none;}
+  .stim2-box video{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000;}
+  .stim2-box canvas{position:absolute;top:0;left:0;pointer-events:none;}
+  .stim2-status{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);display:none;padding:6px 12px;border-radius:4px;background:rgba(8,12,20,0.85);font-family:var(--mono);font-size:11px;color:var(--t2);max-width:90%;text-align:center;pointer-events:none;}
   .world-label{position:absolute;top:6px;left:10px;font-family:var(--mono);font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:1px;color:var(--t3);pointer-events:none;}
   .readout{position:absolute;top:8px;right:12px;font-family:var(--mono);font-size:11px;color:var(--t3);pointer-events:none;background:rgba(10,14,23,.85);padding:4px 8px;border-radius:3px;border:1px solid var(--bdr);display:none;}
   .detail-panel{height:140px;min-height:40px;background:var(--bg1);border-top:1px solid var(--bdr);overflow:auto;flex-shrink:0;padding:8px 16px;}
@@ -180,6 +207,7 @@
 <!-- ── Header ── -->
 <div class="header">
   <h1>DG Viewer</h1>
+  <button id="btnSessions" class="primary" style="display:none" title="Sessions on the dserv host">Sessions</button>
   <button id="btnOpen" class="primary">Open</button>
   <input type="file" id="fileInput" accept=".dg,.dgz" style="display:none">
   <div class="view-tabs" id="viewTabs" style="display:none;">
@@ -292,6 +320,9 @@
 </div>
 
 <script src="js/dg_reader.js"></script>
+<script src="js/stim2_view.js"></script>
+<script src="js/ws_manager.js"></script>
+<script src="js/session_browser.js"></script>
 <script>
 // ═══════════════════════════════════════════════════════════════
 // Image-bearing cells (camera snapshots etc.)
@@ -478,6 +509,11 @@ const App = {
     const params = new URLSearchParams(window.location.search);
     const fileUrl = params.get('file');
     if (fileUrl) this.loadURL(fileUrl);
+
+    // The dserv host's sessions: offered when its catalog answers, and
+    // shown at once when no file was named
+    document.getElementById('btnSessions').addEventListener('click', () => SessionBrowser.show());
+    SessionBrowser.init(this).then(ok => { if (ok && !fileUrl) SessionBrowser.show(); });
   },
 
   _findDGFile(files) {
@@ -492,9 +528,11 @@ const App = {
       const buf = await resp.arrayBuffer();
       const name = url.split('/').pop() || 'data.dg';
       await this._loadBuffer(buf, name);
+      return true;
     } catch (err) {
       console.error(err);
       document.getElementById('fileInfo').textContent = 'Error loading ' + url + ': ' + err.message;
+      return false;
     }
   },
 
@@ -503,6 +541,8 @@ const App = {
     try {
       const buf = await file.arrayBuffer();
       await this._loadBuffer(buf, file.name);
+      SessionBrowser.current = null;            // a local file, not one of the host's
+      SessionBrowser.el && SessionBrowser.el.classList.remove('open');
     } catch (err) {
       console.error(err);
       document.getElementById('fileInfo').textContent = 'Error: ' + err.message;
@@ -544,6 +584,7 @@ const App = {
     if (this.isTrial) {
       const sys = getScalar(this.dg, 'system', 0);
       if (sys) await this.loadPlugin(sys);
+      await Stim2View.init(this);
       this.buildTrialView();
       this.switchView('trial');
     } else {
@@ -905,8 +946,8 @@ const App = {
     if (dfw) dfw.style.display = this.hasSpikes ? 'flex' : 'none';
     if (this.hasSpikes) this._syncDepthInputs();
 
-    // Show world panel only if plugin loaded
-    document.getElementById('worldPanel').style.display = this.plugin ? 'block' : 'none';
+    // Show world panel if a plugin is loaded or stim2 clips are available
+    this.applyWorldMode(false);
 
     // Build trial list
     for (let i = 0; i < this.nRows; i++) {
@@ -963,7 +1004,7 @@ const App = {
       document.getElementById('btnPrev').addEventListener('click', () => this.selTrial(Math.max(0, this.cur - 1)));
       document.getElementById('btnNext').addEventListener('click', () => this.selTrial(Math.min(this.nRows - 1, this.cur + 1)));
       document.getElementById('btnPlayPause').addEventListener('click', () => this.togglePlay());
-      document.getElementById('speedSel').addEventListener('change', e => { this.speed = parseFloat(e.target.value); });
+      document.getElementById('speedSel').addEventListener('change', e => { this.speed = parseFloat(e.target.value); Stim2View.setRate(this.speed); });
       document.getElementById('chkMask').addEventListener('change', e => { this.maskBlinks = e.target.checked; this.renderTrial(); });
       document.getElementById('chkEvents').addEventListener('change', e => { this.showEvents = e.target.checked; this.renderTrial(); });
 
@@ -1029,6 +1070,7 @@ const App = {
         }
       }
     }
+    Stim2View.controls(document.getElementById('pluginControls'));
 
     this.initResize();
     this.resizeCvs();
@@ -1047,7 +1089,17 @@ const App = {
     };
     if (this.cT && this.xT) fix(this.cT, this.xT, document.getElementById('tracePanel'));
     if (this.cW && this.xW) fix(this.cW, this.xW, document.getElementById('worldPanel'));
+    Stim2View.resize();
     this.renderTrial();
+  },
+
+  // the world panel: the stim2 clip when that is on, else the plugin's canvas
+  applyWorldMode(resize = true) {
+    const s2 = Stim2View.active();
+    document.getElementById('worldPanel').style.display = (this.plugin || s2) ? 'block' : 'none';
+    Stim2View.applyMode();
+    if (!s2) document.getElementById('worldLabel').textContent = this.plugin ? (this.plugin.name || '') : '';
+    if (resize) this.resizeCvs();
   },
 
   selTrial(i) {
@@ -1060,6 +1112,7 @@ const App = {
     this.resetZoom();
     this.updateTrialDetail();
     this.renderTrial();
+    Stim2View.load(i);
   },
 
   parseTrialRow(i) {
@@ -1267,6 +1320,10 @@ const App = {
     if (this.plugin && this.plugin.render) {
       const popts = Object.assign({}, this.plugin._opts || {}, { _maskBlinks: this.maskBlinks });
       this.plugin.render(this.xW, this.cW, this.td, this.pt, this.dpr, popts);
+    }
+    if (Stim2View.active()) {
+      if (!this.playing) Stim2View.seek(this.pt);
+      Stim2View.draw();
     }
     // Update scrub slider
     if (this.td && this.td.dur > 0) {
@@ -1648,10 +1705,13 @@ const App = {
     document.getElementById('btnPlayPause').textContent = this.playing ? '\u23F8' : '\u25B6';
     if (this.playing) { this.lastTs = performance.now(); this.animate(); }
     else cancelAnimationFrame(this.af);
+    if (Stim2View.active()) Stim2View.setPlaying(this.playing);
   },
   animate() {
     if (!this.playing) return; const now = performance.now();
-    this.pt += ((now - this.lastTs) / 1000) * this.speed; this.lastTs = now;
+    const dt = (now - this.lastTs) / 1000; this.lastTs = now;
+    // stim2 mode: the video is the clock while it covers pt
+    this.pt = Stim2View.active() ? Stim2View.advance(this.pt, dt, this.speed) : this.pt + dt * this.speed;
     if (this.td && this.pt > this.td.dur) this.pt = 0;
     this.renderTrial(); this.af = requestAnimationFrame(() => this.animate());
   },
@@ -1707,6 +1767,10 @@ const App = {
 
   // ═══ Keyboard ═══
   onKey(e) {
+    if (SessionBrowser.isOpen()) {           // the list has the keys
+      if (e.key === 'Escape') SessionBrowser.hide();
+      return;
+    }
     if (!this.dg) return;
     if (this.currentView === 'trial') {
       if (e.key === 'ArrowUp' || e.key === 'k') { e.preventDefault(); this.selTrial(Math.max(0, this.cur - 1)); }
