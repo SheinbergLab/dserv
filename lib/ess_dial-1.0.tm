@@ -615,10 +615,10 @@ namespace eval ess {
     # ONE analog stick, so `dpad` here never meant a d-pad, and the validator
     # below had to say so in prose. The strategy words say what they do:
     #
-#     ring       deflection rotates a bearing; cursor pinned to the ring
-#     sectors    deflection quantized to 8; cursor walks out a spoke
-#     rate       deflection IS velocity; continuous, speed-graded
-#     threshold  first sample past a fraction of throw reports that bearing
+    #     ring       deflection rotates a bearing; cursor pinned to the ring
+    #     sectors    deflection quantized to 8; cursor walks out a spoke
+    #     rate       deflection IS velocity; continuous, speed-graded
+    #     threshold  first sample past a fraction of throw reports that bearing
     #
     # Old spellings are accepted forever and normalized on the way in, so
     # every protocol that says `-sources {swipe dpad}` keeps working.
