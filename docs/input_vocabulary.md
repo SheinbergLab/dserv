@@ -42,9 +42,11 @@ same word means the same reading wherever it appears:
 | `ring` | deflection rotates a bearing; cursor pinned to the ring (1-D) |
 | `sectors` | deflection quantized to eight; a cursor moves along that heading |
 | `rate` | deflection IS the cursor's velocity; continuous, speed-graded |
+| `threshold` | the first sample past a fraction of measured throw reports that bearing |
 
-`dial` (`ess_dial-1.0.tm`) offers all three; `roam` (`ess_roam-1.0.tm`)
-offers `sectors` and `rate`. What a strategy *produces* differs by response
+`dial` (`ess_dial-1.0.tm`) offers `ring`, `sectors`, `rate`, and `threshold`;
+`roam` (`ess_roam-1.0.tm`) offers `sectors` and `rate`. What a strategy
+*produces* differs by response
 mode — under the dial, `sectors` walks the cursor out one spoke and reports
 one of eight bearings; under a roam it sets the heading of a free 2-D
 position — but in both it is "the deflection is read as eight directions",

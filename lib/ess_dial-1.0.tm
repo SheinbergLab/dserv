@@ -11,13 +11,15 @@
 # That is why it lives beside ess-2.0.tm rather than inside it — the next
 # response mode gets its own file rather than growing the framework's.
 #
-# Sources: swipe | touch | joystick | mouse | ring | sectors | rate.
+# Sources: swipe | touch | joystick | mouse | ring | sectors | rate | threshold.
 #
-# A source is a READING STRATEGY, not a device. Three of these read one
+# A source is a READING STRATEGY, not a device. Four of these read one
 # analog stick and they are NOT interchangeable:
-#   ring     deflection rotates a bearing; cursor pinned to the ring. 1-D.
-#   sectors  deflection quantized to 8 sectors; cursor walks out a spoke.
-#   rate     deflection IS the cursor's velocity; continuous, speed-graded.
+#   ring       deflection rotates a bearing; cursor pinned to the ring. 1-D.
+#   sectors    deflection quantized to 8 sectors; cursor walks out a spoke.
+#   rate       deflection IS the cursor's velocity; continuous, speed-graded.
+#   threshold  the first sample past a fraction of measured throw reports
+#              that sample's bearing. Later samples do not move it.
 #
 # They were `stick`, `dpad` and `astick`, which borrowed DEVICE words for
 # strategies -- `dpad` here never meant a d-pad. Both spellings are accepted
@@ -486,6 +488,26 @@ namespace eval ess {
     # inside the band. See dial_rearm for why astick cannot use homing.
     variable dial_astick_reapproach 0
 
+    # --- threshold source (bearing at a fraction of measured throw) ------
+    #
+    # The fourth reading of the same analog stick. rate integrates the
+    # deflection into a cursor; this one does not travel. The choice is the
+    # bearing of the first sample whose magnitude reaches a fraction of
+    # full scale, and a later sample cannot revise it.
+    #
+    # Release sits strictly below engage, the same hysteresis the analog
+    # joystick transport uses, so a stick resting on the line does not
+    # chatter. The dial does not gate trials on it: dial_threshold_held
+    # reports whether the stick is still outside the release fraction, and
+    # a protocol that wants a letgo gate reads that.
+    variable dial_threshold_frac     0.95  ;# engage, fraction of full scale
+    variable dial_threshold_release  0.57  ;# 0.6 of engage; back inside
+    variable dial_threshold_scale    0.0   ;# full-scale deflection; 0 = unset
+    variable dial_threshold_committed 0
+    variable dial_threshold_x        0.0   ;# latest sample, for the held query
+    variable dial_threshold_y        0.0
+    variable dial_threshold_seen     0
+
     # ---------------------------------------------------------------------
     # angle helpers
     # ---------------------------------------------------------------------
@@ -593,9 +615,10 @@ namespace eval ess {
     # ONE analog stick, so `dpad` here never meant a d-pad, and the validator
     # below had to say so in prose. The strategy words say what they do:
     #
-    #     ring     deflection rotates a bearing; cursor pinned to the ring
-    #     sectors  deflection quantized to 8; cursor walks out a spoke
-    #     rate     deflection IS velocity; continuous, speed-graded
+#     ring       deflection rotates a bearing; cursor pinned to the ring
+#     sectors    deflection quantized to 8; cursor walks out a spoke
+#     rate       deflection IS velocity; continuous, speed-graded
+#     threshold  first sample past a fraction of throw reports that bearing
     #
     # Old spellings are accepted forever and normalized on the way in, so
     # every protocol that says `-sources {swipe dpad}` keeps working.
@@ -604,14 +627,14 @@ namespace eval ess {
     variable dial_source_aliases
     array set dial_source_aliases { stick ring  dpad sectors  astick rate }
 
-    variable dial_valid_sources { swipe touch joystick mouse ring sectors rate }
+    variable dial_valid_sources { swipe touch joystick mouse ring sectors rate threshold }
 
     # The steering set: every one of these drives the cursor from the SAME
     # deflection, so two of them is one hand steering two ways. Named once
     # because three places need it -- the file check, dial_init's check,
     # and the enumerator that offers them -- and this file already carries
     # two bugs that were exactly this kind of drift (see the header).
-    variable dial_steering_sources { swipe ring rate sectors }
+    variable dial_steering_sources { swipe ring rate sectors threshold }
 
     proc dial_source_norm { s } {
         variable dial_source_aliases
@@ -633,9 +656,9 @@ namespace eval ess {
             lappend out $s
         }
         set v $out
-        # swipe/ring/rate all read slider/position, and on an analog rig
-        # `sectors` is derived from that same stick, so any two of them
-        # would drive one cursor two ways.
+        # swipe/ring/rate/threshold all read slider/position, and on an
+        # analog rig `sectors` is derived from that same stick, so any two
+        # of them would drive one cursor two ways.
         variable dial_steering_sources
         set steering {}
         foreach s $v { if { $s in $dial_steering_sources } { lappend steering $s } }
@@ -821,6 +844,9 @@ namespace eval ess {
                  $stick_note] \
             [list rate    slider/position \
                  "deflection IS velocity; continuous and speed-graded" $stick_note] \
+            [list threshold slider/position \
+                 "the first sample past a fraction of measured throw reports that bearing" \
+                 $stick_note] \
             [list sectors ess/joystick/dir \
                  "deflection quantized to 8; the cursor walks out a spoke" $jnote] \
             [list joystick ess/joystick/dir \
@@ -875,11 +901,12 @@ namespace eval ess {
         -validate ::ess::dial_sources_norm \
         -candidates dial \
         -doc "which transports answer a dial: any combination of\
-              swipe touch joystick mouse ring sectors rate, first to commit\
-              wins. ring/sectors/rate are three READINGS of one analog stick\
-              (bearing / eight sectors / velocity); stick, dpad and astick\
-              are their old names and still work. Empty leaves it to the\
-              protocol and the module default\
+              swipe touch joystick mouse ring sectors rate threshold, first\
+              to commit wins. ring/sectors/rate/threshold are four READINGS\
+              of one analog stick (bearing / eight sectors / velocity /\
+              crossing a fraction of throw); stick, dpad and astick are the\
+              old names of the first three and still work. Empty leaves it\
+              to the protocol and the module default\
               {swipe touch}. A protocol's own -sources still wins over this\
               (the joystick task names its own, because there the transport\
               IS the experiment)" \
@@ -941,6 +968,9 @@ namespace eval ess {
         variable dial_astick_commit
         variable dial_astick_pub_ms
         variable dial_astick_min_step
+        variable dial_threshold_frac
+        variable dial_threshold_release
+        variable dial_threshold_scale
         variable dial_mouse_mode
 
         # defaults on every init, so a protocol that omits an option gets
@@ -982,9 +1012,16 @@ namespace eval ess {
         # own comment for why a clock-based cap made the cursor judder.
         set dial_astick_pub_ms    0
         set dial_astick_min_step  0.002
+        set dial_threshold_frac    0.95
+        set dial_threshold_release 0.57
+        set dial_threshold_scale   0.0
         set dial_stick_invert   [dial_stick_invert_default]
         set dial_stick_commit_dp [dial_stick_commit_route]
         set dial_pointer_dpoint ess/dial/pointer
+        # Set only when the caller names them, so a lone -threshold_frac
+        # re-derives release instead of keeping the previous fraction's.
+        set threshold_frac_set 0
+        set threshold_release_set 0
 
         foreach { k v } $args {
             switch -- $k {
@@ -1031,6 +1068,15 @@ namespace eval ess {
                 -astick_commit   { set dial_astick_commit $v }
                 -astick_pub_ms   { set dial_astick_pub_ms [expr {int($v)}] }
                 -astick_min_step { set dial_astick_min_step [expr {double($v)}] }
+                -threshold_frac {
+                    set dial_threshold_frac [expr {double($v)}]
+                    set threshold_frac_set 1
+                }
+                -threshold_release {
+                    set dial_threshold_release [expr {double($v)}]
+                    set threshold_release_set 1
+                }
+                -threshold_scale { set dial_threshold_scale [expr {double($v)}] }
                 # ess/cursor is no longer written by any source; the one
                 # output is ess/dial/pointer (-pointer_dpoint).
                 -cursor_dpoint  { error "::ess::dial_init: -cursor_dpoint is\
@@ -1041,15 +1087,23 @@ namespace eval ess {
             }
         }
 
+        # A lone engage fraction keeps the hysteresis band the same shape.
+        # Naming both is how a caller says the release was deliberate.
+        if { $threshold_frac_set && !$threshold_release_set } {
+            set dial_threshold_release [expr {0.6*$dial_threshold_frac}]
+        }
+        dial_threshold_check
+
         # Normalize the old spellings here too, not just in the settings
         # validator: a protocol passes -sources directly, and `-sources
         # {swipe dpad}` in an existing script has to keep meaning what it
         # meant. One normalizer, both doors.
         set dial_sources [lmap s $dial_sources { dial_source_norm $s }]
 
-        # swipe, ring and rate are three readings of ONE slider/position,
-        # and any two of them would fight over the same cursor. `sectors`
-        # joins the exclusion because on an analog rig its eight sectors are
+        # swipe, ring, rate and threshold are four readings of ONE
+        # slider/position, and any two of them would fight over the same
+        # cursor. `sectors` joins the exclusion because on an analog rig its
+        # eight sectors are
         # DERIVED from that same stick (::ess::joystick's stick transport),
         # so sectors+rate is one hand driving the cursor two ways at once --
         # which reads on screen as a cursor that will not track.
@@ -1108,6 +1162,15 @@ namespace eval ess {
             variable dial_astick_last_pub;   set dial_astick_last_pub   0
             dservAddExactMatch slider/position
             dpointAddScript    slider/position ::ess::dial_astick_sample
+        }
+
+        if { "threshold" in $dial_sources } {
+            variable dial_threshold_committed; set dial_threshold_committed 0
+            variable dial_threshold_seen;      set dial_threshold_seen      0
+            variable dial_threshold_x;         set dial_threshold_x         0.0
+            variable dial_threshold_y;         set dial_threshold_y         0.0
+            dservAddExactMatch slider/position
+            dpointAddScript    slider/position ::ess::dial_threshold_sample
         }
 
         if { "sectors" in $dial_sources } {
@@ -1179,6 +1242,7 @@ namespace eval ess {
         catch { dpointRemoveScript slider/position ::ess::dial_slider_sample }
         catch { dpointRemoveScript slider/position ::ess::dial_stick_sample }
         catch { dpointRemoveScript slider/position ::ess::dial_astick_sample }
+        catch { dpointRemoveScript slider/position ::ess::dial_threshold_sample }
         variable dial_stick_commit_dp
         catch { dpointRemoveScript $dial_stick_commit_dp ::ess::dial_stick_commit }
         catch { dpointRemoveScript ess/joystick/dir ::ess::dial_dpad_dir }
@@ -1491,6 +1555,10 @@ namespace eval ess {
                 dial_pointer_update 0 0 1 0
             }
         }
+        # threshold stays hidden until the stick crosses. If it is already
+        # past the fraction, that crossing is this window's answer -- a
+        # level, not an edge, so a stick held out at the open counts.
+        dial_threshold_open_window
     }
 
     # Re-open the response window WITHOUT resetting where the cursor is.
@@ -1566,6 +1634,10 @@ namespace eval ess {
             # its timeout with a frozen cursor.
             variable dial_astick_committed; set dial_astick_committed 0
         }
+        # Same rule as dial_arm: a stick already past the fraction at the
+        # re-opened window is the answer. A protocol that wants the stick
+        # back inside first reads dial_threshold_held and waits.
+        dial_threshold_open_window
         return
     }
 
@@ -1584,6 +1656,10 @@ namespace eval ess {
         # a dot still moving after the dial stopped listening invites
         # clicks that do nothing.
         if { $dial_pointer_shown } { dial_pointer_hide }
+        # The latch ends with the window. The next dial_arm starts clean;
+        # a sample that arrives after this finds the window closed.
+        variable dial_threshold_committed
+        set dial_threshold_committed 0
     }
 
     proc dial_armed {} {
@@ -2510,6 +2586,161 @@ namespace eval ess {
     # dial_pending. Nothing to poll.
     proc dial_poll_rate {} { return "" }
 
+    # ---------------------------------------------------------------------
+    # threshold: the bearing where the stick crossed a fraction of throw
+    # ---------------------------------------------------------------------
+
+    proc dial_threshold_check {} {
+        variable dial_threshold_frac
+        variable dial_threshold_release
+        variable dial_threshold_scale
+        if { $dial_threshold_frac <= 0 || $dial_threshold_frac >= 1.0 } {
+            error "::ess::dial_threshold: engage fraction must be in (0,1),\
+                   got $dial_threshold_frac"
+        }
+        if { $dial_threshold_release < 0 || $dial_threshold_release >= 1.0 } {
+            error "::ess::dial_threshold: release fraction must be in \[0,1),\
+                   got $dial_threshold_release"
+        }
+        if { $dial_threshold_release >= $dial_threshold_frac } {
+            error "::ess::dial_threshold: release ($dial_threshold_release)\
+                   must be below engage ($dial_threshold_frac)"
+        }
+        if { $dial_threshold_scale < 0 } {
+            error "::ess::dial_threshold: scale must be >= 0,\
+                   got $dial_threshold_scale"
+        }
+    }
+
+    # |deflection| / full scale. 0 when scale is unset, so a held query
+    # before calibration does not read a resting offset as a full push.
+    proc dial_threshold_fraction { x y } {
+        variable dial_threshold_scale
+        if { $dial_threshold_scale <= 0 } { return 0.0 }
+        return [expr {sqrt($x*$x + $y*$y) / $dial_threshold_scale}]
+    }
+
+    # Live adjustment. Changing the engage fraction alone re-derives the
+    # release at 0.6 of it, so the hysteresis band keeps its shape. Passing
+    # -release in the same call is how a caller says they meant that value.
+    proc dial_threshold_tune { args } {
+        variable dial_threshold_frac
+        variable dial_threshold_release
+        variable dial_threshold_scale
+        set given {}
+        foreach { k v } $args {
+            switch -- $k {
+                -frac    { set dial_threshold_frac    [expr {double($v)}] }
+                -release { set dial_threshold_release [expr {double($v)}] }
+                -scale   { set dial_threshold_scale   [expr {double($v)}] }
+                default { error "::ess::dial_threshold_tune: unknown option '$k'" }
+            }
+            lappend given $k
+        }
+        if { "-frac" in $given && "-release" ni $given } {
+            set dial_threshold_release [expr {0.6*$dial_threshold_frac}]
+        }
+        dial_threshold_check
+        return [list frac $dial_threshold_frac release $dial_threshold_release \
+                    scale $dial_threshold_scale]
+    }
+
+    # 1 when the latest sample is still at or outside the release fraction.
+    # This is the letgo signal. The dial does not hold a trial on it.
+    proc dial_threshold_held {} {
+        variable dial_threshold_scale
+        variable dial_threshold_release
+        variable dial_threshold_x
+        variable dial_threshold_y
+        variable dial_threshold_seen
+        if { $dial_threshold_scale <= 0 } { return 0 }
+        if { $dial_threshold_seen } {
+            set x $dial_threshold_x
+            set y $dial_threshold_y
+        } elseif { [dservExists slider/position] } {
+            lassign [dservGet slider/position] x y
+            if { $x eq "" } { return 0 }
+            if { $y eq "" } { set y 0.0 }
+        } else {
+            return 0
+        }
+        return [expr {[dial_threshold_fraction $x $y] >= $dial_threshold_release}]
+    }
+
+    # Called from dial_arm and dial_rearm, after the window's armed_time is
+    # set. Hides the pointer, then takes the stick's current position: if
+    # that position is already past the fraction, it is the answer.
+    proc dial_threshold_open_window {} {
+        variable dial_sources
+        if { "threshold" ni $dial_sources } return
+        variable dial_threshold_scale
+        variable dial_threshold_committed
+        if { $dial_threshold_scale <= 0 } {
+            error "::ess::dial_arm: threshold has no full-scale deflection --\
+                   pass -threshold_scale (slider/full_scale, in slider output\
+                   units; measure it, do not assume a throw)"
+        }
+        set dial_threshold_committed 0
+        dial_pointer_hide
+        if { [dservExists slider/position] } {
+            dial_threshold_sample slider/position [dservGet slider/position]
+        }
+    }
+
+    proc dial_threshold_latch { x y ts } {
+        variable dial_threshold_committed
+        variable dial_armed_time
+        variable dial_pending
+        variable dial_radius
+        variable dial_pointer_shown
+        variable dial_pointer_band
+        variable dial_pointer_x
+        variable dial_pointer_y
+        if { $dial_threshold_committed || $dial_armed_time == 0 } return
+        set dial_threshold_committed 1
+        # A position already published before the window opened is not a
+        # crossing during the window. The answer is still that bearing;
+        # its time is when the window took it.
+        if { $ts < $dial_armed_time } { set ts $dial_armed_time }
+        set a [dial_clamp_arc [dial_norm2pi [expr {atan2($y, $x)}]]]
+        set dial_pending [list $a threshold $ts]
+        if { $dial_radius > 0 } {
+            set px [expr {$dial_radius * cos($a)}]
+            set py [expr {$dial_radius * sin($a)}]
+            set dial_pointer_x $px
+            set dial_pointer_y $py
+            set dial_pointer_shown 1
+            set dial_pointer_band 1
+            dial_pointer_update $px $py 1 1
+        }
+        do_update
+    }
+
+    proc dial_threshold_sample { dpoint data } {
+        variable dial_active
+        variable dial_armed_time
+        variable dial_threshold_committed
+        variable dial_threshold_frac
+        variable dial_threshold_scale
+        variable dial_threshold_x
+        variable dial_threshold_y
+        variable dial_threshold_seen
+        if { !$dial_active } return
+        lassign $data x y
+        if { $x eq "" } return
+        if { $y eq "" } { set y 0.0 }
+        set dial_threshold_x $x
+        set dial_threshold_y $y
+        set dial_threshold_seen 1
+        if { $dial_armed_time == 0 || $dial_threshold_committed } return
+        if { $dial_threshold_scale <= 0 } return
+        if { [dial_threshold_fraction $x $y] < $dial_threshold_frac } return
+        dial_threshold_latch $x $y [dservTimestamp $dpoint]
+    }
+
+    # Commits arrive asynchronously via dial_threshold_sample. Nothing to poll.
+    proc dial_poll_threshold {} { return "" }
+
     # Velocity steering from a self-centering stick.
     #
     # Reads slider/position, so it inherits sliderconf's center, deadzone,
@@ -2685,8 +2916,15 @@ namespace eval ess {
         # A simulated commit is consumed here like any other source, so it
         # travels the identical path into the protocol.
         if { $dial_pending ne "" } {
-            lassign $dial_pending dial_report_angle dial_report_source
-            set dial_report_time   [now]
+            lassign $dial_pending dial_report_angle dial_report_source ts
+            # A source that latches on a device sample (threshold) carries
+            # that sample's box timestamp. Everyone else is stamped when the
+            # protocol reads the commit, which is what they have always done.
+            if { $ts eq "" } {
+                set dial_report_time [now]
+            } else {
+                set dial_report_time $ts
+            }
             set dial_pending       ""
             set dial_armed_time    0
             return $dial_report_angle
