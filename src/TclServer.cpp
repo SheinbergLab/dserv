@@ -571,9 +571,21 @@ static void file_stream_pump(R *res, std::shared_ptr<FileStream> fs) {
   uWS::Loop::get()->defer([res, fs]() { file_stream_pump(res, fs); });
 }
 
+// HTTP date (RFC 9110 IMF-fixdate) for Last-Modified
+static std::string http_date(time_t t) {
+  struct tm g;
+  gmtime_r(&t, &g);
+  char buf[64];
+  strftime(buf, sizeof buf, "%a, %d %b %Y %H:%M:%S GMT", &g);
+  return buf;
+}
+
+// head: the headers only (HEAD), so a client can tell whether its copy
+// is current from Last-Modified and Content-Length without the body
 template <class R>
 static void stream_file_async(R *res, const std::string &path, uintmax_t size,
-                              const char *content_type) {
+                              const char *content_type, time_t mtime,
+                              bool head = false) {
   auto fs = std::make_shared<FileStream>();
   fs->f.open(path, std::ios::binary);
   if (!fs->f) {
@@ -581,10 +593,20 @@ static void stream_file_async(R *res, const std::string &path, uintmax_t size,
     return;
   }
   fs->size = size;
-  res->onAborted([fs]() { fs->finished = true; });
   res->writeHeader("Content-Type", content_type)
+     ->writeHeader("Last-Modified", http_date(mtime))
      ->writeHeader("Cache-Control", "no-cache")
-     ->writeHeader("Access-Control-Allow-Origin", "*");
+     ->writeHeader("Access-Control-Allow-Origin", "*")
+     ->writeHeader("Access-Control-Expose-Headers", "Last-Modified, Content-Length");
+  if (head) {
+    // our own Content-Length: this uWS's endWithoutBody(size) writes one
+    // but then waits for that many body bytes, and the handler would
+    // return with the response still open (uWS aborts the process)
+    res->writeHeader("Content-Length", std::to_string(size));
+    res->endWithoutBody();
+    return;
+  }
+  res->onAborted([fs]() { fs->finished = true; });
   file_stream_pump(res, fs);
 }
 
@@ -898,9 +920,10 @@ void TclServer::start_websocket_server(void)
     // from the df work directory: the datapoint df/work_dir (set by
     // dfconf), else www's sibling work/.  Read only, these two kinds
     // only, plain file names only.  Any origin may read them, so a viewer
-    // or render host elsewhere can.
+    // or render host elsewhere can.  HEAD answers the headers alone
+    // (Last-Modified, Content-Length), for a render host's cached copy.
     // ------------------------------------------------------------------
-    app.get("/data/*", [this](auto *res, auto *req) {
+    auto serve_data = [this](auto *res, auto *req, bool head) {
         std::string rel(req->getUrl().substr(6));      // after "/data/"
         std::string kind, name;
         auto slash = rel.find('/');
@@ -945,8 +968,11 @@ void TclServer::start_websocket_server(void)
         }
         // streamed in pieces: never holds the loop that carries the
         // web clients' datapoints for more than a few 64 KB reads
-        stream_file_async(res, file_path, (uintmax_t) st.st_size, "application/gzip");
-    });
+        stream_file_async(res, file_path, (uintmax_t) st.st_size, "application/gzip",
+                          st.st_mtime, head);
+    };
+    app.get("/data/*", [serve_data](auto *res, auto *req) { serve_data(res, req, false); });
+    app.head("/data/*", [serve_data](auto *res, auto *req) { serve_data(res, req, true); });
 
       // Serve all other files from www_path
 app.get("/*", [this](auto *res, auto *req) {
