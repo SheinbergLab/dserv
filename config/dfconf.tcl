@@ -1046,12 +1046,21 @@ proc list_datafiles {{filters {}}} {
     return $result
 }
 
-# Sessions a viewer can open: those whose trials file is in the work
-# directory now (dserv serves it as /data/trials/NAME.trials.dgz), newest
-# first.  JSON: [{name, subject, system, protocol, variant, n_trials, date,
-# time, timestamp, trials_size, has_obs}].  Read only: a SELECT and a stat
-# per row.
-proc list_trials_files {{limit 1000}} {
+# ----------------------------------------------------------------------------
+# dg_viewer's Sessions panel
+#
+# The obs file is the work directory's lasting copy of a session; its
+# trials file is deleted once converted and exported (above), so a viewer
+# asks for one to be extracted again (viewer_trials) and then reads it from
+# dserv's /data/trials/NAME.trials.dgz.
+# ----------------------------------------------------------------------------
+
+# Sessions a viewer can open: those whose obs file (or trials file) is in
+# the work directory, newest first.  JSON: [{name, subject, system,
+# protocol, variant, n_trials, date, time, timestamp, has_obs, has_trials,
+# trials_size}] (trials_size 0 without a trials file).  Read only: a
+# SELECT and two stats per row.
+proc list_sessions {{limit 1000}} {
     global df_work_dir
     if {![string is integer -strict $limit]} { set limit 1000 }
     set tdir [file join $df_work_dir trials]
@@ -1068,7 +1077,9 @@ proc list_trials_files {{limit 1000}} {
     } r {
         set name [file rootname [file tail $r(filename)]]
         set tf [file join $tdir $name.trials.dgz]
-        if {![file isfile $tf]} continue
+        set has_obs [file isfile [file join $odir $name.obs.dgz]]
+        set has_trials [file isfile $tf]
+        if {!$has_obs && !$has_trials} continue
         if {[incr n] > $limit} break
         $json map_open
         $json string name string $name
@@ -1077,14 +1088,63 @@ proc list_trials_files {{limit 1000}} {
         }
         $json string n_trials number [expr {$r(n_trials) ne "" ? $r(n_trials) : 0}]
         $json string timestamp number [expr {$r(timestamp) ne "" ? $r(timestamp) : 0}]
-        $json string trials_size number [file size $tf]
-        $json string has_obs bool [file isfile [file join $odir $name.obs.dgz]]
+        $json string has_obs bool $has_obs
+        $json string has_trials bool $has_trials
+        $json string trials_size number [expr {$has_trials ? [file size $tf] : 0}]
         $json map_close
     }
     $json array_close
     set result [$json get]
     $json delete
     return $result
+}
+
+# Make NAME's trials file for a viewer, then say so in the datapoint
+# df/viewer_trials/NAME: {"token":..,"status":"ok"|"error","error":..}.
+# Sent with sendNoReply, so the caller -- dserv's main interp, on behalf of
+# a page -- never waits on an extraction.  A trials file newer than its obs
+# file and its system's extractor is used as it is.  While an experiment
+# runs, nothing is extracted: the viewer is told to wait for it to stop.
+proc viewer_trials {name token} {
+    global df_work_dir
+    set dp df/viewer_trials/$name
+    set say {{status {msg ""}} {
+        upvar token token dp dp
+        set j [yajl create #auto]
+        $j map_open string token string $token string status string $status \
+            string error string $msg map_close
+        dservSet $dp [$j get]
+        $j delete
+    }}
+    if {![regexp {^[A-Za-z0-9][A-Za-z0-9._-]*$} $name]} {
+        apply $say error "bad session name"; return
+    }
+    set tf [file join $df_work_dir trials $name.trials.dgz]
+    set of [file join $df_work_dir obs $name.obs.dgz]
+    set row [dfdb eval {
+        SELECT system FROM datafiles WHERE filename = :name || '.ess'
+    }]
+    set system [lindex $row 0]
+    set extractor ""
+    catch { set extractor [file join [df::get_ess_root] $system ${system}_extract.tcl] }
+    if {[file isfile $tf]
+            && (![file isfile $of] || [file mtime $tf] >= [file mtime $of])
+            && ($extractor eq "" || ![file isfile $extractor]
+                || [file mtime $tf] >= [file mtime $extractor])} {
+        apply $say ok; return
+    }
+    if {![catch {dservGet ess/status} s] && $s eq "running"} {
+        apply $say error "an experiment is running: this session's trials\
+            are extracted once it stops"
+        return
+    }
+    if {[catch {reextract_trials $name.ess} r]} {
+        apply $say error $r; return
+    }
+    if {[dict get $r status] ne "ok"} {
+        apply $say error [dict get $r error]; return
+    }
+    apply $say ok
 }
 
 proc get_filter_options {} {
@@ -1537,6 +1597,31 @@ on the new column types. The .ess itself keeps full precision either
 way, so a file converted narrow can be re-converted wide later. Takes
 effect on the next conversion." \
     -apply {::apply_wide_datafiles}
+
+# Where dg_viewer's trial clips come from: a stim2 render server
+# (stim2's tools/render/render_server.tcl).  Nothing here uses it -- the
+# viewer reads it -- so it needs no -apply.
+proc ::df_norm_render_url {v} {
+    set v [string trim $v]
+    if { $v eq "" } { return "" }
+    if { ![regexp {^[a-zA-Z][a-zA-Z0-9+.-]*://} $v] } { set v "http://$v" }
+    set v [string trimright $v /]
+    if { ![regexp {^https?://[A-Za-z0-9.:\[\]-]+$} $v] } {
+        error "df render_url: '$v' -- give http://host:port, e.g.\
+ http://render-mac.local:8140"
+    }
+    return $v
+}
+
+settings::declare df render_url -default "" \
+    -validate ::df_norm_render_url \
+    -doc "the stim2 render server that dg_viewer plays trial clips
+from (stim2's tools/render/render_server.tcl, port 8140), e.g.
+http://render-mac.local:8140. Empty: the viewer tries port 8140 on
+this dserv's host. Set it when the render host is another machine --
+a Pi rig, whose dserv cannot render, served by a lab Mac running
+render_server.tcl -host 0.0.0.0 -dserv http://<this rig>:2565.
+A page's ?render=URL overrides it. Read when a viewer page opens."
 
 
 

@@ -7,7 +7,9 @@
 // seeks it.  The gaze is drawn here, over the video, from the trials DG's
 // em_h_deg / em_v_deg.
 //
-// The render server is ?render=URL, else this page's host on port 8140.
+// The render server is ?render=URL, else the dserv's `df render_url`
+// setting (a rig whose render host is another machine), else this page's
+// host on port 8140.
 // A trials DG row names its clip by `filename` and `obsid`.
 //
 // Time: the viewer's clock is App.pt, seconds from td.tStart (em_seconds,
@@ -33,7 +35,8 @@ const Stim2View = {
     if (this._probed) return this.available;     // once per page
     this._probed = true;
     const p = new URLSearchParams(window.location.search);
-    this.server = (p.get('render') || `${location.protocol}//${location.hostname}:8140`).replace(/\/+$/, '');
+    this.server = (p.get('render') || await this._rigServer()
+                   || `${location.protocol}//${location.hostname}:8140`).replace(/\/+$/, '');
     this._build();
     try {
       const r = await fetch(this.server + '/', { signal: AbortSignal.timeout(1500) });
@@ -43,6 +46,18 @@ const Stim2View = {
     }
     console.log(`stim2 render server ${this.server}: ${this.available ? 'available' : 'not answering'}`);
     return this.available;
+  },
+
+  // the rig's own say: dserv's `df render_url` setting, through the
+  // Sessions panel's connection ("" when unset, or a dserv without it)
+  async _rigServer() {
+    if (typeof SessionBrowser === 'undefined' || !SessionBrowser.ready) return '';
+    try {
+      if (!await SessionBrowser.ready) return '';
+      return (await SessionBrowser.conn.evalAsync('dservGet settings/df/render_url', 3000)).trim();
+    } catch (e) {
+      return '';
+    }
   },
 
   active() { return this.available && this.enabled && !this.noClip && this.app && this.app.isTrial; },
@@ -204,7 +219,12 @@ const Stim2View = {
     if (my !== this.waiting) return;
     try {
       const s = await (await fetch(this.server + '/status')).json();
-      if (my !== this.waiting || !s.rendering) return;
+      if (my !== this.waiting) return;
+      if (s.fetching && s.fetching.length && !s.rendering) {
+        this._status('copying the session from the rig…');
+        return;
+      }
+      if (!s.rendering) return;
       if (s.rendering.job.endsWith('/' + trial)) {
         this._status(`rendering trial ${trial}… ${Math.round(s.rendering.progress * 100)}%`);
       } else {

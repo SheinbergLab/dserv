@@ -1,10 +1,13 @@
 // session_browser.js — dg_viewer's list of the dserv host's sessions.
 //
-// The sessions come from dserv's df catalog (`list_trials_files`, only
-// those whose trials file is on disk); a session opens from dserv's
-// read-only /data/trials/NAME.trials.dgz.  Everything here is a read:
-// one catalog query when the panel opens or refreshes, one file fetch
-// per session opened.
+// The sessions come from dserv's df catalog (`list_sessions`: those whose
+// obs or trials file is in the work directory); a session opens from
+// dserv's read-only /data/trials/NAME.trials.dgz.  df deletes a trials
+// file once it is exported (the obs file is the lasting copy), so opening
+// a session without one first asks df to extract it (`viewer_trials`),
+// which df does only while no experiment runs.  Otherwise everything here
+// is a read: one catalog query when the panel opens or refreshes, one file
+// fetch per session opened.
 //
 // The dserv is this page's own host, else ?host=HOST:PORT (and ?ssl=1),
 // as for dserv's other pages.  Without one answering, the panel is not
@@ -20,7 +23,13 @@ const SessionBrowser = {
   current: null,       // name of the session shown
   el: null,
 
-  async init(app) {
+  // ready: the connection attempt, for others that ask dserv (Stim2View)
+  init(app) {
+    this.ready = this._init(app);
+    return this.ready;
+  },
+
+  async _init(app) {
     this.app = app;
     const p = new URLSearchParams(window.location.search);
     this.host = p.get('host') || window.location.host;
@@ -93,13 +102,13 @@ const SessionBrowser = {
     foot.textContent = `asking ${this.host}…`;
     try {
       if (!this.conn.connected) await this.conn.connect();   // it may have dropped since
-      const r = await this.conn.evalAsync('send df {list_trials_files}', 15000);
+      const r = await this.conn.evalAsync('send df {list_sessions}', 15000);
       this.sessions = JSON.parse(r);
       foot.textContent = '';
     } catch (e) {
       this.sessions = [];
       foot.textContent = /invalid command name/.test(e.message)
-        ? `${this.host}'s dserv has no list_trials_files: it needs the current config/dfconf.tcl`
+        ? `${this.host}'s dserv has no list_sessions: it needs the current config/dfconf.tcl`
         : `could not list sessions: ${e.message}`;
     }
     this._fillSelect('spSubject', 'subject', 'all subjects');
@@ -145,7 +154,8 @@ const SessionBrowser = {
         `<span class="sp-subj">${esc(s.subject)}</span>` +
         `<span class="sp-exp">${esc(s.system)}<i>/</i>${esc(s.protocol)}<i>/</i>${esc(s.variant)}</span>` +
         `<span class="sp-n">${s.n_trials} trials</span>` +
-        `<span class="sp-size">${(s.trials_size / 1048576).toFixed(1)} MB</span>`;
+        `<span class="sp-size">${s.has_trials ? (s.trials_size / 1048576).toFixed(1) + ' MB' : ''}</span>`;
+      if (!s.has_obs) r.title += ' (no obs file here: no stim2 clips)';
       r.addEventListener('click', () => this.open(s.name));
       list.appendChild(r);
     }
@@ -155,9 +165,17 @@ const SessionBrowser = {
 
   async open(name) {
     const url = this.dataUrl(name);
-    this.el.querySelector('#spFoot').textContent = `loading ${name}…`;
+    const foot = this.el.querySelector('#spFoot');
+    const s = this.sessions.find(x => x.name === name);
+    if (s && !s.has_trials) {
+      foot.textContent = `extracting ${name}'s trials…`;
+      const err = await this._extract(name);
+      if (err) { foot.textContent = `${name}: ${err}`; return; }
+      s.has_trials = true;
+    }
+    foot.textContent = `loading ${name}…`;
     const ok = await this.app.loadURL(url);
-    if (!ok) { this.el.querySelector('#spFoot').textContent = `could not load ${name}`; return; }
+    if (!ok) { foot.textContent = `could not load ${name}`; return; }
     this.current = name;
     this.el.querySelector('#spFoot').textContent = '';
     // the address names the session: reload or share it
@@ -165,6 +183,33 @@ const SessionBrowser = {
     p.set('file', url);
     history.replaceState(null, '', `${location.pathname}?${p.toString().replace(/%2F/g, '/').replace(/%3A/g, ':')}`);
     this.el.classList.remove('open');
+  },
+
+  // The trials file is made in df, which says when in the datapoint
+  // df/viewer_trials/NAME; sendNoReply, so dserv's main interp does not
+  // wait on the extraction (its other pages would wait with it).  "" when
+  // done, else why not.
+  async _extract(name) {
+    const token = Math.random().toString(36).slice(2, 10);
+    try {
+      if (!this.conn.connected) await this.conn.connect();
+      await this.conn.evalAsync(`sendNoReply df {viewer_trials ${name} ${token}}`, 5000);
+    } catch (e) {
+      return /invalid command name/.test(e.message)
+        ? `this dserv cannot extract trials for the viewer (it needs the current config/dfconf.tcl)`
+        : e.message;
+    }
+    const until = Date.now() + 180000;
+    while (Date.now() < until) {
+      await new Promise(r => setTimeout(r, 300));
+      let v;
+      try {
+        v = JSON.parse(await this.conn.evalAsync(`dservGet df/viewer_trials/${name}`, 5000));
+      } catch (e) { continue; }                    // not there yet
+      if (v.token !== token) continue;              // an earlier answer
+      return v.status === 'ok' ? '' : (v.error || 'extraction failed');
+    }
+    return 'no answer from df after 3 minutes';
   },
 };
 
