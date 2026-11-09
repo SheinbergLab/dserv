@@ -182,12 +182,21 @@ const Stim2View = {
       return;
     }
     this.timing = j.timing;
-    const zeroMs = (this.app.hasEye && j.timing.em_zero_ms != null) ? j.timing.em_zero_ms : j.timing.obs_begin_ms;
-    this.zero = zeroMs / 1000 - (this.app.td ? this.app.td.tStart : 0);
-    if (!this.app.hasEye && this.app.td) {
-      // no em_seconds: the trial is BEGINOBS to ENDOBS
-      const td = this.app.td;
-      td.tStart = 0; td.dur = td.tEnd = (j.timing.obs_end_ms - j.timing.obs_begin_ms) / 1000;
+    // The clip is timed by the rig's frames; the trials DG only places the
+    // viewer's clock on it.  The trial runs BEGINOBS to ENDOBS whatever the
+    // eye record covers, so the clip always plays to its end.
+    const td = this.app.td;
+    const obsDur = (j.timing.obs_end_ms - j.timing.obs_begin_ms) / 1000;
+    const eyeTimed = this.app.hasEye && td && td.eyeT && td.eyeT.length > 1 && j.timing.em_zero_ms != null;
+    if (eyeTimed) {
+      // em_seconds: 0 at the period's first eye record (em_zero_ms)
+      this.zero = j.timing.em_zero_ms / 1000 - td.tStart;
+      const end = (j.timing.obs_end_ms - j.timing.em_zero_ms) / 1000;
+      if (end > td.tEnd) { td.tEnd = end; td.dur = td.tEnd - td.tStart; this.app.renderTrial(); }
+    } else if (td) {
+      // no eye times (no eye data, or positions without em_seconds, as from
+      // a virtual eye's eyetracking/raw alone): obs time, BEGINOBS = 0
+      td.tStart = 0; td.dur = td.tEnd = obsDur;
       this.zero = j.timing.obs_begin_ms / 1000;
       this.app.renderTrial();
     }
