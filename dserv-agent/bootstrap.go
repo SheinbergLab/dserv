@@ -41,7 +41,9 @@ type BootstrapProfile struct {
 	// launcher instead. "mirror" means a live mirror of another rig's display:
 	// stim2.service disabled, the mirror's two units (stim2's
 	// tools/mirror/systemd) in its place, following the rig named by
-	// ?mirror=HOST. Empty means the cage default, fullscreen via systemd.
+	// ?mirror=HOST. "headless" means stim2 is there to render trial clips
+	// (a server): stim2.service disabled, nothing in its place. Empty means
+	// the cage default, fullscreen via systemd.
 	StimMode string `json:"stimMode,omitempty"`
 }
 
@@ -60,6 +62,12 @@ type BootstrapConfig struct {
 	StimMode         string // "" = cage default (fullscreen service); "windowed" = dev
 	TimeRole         string // ?time_role= seed for TIME_ROLE; whitelist-validated
 	MirrorRig        string // ?mirror= seed for MIRROR_RIG (a host); validated
+
+	// With is the optional add-ons this run opts the box into (?with=, plus
+	// any optional component a ?components= list names), space-separated,
+	// ids validated against the roster. The install loop installs these;
+	// other optional add-ons ride in the roster for the panel to offer.
+	With string
 
 	// ExplicitComponents is the raw ?components= list, empty when provisioning
 	// by profile. The script forwards it on the sudo re-fetch, which used to
@@ -146,15 +154,77 @@ var defaultProfiles = []BootstrapProfile{
 		StimMode:    "mirror",
 	},
 	{
+		// A data server shows no stimulus, but it is where the trial viewer
+		// is opened, so it carries stim2 and the dlsh interpreter for
+		// rendering trial clips: installed, never run as a display
+		// (StimMode "headless" keeps stim2.service off). Rendering itself
+		// is the optional stim2-render add-on -- ?with=stim2-render, or the
+		// panel.
 		Name:        "server",
-		Description: "Data server only (dserv + dlsh, no stimulus)",
-		Components:  []string{"dserv", "dlsh"},
+		Description: "Data server (dserv + dlsh; stim2 installed for trial clips, no display)",
+		Components:  []string{"dserv", "dlsh", "stim2", "dlsh-interp"},
+		StimMode:    "headless",
 	},
 	{
 		Name:        "minimal",
 		Description: "Minimal install (dserv + dlsh, agent only)",
 		Components:  []string{"dserv", "dlsh"},
 	},
+}
+
+// parseWith reads ?with=ID[,ID]: component ids, each one in the roster.
+func (a *Agent) parseWith(raw string) ([]string, error) {
+	var ids []string
+	seen := map[string]bool{}
+	for _, id := range strings.Split(raw, ",") {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			continue
+		}
+		known := false
+		for _, c := range a.components {
+			if c.ID == id {
+				known = true
+				break
+			}
+		}
+		if !known {
+			return nil, fmt.Errorf("invalid with: no component %q", id)
+		}
+		seen[id] = true
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
+// applyWith adds the ?with= components, and what they depend on, to a
+// resolved set, and returns the set with the optional add-ons the install
+// should opt into: those named in ?with=, and -- for an explicit
+// ?components= list, where naming an optional component is the opt-in --
+// the optional ones the list holds. Profile add-ons that merely ride along
+// for the panel to offer stay out of it.
+func (a *Agent) applyWith(components []Component, with []string, explicit bool) ([]Component, []string) {
+	if len(with) > 0 {
+		wanted := make(map[string]bool, len(components)+len(with))
+		for _, c := range components {
+			wanted[c.ID] = true
+		}
+		for _, id := range with {
+			wanted[id] = true
+		}
+		components = a.resolveWithDeps(wanted)
+	}
+	optIn := map[string]bool{}
+	for _, id := range with {
+		optIn[id] = true
+	}
+	var addons []string
+	for _, c := range components {
+		if c.Optional && (optIn[c.ID] || explicit) {
+			addons = append(addons, c.ID)
+		}
+	}
+	return components, addons
 }
 
 // profileStimMode reports how this profile wants the display program to run.
@@ -287,6 +357,10 @@ STIM_MODE="{{.StimMode}}"
 # which otherwise carries only ?profile= and loses the list.
 COMPONENTS_ARG="{{.ExplicitComponents}}"
 
+# Optional add-ons this run installs (?with=, or named in ?components=),
+# space-separated. Others ride in the roster for the panel to offer.
+WITH_ADDONS="{{.With}}"
+
 # Units owned by components this profile deliberately excludes, resolved by
 # the registry. step_retire_services turns these OFF if it finds them; empty
 # for ?components= runs. See that step for why.
@@ -404,8 +478,11 @@ while [[ $# -gt 0 ]]; do
             echo "  dev       Development box (all components; stim2 windowed)"
             echo "  stim      Display box only (stim2 + dlsh, no dserv)"
             echo "  mirror    Live mirror of a rig's display (?mirror=RIG; amd64)"
-            echo "  server    Data server only (no stimulus)"
+            echo "  server    Data server (stim2 installed for trial clips, no display)"
             echo "  minimal   Minimal install (dserv + dlsh)"
+            echo ""
+            echo "Add-ons (set via URL, e.g. /setup?profile=server&with=stim2-render):"
+            echo "  stim2-render  Trial clips for the trial viewer (needs dserv + stim2)"
             exit 0
             ;;
         *) echo "Unknown option: $1"; exit 1 ;;
@@ -650,11 +727,20 @@ profile_services() {
     # the X server on vt1. Its two units take stim2's place in the list, so
     # the start step enables and verifies them and the agent manages the
     # display as the box's primary service.
-    if [[ "$STIM_MODE" == "windowed" || "$STIM_MODE" == "mirror" ]]; then
+    #
+    # A headless box (a server) has stim2 only to render trial clips: its
+    # display unit never runs there.
+    #
+    # Optional add-ons are left out too. They ride in the roster whether or
+    # not the box opted in, and their packages enable their own units on
+    # install (stim2-render) -- enabling one here would turn an add-on on for
+    # every box that merely could have it, and re-enable one an admin turned
+    # off.
+    if [[ "$STIM_MODE" == "windowed" || "$STIM_MODE" == "mirror" || "$STIM_MODE" == "headless" ]]; then
         exclude="${exclude}|${STIM_COMPONENT_ID}"
     fi
     echo "$COMPONENTS_JSON" | jq -r --arg ex "$exclude" \
-        '.components[] | select(.id | test("^(" + $ex + ")$") | not) | .service // empty'
+        '.components[] | select(.optional != true) | select(.id | test("^(" + $ex + ")$") | not) | .service // empty'
     if [[ "$STIM_MODE" == "mirror" ]]; then
         echo "$MIRROR_DISPLAY_SVC"
         echo "$MIRROR_DRIVER_SVC"
@@ -784,6 +870,7 @@ check_root() {
             # typed.
             local refetch="${REGISTRY_URL}/setup?profile=${PROFILE}"
             [[ -n "$COMPONENTS_ARG" ]] && refetch="${REGISTRY_URL}/setup?components=${COMPONENTS_ARG}"
+            [[ -n "$WITH_ADDONS" ]] && refetch="${refetch}&with=${WITH_ADDONS// /,}"
             local script=""
             script=$(curl -fsSL "$refetch") || script=""
             if [[ -z "$script" || "${script:0:2}" != '#!' ]]; then
@@ -1033,6 +1120,20 @@ step_prerequisites() {
     ok "Prerequisites"
 }
 
+# Optional add-ons ride in the roster for the panel to offer, but a profile
+# install never opts a box in unless ?with= names one. A box that DID opt in
+# earlier has a version, and updates like anything else -- which is also how
+# a re-run without ?with= keeps an add-on.
+skip_addon() {
+    local comp_json="$1" comp_id
+    [[ $(echo "$comp_json" | jq -r '.optional // false') == "true" ]] || return 1
+    comp_id=$(echo "$comp_json" | jq -r '.id')
+    [[ " $WITH_ADDONS " == *" $comp_id "* ]] && return 1
+    [[ -n $(installed_version "$comp_json") ]] && return 1
+    info "${comp_id}: optional add-on -- skipping (opt in from the agent panel, or ?with=${comp_id})"
+    return 0
+}
+
 step_install_components() {
     local count=$(echo "$COMPONENTS_JSON" | jq '.components | length')
     local names=$(echo "$COMPONENTS_JSON" | jq -r '[.components[].name] | join(", ")')
@@ -1077,12 +1178,8 @@ step_install_components() {
                     # Already handled by step_install_agent. Counted as installed
                     # so the tally is honest and anything depending on it resolves.
                     installed+=("$comp_id")
-                elif [[ $(echo "$comp_json" | jq -r '.optional // false') == "true" ]] \
-                     && [[ -z $(installed_version "$comp_json") ]]; then
-                    # Optional add-ons ride in the roster for the panel to offer,
-                    # but a profile install never opts a box in. A box that DID
-                    # opt in earlier has a version, and updates like anything else.
-                    info "${comp_id}: optional add-on -- skipping (opt in from the agent panel)"
+                elif skip_addon "$comp_json"; then
+                    :
                 else
                     install_component "$comp_json" && installed+=("$comp_id") || warn "Failed: ${comp_id}"
                 fi
@@ -1101,11 +1198,7 @@ step_install_components() {
                 local comp_json=$(echo "$COMPONENTS_JSON" | jq ".components[$i]")
                 local comp_id=$(echo "$comp_json" | jq -r '.id')
                 [[ "$comp_id" == "$AGENT_COMPONENT_ID" ]] && { installed+=("$comp_id"); continue; }
-                if [[ $(echo "$comp_json" | jq -r '.optional // false') == "true" ]] \
-                   && [[ -z $(installed_version "$comp_json") ]]; then
-                    info "${comp_id}: optional add-on -- skipping (opt in from the agent panel)"
-                    continue
-                fi
+                skip_addon "$comp_json" && continue
                 install_component "$comp_json" && installed+=("$comp_id") || warn "Failed: ${comp_id}"
             done
             break
@@ -1355,6 +1448,23 @@ check_mirror() {
         fail "--mirror wants a host name or address, not '${MIRROR_RIG}'"
     fi
     ok "Mirror of ${MIRROR_RIG}"
+}
+
+# A headless box (the server profile) has stim2 to render trial clips and
+# never as a display: a box retyped to one from incage or dev must not keep
+# stim2.service, which would take vt1 with an X server or cage of its own.
+step_stim_headless() {
+    [[ "$STIM_MODE" == "headless" ]] || return 0
+    local stim_svc
+    stim_svc=$(echo "$COMPONENTS_JSON" | jq -r --arg id "$STIM_COMPONENT_ID" \
+        '.components[] | select(.id == $id) | .service // empty')
+    [[ -n "$stim_svc" ]] || return 0
+    if systemctl is-enabled "$stim_svc" &>/dev/null || \
+       systemctl is-active --quiet "$stim_svc" 2>/dev/null; then
+        warn "Disabling ${stim_svc}: a ${PROFILE} box has stim2 for trial clips, not as a display"
+        run systemctl disable --now "$stim_svc" || \
+            warn "  could not disable ${stim_svc}; do it by hand: systemctl disable --now ${stim_svc}"
+    fi
 }
 
 step_stim_mirror() {
@@ -1815,7 +1925,8 @@ step_record_identity() {
 #
 # stim_mode "" = cage default (stim2.service fullscreen on its own X server);
 # "windowed" = development launcher, fullscreen unit disabled;
-# "mirror" = live mirror of the rig in mirror=, stim2.service disabled.
+# "mirror" = live mirror of the rig in mirror=, stim2.service disabled;
+# "headless" = stim2 for trial clips only (server), stim2.service disabled.
 profile=${PROFILE}
 stim_mode=${STIM_MODE}
 components=${installed_components}
@@ -2089,6 +2200,7 @@ main() {
     step_install_components
     step_stim_launcher
     step_stim_mirror
+    step_stim_headless
     step_configure_dserv
     # Soft: refreshing ESS scripts is a convenience, and it sits upstream of
     # every step that makes the box registrable. Scripts are recoverable from
@@ -2197,6 +2309,15 @@ func (a *Agent) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// ?with=ID[,ID]: optional add-ons to install now (stim2-render), with
+	// whatever they depend on. Ids land in the script unquoted, so they are
+	// checked against the roster before anything else.
+	with, err := a.parseWith(r.URL.Query().Get("with"))
+	if err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+
 	// Filter components based on profile or explicit list
 	components := a.filterComponents(profileName, explicitComponents)
 
@@ -2228,6 +2349,8 @@ func (a *Agent) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+
+	components, with = a.applyWith(components, with, explicitComponents != "")
 
 	// An explicit ?components= list is not a profile. Without this the banner,
 	// the recorded identity, and the sudo re-fetch all claim "incage" for a
@@ -2280,6 +2403,7 @@ func (a *Agent) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 		StimMode:         a.profileStimMode(profileName),
 		TimeRole:         timeRole,
 		MirrorRig:        mirrorRig,
+		With:             strings.Join(with, " "),
 
 		ExplicitComponents: explicitComponents,
 		RetireServices:     strings.Join(retire, " "),
