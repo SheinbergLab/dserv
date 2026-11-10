@@ -214,6 +214,7 @@ type BoxIdentity struct {
 	Registry    string `json:"registry,omitempty"`
 	Role        string `json:"role,omitempty"`
 	TimeRole    string `json:"timeRole,omitempty"` // declared, with argument: "client eth0"
+	Mirror      string `json:"mirror,omitempty"`   // stim_mode "mirror": the rig whose display it shows
 	Provisioned string `json:"provisioned,omitempty"`
 }
 
@@ -1539,6 +1540,8 @@ func readBoxIdentity(path string) *BoxIdentity {
 			id.Role = val
 		case "time_role":
 			id.TimeRole = val
+		case "mirror":
+			id.Mirror = val
 		case "provisioned":
 			id.Provisioned = val
 		default:
@@ -1997,7 +2000,8 @@ func (a *Agent) loadComponents() {
 			Components []Component `json:"components"`
 		}
 		if json.Unmarshal(data, &fileCfg) == nil {
-			a.components = fileCfg.Components
+			embedded := a.components
+			a.components = mergeEmbeddedAddons(fileCfg.Components, embedded)
 			log.Printf("Loaded components from %s", a.cfg.ComponentsFile)
 		}
 	}
@@ -2031,6 +2035,37 @@ func (a *Agent) loadComponents() {
 			log.Printf("Component %s: hardware detected", comp.ID)
 		}
 	}
+}
+
+// mergeEmbeddedAddons adds to a box's roster (written by the setup script)
+// the optional add-ons this agent knows of that the roster lacks, when
+// everything they depend on is in it -- the rule the setup script's roster
+// follows (handleBootstrap). Without it, an add-on released after a box was
+// provisioned (stim2-render) reached the panel only by re-running setup;
+// with it, updating the agent is enough. Nothing else in the roster
+// changes: it describes what this box is.
+func mergeEmbeddedAddons(roster, embedded []Component) []Component {
+	have := make(map[string]bool, len(roster))
+	for _, c := range roster {
+		have[c.ID] = true
+	}
+	for _, c := range embedded {
+		if !c.Optional || have[c.ID] {
+			continue
+		}
+		eligible := true
+		for _, dep := range c.Depends {
+			if !have[dep] {
+				eligible = false
+				break
+			}
+		}
+		if eligible {
+			roster = append(roster, c)
+			have[c.ID] = true
+		}
+	}
+	return roster
 }
 
 // nonOptional filters the roster down to what profiles install: components

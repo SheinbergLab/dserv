@@ -61,6 +61,17 @@
       "depends": ["dserv"],
       "optional": true,
       "detectCmd": ["sh", "-c", "cat /sys/bus/i2c/devices/*/name 2>/dev/null | grep -qiE '^(imx|ov|arducam)'"]
+    },
+    {
+      "id": "stim2-render",
+      "name": "stim2 render",
+      "description": "Trial clips for the trial viewer: turns on the stim2-render service (port 8140), which pauses while an experiment runs",
+      "repo": "SheinbergLab/stim2",
+      "package": "stim2-render",
+      "service": "stim2-render",
+      "assetPattern": "^stim2-render_.*_all\\.deb$",
+      "depends": ["dserv", "stim2", "dlsh-interp"],
+      "optional": true
     }
   ]
 }

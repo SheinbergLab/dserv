@@ -1025,7 +1025,7 @@ body.solo .agent-panel {
 	 // Existing boxes may still have the old components.json order until
 	 // reprovisioned, so this sort is the source of truth for the panel.
 	 sortComponentsForDisplay(comps) {
-             const order = ['dlsh', 'dserv', 'stim2', 'dserv-agent'];
+             const order = ['dlsh', 'dlsh-interp', 'dserv', 'stim2', 'stim2-render', 'dserv-agent'];
              return [...comps].sort((a, b) => {
 		 const idA = (a.component || a).id;
 		 const idB = (b.component || b).id;
@@ -1398,6 +1398,14 @@ body.solo .agent-panel {
              const hasService = !!c.service;
              const serviceStatus = services[c.service] || 'unknown';
              const deps = c.depends || [];
+             // A first install of a component whose dependencies are not
+             // installed would fail in apt (stim2-render Depends on stim2 and
+             // dlsh-interp, which come from GitHub, not an apt mirror): say
+             // what to install first instead of offering the button.
+             const missingDeps = inst ? [] : deps.filter(d => {
+		 const e = (this.panelComponents || []).find(x => (x.component || x).id === d);
+		 return !(e && e.installed);
+             });
              const graph = this.buildDependencyGraph();
              const dependents = graph.dependents[c.id] || [];
              const isSharedDep = dependents.length > 0;
@@ -1473,6 +1481,8 @@ body.solo .agent-panel {
 			  ? (migrating
 			     ? `<span class="follows-note" style="color:#fbbf24" title="The deferred agent migration is scheduled and fires ~20s after the ${this.esc(leaderName)} install; the agent restarts and this panel reconnects on its own. Pressing Update now would race it for the dpkg lock.">updating with ${this.esc(leaderName)} now…</span>`
 			     : `<span class="follows-note" title="A ${this.esc(leaderName)} install schedules the agent migration moments later; this package updates on its own. Update ${this.esc(leaderName)} and this follows.">updates with ${this.esc(leaderName)}</span>`)
+			  : missingDeps.length
+			  ? `<span class="follows-note" title="A fresh install needs what this one depends on already here: the agent installs one package at a time and apt cannot fetch these from GitHub on its own.">install ${this.esc(missingDeps.join(', '))} first</span>`
 			  : `${assets}
                         <button class="component-btn ${hasUpd?'update':''}" onclick="app.install('${c.id}')" ${!comp.assets?.length?'disabled':''}>${btn}</button>`}
                     </div>
