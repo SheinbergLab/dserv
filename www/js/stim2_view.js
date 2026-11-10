@@ -35,8 +35,11 @@ const Stim2View = {
     if (this._probed) return this.available;     // once per page
     this._probed = true;
     const p = new URLSearchParams(window.location.search);
+    // the default is http whatever the page: the render server has no TLS.
+    // An https page may still reach it on localhost (browsers trust http
+    // there); elsewhere, df render_url or ?render= names one it can reach
     this.server = (p.get('render') || await this._rigServer()
-                   || `${location.protocol}//${location.hostname}:8140`).replace(/\/+$/, '');
+                   || `http://${location.hostname}:8140`).replace(/\/+$/, '');
     this._build();
     try {
       const r = await fetch(this.server + '/', { signal: AbortSignal.timeout(1500) });
@@ -138,6 +141,7 @@ const Stim2View = {
     this.loading = true;      // playback waits for the clip meanwhile
     this.video.pause();
     this.video.removeAttribute('src'); this.video.load();
+    if (this._blob) { URL.revokeObjectURL(this._blob); this._blob = null; }
     this.draw();
     const dg = this.app.dg;
     let fn = getScalar(dg, 'filename', i), obsid = getScalar(dg, 'obsid', i);
@@ -201,8 +205,25 @@ const Stim2View = {
       this.app.renderTrial();
     }
     this._status(j.cached ? '' : 'loading…');
+    let src = this.server + j.clip;
+    if (location.protocol === 'https:' && src.startsWith('http:')) {
+      // An https page's <video> asks for an http clip over https (browsers
+      // upgrade mixed-content media), which the render server does not
+      // speak; fetch() is not upgraded, so fetch the clip and play it from
+      // memory.  Clips are a few MB at most.
+      try {
+        const b = await (await fetch(src)).blob();
+        if (my !== this.req) return;
+        src = this._blob = URL.createObjectURL(b);
+      } catch (e) {
+        if (my !== this.req) return;
+        this.loading = false;
+        this._status(`the clip did not load (${src}): ${e.message}`);
+        return;
+      }
+    }
     this.video.playbackRate = this.app.speed || 1;
-    this.video.src = this.server + j.clip;
+    this.video.src = src;
     // ready once the duration is known: Safari may load no picture until
     // something seeks or plays, which is what comes next
     const ok = await new Promise(res => {
