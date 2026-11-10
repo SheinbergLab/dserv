@@ -10,6 +10,19 @@
       "versionFile": "/usr/local/dlsh/VERSION"
     },
     {
+      "id": "dlsh-interp",
+      "name": "dlsh interpreter",
+      "description": "Standalone dlsh (runs replay and the stim2-render service)",
+      "repo": "SheinbergLab/dlsh",
+      "package": "dlsh-interp",
+      "assetPattern": "dlsh-interp_.*\\.deb$",
+      "depends": ["dlsh"],
+      "postInstall": [
+        "dpkg-query -W -f='${Version}\\n' dlsh-interp > /usr/local/dlsh/VERSION",
+        "systemctl try-restart stim2-render"
+      ]
+    },
+    {
       "id": "dserv",
       "name": "dserv",
       "description": "Data server and experiment control backend",
