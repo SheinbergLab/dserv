@@ -652,8 +652,8 @@ void TclServer::start_websocket_server(void)
   } else {
     std::cout << "SSL certificates not found - starting HTTP/WS server on port " 
               << websocket_port() << std::endl;
-    std::cout << "(To enable HTTPS, place cert.pem and key.pem in /etc/dserv/ssl/)" 
-              << std::endl;
+    std::cout << "(To enable HTTPS, place " << cert_path << " and "
+              << key_path << ")" << std::endl;
   }
 
   ds->set((char *)"system/ssl", (char *)(use_ssl ? "1" : "0"));
