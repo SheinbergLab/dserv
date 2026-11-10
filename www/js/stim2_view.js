@@ -9,7 +9,10 @@
 //
 // The render server is ?render=URL, else the dserv's `df render_url`
 // setting (a rig whose render host is another machine), else this page's
-// host on port 8140.
+// host on port 8140: https there when this page is https (a render server
+// run with -cert/-key), falling back to http.  Safari will not let an https
+// page use an http server at all, even on localhost, so with Safari an
+// https dserv needs an https render server.
 // A trials DG row names its clip by `filename` and `obsid`.
 //
 // Time: the viewer's clock is App.pt, seconds from td.tStart (em_seconds,
@@ -35,19 +38,32 @@ const Stim2View = {
     if (this._probed) return this.available;     // once per page
     this._probed = true;
     const p = new URLSearchParams(window.location.search);
-    // the default is http whatever the page: the render server has no TLS.
-    // An https page may still reach it on localhost (browsers trust http
-    // there); elsewhere, df render_url or ?render= names one it can reach
-    this.server = (p.get('render') || await this._rigServer()
-                   || `http://${location.hostname}:8140`).replace(/\/+$/, '');
+    // A named server is used as named.  Otherwise port 8140 of this host,
+    // in this page's scheme first: an https page tries https (a render
+    // server with -cert/-key), then http, which Chrome allows from an https
+    // page on localhost only (clips then come through _blob, below) and
+    // Safari never does.
+    const named = p.get('render') || await this._rigServer();
+    const here = location.hostname;
+    const tries = named ? [named]
+                : location.protocol === 'https:' ? [`https://${here}:8140`, `http://${here}:8140`]
+                : [`http://${here}:8140`];
     this._build();
-    try {
-      const r = await fetch(this.server + '/', { signal: AbortSignal.timeout(1500) });
-      this.available = r.ok;
-    } catch (e) {
-      this.available = false;
+    this.available = false;
+    for (const t of tries) {
+      this.server = t.replace(/\/+$/, '');
+      try {
+        const r = await fetch(this.server + '/', { signal: AbortSignal.timeout(1500) });
+        this.available = r.ok;
+      } catch (e) {
+        this.available = false;
+      }
+      if (this.available) break;
     }
-    console.log(`stim2 render server ${this.server}: ${this.available ? 'available' : 'not answering'}`);
+    if (!this.available) this.server = tries[0].replace(/\/+$/, '');
+    console.log(`stim2 render server ${this.server}: ${this.available ? 'available' : 'not answering'}` +
+                (!this.available && location.protocol === 'https:' && this.server.startsWith('http:')
+                 ? ' (an http server from an https page: Safari blocks this; run the render server with -cert/-key)' : ''));
     return this.available;
   },
 
@@ -207,10 +223,11 @@ const Stim2View = {
     this._status(j.cached ? '' : 'loading…');
     let src = this.server + j.clip;
     if (location.protocol === 'https:' && src.startsWith('http:')) {
-      // An https page's <video> asks for an http clip over https (browsers
-      // upgrade mixed-content media), which the render server does not
-      // speak; fetch() is not upgraded, so fetch the clip and play it from
-      // memory.  Clips are a few MB at most.
+      // An http render server from an https page (Chrome, localhost only):
+      // the <video> would ask for the clip over https (browsers upgrade
+      // mixed-content media), which an http server does not speak; fetch()
+      // is not upgraded, so fetch the clip and play it from memory.  Clips
+      // are a few MB at most.  An https server needs none of this.
       try {
         const b = await (await fetch(src)).blob();
         if (my !== this.req) return;
