@@ -323,6 +323,12 @@ func fleetTableHTML(nodes []*MeshNode, reports []*BoxReport) (string, int) {
 				if r.Box.StimMode == "windowed" {
 					identity += " · windowed"
 				}
+				if r.Box.StimMode == "mirror" {
+					identity += " · mirror"
+					if r.Box.Mirror != "" {
+						identity += " of " + html.EscapeString(r.Box.Mirror)
+					}
+				}
 				if r.Box.Role != "" {
 					identity += fmt.Sprintf(` · <span style="color:#fbbf24">%s</span>`, html.EscapeString(r.Box.Role))
 				}

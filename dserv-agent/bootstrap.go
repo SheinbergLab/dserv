@@ -18,10 +18,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 	"runtime"
 	"strings"
 	"text/template"
 )
+
+// mirrorRigRe: a host name, IPv4 address or host:port for ?mirror= -- it is
+// interpolated into the script, so nothing that could quote or expand.
+var mirrorRigRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.:-]{0,252}$`)
 
 // BootstrapProfile defines a named set of components to install
 type BootstrapProfile struct {
@@ -33,7 +38,10 @@ type BootstrapProfile struct {
 	// components get installed -- the first thing a profile has needed to say
 	// that is not a component list. "windowed" means a desktop development box:
 	// leave the cage unit (own X server on tty1) disabled and install a
-	// launcher instead. Empty means the cage default, fullscreen via systemd.
+	// launcher instead. "mirror" means a live mirror of another rig's display:
+	// stim2.service disabled, the mirror's two units (stim2's
+	// tools/mirror/systemd) in its place, following the rig named by
+	// ?mirror=HOST. Empty means the cage default, fullscreen via systemd.
 	StimMode string `json:"stimMode,omitempty"`
 }
 
@@ -51,6 +59,7 @@ type BootstrapConfig struct {
 	ProfileName      string
 	StimMode         string // "" = cage default (fullscreen service); "windowed" = dev
 	TimeRole         string // ?time_role= seed for TIME_ROLE; whitelist-validated
+	MirrorRig        string // ?mirror= seed for MIRROR_RIG (a host); validated
 
 	// ExplicitComponents is the raw ?components= list, empty when provisioning
 	// by profile. The script forwards it on the sudo re-fetch, which used to
@@ -124,6 +133,17 @@ var defaultProfiles = []BootstrapProfile{
 		Name:        "stim",
 		Description: "Display box only (stim2 + dlsh, no dserv)",
 		Components:  []string{"stim2", "dlsh"},
+	},
+	{
+		// A second screen showing a rig's display live, drawn by a stim2 of
+		// its own from the rig's stim/frame stream. The rig is not a
+		// component: it comes from ?mirror=HOST (or --mirror), and a re-run
+		// without one keeps the rig the box already follows. amd64 only for
+		// now -- the mirror's display unit is the X11 flavor.
+		Name:        "mirror",
+		Description: "Live mirror of a rig's display (stim2 + dlsh interpreter; amd64; ?mirror=RIG)",
+		Components:  []string{"stim2", "dlsh", "dlsh-interp"},
+		StimMode:    "mirror",
 	},
 	{
 		Name:        "server",
@@ -297,6 +317,11 @@ ROLE=""
 # against a strict whitelist before it lands here; --time-role below still
 # overrides, and "none" clears a declaration.
 TIME_ROLE="{{.TimeRole}}"
+# The rig a mirror box shows (stim_mode "mirror"): its dserv host. Seeded from
+# ?mirror= (validated by the registry); --mirror overrides; a re-run without
+# either keeps the rig the box already follows (box.conf, else
+# /etc/default/stim2-mirror).
+MIRROR_RIG="{{.MirrorRig}}"
 WORKGROUP="${DEFAULT_WORKGROUP}"
 WORKGROUP_EXPLICIT=false
 SYSTEMS_PATH=""
@@ -312,6 +337,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --role)        ROLE="$2"; shift 2 ;;
         --time-role)   TIME_ROLE="$2"; shift 2 ;;
+        --mirror)      MIRROR_RIG="$2"; shift 2 ;;
         --workgroup)   WORKGROUP="$2"; WORKGROUP_EXPLICIT=true; shift 2 ;;
         --systems-path) SYSTEMS_PATH="$2"; SYSTEMS_PATH_EXPLICIT=true; shift 2 ;;
         --user)        ESS_USER_ARG="$2"; shift 2 ;;
@@ -338,6 +364,9 @@ while [[ $# -gt 0 ]]; do
             echo "                       \"grandmaster IFACE\" | \"client IFACE\" |"
             echo "                       \"ntp-client SERVER\" (quote role+arg together;"
             echo "                       re-runs preserve it; \"none\" clears it)"
+            echo "  --mirror HOST        mirror profile: the rig (its dserv host) whose"
+            echo "                       display this box shows (also ?mirror=HOST;"
+            echo "                       re-runs keep the rig already set)"
             echo "  --workgroup NAME     Workgroup name (default: ${DEFAULT_WORKGROUP})."
             echo "                       Given explicitly, it is DECLARED on the box"
             echo "                       (local/rig.tcl), updating any earlier answer."
@@ -372,6 +401,9 @@ while [[ $# -gt 0 ]]; do
             echo ""
             echo "Profiles (set via URL, e.g. /setup?profile=server):"
             echo "  incage    Full in-cage box (all components)"
+            echo "  dev       Development box (all components; stim2 windowed)"
+            echo "  stim      Display box only (stim2 + dlsh, no dserv)"
+            echo "  mirror    Live mirror of a rig's display (?mirror=RIG; amd64)"
             echo "  server    Data server only (no stimulus)"
             echo "  minimal   Minimal install (dserv + dlsh)"
             exit 0
@@ -588,6 +620,14 @@ AGENT_COMPONENT_ID="dserv-agent"
 # windowed launcher is installed in its place.
 STIM_COMPONENT_ID="stim2"
 
+# A mirror box's units, shipped in stim2's tools/mirror/systemd: the mirror's
+# own stim2 fullscreen (X11, ports 5610-5613), and the driver that follows the
+# rig's dserv (dlsh, tools/mirror/mirror.tcl).
+MIRROR_DISPLAY_SVC="stim2-mirror-display"
+MIRROR_DRIVER_SVC="stim2-mirror"
+MIRROR_TOOLS="/usr/local/stim2/tools/mirror"
+MIRROR_DEFAULTS="/etc/default/stim2-mirror"
+
 has_component() {
     echo "$COMPONENTS_JSON" | jq -e --arg id "$1" \
         '.components[] | select(.id == $id)' &>/dev/null
@@ -605,11 +645,20 @@ profile_services() {
     # compositor on graphical.target. Excluding it here keeps it out of both
     # the enable/start loop and the verify loop, so a bootstrap re-run stops
     # switching back on what someone deliberately turned off.
-    if [[ "$STIM_MODE" == "windowed" ]]; then
+    #
+    # A mirror box likewise: stim2.service and the mirror's display both want
+    # the X server on vt1. Its two units take stim2's place in the list, so
+    # the start step enables and verifies them and the agent manages the
+    # display as the box's primary service.
+    if [[ "$STIM_MODE" == "windowed" || "$STIM_MODE" == "mirror" ]]; then
         exclude="${exclude}|${STIM_COMPONENT_ID}"
     fi
     echo "$COMPONENTS_JSON" | jq -r --arg ex "$exclude" \
         '.components[] | select(.id | test("^(" + $ex + ")$") | not) | .service // empty'
+    if [[ "$STIM_MODE" == "mirror" ]]; then
+        echo "$MIRROR_DISPLAY_SVC"
+        echo "$MIRROR_DRIVER_SVC"
+    fi
 }
 
 # The unit the agent manages as its primary: dserv where there is one,
@@ -696,6 +745,7 @@ check_root() {
             local -a fwd=()
             [[ -n "$ROLE" ]]      && fwd+=(--role "$ROLE")
             [[ -n "$TIME_ROLE" ]] && fwd+=(--time-role "$TIME_ROLE")
+            [[ -n "$MIRROR_RIG" ]] && fwd+=(--mirror "$MIRROR_RIG")
             # Only when EXPLICIT: the variable always holds the template
             # default, and forwarding that unconditionally would make the
             # root re-run treat it as an operator declaration (which now
@@ -1275,6 +1325,120 @@ LAUNCHER
     fi
 }
 
+# Settle the mirror's rig before anything is installed, so a mirror box that
+# cannot be one fails at the top rather than after its packages land.
+check_mirror() {
+    [[ "$STIM_MODE" == "mirror" ]] || return 0
+
+    local arch
+    arch=$(dpkg --print-architecture 2>/dev/null || true)
+    if [[ "$arch" != "amd64" ]]; then
+        fail "The mirror profile is for amd64 boxes (its display unit is stim2's X11 flavor); this one is ${arch:-unknown}"
+    fi
+
+    if [[ "$MIRROR_RIG" == none ]]; then
+        fail "A mirror box needs a rig: --mirror none only makes sense for leaving the mirror profile"
+    fi
+    if [[ -z "$MIRROR_RIG" ]]; then
+        # A re-run keeps the rig the box already follows.
+        local prev="${DSERV_BOX_CONF:-/etc/dserv-agent/box.conf}"
+        [[ -f "$prev" ]] && MIRROR_RIG=$(sed -n 's/^mirror=//p' "$prev" | head -1)
+        if [[ -z "$MIRROR_RIG" && -f "$MIRROR_DEFAULTS" ]]; then
+            MIRROR_RIG=$(sed -n 's/^MIRROR_DSERV=//p' "$MIRROR_DEFAULTS" | head -1)
+        fi
+        [[ -n "$MIRROR_RIG" ]] && info "Preserving mirrored rig: ${MIRROR_RIG} (pass --mirror HOST to change it)"
+    fi
+    if [[ -z "$MIRROR_RIG" ]]; then
+        fail "The mirror profile needs the rig to show: ?mirror=HOST in the URL, or --mirror HOST"
+    fi
+    if [[ ! "$MIRROR_RIG" =~ ^[A-Za-z0-9][A-Za-z0-9.:-]*$ ]]; then
+        fail "--mirror wants a host name or address, not '${MIRROR_RIG}'"
+    fi
+    ok "Mirror of ${MIRROR_RIG}"
+}
+
+step_stim_mirror() {
+    local svc
+    if [[ "$STIM_MODE" != "mirror" ]]; then
+        # The reverse reclassification, as for the windowed launcher: a box
+        # leaving the mirror class must not go on showing another rig's
+        # display (nor hold vt1 against its own stim2.service).
+        for svc in "$MIRROR_DRIVER_SVC" "$MIRROR_DISPLAY_SVC"; do
+            if systemctl is-enabled "$svc" &>/dev/null || \
+               systemctl is-active --quiet "$svc" 2>/dev/null; then
+                warn "Disabling ${svc}: this box is no longer a mirror"
+                run systemctl disable --now "$svc" || \
+                    warn "  could not disable ${svc}; do it by hand: systemctl disable --now ${svc}"
+            fi
+        done
+        return
+    fi
+    if ! has_component "$STIM_COMPONENT_ID"; then
+        return
+    fi
+
+    info "Setting up the live mirror of ${MIRROR_RIG}..."
+
+    if [[ ! -f "${MIRROR_TOOLS}/mirror.tcl" ]] && ! $DRY_RUN; then
+        fail "stim2 has no mirror tools (${MIRROR_TOOLS}): it needs a newer stim2 (--reinstall after updating)"
+    fi
+    # stim2's postinst creates the stim user on amd64 (X11) boxes; the
+    # mirror's display and driver both run as it.
+    if ! id stim &>/dev/null && ! $DRY_RUN; then
+        fail "no 'stim' user: stim2's package creates it on amd64 boxes -- re-run with --reinstall"
+    fi
+    # the display, and the render node (VAAPI, a headless stim2)
+    local g
+    for g in video render; do
+        if grep -q "^${g}:" /etc/group 2>/dev/null; then
+            run adduser stim "$g" || true
+        fi
+    done
+
+    # The units: package-shipped, refreshed when stim2 brings new ones.
+    local changed=false unit src dst
+    for unit in "$MIRROR_DISPLAY_SVC" "$MIRROR_DRIVER_SVC"; do
+        src="${MIRROR_TOOLS}/systemd/${unit}.service"
+        dst="/etc/systemd/system/${unit}.service"
+        if ! cmp -s "$src" "$dst" 2>/dev/null; then
+            run install -m 0644 "$src" "$dst"
+            changed=true
+        fi
+    done
+    run chmod 0755 "${MIRROR_TOOLS}/start-stim2-mirror.sh"
+
+    # The settings: the rig, and options the site may have edited (kept).
+    if [[ ! -f "$MIRROR_DEFAULTS" ]]; then
+        run install -m 0644 "${MIRROR_TOOLS}/systemd/stim2-mirror.default" "$MIRROR_DEFAULTS"
+        changed=true
+    fi
+    local current=""
+    [[ -f "$MIRROR_DEFAULTS" ]] && current=$(sed -n 's/^MIRROR_DSERV=//p' "$MIRROR_DEFAULTS" | head -1)
+    if [[ "$current" != "$MIRROR_RIG" ]]; then
+        sed_inplace "s/^MIRROR_DSERV=.*/MIRROR_DSERV=${MIRROR_RIG}/" "$MIRROR_DEFAULTS"
+        changed=true
+    fi
+    run systemctl daemon-reload
+
+    # stim2.service and the mirror's display both want the X server on vt1.
+    local stim_svc
+    stim_svc=$(echo "$COMPONENTS_JSON" | jq -r --arg id "$STIM_COMPONENT_ID" \
+        '.components[] | select(.id == $id) | .service // empty')
+    if [[ -n "$stim_svc" ]] && { systemctl is-enabled "$stim_svc" &>/dev/null || \
+                                 systemctl is-active --quiet "$stim_svc" 2>/dev/null; }; then
+        warn "Disabling ${stim_svc}: a mirror box's display is ${MIRROR_DISPLAY_SVC}"
+        run systemctl disable --now "$stim_svc" || \
+            warn "  could not disable ${stim_svc}; do it by hand before the mirror can start"
+    fi
+
+    # Running units pick up a new rig or new units now; the start step
+    # enables them (and starts them on a fresh box).
+    if $changed; then
+        run systemctl try-restart "$MIRROR_DISPLAY_SVC" "$MIRROR_DRIVER_SVC" || true
+    fi
+    ok "mirror of ${MIRROR_RIG}: journalctl -fu ${MIRROR_DRIVER_SVC}"
+}
+
 step_configure_dserv() {
     if ! has_component dserv; then
         info "No dserv in profile ${PROFILE} — skipping dserv config"
@@ -1641,13 +1805,17 @@ step_record_identity() {
     # record. The agent reads this file and reports it on /api/status.
     local installed_components
     installed_components=$(echo "$COMPONENTS_JSON" | jq -r '[.components[].id] | join(",")')
+    # Only a mirror box follows a rig; check_mirror has settled which.
+    local mirror_rig=""
+    [[ "$STIM_MODE" == "mirror" ]] && mirror_rig="$MIRROR_RIG"
     write_file /etc/dserv-agent/box.conf <<EOF
 # Declared identity for this box -- written by the dserv bootstrap.
 # Retype: curl -sSL ${REGISTRY_URL}/setup?profile=<name> | bash
 # (script sync is opt-in, so local work in ~/systems/ess is kept)
 #
 # stim_mode "" = cage default (stim2.service fullscreen on its own X server);
-# "windowed" = development launcher, fullscreen unit disabled.
+# "windowed" = development launcher, fullscreen unit disabled;
+# "mirror" = live mirror of the rig in mirror=, stim2.service disabled.
 profile=${PROFILE}
 stim_mode=${STIM_MODE}
 components=${installed_components}
@@ -1655,6 +1823,7 @@ workgroup=${WORKGROUP}
 registry=${REGISTRY_URL}
 role=${ROLE}
 time_role=${TIME_ROLE}
+mirror=${mirror_rig}
 provisioned=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 EOF
     ok "Recorded identity: profile=${PROFILE}${STIM_MODE:+ (${STIM_MODE})} in /etc/dserv-agent/box.conf"
@@ -1904,6 +2073,7 @@ main() {
     fi
 
     detect_platform
+    check_mirror
 
     echo ""
     info "Log: ${LOG_FILE}"
@@ -1918,6 +2088,7 @@ main() {
     step_configure_agent
     step_install_components
     step_stim_launcher
+    step_stim_mirror
     step_configure_dserv
     # Soft: refreshing ESS scripts is a convenience, and it sits upstream of
     # every step that makes the box registrable. Scripts are recoverable from
@@ -2018,6 +2189,14 @@ func (a *Agent) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// ?mirror=HOST: the rig a mirror box shows. It lands in the script
+	// unquoted (MIRROR_RIG="..."), so only host characters pass.
+	mirrorRig := strings.TrimSpace(r.URL.Query().Get("mirror"))
+	if mirrorRig != "" && !mirrorRigRe.MatchString(mirrorRig) {
+		http.Error(w, "invalid mirror (want the rig's dserv host name or address)", 400)
+		return
+	}
+
 	// Filter components based on profile or explicit list
 	components := a.filterComponents(profileName, explicitComponents)
 
@@ -2100,6 +2279,7 @@ func (a *Agent) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 		ProfileName:      profileName,
 		StimMode:         a.profileStimMode(profileName),
 		TimeRole:         timeRole,
+		MirrorRig:        mirrorRig,
 
 		ExplicitComponents: explicitComponents,
 		RetireServices:     strings.Join(retire, " "),

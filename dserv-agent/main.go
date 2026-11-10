@@ -214,6 +214,7 @@ type BoxIdentity struct {
 	Registry    string `json:"registry,omitempty"`
 	Role        string `json:"role,omitempty"`
 	TimeRole    string `json:"timeRole,omitempty"` // declared, with argument: "client eth0"
+	Mirror      string `json:"mirror,omitempty"`   // stim_mode "mirror": the rig whose display it shows
 	Provisioned string `json:"provisioned,omitempty"`
 }
 
@@ -1539,6 +1540,8 @@ func readBoxIdentity(path string) *BoxIdentity {
 			id.Role = val
 		case "time_role":
 			id.TimeRole = val
+		case "mirror":
+			id.Mirror = val
 		case "provisioned":
 			id.Provisioned = val
 		default:
