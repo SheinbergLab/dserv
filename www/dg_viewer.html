@@ -158,6 +158,12 @@
   .world-panel{width:340px;min-width:260px;position:relative;overflow:hidden;background:#080c14;border-left:1px solid var(--bdr);}
   .world-panel canvas{position:absolute;top:0;left:0;}
   .world-panel.stim2-on{width:48%;min-width:320px;}
+  /* No eye traces in the file: the world view gets the area and the trace
+     panel shrinks to an event strip under it (taller with spikes) */
+  .plot-area.strip{flex-direction:column;}
+  .plot-area.strip .world-panel{order:0;flex:1;width:auto;min-width:0;border-left:none;border-bottom:1px solid var(--bdr);}
+  .plot-area.strip .trace-panel{order:1;flex:0 0 64px;cursor:ew-resize;}
+  .plot-area.strip.spk .trace-panel{flex-basis:220px;}
   .stim2-box{position:absolute;inset:0;display:none;}
   .stim2-box video{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000;}
   .stim2-box canvas{position:absolute;top:0;left:0;pointer-events:none;}
@@ -172,7 +178,9 @@
   .dr{display:flex;gap:6px;font-family:var(--mono);font-size:10px;padding:1px 0;}
   .dr .k{color:var(--t3);min-width:130px;flex-shrink:0;}
   .dr .v{color:var(--t1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-  .controls{display:flex;align-items:center;gap:8px;padding:7px 16px;background:var(--bg1);border-top:1px solid var(--bdr);flex-shrink:0;}
+  .controls{display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px;padding:7px 16px;background:var(--bg1);border-top:1px solid var(--bdr);flex-shrink:0;}
+  .controls #scrubSlider{min-width:140px;}
+  .controls label{white-space:nowrap;}
   .controls .td{font-family:var(--mono);font-size:12px;color:var(--t2);min-width:110px;}
   .controls .sc{font-family:var(--mono);font-size:11px;color:var(--t3);display:flex;align-items:center;gap:5px;margin-left:auto;}
   .controls select{font-family:var(--mono);font-size:11px;background:var(--bg2);color:var(--t1);border:1px solid var(--bdr);border-radius:3px;padding:2px 5px;}
@@ -306,6 +314,10 @@
         <div class="sc" id="pluginControls"></div>
         <div class="sc"><label>Speed</label>
           <select id="speedSel"><option value="0.1">0.1x</option><option value="0.25">0.25x</option><option value="0.5">0.5x</option><option value="1" selected>1x</option><option value="2">2x</option><option value="5">5x</option></select>
+          <label>At end</label>
+          <select id="endSel" title="When a trial finishes playing">
+            <option value="loop">loop</option><option value="next">next trial</option><option value="stop">stop</option>
+          </select>
         </div>
       </div>
     </div>
@@ -456,6 +468,7 @@ const App = {
 
   // Trial view state
   cur: -1, playing: false, pt: 0, speed: 1, af: null, lastTs: 0,
+  endMode: 'loop',       // at a trial's end: 'loop' | 'next' (play through) | 'stop'
   maskBlinks: true,
   showEvents: true,
   vMin: 0, vMax: 1, drag: null,
@@ -986,7 +999,7 @@ const App = {
         ds.textContent = d.toFixed(1) + 's';
         el.appendChild(ds);
       }
-      el.addEventListener('click', () => this.selTrial(i));
+      el.addEventListener('click', () => this.selTrial(i, this.endMode === 'next'));
       list.appendChild(el);
     }
 
@@ -1001,10 +1014,17 @@ const App = {
     // Controls — only bind once
     if (!this._controlsBound) {
       this._controlsBound = true;
-      document.getElementById('btnPrev').addEventListener('click', () => this.selTrial(Math.max(0, this.cur - 1)));
-      document.getElementById('btnNext').addEventListener('click', () => this.selTrial(Math.min(this.nRows - 1, this.cur + 1)));
+      document.getElementById('btnPrev').addEventListener('click', () => this.stepTrial(-1));
+      document.getElementById('btnNext').addEventListener('click', () => this.stepTrial(1));
       document.getElementById('btnPlayPause').addEventListener('click', () => this.togglePlay());
       document.getElementById('speedSel').addEventListener('change', e => { this.speed = parseFloat(e.target.value); Stim2View.setRate(this.speed); });
+      const endSel = document.getElementById('endSel');
+      try { const m = localStorage.getItem('dg_viewer.endMode'); if (m === 'loop' || m === 'next' || m === 'stop') this.endMode = m; } catch (e) { /* no storage */ }
+      endSel.value = this.endMode;
+      endSel.addEventListener('change', e => {
+        this.endMode = e.target.value;
+        try { localStorage.setItem('dg_viewer.endMode', this.endMode); } catch (err) { /* no storage */ }
+      });
       document.getElementById('chkMask').addEventListener('change', e => { this.maskBlinks = e.target.checked; this.renderTrial(); });
       document.getElementById('chkEvents').addEventListener('change', e => { this.showEvents = e.target.checked; this.renderTrial(); });
 
@@ -1035,16 +1055,16 @@ const App = {
         }
       });
 
-      // Trace panel interactions
+      // Trace panel interactions.  Bound whatever the first file holds:
+      // this runs once per page, and a later file may have eye data.  The
+      // handlers themselves tell the eye plot from the event strip.
       const tp = document.getElementById('tracePanel');
-      if (this.hasEye) {
-        tp.addEventListener('wheel', e => this.onWheel(e), { passive: false });
-        tp.addEventListener('mousedown', e => this.onDown(e));
-        tp.addEventListener('mousemove', e => this.onMove(e));
-        tp.addEventListener('mouseup', () => { this.drag = null; this.scrubbing = false; });
-        tp.addEventListener('mouseleave', () => { this.drag = null; this.scrubbing = false; document.getElementById('readout').style.display = 'none'; });
-        tp.addEventListener('dblclick', () => this.resetZoom());
-      }
+      tp.addEventListener('wheel', e => this.onWheel(e), { passive: false });
+      tp.addEventListener('mousedown', e => this.onDown(e));
+      tp.addEventListener('mousemove', e => this.onMove(e));
+      tp.addEventListener('mouseup', () => { this.drag = null; this.scrubbing = false; });
+      tp.addEventListener('mouseleave', () => { this.drag = null; this.scrubbing = false; document.getElementById('readout').style.display = 'none'; });
+      tp.addEventListener('dblclick', () => this.resetZoom());
     } // end _controlsBound
 
     // Plugin controls
@@ -1096,16 +1116,36 @@ const App = {
   // the world panel: the stim2 clip when that is on, else the plugin's canvas
   applyWorldMode(resize = true) {
     const s2 = Stim2View.active();
-    document.getElementById('worldPanel').style.display = (this.plugin || s2) ? 'block' : 'none';
+    const world = !!(this.plugin || s2);
+    document.getElementById('worldPanel').style.display = world ? 'block' : 'none';
+    // No eye traces: the world view takes the area, the trace panel becomes
+    // an event strip under it.  With no world view there is nothing to give
+    // the space to, so the timeline keeps the panel.
+    const pa = document.querySelector('.plot-area');
+    pa.classList.toggle('strip', !this.hasEye && world);
+    pa.classList.toggle('spk', !!this.hasSpikes);
+    for (const id of ['chkMask', 'chkEvents'])        // eye-only options
+      document.getElementById(id).parentElement.style.display = this.hasEye ? '' : 'none';
     Stim2View.applyMode();
     if (!s2) document.getElementById('worldLabel').textContent = this.plugin ? (this.plugin.name || '') : '';
     if (resize) this.resizeCvs();
   },
 
-  selTrial(i) {
+  // the previous/next trial: playing through, playback carries on into it
+  stepTrial(d) {
+    const i = Math.max(0, Math.min(this.nRows - 1, this.cur + d));
+    if (i !== this.cur) this.selTrial(i, this.endMode === 'next');
+  },
+
+  // keepPlaying: playback (if on) runs on into trial i from its start; in
+  // stim2 mode the clock waits while the clip loads (Stim2View.advance)
+  selTrial(i, keepPlaying = false) {
     if (i < 0 || i >= this.nRows) return;
-    this.cur = i; this.pt = 0; this.playing = false;
-    const btn = document.getElementById('btnPlayPause'); if (btn) btn.textContent = '\u25B6';
+    this.cur = i; this.pt = 0;
+    if (!keepPlaying || !this.playing) {
+      this.playing = false; cancelAnimationFrame(this.af);
+      const btn = document.getElementById('btnPlayPause'); if (btn) btn.textContent = '\u25B6';
+    }
     document.querySelectorAll('.ti').forEach(el => el.classList.toggle('active', parseInt(el.dataset.idx) === i));
     const ae = document.querySelector('.ti.active'); if (ae) ae.scrollIntoView({ block: 'nearest' });
     this.parseTrialRow(i);
@@ -1214,8 +1254,16 @@ const App = {
       td.tEnd = td.dur;
     }
 
+    // A trial of a file with eye data that has none of its own: time it as
+    // a trial without eye data, or it would last 0 s and never play
+    if (!(td.dur > 0)) {
+      const on = Number(getScalar(dg, 'stimon', i) ?? getScalar(dg, 'stim_on', i)) || 0;
+      const off = Number(getScalar(dg, 'stimoff', i) ?? getScalar(dg, 'stim_off', i)) || 0;
+      td.tStart = 0; td.dur = td.tEnd = Math.max((off - on) / 1000, 1);
+    }
+
     // Standard timing fields
-    const stimon = Number(getScalar(dg, 'stimon', i) ?? getScalar(dg, 'stim_on', i)) || 0;
+    const stimon =Number(getScalar(dg, 'stimon', i) ?? getScalar(dg, 'stim_on', i)) || 0;
     const stimoff = Number(getScalar(dg, 'stimoff', i) ?? getScalar(dg, 'stim_off', i)) || 0;
     const resp_time = Number(getScalar(dg, 'resp_time', i)) || 0;
     const reward_time = Number(getScalar(dg, 'reward_time', i)) || 0;
@@ -1338,10 +1386,10 @@ const App = {
 
     if (!this.td) return;
     if (!this.hasEye || !this.td.eyeT) {
-      ctx.fillStyle = '#5a6b85'; ctx.font = '13px "JetBrains Mono"'; ctx.textAlign = 'center';
-      ctx.fillText('No eye data for this trial', w / 2, h / 2);
-      // Still show event markers as a timeline
-      this._renderTimeline(ctx, w, h);
+      // The event timeline instead: the whole panel when there is nothing
+      // else to show, else the strip under the world view.  A file WITH
+      // eye data says so when one trial lacks it -- the signal was lost.
+      this._renderTimeline(ctx, w, h, this.hasEye ? 'No eye data for this trial' : '');
       return;
     }
 
@@ -1645,32 +1693,67 @@ const App = {
     ctx.fillText(`pop rate · peak ${hmax.toFixed(0)}`, m.l + 4, psthY0 + 11);
   },
 
-  _renderTimeline(ctx, w, h) {
-    // Minimal timeline for trials without eye data
+  // The event timeline, for trials without eye traces: the trial's events
+  // over its whole duration, a playhead, and (when the file has them) the
+  // spike raster.  The whole panel is a scrub bar -- press or drag anywhere
+  // to move the playhead.  No zoom: the strip always shows the full trial.
+  _renderTimeline(ctx, w, h, msg) {
     const td = this.td; if (!td) return;
-    const m = { t: 20, r: 16, b: 30, l: 54 }, pW = w - m.l - m.r, pH = h - m.t - m.b;
-    ctx.strokeStyle = '#2a3654'; ctx.lineWidth = 1;
-    ctx.strokeRect(m.l, m.t, pW, pH);
+    const m = { t: 6, r: 16, b: 18, l: 54 }, pW = w - m.l - m.r, pH = h - m.t - m.b;
+    const tMin = td.tStart, tMax = td.tStart + (td.dur > 0 ? td.dur : 1);
+    const toX = t => m.l + ((t - tMin) / (tMax - tMin)) * pW;
+    const showSpk = this.hasSpikes && td.spikeT && td.spikeT.length > 0;
+    const bandH = showSpk ? 34 : pH;
 
-    // Event markers on a simple timeline
-    if (td.dur > 0) {
-      const toX = t => m.l + (t / td.dur) * pW;
-      const marks = [
-        [td.stimOnSec, 'rgba(251,191,36,0.6)', 'stimOn'],
-        [td.respTimeSec, 'rgba(244,114,182,0.6)', 'resp'],
-        [td.stimOffSec, 'rgba(251,191,36,0.3)', 'stimOff'],
-        [td.rewardTimeSec, 'rgba(16,185,129,0.6)', 'reward']
-      ];
-      for (const [t, col, label] of marks) {
-        if (t > 0 && t <= td.dur) {
-          ctx.strokeStyle = col; ctx.lineWidth = 2;
-          ctx.beginPath(); ctx.moveTo(toX(t), m.t); ctx.lineTo(toX(t), m.t + pH); ctx.stroke();
-          ctx.fillStyle = col; ctx.font = '9px "JetBrains Mono"'; ctx.textAlign = 'left';
-          ctx.fillText(label, toX(t) + 3, m.t + 14);
-        }
+    // The band: background, the observation period, the time grid
+    ctx.fillStyle = '#151c2a'; ctx.fillRect(m.l, m.t, pW, bandH);
+    const oStart = Math.max(tMin, td.stimOnSec), oEnd = Math.min(tMax, td.respTimeSec);
+    if (td.stimOnSec > 0 && oEnd > oStart) {
+      ctx.fillStyle = 'rgba(91,164,245,0.10)';
+      ctx.fillRect(toX(oStart), m.t, toX(oEnd) - toX(oStart), bandH);
+    }
+    const xT = this.niceScale(tMin, tMax, Math.max(2, Math.min(10, Math.floor(pW / 70))));
+    ctx.strokeStyle = '#1f2a40'; ctx.lineWidth = 1;
+    for (const t of xT) { ctx.beginPath(); ctx.moveTo(toX(t), m.t); ctx.lineTo(toX(t), m.t + bandH); ctx.stroke(); }
+
+    // Event markers
+    const marks = [
+      [td.stimOnSec, 'rgba(251,191,36,0.7)', 'stimOn'],
+      [td.stimOffSec, 'rgba(251,191,36,0.35)', 'stimOff'],
+      [td.respTimeSec, 'rgba(244,114,182,0.7)', 'resp'],
+      [td.rewardTimeSec, 'rgba(16,185,129,0.7)', 'reward']
+    ];
+    ctx.font = '9px "JetBrains Mono"'; ctx.textAlign = 'left';
+    for (const [t, col, label] of marks) {
+      if (t > 0 && t >= tMin && t <= tMax) {
+        ctx.strokeStyle = col; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(toX(t), m.t); ctx.lineTo(toX(t), m.t + bandH); ctx.stroke();
+        ctx.fillStyle = col; ctx.fillText(label, toX(t) + 3, m.t + 10);
       }
     }
+    ctx.strokeStyle = '#2a3654'; ctx.lineWidth = 1; ctx.strokeRect(m.l, m.t, pW, bandH);
+
+    if (showSpk) this._renderSpikeStrip(ctx, m, pW, bandH, pH - bandH - 6, tMin, tMax, td);
+
+    if (msg) {
+      ctx.fillStyle = '#5a6b85'; ctx.font = '13px "JetBrains Mono"'; ctx.textAlign = 'center';
+      ctx.fillText(msg, m.l + pW / 2, m.t + bandH / 2 + 4);
+    }
+
+    // Time labels under it all
+    ctx.fillStyle = '#5a6b85'; ctx.font = '10px "JetBrains Mono"'; ctx.textAlign = 'center';
+    for (const t of xT) ctx.fillText(t.toFixed(t % 1 ? 1 : 0) + 's', toX(t), m.t + pH + 13);
+
+    // Playhead through the band (and the spikes)
+    const px = toX(td.tStart + Math.max(0, Math.min(this.pt, tMax - tMin)));
+    ctx.strokeStyle = '#f472b6'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(px, m.t); ctx.lineTo(px, m.t + pH); ctx.stroke();
+    ctx.fillStyle = '#f472b6';
+    ctx.beginPath(); ctx.moveTo(px - 4, m.t - 4); ctx.lineTo(px + 4, m.t - 4); ctx.lineTo(px, m.t + 2); ctx.closePath(); ctx.fill();
+
     document.getElementById('timeDisplay').textContent = this.pt.toFixed(3) + ' s';
+    this._scrubY = null;
+    this._pr = { m, pW, pH, tMin, tMax, w, h, strip: true };
   },
 
   // ═══ Interaction ═══
@@ -1702,6 +1785,8 @@ const App = {
 
   togglePlay() {
     this.playing = !this.playing;
+    // play again after an 'At end: stop' (or the last trial played through)
+    if (this.playing && this.td && this.td.dur > 0 && this.pt >= this.td.dur) this.pt = 0;
     document.getElementById('btnPlayPause').textContent = this.playing ? '\u23F8' : '\u25B6';
     if (this.playing) { this.lastTs = performance.now(); this.animate(); }
     else cancelAnimationFrame(this.af);
@@ -1712,13 +1797,28 @@ const App = {
     const dt = (now - this.lastTs) / 1000; this.lastTs = now;
     // stim2 mode: the video is the clock while it covers pt
     this.pt = Stim2View.active() ? Stim2View.advance(this.pt, dt, this.speed) : this.pt + dt * this.speed;
-    if (this.td && this.pt > this.td.dur) this.pt = 0;
+    if (this.td && this.pt > this.td.dur) {
+      if (this.endMode === 'next' && this.cur < this.nRows - 1) {
+        // play through: on into the next trial from its start
+        this.selTrial(this.cur + 1, true);
+        this.af = requestAnimationFrame(() => this.animate());
+        return;
+      }
+      if (this.endMode === 'loop') this.pt = 0;
+      else {                                  // 'stop', or played through the last trial
+        this.pt = this.td.dur;
+        this.togglePlay();
+        this.renderTrial();
+        return;
+      }
+    }
     this.renderTrial(); this.af = requestAnimationFrame(() => this.animate());
   },
 
   resetZoom() { this.vMin = 0; this.vMax = 1; this.renderTrial(); },
   onWheel(e) {
-    e.preventDefault(); if (!this._pr) return;
+    if (!this._pr || this._pr.strip) return;        // the strip always shows the whole trial
+    e.preventDefault();
     const { m, pW } = this._pr, rect = this.cT.getBoundingClientRect();
     const mx = e.clientX - rect.left - m.l, frac = Math.max(0, Math.min(1, mx / pW));
     const anchor = this.vMin + frac * (this.vMax - this.vMin), zf = e.deltaY > 0 ? 1.15 : 0.87;
@@ -1728,6 +1828,7 @@ const App = {
   },
   onDown(e) {
     if (!this._pr || e.button !== 0) return;
+    if (this._pr.strip) { this.scrubbing = true; this._scrubFromMouse(e); return; }   // all of it scrubs
     const rect = this.cT.getBoundingClientRect();
     const logH = this.cT.height / this.dpr;
     const my = (e.clientY - rect.top) * (logH / rect.height);
@@ -1739,6 +1840,7 @@ const App = {
   },
   onMove(e) {
     if (!this._pr) return;
+    if (this._pr.strip) { if (this.scrubbing) this._scrubFromMouse(e); return; }
     const { m, pW, tMin, tMax, pH } = this._pr, rect = this.cT.getBoundingClientRect();
     const mx = e.clientX - rect.left, my = e.clientY - rect.top, ro = document.getElementById('readout');
     if (mx >= m.l && mx <= m.l + pW && my >= m.t && my <= m.t + pH) {
@@ -1773,8 +1875,8 @@ const App = {
     }
     if (!this.dg) return;
     if (this.currentView === 'trial') {
-      if (e.key === 'ArrowUp' || e.key === 'k') { e.preventDefault(); this.selTrial(Math.max(0, this.cur - 1)); }
-      else if (e.key === 'ArrowDown' || e.key === 'j') { e.preventDefault(); this.selTrial(Math.min(this.nRows - 1, this.cur + 1)); }
+      if (e.key === 'ArrowUp' || e.key === 'k') { e.preventDefault(); this.stepTrial(-1); }
+      else if (e.key === 'ArrowDown' || e.key === 'j') { e.preventDefault(); this.stepTrial(1); }
       else if (e.key === 'ArrowLeft') { e.preventDefault(); const step = e.shiftKey ? 0.1 : 0.004; this.pt = Math.max(0, this.pt - step); this.renderTrial(); }
       else if (e.key === 'ArrowRight') { e.preventDefault(); const step = e.shiftKey ? 0.1 : 0.004; if (this.td) this.pt = Math.min(this.td.dur, this.pt + step); this.renderTrial(); }
       else if (e.key === ' ') { e.preventDefault(); this.togglePlay(); }
