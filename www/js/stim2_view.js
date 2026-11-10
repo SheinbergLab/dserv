@@ -252,8 +252,15 @@ const Stim2View = {
       v.addEventListener('loadedmetadata', done); v.addEventListener('error', done);
     });
     if (my !== this.req) return;
+    if (!ok) { this.loading = false; this._status(`the clip did not load (${this.server + j.clip})`); return; }
+    // Prime the clip: play it for a moment and stop, before anything uses
+    // it.  Safari (WebKit) otherwise leaves a never-played video's picture
+    // on its first frame when play() starts it from the start of the clip:
+    // the video's clock runs, the picture does not, until a later seek.
+    // The playback clock waits meanwhile (loading).
+    await this._prime();
+    if (my !== this.req) return;
     this.loading = false;
-    if (!ok) { this._status(`the clip did not load (${this.server + j.clip})`); return; }
     this.ready = true;
     this._status('');
     document.getElementById('worldLabel').textContent =
@@ -285,11 +292,29 @@ const Stim2View = {
   ptOf(clipT) { return clipT - this.zero - (this.app.td ? this.app.td.tStart : 0); },
   _frame() { return this.timing ? 1 / this.timing.fps : 1 / 60; },
 
-  _seekTo(t) {
+  // force: seek even when already within half a frame of t (see advance)
+  _seekTo(t, force = false) {
     if (this.video.seeking) { this.pendingSeek = t; return; }
     const d = this.video.duration || 0;
     const c = Math.max(0, Math.min(d > 0 ? d - this._frame() / 2 : 0, t));
-    if (Math.abs(this.video.currentTime - c) > this._frame() / 2) this.video.currentTime = c;
+    if (force || Math.abs(this.video.currentTime - c) > this._frame() / 2) this.video.currentTime = c;
+  },
+
+  // play the fresh clip briefly, then back to its start (see load).  Muted
+  // inline video may always play; a refusal or a stall just skips it.
+  async _prime() {
+    const v = this.video;
+    try {
+      await Promise.race([v.play(), new Promise((_, no) => setTimeout(() => no(new Error('timeout')), 750))]);
+    } catch (e) { /* refused or slow: unprimed, as before */ }
+    v.pause();
+    if (v.currentTime !== 0) {
+      await new Promise(res => {
+        const t = setTimeout(res, 750);
+        v.addEventListener('seeked', () => { clearTimeout(t); res(); }, { once: true });
+        v.currentTime = 0;
+      });
+    }
   },
 
   // paused: put the video at pt
@@ -335,7 +360,10 @@ const Stim2View = {
     if (t < 0) {
       next = pt + dt * speed;
       const tn = this.clipT(next);
-      if (tn >= 0) { this._seekTo(tn); this._play(); }
+      // the clip starts: a real seek even when tn is within half a frame of
+      // where the video sits (its start), then play -- the same order as
+      // the loop's restart, which never froze, where the seek is long
+      if (tn >= 0) { this._seekTo(tn, true); this._play(); }
     } else if (v.ended || t >= v.duration) {
       next = pt + dt * speed;
     } else if (v.paused) {
