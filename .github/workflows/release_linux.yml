@@ -217,9 +217,12 @@ jobs:
   # version can never load on the rigs — that mismatch is why this deb used to
   # be dead on arrival and camera installs fell back to on-target source
   # builds. Linking the distro package and depending on the exact soname
-  # package (libcamera0.7 today, computed below) makes the deb installable
-  # with no build tools on the target, and apt refuses it cleanly on any
-  # system whose libcamera cannot work.
+  # package (computed below: libcamera0.8 since the archive's 0.8.0+rpt20261104,
+  # libcamera0.7 before) makes the deb installable with no build tools on the
+  # target, and apt refuses it cleanly on any system whose libcamera cannot
+  # work. The archive moves under this job without notice -- 0.8 renamed
+  # control enums and changed orientationFromRotation, and camera.cpp now
+  # compiles against both API shapes (DSERV_LIBCAMERA_0_8).
   release-camera-rpi:
 
     needs: create-release

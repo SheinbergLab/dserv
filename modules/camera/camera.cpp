@@ -73,9 +73,23 @@ typedef struct camera_info_s {
 #include <unistd.h>
 #include <fcntl.h>
 
+#include <optional>
+
 #include <libcamera/libcamera.h>
 #include <libcamera/control_ids.h>
 #include <libcamera/orientation.h>
+#include <libcamera/version.h>
+
+// libcamera 0.8 changed two APIs this file uses (Raspberry Pi's
+// 0.8.0+rpt20261104 is where the trixie archive picked it up; 0.7.2 was
+// still the old shape):
+//   - enum control values are prefixed with their control's name
+//     (controls::ExposureNormal -> controls::AeExposureModeNormal)
+//   - orientationFromRotation(int) returns std::optional<Orientation>
+//     instead of taking a bool *success
+// The other release builds pin upstream 0.4.0, so both shapes must compile.
+#define DSERV_LIBCAMERA_0_8 \
+  (LIBCAMERA_VERSION_MAJOR > 0 || LIBCAMERA_VERSION_MINOR >= 8)
 
 #ifdef HAS_JPEG
 #include <jpeglib.h>
@@ -1084,11 +1098,19 @@ public:
     }
     if (available_controls.find(&controls::AeExposureMode) !=
 	available_controls.end()) {
+#if DSERV_LIBCAMERA_0_8
+      controls.set(controls::AeExposureMode, controls::AeExposureModeNormal);
+#else
       controls.set(controls::AeExposureMode, controls::ExposureNormal);
+#endif
     }
     if (available_controls.find(&controls::AeMeteringMode) !=
 	available_controls.end()) {
+#if DSERV_LIBCAMERA_0_8
+      controls.set(controls::AeMeteringMode, controls::AeMeteringModeCentreWeighted);
+#else
       controls.set(controls::AeMeteringMode, controls::MeteringCentreWeighted);
+#endif
     }
     if (available_controls.find(&controls::Brightness) !=
 	available_controls.end()) {
@@ -2704,8 +2726,15 @@ private:
     // 90/270 require a transpose the ISP cannot do; libcamera leaves those
     // to the application (see libcamera orientation API notes).
     if (rotation_ == 180) {
+#if DSERV_LIBCAMERA_0_8
+      std::optional<Orientation> o = orientationFromRotation(180);
+      bool ok = o.has_value();
+      // the old call returned Rotate0 on failure; keep that
+      config_->orientation = ok ? *o : Orientation::Rotate0;
+#else
       bool ok = false;
       config_->orientation = orientationFromRotation(180, &ok);
+#endif
       if (ok) {
 	hardware_orientation_ = true;
 	std::cout << "Rotation 180° via libcamera hardware orientation" << std::endl;
