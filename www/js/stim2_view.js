@@ -131,6 +131,129 @@ const Stim2View = {
       if (on) this.load(this.app.cur); else this.video.pause();
     });
     mk('chkStim2Gaze', 'gaze', this.showGaze, on => { this.showGaze = on; this.draw(); });
+    const b = document.createElement('button');
+    b.id = 'btnStim2Export'; b.className = 'stim2-export-btn'; b.textContent = 'mp4';
+    b.title = 'Export this trial as a movie (stim2 draws the gaze and caption into it)';
+    b.addEventListener('click', e => { e.stopPropagation(); this._exportPanel(b); });
+    container.appendChild(b);
+  },
+
+  // ── export: the selected trial as one movie, with the gaze shown here
+  // and a caption, drawn by stim2 (the render server's POST /export) ──
+  _exportPanel(btn) {
+    let p = document.getElementById('stim2Export');
+    if (p) { p.remove(); return; }
+    p = document.createElement('div');
+    p.id = 'stim2Export'; p.className = 'stim2-export';
+    const hasGaze = !!(this.app.hasEye && this.app.td && this.app.td.eyeT && this.app.td.eyeT.length);
+    const dg = this.app.dg, i = this.app.cur;
+    const obsid = getScalar(dg, 'obsid', i);
+    p.innerHTML = `
+      <div class="x-title">Export trial ${obsid != null ? Number(obsid) + 1 : ''}</div>
+      <input type="text" class="x-cap" maxlength="500" placeholder="caption (optional)">
+      <div class="x-row">
+        <select class="x-at" title="Where the caption goes">
+          <option value="nw">top left</option><option value="n">top</option><option value="ne">top right</option>
+          <option value="sw">bottom left</option><option value="s">bottom</option><option value="se">bottom right</option>
+        </select>
+        <label class="bt"><input type="checkbox" class="x-gaze"${hasGaze && this.showGaze ? ' checked' : ''}${hasGaze ? '' : ' disabled'}> gaze</label>
+      </div>
+      <div class="x-row"><button class="primary x-go">Export</button><button class="x-close">Close</button></div>
+      <div class="x-status"></div>`;
+    document.body.appendChild(p);
+    const r = btn.getBoundingClientRect();
+    p.style.left = Math.max(8, Math.min(window.innerWidth - p.offsetWidth - 8, r.right - p.offsetWidth)) + 'px';
+    p.style.bottom = (window.innerHeight - r.top + 6) + 'px';
+    const close = () => { p.remove(); document.removeEventListener('mousedown', outside); document.removeEventListener('keydown', esc); };
+    const outside = e => { if (!p.contains(e.target) && e.target !== btn) close(); };
+    const esc = e => { if (e.key === 'Escape') close(); };
+    document.addEventListener('mousedown', outside);
+    document.addEventListener('keydown', esc);
+    p.querySelector('.x-close').addEventListener('click', close);
+    const cap = p.querySelector('.x-cap');
+    cap.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') go.click(); if (e.key === 'Escape') close(); });
+    const go = p.querySelector('.x-go');
+    go.addEventListener('click', async () => {
+      go.disabled = true;
+      try {
+        await this.exportTrial(i, {
+          caption: cap.value.trim(),
+          caption_at: p.querySelector('.x-at').value,
+          gaze: p.querySelector('.x-gaze').checked,
+        }, msg => { p.querySelector('.x-status').textContent = msg; });
+      } finally { go.disabled = false; }
+    });
+    cap.focus();
+  },
+
+  // row i's reel item: the trial, its caption, and the gaze as this page
+  // draws it (em_seconds from the trial's first sample; blinks left out
+  // when they are masked here)
+  _trialItem(i, opts) {
+    const dg = this.app.dg;
+    const fn = String(getScalar(dg, 'filename', i)).split(/[\\/]/).pop();
+    const item = { type: 'trial', file: fn, obsid: Number(getScalar(dg, 'obsid', i)) };
+    if (opts.caption) { item.caption = opts.caption; item.caption_at = opts.caption_at || 'nw'; }
+    const td = i === this.app.cur ? this.app.td : null;
+    if (opts.gaze && td && td.eyeT && td.eyeH && td.eyeV) {
+      const t = [], x = [], y = [];
+      const mask = this.app.maskBlinks && td.blink;
+      for (let k = 0; k < td.eyeT.length; k++) {
+        if (mask && td.blink[k] !== 0) continue;
+        const h = td.eyeH[k], v = td.eyeV[k];
+        if (!Number.isFinite(h) || !Number.isFinite(v)) continue;
+        t.push(Math.round((td.eyeT[k] - td.tStart) * 1e4) / 1e4);
+        x.push(Math.round(h * 1e3) / 1e3); y.push(Math.round(v * 1e3) / 1e3);
+      }
+      if (t.length) item.gaze = { t, x, y };
+    }
+    return item;
+  },
+
+  // render and download; say(msg) reports progress
+  async exportTrial(i, opts, say) {
+    if (!this.available) { say('no render server'); return; }
+    const dg = this.app.dg;
+    if (getScalar(dg, 'filename', i) == null || getScalar(dg, 'obsid', i) == null) {
+      say('no filename/obsid columns: cannot find this trial'); return;
+    }
+    const item = this._trialItem(i, opts);
+    const name = `${item.file.replace(/\.(trials\.dgz|obs\.dgz|ess|dgz)$/, '')}_trial${item.obsid + 1}.mp4`;
+    say('rendering…');
+    const poll = setInterval(async () => {
+      try {
+        const s = await (await fetch(this.server + '/status')).json();
+        if (s.rendering && s.rendering.job.startsWith('export/')) {
+          say(`rendering… ${Math.round(s.rendering.progress * 100)}%`);
+        } else if (s.rendering) {
+          say(`waiting for trial ${s.rendering.job.split('/').pop()} to finish…`);
+        }
+      } catch (e) { /* the answer will come */ }
+    }, 400);
+    let j, r;
+    try {
+      r = await fetch(this.server + '/export', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fps: 60, items: [item] }),
+      });
+      j = await r.json();
+    } catch (e) {
+      j = { error: `render server ${this.server}: ${e.message}` }; r = { ok: false };
+    } finally { clearInterval(poll); }
+    if (!r.ok || j.error) { say(j.error || `export failed (${r.status})`); return; }
+    say('downloading…');
+    try {
+      const blob = await (await fetch(this.server + j.clip)).blob();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob); a.download = name;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+      const size = blob.size < 1048576 ? `${Math.max(1, Math.round(blob.size / 1024))} KB`
+                                       : `${(blob.size / 1048576).toFixed(1)} MB`;
+      say(`saved ${name} (${size})`);
+    } catch (e) {
+      say(`the movie did not download: ${e.message}`);
+    }
   },
 
   // show the video (stim2 on) or the plugin's canvas
