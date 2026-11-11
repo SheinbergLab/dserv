@@ -70,7 +70,7 @@
 
   /* fields */
   .field { margin-top: 14px; }
-  .field:first-of-type { margin-top: 0; }
+  .field:first-of-type, .row > .field { margin-top: 0; }
   .field > label, .field > .label { display: block; font-size: 13.5px; font-weight: 600; color: var(--text); margin-bottom: 6px; }
   .row { display: flex; gap: 10px; flex-wrap: wrap; }
   .row > * { flex: 1 1 180px; }
@@ -99,7 +99,9 @@
              overflow-wrap: anywhere; line-height: 1.6; }
   .cmd pre::before { content: "$ "; color: var(--green); }
   .cmd pre .ph { color: var(--amber); }
-  .cmd pre .nw { white-space: nowrap; }
+  /* a group (a flag and its value) moves to the next line whole, and breaks
+     inside only when it is wider than a line by itself (phones) */
+  .cmd pre .nw { display: inline-block; max-width: 100%; vertical-align: top; }
   .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; align-items: center; }
   button, .btn {
     font: inherit; font-size: 13px; font-weight: 600; color: #cfe0ef; background: #1e2d3d;
@@ -578,23 +580,50 @@
 
     var pre = $('cmd'), text = '', incomplete = [];
     pre.textContent = '';
+    // Lay the command out in groups that never split inside: a flag with
+    // its value ("--workgroup mylab", "| sudo bash"), breaking only between
+    // groups -- and a URL at its ? and &. Grouping is done here from the
+    // words, so every mode wraps the same way however its parts were built.
+    // Spaces stay plain spaces: a hand-selected copy must still run.
+    var group = null, gap = false;
+    function flush() {
+      if (group === null) return;
+      var nw = document.createElement('span'); nw.className = 'nw';
+      // a URL too long for the line breaks at a path / or its ? and &,
+      // not mid-word (and never inside the scheme's //)
+      group.split(/(?<=[?&]|[^\/:]\/)/).forEach(function (bit, i) {
+        if (i) nw.appendChild(document.createElement('wbr'));
+        nw.appendChild(document.createTextNode(bit));
+      });
+      pre.appendChild(nw);
+      group = null;
+    }
     parts.forEach(function (p) {
+      text += p.text;
       if (p.ph) {
+        flush();
+        if (gap) pre.appendChild(document.createTextNode(' '));
+        gap = false;
         var s = document.createElement('span'); s.className = 'ph'; s.textContent = p.text;
         pre.appendChild(s); incomplete.push(p.text);
-      } else if (/[?&]/.test(p.text)) {
-        // break a long URL at its ? and & rather than mid-word
-        p.text.split(/(?<=[?&])/).forEach(function (bit, i) {
-          if (i) pre.appendChild(document.createElement('wbr'));
-          pre.appendChild(document.createTextNode(bit));
-        });
-      } else {
-        // a flag and its value stay on one line ("--time-role", not "--\ntime-role")
-        var nw = document.createElement('span'); nw.className = 'nw'; nw.textContent = p.text;
-        pre.appendChild(nw);
+        return;
       }
-      text += p.text;
+      (p.text.match(/ +|[^ ]+/g) || []).forEach(function (tok) {
+        if (tok.charAt(0) === ' ') { gap = true; return; }
+        // a new group at the start, a flag, a pipe or a URL; anything else
+        // (a value, "sudo", "bash") rides with the group before it
+        if (group === null || /^[-|]|:\/\//.test(tok)) {
+          flush();
+          if (gap) pre.appendChild(document.createTextNode(' '));
+          group = tok;
+        } else {
+          group += (gap ? ' ' : '') + tok;
+        }
+        gap = false;
+      });
     });
+    flush();
+    if (gap) pre.appendChild(document.createTextNode(' '));
     pre.dataset.cmd = text;
     var bad = warn.some(function (w) { return w.err; });
     var copy = $('copy');
