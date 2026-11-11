@@ -1,0 +1,778 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>dserv</title>
+<!--
+  The registry's landing page (handleLandingPage, embedded). A configurator:
+  the visitor says what the box is, the page writes the /setup one-liner.
+
+  What a profile installs is never decided here. /setup/profiles is inlined
+  below as PROFILES, and /setup/plan answers what a profile installs, offers
+  and turns off -- the same resolveBootstrap the served script comes from.
+  This page only decides how the command is SPELLED: which knobs ride in the
+  URL (what the box is: profile, add-ons, rig) and which are flags after
+  `bash -s --` (what this run does).
+-->
+<style>
+  :root {
+    --bg: #0f1419; --panel: #16202a; --panel-2: #1a2634; --well: #0b0f14;
+    --line: #2f3336; --line-soft: #1f2327;
+    --text: #e7e9ea; --text-2: #9fb0bf; --muted: #71767b;
+    --blue: #60a5fa; --green: #34d399; --amber: #fbbf24; --red: #f87171;
+    --code: #d7e3ee; --code-2: #a9c7e0;
+    --mono: 'SF Mono', ui-monospace, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg); color: var(--text); line-height: 1.5;
+    min-height: 100vh; -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--blue); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code { font-family: var(--mono); font-size: .88em; color: var(--code-2);
+         background: var(--panel-2); padding: 1px 5px; border-radius: 4px; }
+
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 40px 24px 48px; }
+  header { display: flex; align-items: baseline; gap: 18px; flex-wrap: wrap; margin-bottom: 28px; }
+  h1 {
+    font-size: 44px; font-weight: 800; letter-spacing: -1.5px; line-height: 1;
+    background: linear-gradient(135deg, #60a5fa, #34d399);
+    -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+  }
+  header p { color: var(--text-2); font-size: 16px; }
+
+  .layout { display: grid; grid-template-columns: minmax(0, 1fr) 430px; gap: 24px; align-items: start; }
+  @media (max-width: 920px) { .layout { grid-template-columns: minmax(0, 1fr); } }
+
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 20px 22px; margin-bottom: 16px; }
+  .card h2 { font-size: 13px; font-weight: 650; text-transform: uppercase; letter-spacing: 1.2px;
+             color: var(--muted); margin-bottom: 14px; }
+  .hint { font-size: 13px; color: var(--muted); margin-top: 8px; }
+  .hint code { font-size: 12px; }
+
+  /* choice tiles: the task, and the profile */
+  .tiles { display: grid; gap: 10px; }
+  .tiles.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .tiles.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  @media (max-width: 620px) { .tiles.three, .tiles.two { grid-template-columns: minmax(0, 1fr); } }
+  .tile { position: relative; display: block; cursor: pointer; border: 1px solid var(--line);
+          border-radius: 10px; padding: 12px 14px; background: var(--well); transition: border-color .12s, background .12s; }
+  .tile:hover { border-color: #3b5168; }
+  .tile input { position: absolute; opacity: 0; pointer-events: none; }
+  .tile .t { display: block; font-weight: 600; font-size: 15px; color: var(--text); }
+  .tile .d { display: block; font-size: 13px; color: var(--text-2); margin-top: 3px; }
+  .tile .tag { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-left: 6px; font-weight: 400; }
+  .tile:has(input:checked) { border-color: var(--blue); background: #132233; }
+  .tile:has(input:focus-visible) { outline: 2px solid var(--blue); outline-offset: 2px; }
+
+  /* fields */
+  .field { margin-top: 14px; }
+  .field:first-of-type { margin-top: 0; }
+  .field > label, .field > .label { display: block; font-size: 13.5px; font-weight: 600; color: var(--text); margin-bottom: 6px; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; }
+  .row > * { flex: 1 1 180px; }
+  input[type=text], select {
+    width: 100%; font: inherit; font-size: 14px; color: var(--text); background: var(--well);
+    border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px;
+  }
+  input[type=text] { font-family: var(--mono); font-size: 13.5px; }
+  input[type=text]:focus, select:focus { outline: none; border-color: var(--blue); }
+  input[type=text].bad { border-color: var(--red); }
+  .check { display: flex; gap: 10px; align-items: flex-start; cursor: pointer; padding: 6px 0; }
+  .check input { margin-top: 3px; accent-color: var(--blue); width: 16px; height: 16px; flex-shrink: 0; }
+  .check .t { font-size: 14px; color: var(--text); }
+  .check .d { display: block; font-size: 13px; color: var(--muted); }
+  details { margin-top: 10px; }
+  summary { cursor: pointer; font-size: 13px; color: var(--text-2); }
+  details[open] summary { margin-bottom: 10px; }
+  [hidden] { display: none !important; }
+
+  /* the output */
+  .out { position: sticky; top: 20px; }
+  @media (max-width: 920px) { .out { position: static; } }
+  .out .card { border-color: #34506b; }
+  .cmd { background: var(--well); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+  .cmd pre { font-family: var(--mono); font-size: 13.5px; color: var(--code); white-space: pre-wrap;
+             overflow-wrap: anywhere; line-height: 1.6; }
+  .cmd pre::before { content: "$ "; color: var(--green); }
+  .cmd pre .ph { color: var(--amber); }
+  .cmd pre .nw { white-space: nowrap; }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; align-items: center; }
+  button, .btn {
+    font: inherit; font-size: 13px; font-weight: 600; color: #cfe0ef; background: #1e2d3d;
+    border: 1px solid #34506b; border-radius: 8px; padding: 7px 13px; cursor: pointer; transition: all .12s;
+  }
+  button:hover, .btn:hover { background: #244056; border-color: var(--blue); text-decoration: none; }
+  button.primary { background: #1d4ed8; border-color: #3b82f6; color: #fff; }
+  button.primary:hover { background: #2563eb; }
+  button.done { color: var(--green); border-color: var(--green); background: #14261d; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  .actions .check { padding: 0; margin-left: auto; }
+  .actions .check .t { font-size: 12.5px; color: var(--text-2); }
+
+  .warn { margin-top: 12px; font-size: 13px; color: var(--amber); background: #2a2310; border: 1px solid #5a4a1a;
+          border-radius: 8px; padding: 8px 11px; }
+  .warn.err { color: var(--red); background: #2a1414; border-color: #5a2424; }
+  .does { list-style: none; margin-top: 4px; }
+  .does li { font-size: 13.5px; color: var(--text-2); padding: 7px 0 7px 20px; border-bottom: 1px solid var(--line-soft); position: relative; }
+  .does li:last-child { border-bottom: 0; }
+  .does li::before { content: "›"; position: absolute; left: 4px; color: var(--muted); }
+  .does li.off::before { content: "×"; color: var(--red); }
+  .does li.dry::before { content: "◌"; color: var(--amber); }
+  .does strong { color: var(--text); font-weight: 600; }
+  .chips { display: inline-flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }
+  .chip { font-family: var(--mono); font-size: 11.5px; color: var(--code-2); background: var(--panel-2);
+          border: 1px solid var(--line); border-radius: 20px; padding: 1px 8px; }
+  .chip.addon { border-color: #2f6b52; color: #8de0bd; }
+
+  /* reference */
+  .ref { margin-top: 36px; }
+  .ref > h2 { font-size: 13px; font-weight: 650; text-transform: uppercase; letter-spacing: 1.2px; color: var(--muted); margin-bottom: 14px; }
+  .notes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+  @media (max-width: 760px) { .notes { grid-template-columns: minmax(0, 1fr); } }
+  .notes .card { margin: 0; }
+  .notes h3 { font-size: 15px; font-weight: 650; margin-bottom: 6px; }
+  .notes p { font-size: 13.5px; color: var(--text-2); }
+  .notes p + p { margin-top: 8px; }
+  .wgjump { display: flex; gap: 8px; margin-top: 10px; }
+  .wgjump input { flex: 1; }
+
+  footer { margin-top: 40px; padding-top: 22px; border-top: 1px solid var(--line); text-align: center;
+           font-size: 13px; color: var(--muted); }
+  footer .sep { margin: 0 10px; color: var(--line); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>dserv</h1>
+    <p>Data acquisition &amp; experimental control for the lab. Describe the machine; copy the command.</p>
+  </header>
+
+  <div class="layout">
+    <form id="cfg" autocomplete="off" onsubmit="return false">
+
+      <div class="card">
+        <h2>What are you doing?</h2>
+        <div class="tiles three" role="radiogroup">
+          <label class="tile"><input type="radio" name="mode" value="setup">
+            <span class="t">Set up or update a box</span>
+            <span class="d">A fresh Linux machine, or re-run on one to update it.</span></label>
+          <label class="tile"><input type="radio" name="mode" value="scripts">
+            <span class="t">Pull a workgroup&rsquo;s scripts</span>
+            <span class="d">ESS systems only, on a box set up earlier or a Mac.</span></label>
+          <label class="tile"><input type="radio" name="mode" value="clock">
+            <span class="t">Put a box on the site clock</span>
+            <span class="d">PTP/NTP tooling and a time role, on any Linux box.</span></label>
+        </div>
+      </div>
+
+      <!-- ===== set up / update ===== -->
+      <div data-mode="setup">
+        <div class="card">
+          <h2>What kind of box?</h2>
+          <div class="tiles two" id="profiles" role="radiogroup"></div>
+          <div class="field" id="mirror-field" hidden style="margin-top:14px">
+            <label for="mirror">Rig to mirror</label>
+            <input type="text" id="mirror" placeholder="its dserv host, e.g. officepi.local or 192.168.88.40" spellcheck="false">
+            <p class="hint">The display this box shows live. Left empty on a re-run, the box keeps the rig it already follows.</p>
+          </div>
+        </div>
+
+        <div class="card" id="addons-card" hidden>
+          <h2>Add-ons</h2>
+          <div id="addons"></div>
+          <p class="hint">Add-ons this box type can carry. Unticked ones can still be turned on later from the box&rsquo;s panel.</p>
+        </div>
+
+        <div class="card">
+          <h2>Workgroup &amp; scripts</h2>
+          <div class="field">
+            <label for="wg">Workgroup</label>
+            <input type="text" id="wg" data-share="wg" placeholder="e.g. mylab" spellcheck="false">
+            <p class="hint">Declared on the box (<code>local/rig.tcl</code>), replacing an earlier one. Leave empty to keep what the box already declares.</p>
+          </div>
+          <label class="check" style="margin-top:10px"><input type="checkbox" id="scripts">
+            <span><span class="t">Also pull the workgroup&rsquo;s ESS scripts</span>
+            <span class="d">Off by default: a fresh box runs the stock tree (blinky). The registry copy wins every collision, so push local edits first.</span></span></label>
+          <div id="scripts-more" hidden>
+            <details>
+              <summary>Who owns the tree, and where it lives</summary>
+              <div class="row">
+                <div class="field"><label for="user">Account</label>
+                  <input type="text" id="user" placeholder="whoever runs the command" spellcheck="false"></div>
+                <div class="field"><label for="sp">Systems path</label>
+                  <input type="text" id="sp" placeholder="~/systems" spellcheck="false"></div>
+              </div>
+              <p class="hint">A systems path given here is declared as the rig&rsquo;s <code>ess system_path</code>. Workgroup and tree move together, so one tree per workgroup (<code>~/systems-mylab</code>) makes switching a re-run of the other pair.</p>
+            </details>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Clock</h2>
+          <div class="row">
+            <div class="field"><label for="tr">Time role</label>
+              <select id="tr">
+                <option value="keep">Leave as declared (none on a fresh box)</option>
+                <option value="client">PTP client: follow the site clock (µs)</option>
+                <option value="ntp-client">NTP client: chrony, for NICs without PTP</option>
+                <option value="grandmaster">Grandmaster: this box defines site time</option>
+                <option value="none">Clear the declared role</option>
+              </select></div>
+            <div class="field" id="tra-field" hidden><label for="tra" id="tra-label">Interface</label>
+              <input type="text" id="tra" spellcheck="false"></div>
+          </div>
+          <p class="hint" id="tr-hint"></p>
+        </div>
+
+        <div class="card">
+          <h2>This run</h2>
+          <label class="check"><input type="checkbox" id="dry">
+            <span><span class="t">Dry run</span><span class="d">Show every step; change nothing.</span></span></label>
+          <label class="check"><input type="checkbox" id="reinstall">
+            <span><span class="t">Reinstall components</span><span class="d">Even those already at the current version: repairs a broken install.</span></span></label>
+        </div>
+      </div>
+
+      <!-- ===== scripts only ===== -->
+      <div data-mode="scripts" hidden>
+        <div class="card">
+          <h2>Workgroup &amp; scripts</h2>
+          <div class="field">
+            <label for="s-wg">Workgroup</label>
+            <input type="text" id="s-wg" placeholder="empty: refresh the box&rsquo;s own declared workgroup" spellcheck="false">
+            <p class="hint">Named, it is declared on the box: this is how a box joins a <em>new</em> workgroup&rsquo;s scripts. Nothing else is touched &mdash; no agent, components or services.</p>
+          </div>
+          <div class="row" style="margin-top:14px">
+            <div class="field"><label for="s-user">Account</label>
+              <input type="text" id="s-user" placeholder="whoever runs sudo" spellcheck="false"></div>
+            <div class="field"><label for="s-sp">Systems path</label>
+              <input type="text" id="s-sp" placeholder="~/systems" spellcheck="false"></div>
+          </div>
+          <p class="hint">Keeping a second workgroup&rsquo;s scripts? Give each its own tree (<code>~/systems-otherlab</code>); switching back is a re-run of the other pair.</p>
+          <label class="check" style="margin-top:12px"><input type="checkbox" id="s-dry">
+            <span><span class="t">Dry run</span><span class="d">Show every step; change nothing.</span></span></label>
+        </div>
+      </div>
+
+      <!-- ===== clock only ===== -->
+      <div data-mode="clock" hidden>
+        <div class="card">
+          <h2>Time role</h2>
+          <div class="row">
+            <div class="field"><label for="c-tr">Role</label>
+              <select id="c-tr">
+                <option value="tools">Install the tooling only</option>
+                <option value="client">PTP client: follow the site clock (µs)</option>
+                <option value="ntp-client">NTP client: chrony, for NICs without PTP</option>
+                <option value="grandmaster">Grandmaster: this box defines site time</option>
+              </select></div>
+            <div class="field" id="c-tra-field" hidden><label for="c-tra" id="c-tra-label">Interface</label>
+              <input type="text" id="c-tra" spellcheck="false"></div>
+          </div>
+          <p class="hint">Everything installs inert; a role is a deliberate, per-host step. Not sure which interface? Install the tooling, then run <code>dserv-ptp-setup candidates</code>. The role is recorded in <code>box.conf</code> either way.</p>
+        </div>
+      </div>
+    </form>
+
+    <aside class="out">
+      <div class="card">
+        <h2>Run this on the box</h2>
+        <div class="cmd"><pre id="cmd"></pre></div>
+        <div class="actions">
+          <button type="button" class="primary" id="copy">Copy</button>
+          <a class="btn" id="view" target="_blank" rel="noopener">View script</a>
+          <button type="button" id="share" title="Copy a link that opens this page with these choices">Share</button>
+          <label class="check" title="For a box without curl"><input type="checkbox" id="wget"><span class="t">wget</span></label>
+        </div>
+        <div id="warnings"></div>
+      </div>
+      <div class="card">
+        <h2>What it does</h2>
+        <ul class="does" id="does"></ul>
+      </div>
+    </aside>
+  </div>
+
+  <section class="ref">
+    <h2>Good to know</h2>
+    <div class="notes">
+      <div class="card">
+        <h3>Re-run to update</h3>
+        <p>The same command updates a box: components move to their latest release, and what the box declares (time role, mirrored rig) is kept unless the command says otherwise.</p>
+      </div>
+      <div class="card">
+        <h3>Changing what a box is</h3>
+        <p>A box type is a declaration. Re-running with a different one installs what the new type needs and turns off the services of components it leaves out &mdash; listed under &ldquo;What it does&rdquo; before you run anything.</p>
+      </div>
+      <div class="card">
+        <h3>How the command is put together</h3>
+        <p>The URL says what the box <em>is</em> (type, add-ons, rig); flags after <code>bash -s --</code> say what this run <em>does</em>. The URL is quoted because <code>?</code> and <code>&amp;</code> mean something to the shell &mdash; unquoted, zsh stops at &ldquo;no matches found&rdquo; and bash backgrounds the command at the <code>&amp;</code>.</p>
+        <p>Every option: <code>curl -sSL __BASE__/setup | bash -s -- --help</code></p>
+      </div>
+      <div class="card">
+        <h3>Lab time</h3>
+        <p>A <strong>grandmaster</strong> defines a site&rsquo;s time; PTP <strong>clients</strong> follow it at microseconds on NICs that hardware-timestamp; <strong>NTP clients</strong> (chrony) cover the rest at tens of microseconds on a wired LAN. Exactly one grandmaster per segment.</p>
+        <p>Re-running the clock command updates the tooling and restarts PTP daemons that changed, so clients re-lock: do it between sessions.</p>
+      </div>
+      <div class="card">
+        <h3>A workgroup&rsquo;s machines</h3>
+        <p>Every box that has reported in, with its versions and clock.</p>
+        <div class="wgjump"><input type="text" id="jump" placeholder="workgroup" spellcheck="false"><button type="button" id="jump-go">Open</button></div>
+      </div>
+      <div class="card">
+        <h3>Box types</h3>
+        <p id="profile-list"></p>
+        <p>As JSON: <a href="/setup/profiles"><code>/setup/profiles</code></a>; what one installs: <code>/setup/plan?profile=NAME</code>.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <a href="https://github.com/SheinbergLab/dserv">GitHub</a>
+    <span class="sep">·</span>
+    <span>dserv-agent __VERSION__</span>
+  </footer>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var BASE = __BASE_JSON__;
+  var PROFILES = __PROFILES_JSON__;
+
+  // The registry's own validators, so the page refuses what /setup would.
+  var RE = {
+    host: /^[A-Za-z0-9][A-Za-z0-9.:-]{0,252}$/,   // mirrorRigRe
+    arg: /^[A-Za-z0-9._:-]+$/,                    // timeArgRe
+    wg: /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/,      // workgroupRe
+    user: /^[A-Za-z_][A-Za-z0-9_.-]*$/
+  };
+  var ROLES = { client: 1, 'ntp-client': 1, grandmaster: 1 };
+
+  var $ = function (id) { return document.getElementById(id); };
+  var store = {
+    get: function (k) { try { return localStorage.getItem('dservnet.' + k) || ''; } catch (e) { return ''; } },
+    set: function (k, v) { try { localStorage.setItem('dservnet.' + k, v); } catch (e) {} }
+  };
+
+  // ---------- state, and the share link that carries it ----------
+
+  var S = {
+    mode: 'setup', profile: 'incage', with: [], mirror: '',
+    wg: '', scripts: false, user: '', sp: '', tr: 'keep', tra: '',
+    dry: false, reinstall: false,
+    swg: '', suser: '', ssp: '', sdry: false,
+    ctr: 'tools', ctra: '',
+    wget: false
+  };
+  var KEYS = { mode: 'm', profile: 'p', mirror: 'rig', wg: 'wg', user: 'u', sp: 'sp', tr: 'tr', tra: 'ta',
+               swg: 'swg', suser: 'su', ssp: 'ssp', ctr: 'ctr', ctra: 'cta' };
+  var FLAGS = { scripts: 's', dry: 'dry', reinstall: 're', sdry: 'sdry', wget: 'wget' };
+
+  var DEFAULTS = JSON.parse(JSON.stringify(S));
+  function readHash() {
+    var h = location.hash.replace(/^#/, '');
+    if (!h) return false;
+    var wget = S.wget;
+    Object.keys(DEFAULTS).forEach(function (k) { S[k] = JSON.parse(JSON.stringify(DEFAULTS[k])); });
+    S.wget = wget;
+    var q = new URLSearchParams(h);
+    Object.keys(KEYS).forEach(function (k) { if (q.has(KEYS[k])) S[k] = q.get(KEYS[k]); });
+    Object.keys(FLAGS).forEach(function (k) { S[k] = q.get(FLAGS[k]) === '1'; });
+    if (q.get('w')) S.with = q.get('w').split(',').filter(Boolean);
+    return true;
+  }
+  function writeHash() {
+    var q = new URLSearchParams();
+    Object.keys(KEYS).forEach(function (k) {
+      if (S[k] && !(k === 'mode' && S[k] === 'setup') && !(k === 'profile' && S[k] === 'incage')
+          && !(k === 'tr' && S[k] === 'keep') && !(k === 'ctr' && S[k] === 'tools')) q.set(KEYS[k], S[k]);
+    });
+    Object.keys(FLAGS).forEach(function (k) { if (S[k]) q.set(FLAGS[k], '1'); });
+    if (S.with.length) q.set('w', S.with.join(','));
+    var s = q.toString();
+    history.replaceState(null, '', s ? '#' + s : location.pathname + location.search);
+  }
+
+  // ---------- shell spelling ----------
+
+  function sq(s) {   // one shell word
+    return /^[A-Za-z0-9._\/:=@%+,-]+$/.test(s) ? s : "'" + s.replace(/'/g, "'\\''") + "'";
+  }
+  function sqPath(s) {   // keep a leading ~ expandable: the invoking shell resolves it
+    if (s === '~') return s;
+    if (s.indexOf('~/') === 0) return '~/' + (s.length > 2 ? sq(s.slice(2)) : '');
+    return sq(s);
+  }
+  function fetcher(url) {
+    var u = /[?&]/.test(url) ? '"' + url + '"' : url;
+    return (S.wget ? 'wget -qO- ' : 'curl -sSL ') + u;
+  }
+
+  // A command is a list of parts; placeholders show in amber and block Copy.
+  function P(text, ph) { return { text: text, ph: !!ph }; }
+
+  // ---------- the three commands ----------
+
+  var plans = {};      // profile -> /setup/plan (no ?with: add-on deps are in the set already)
+  var planErr = '';
+
+  function setupCommand(warn, does) {
+    var plan = plans[S.profile];
+    var addonIds = plan ? plan.addons.map(function (a) { return a.id; }) : [];
+    var withIds = S.with.filter(function (id) { return addonIds.indexOf(id) >= 0; });
+
+    var qs = ['profile=' + S.profile];
+    if (withIds.length) qs.push('with=' + withIds.join(','));
+    var parts = [];
+    var mirrorOK = S.mirror && RE.host.test(S.mirror);
+    if (S.profile === 'mirror' && S.mirror) {
+      if (mirrorOK) qs.push('mirror=' + S.mirror);
+      else warn.push({ err: true, text: 'The rig is a host name or address: letters, digits, dots, colons and dashes.' });
+    }
+    var url = BASE + '/setup?' + qs.join('&');
+    parts.push(P(fetcher(url) + ' | bash'));
+
+    // Each flag is a list of parts, so a placeholder can sit inside one.
+    var flags = [];
+    if (S.wg) {
+      if (RE.wg.test(S.wg)) flags.push([P('--workgroup ' + sq(S.wg))]);
+      else warn.push({ err: true, text: 'A workgroup name is letters, digits, \u201c.\u201d, \u201c_\u201d and \u201c-\u201d.' });
+    }
+    if (S.scripts) {
+      flags.push([P('--scripts')]);
+      if (S.user) {
+        if (RE.user.test(S.user)) flags.push([P('--user ' + sq(S.user))]);
+        else warn.push({ err: true, text: 'That account name will not resolve.' });
+      }
+      if (S.sp) flags.push([P('--systems-path ' + sqPath(S.sp))]);
+    }
+    if (S.tr === 'none') flags.push([P('--time-role none')]);
+    else if (ROLES[S.tr]) {
+      if (S.tra && RE.arg.test(S.tra)) flags.push([P('--time-role "' + S.tr + ' ' + S.tra + '"')]);
+      else {
+        flags.push([P('--time-role "' + S.tr + ' '), P(S.tr === 'ntp-client' ? 'SERVER' : 'IFACE', true), P('"')]);
+        if (S.tra) warn.push({ err: true, text: 'An interface or server is letters, digits, \u201c.\u201d, \u201c_\u201d, \u201c:\u201d and \u201c-\u201d.' });
+      }
+    }
+    if (S.dry) flags.push([P('--dry-run')]);
+    if (S.reinstall) flags.push([P('--reinstall')]);
+    if (flags.length) {
+      parts.push(P(' -s --'));
+      flags.forEach(function (f) { parts.push(P(' ')); parts.push.apply(parts, f); });
+    }
+
+    if (S.profile === 'mirror' && !S.mirror) {
+      warn.push({ text: 'No rig named: fine on a re-run (the box keeps its rig), but a new mirror needs one.' });
+    }
+    if (S.scripts && !S.wg) {
+      warn.push({ text: 'Scripts with no workgroup pull the box\u2019s declared one' +
+        (plan && plan.workgroup ? ', or \u201c' + plan.workgroup + '\u201d on a fresh box.' : '; a fresh box has none to pull.') });
+    }
+
+    // what it does
+    if (planErr) warn.push({ err: true, text: planErr });
+    if (plan) {
+      var inst = plan.install.map(function (c) { return { n: c.name || c.id, addon: false }; });
+      plan.addons.forEach(function (a) { if (withIds.indexOf(a.id) >= 0) inst.push({ n: a.name || a.id, addon: true }); });
+      does.push({ html: '<strong>Installs</strong> and keeps current:<br>' + chips(inst) });
+      var hasStim = plan.install.some(function (c) { return c.id === 'stim2'; });
+      var mode = {
+        '': hasStim ? 'stim2 runs <strong>fullscreen</strong> on this box\u2019s display (<code>stim2.service</code>).' : '',
+        windowed: 'stim2 gets a desktop <strong>launcher</strong>; no fullscreen service.',
+        mirror: 'stim2 shows <strong>' + esc(mirrorOK ? S.mirror : 'the rig') + '</strong>\u2019s display live (<code>stim2-mirror-display</code>, X11 on amd64, cage on arm64).',
+        headless: 'stim2 is there to <strong>render trial clips</strong>; its display service stays off.'
+      }[plan.stimMode];
+      if (mode) does.push({ html: mode });
+      if (plan.retire.length) {
+        does.push({ cls: 'off', html: '<strong>Turns off</strong>, if running: ' +
+          plan.retire.map(function (u) { return '<code>' + esc(u) + '</code>'; }).join(', ') + ' (not part of this box type).' });
+      }
+    }
+    does.push({ html: S.wg && RE.wg.test(S.wg)
+      ? 'Declares workgroup <strong>' + esc(S.wg) + '</strong> and registers the box there.'
+      : 'Keeps the box\u2019s declared workgroup' + (plan && plan.workgroup ? ' (a fresh box: <strong>' + esc(plan.workgroup) + '</strong>).' : '.') });
+    does.push({ html: S.scripts
+      ? 'Pulls the workgroup\u2019s ESS scripts into <code>' + esc((S.sp || '~' + (S.user || '') + '/systems') + '/ess') + '</code>; registry copy wins.'
+      : 'Leaves ESS scripts alone (a fresh box gets the stock tree).' });
+    does.push({ html: {
+      keep: 'Keeps the declared time role, if any.',
+      none: 'Clears the declared time role.'
+    }[S.tr] || 'Declares and applies time role <strong>' + esc(S.tr + ' ' + (S.tra || '\u2026')) + '</strong> (recorded in <code>box.conf</code>).' });
+    if (S.reinstall) does.push({ html: 'Reinstalls every component, even at the current version.' });
+    does.push({ html: 'Re-runs itself under <code>sudo</code> (asks for a password). Debian/Ubuntu only.' });
+    if (S.dry) does.push({ cls: 'dry', html: '<strong>Dry run:</strong> prints each step and changes nothing.' });
+    return parts;
+  }
+
+  function scriptsCommand(warn, does) {
+    var flags = ['--scripts-only'];
+    if (S.swg) {
+      if (RE.wg.test(S.swg)) flags.push('--workgroup ' + sq(S.swg));
+      else warn.push({ err: true, text: 'A workgroup name is letters, digits, \u201c.\u201d, \u201c_\u201d and \u201c-\u201d.' });
+    }
+    if (S.suser) {
+      if (RE.user.test(S.suser)) flags.push('--user ' + sq(S.suser));
+      else warn.push({ err: true, text: 'That account name will not resolve.' });
+    }
+    if (S.ssp) flags.push('--systems-path ' + sqPath(S.ssp));
+    if (S.sdry) flags.push('--dry-run');
+    does.push({ html: S.swg && RE.wg.test(S.swg)
+      ? 'Declares workgroup <strong>' + esc(S.swg) + '</strong> on the box and pulls its ESS scripts.'
+      : 'Refreshes the scripts of the workgroup the box already declares.' });
+    does.push({ html: 'Into <code>' + esc((S.ssp || '~' + (S.suser || '') + '/systems') + '/ess') + '</code>' +
+      (S.ssp ? ', declared as the rig\u2019s <code>ess system_path</code>.' : '.') + ' The registry copy wins every collision.' });
+    does.push({ html: 'Touches nothing else: no agent, components or services.' });
+    does.push({ html: 'A running dserv picks it up at its next restart or system load.' });
+    does.push({ html: 'Runs on Linux or macOS.' });
+    if (S.sdry) does.push({ cls: 'dry', html: '<strong>Dry run:</strong> prints each step and changes nothing.' });
+    return [P(fetcher(BASE + '/setup') + ' | sudo bash -s -- ' + flags.join(' '))];
+  }
+
+  function clockCommand(warn, does) {
+    var parts = [P(fetcher(BASE + '/ptp/setup') + ' | sudo bash')];
+    does.push({ html: 'Installs or updates the PTP/NTP tooling (<code>dserv-ptp-setup</code>), inert.' });
+    if (ROLES[S.ctr]) {
+      if (S.ctra && RE.arg.test(S.ctra)) parts.push(P(' -s -- ' + S.ctr + ' ' + S.ctra));
+      else {
+        parts.push(P(' -s -- ' + S.ctr + ' '), P(S.ctr === 'ntp-client' ? 'SERVER' : 'IFACE', true));
+        if (S.ctra) warn.push({ err: true, text: 'An interface or server is letters, digits, \u201c.\u201d, \u201c_\u201d, \u201c:\u201d and \u201c-\u201d.' });
+      }
+      does.push({ html: 'Applies time role <strong>' + esc(S.ctr + ' ' + (S.ctra || '\u2026')) + '</strong> and records it in <code>box.conf</code>.' });
+      if (S.ctr === 'client') does.push({ html: 'Refuses if no sane grandmaster is visible on the segment.' });
+      if (S.ctr === 'grandmaster') warn.push({ text: 'One grandmaster per segment: make sure no other box holds this role.' });
+    }
+    does.push({ html: 'Restarts PTP daemons whose files changed, so clients re-lock: run it between sessions.' });
+    return parts;
+  }
+
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  function chips(list) {
+    return '<span class="chips">' + list.map(function (c) {
+      return '<span class="chip' + (c.addon ? ' addon' : '') + '">' + esc(c.n) + '</span>';
+    }).join('') + '</span>';
+  }
+
+  // ---------- render ----------
+
+  function render() {
+    document.querySelectorAll('[data-mode]').forEach(function (el) { el.hidden = el.getAttribute('data-mode') !== S.mode; });
+
+    var warn = [], does = [], parts;
+    if (S.mode === 'scripts') parts = scriptsCommand(warn, does);
+    else if (S.mode === 'clock') parts = clockCommand(warn, does);
+    else parts = setupCommand(warn, does);
+
+    var pre = $('cmd'), text = '', incomplete = [];
+    pre.textContent = '';
+    parts.forEach(function (p) {
+      if (p.ph) {
+        var s = document.createElement('span'); s.className = 'ph'; s.textContent = p.text;
+        pre.appendChild(s); incomplete.push(p.text);
+      } else if (/[?&]/.test(p.text)) {
+        // break a long URL at its ? and & rather than mid-word
+        p.text.split(/(?<=[?&])/).forEach(function (bit, i) {
+          if (i) pre.appendChild(document.createElement('wbr'));
+          pre.appendChild(document.createTextNode(bit));
+        });
+      } else {
+        // a flag and its value stay on one line ("--time-role", not "--\ntime-role")
+        var nw = document.createElement('span'); nw.className = 'nw'; nw.textContent = p.text;
+        pre.appendChild(nw);
+      }
+      text += p.text;
+    });
+    pre.dataset.cmd = text;
+    var bad = warn.some(function (w) { return w.err; });
+    var copy = $('copy');
+    copy.disabled = incomplete.length > 0 || bad;
+    copy.textContent = incomplete.length ? 'Fill in ' + incomplete.join(', ') : 'Copy';
+
+    // the actual script this command fetches, for reading before running
+    var m = text.match(/(https?:\/\/[^\s"]+)/);
+    $('view').href = m ? m[1] : BASE + '/setup';
+
+    $('warnings').innerHTML = warn.map(function (w) {
+      return '<div class="warn' + (w.err ? ' err' : '') + '">' + esc(w.text) + '</div>';
+    }).join('');
+    $('does').innerHTML = does.map(function (d) {
+      return '<li' + (d.cls ? ' class="' + d.cls + '"' : '') + '>' + d.html + '</li>';
+    }).join('');
+    writeHash();
+  }
+
+  // ---------- profiles and the plan ----------
+
+  function renderProfiles() {
+    var box = $('profiles');
+    box.innerHTML = PROFILES.map(function (p) {
+      return '<label class="tile"><input type="radio" name="profile" value="' + esc(p.name) + '">' +
+        '<span class="t">' + esc(p.title || p.name) + '<span class="tag">' + esc(p.name) + '</span></span>' +
+        '<span class="d">' + esc(p.description) + '</span></label>';
+    }).join('');
+    $('profile-list').innerHTML = PROFILES.map(function (p) {
+      return '<code>' + esc(p.name) + '</code> ' + esc(p.description);
+    }).join('<br>');
+  }
+
+  function renderAddons() {
+    var plan = plans[S.profile];
+    var list = plan ? plan.addons : [];
+    $('addons-card').hidden = !list.length;
+    $('addons').innerHTML = list.map(function (a) {
+      return '<label class="check"><input type="checkbox" data-addon="' + esc(a.id) + '"' +
+        (S.with.indexOf(a.id) >= 0 ? ' checked' : '') + '><span><span class="t">' + esc(a.name || a.id) +
+        '</span><span class="d">' + esc(a.description || '') + '</span></span></label>';
+    }).join('');
+  }
+
+  var pending = {};
+  function loadPlan() {
+    var name = S.profile;
+    if (plans[name]) { planErr = ''; renderAddons(); render(); return; }
+    if (pending[name]) return;
+    pending[name] = true;
+    fetch('/setup/plan?profile=' + encodeURIComponent(name))
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+      .then(function (res) {
+        delete pending[name];
+        if (!res.ok) { planErr = res.j.error || 'The registry could not resolve this box type.'; }
+        else { plans[name] = res.j; planErr = ''; }
+        if (name === S.profile) { renderAddons(); render(); }
+      })
+      .catch(function () {
+        delete pending[name];
+        planErr = 'Could not ask the registry what this box type installs.';
+        if (name === S.profile) render();
+      });
+  }
+
+  // ---------- wiring ----------
+
+  function syncInputs() {
+    document.querySelectorAll('input[name=mode]').forEach(function (r) { r.checked = r.value === S.mode; });
+    document.querySelectorAll('input[name=profile]').forEach(function (r) { r.checked = r.value === S.profile; });
+    $('mirror').value = S.mirror; $('wg').value = S.wg; $('scripts').checked = S.scripts;
+    $('user').value = S.user; $('sp').value = S.sp; $('tr').value = S.tr; $('tra').value = S.tra;
+    $('dry').checked = S.dry; $('reinstall').checked = S.reinstall;
+    $('s-wg').value = S.swg; $('s-user').value = S.suser; $('s-sp').value = S.ssp; $('s-dry').checked = S.sdry;
+    $('c-tr').value = S.ctr; $('c-tra').value = S.ctra; $('wget').checked = S.wget;
+    if (S.user || S.sp) $('scripts-more').querySelector('details').open = true;
+    syncConditional();
+  }
+
+  function roleField(role, field, label, input) {
+    var needs = !!ROLES[role];
+    $(field).hidden = !needs;
+    $(label).textContent = role === 'ntp-client' ? 'NTP server' : 'Interface';
+    $(input).placeholder = role === 'ntp-client' ? 'e.g. 192.168.88.29' : 'e.g. eth0';
+  }
+
+  function syncConditional() {
+    $('mirror-field').hidden = S.profile !== 'mirror';
+    $('scripts-more').hidden = !S.scripts;
+    roleField(S.tr, 'tra-field', 'tra-label', 'tra');
+    roleField(S.ctr, 'c-tra-field', 'c-tra-label', 'c-tra');
+    $('tr-hint').textContent = {
+      keep: 'A re-run keeps whatever role the box already declares.',
+      client: 'Follows the site grandmaster on a NIC that can hardware-timestamp.',
+      'ntp-client': 'chrony against a server on the LAN: for boxes whose NIC cannot do PTP.',
+      grandmaster: 'Exactly one per segment. Applied last, after the services are up.',
+      none: 'Removes the declaration from box.conf; the box keeps its current clock setup.'
+    }[S.tr] || '';
+    ['mirror', 'wg', 'user', 'tra', 's-wg', 's-user', 'c-tra'].forEach(function (id) {
+      var v = $(id).value, re = { mirror: RE.host, wg: RE.wg, 's-wg': RE.wg, user: RE.user, 's-user': RE.user, tra: RE.arg, 'c-tra': RE.arg }[id];
+      $(id).classList.toggle('bad', !!v && !re.test(v));
+    });
+  }
+
+  var TEXT = { mirror: 'mirror', wg: 'wg', user: 'user', sp: 'sp', tra: 'tra',
+               's-wg': 'swg', 's-user': 'suser', 's-sp': 'ssp', 'c-tra': 'ctra' };
+  var BOOL = { scripts: 'scripts', dry: 'dry', reinstall: 'reinstall', 's-dry': 'sdry', wget: 'wget' };
+
+  $('cfg').addEventListener('input', onChange);
+  $('cfg').addEventListener('change', onChange);
+  $('wget').addEventListener('change', onChange);
+  function onChange(e) {
+    var t = e.target, id = t.id;
+    if (t.name === 'mode') S.mode = t.value;
+    else if (t.name === 'profile') { S.profile = t.value; syncConditional(); loadPlan(); return; }
+    else if (t.dataset.addon) {
+      var a = t.dataset.addon;
+      S.with = S.with.filter(function (x) { return x !== a; });
+      if (t.checked) S.with.push(a);
+    }
+    else if (TEXT[id]) S[TEXT[id]] = t.value.trim();
+    else if (BOOL[id]) S[BOOL[id]] = t.checked;
+    else if (id === 'tr') S.tr = t.value;
+    else if (id === 'c-tr') S.ctr = t.value;
+    if (id === 'wg' || id === 's-wg') store.set('wg', t.value.trim());
+    syncConditional();
+    render();
+  }
+
+  function flash(btn, label) {
+    var prev = btn.textContent;
+    btn.textContent = label; btn.classList.add('done');
+    setTimeout(function () { btn.textContent = prev; btn.classList.remove('done'); }, 1400);
+  }
+  // navigator.clipboard needs a secure context, and a lab-internal registry
+  // is often plain http: fall back to the old selection copy there.
+  function copyText(text, btn, label) {
+    function legacy() {
+      var ta = document.createElement('textarea');
+      ta.value = text; ta.setAttribute('readonly', ''); ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      var ok = false;
+      try { ok = document.execCommand('copy'); } catch (e) {}
+      document.body.removeChild(ta);
+      flash(btn, ok ? label : 'Copy failed');
+    }
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text).then(function () { flash(btn, label); }, legacy);
+    } else legacy();
+  }
+  $('copy').addEventListener('click', function () { copyText($('cmd').dataset.cmd, this, 'Copied'); });
+  $('share').addEventListener('click', function () { copyText(location.href, this, 'Link copied'); });
+  function jump() {
+    var v = $('jump').value.trim();
+    if (v && RE.wg.test(v)) location.href = '/w/' + encodeURIComponent(v);
+  }
+  $('jump-go').addEventListener('click', jump);
+  $('jump').addEventListener('keydown', function (e) { if (e.key === 'Enter') jump(); });
+
+  // ---------- start ----------
+
+  // Hash changes from outside (a share link opened in a tab already on this
+  // page). writeHash uses replaceState, which fires no hashchange, so this
+  // never answers the page's own writes.
+  window.addEventListener('hashchange', function () { if (readHash()) start(); });
+
+  function start() {
+    if (!PROFILES.some(function (p) { return p.name === S.profile; })) S.profile = PROFILES.length ? PROFILES[0].name : 'incage';
+    if (S.tr !== 'keep' && S.tr !== 'none' && !ROLES[S.tr]) S.tr = 'keep';
+    if (S.ctr !== 'tools' && !ROLES[S.ctr]) S.ctr = 'tools';
+    if (['setup', 'scripts', 'clock'].indexOf(S.mode) < 0) S.mode = 'setup';
+    syncInputs();
+    render();
+    loadPlan();
+  }
+
+  renderProfiles();
+  if (!readHash()) S.wg = S.swg = store.get('wg');   // the account is per box: never remembered into a new page
+  $('jump').value = store.get('wg');
+  start();
+})();
+</script>
+</body>
+</html>

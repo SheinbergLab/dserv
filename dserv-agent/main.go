@@ -868,243 +868,48 @@ func (a *Agent) handleServerStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// landingPage is the registry's landing page: a configurator that writes the
+// /setup one-liner (landing.html). Placeholders are filled per request.
+//
+//go:embed landing.html
+var landingPage string
+
 // Landing page for public server mode
 func (a *Agent) handleLandingPage(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
 		http.NotFound(w, r)
 		return
 	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	io.WriteString(w, a.renderLandingPage(requestBaseURL(r)))
+}
 
-	// Derive the base URL from the request so the copy-paste commands work on
-	// whichever registry served this page (dserv.net or a lab-internal one),
-	// matching how handleBootstrap resolves its serverURL.
+// requestBaseURL derives the base URL from the request, so the commands the
+// page writes work on whichever registry served it (dserv.net or a
+// lab-internal one), matching how handleBootstrap resolves its serverURL.
+func requestBaseURL(r *http.Request) string {
 	scheme := "http"
 	if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
 		scheme = "https"
 	}
-	base := fmt.Sprintf("%s://%s", scheme, r.Host)
+	return fmt.Sprintf("%s://%s", scheme, r.Host)
+}
 
-	// The RP2350/WIZnet extio card is deliberately not advertised: that board
-	// is being retired in favour of the NXP parts, and pointing new boxes at a
-	// line we are winding down is worse than saying nothing. /extio/setup still
-	// works for the boards already in service -- this only stops promoting it.
-	// Restore from git history (or write the NXP equivalent) when there is a
-	// board bootstrap worth sending people to.
-	// No extio card, deliberately: /extio/setup still serves the RP2350/WIZnet
-	// provisioning flow, but that hardware is being superseded by the NXP
-	// boxes, which do not provision via picotool. Advertise a board path here
-	// again when one exists for them.
-
-	// Profiles, straight from the same list the bootstrap resolves against, so
-	// this page cannot advertise a profile that does not exist. incage is the
-	// default and gets its own card above; the rest are named here.
-	otherProfiles := ""
-	for _, p := range a.getProfiles() {
-		if p.Name == "incage" || p.Name == "stim" {
-			continue
-		}
-		otherProfiles += fmt.Sprintf(
-			"<li><code>?profile=%s</code> — %s</li>", p.Name, html.EscapeString(p.Description))
-	}
-	if otherProfiles != "" {
-		otherProfiles = "<ul class=\"profiles\">" + otherProfiles + "</ul>"
-	}
-
-	html := `<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>dserv</title>
-    <style>
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: #0f1419;
-            color: #e7e9ea;
-            line-height: 1.55;
-            min-height: 100vh;
-            -webkit-font-smoothing: antialiased;
-        }
-        .wrap { max-width: 820px; margin: 0 auto; padding: 72px 24px 48px; }
-        header { text-align: center; margin-bottom: 56px; }
-        h1 {
-            font-size: 64px; font-weight: 800; letter-spacing: -2px; line-height: 1;
-            background: linear-gradient(135deg, #60a5fa, #34d399);
-            -webkit-background-clip: text; background-clip: text;
-            -webkit-text-fill-color: transparent;
-        }
-        header .tagline { font-size: 19px; color: #8b98a5; margin-top: 14px; }
-        h2 {
-            font-size: 13px; font-weight: 600; text-transform: uppercase;
-            letter-spacing: 1.5px; color: #71767b; margin-bottom: 18px; padding-left: 2px;
-        }
-        .cards { display: grid; gap: 16px; }
-        .card {
-            background: #16202a; border: 1px solid #2f3336; border-radius: 14px; padding: 24px;
-        }
-        .card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-        .card h3 { font-size: 19px; font-weight: 650; color: #e7e9ea; }
-        .platform {
-            font-size: 11px; font-family: 'SF Mono', ui-monospace, Menlo, monospace;
-            color: #7f95ab; background: #1a2634; border: 1px solid #2f3336;
-            padding: 3px 9px; border-radius: 20px; white-space: nowrap;
-        }
-        .card-desc { font-size: 14.5px; color: #9fb0bf; margin: 8px 0 18px; }
-        .cmd {
-            display: flex; align-items: center; gap: 10px;
-            background: #0b0f14; border: 1px solid #2f3336; border-radius: 10px;
-            padding: 12px 12px 12px 16px;
-        }
-        .cmd code {
-            flex: 1; font-family: 'SF Mono', ui-monospace, Menlo, monospace;
-            font-size: 14px; color: #d7e3ee; overflow-x: auto; white-space: nowrap;
-        }
-        .cmd code::before { content: "$ "; color: #34d399; }
-        .copy {
-            flex-shrink: 0; font-size: 12px; font-weight: 600; color: #cfe0ef;
-            background: #1e2d3d; border: 1px solid #34506b; border-radius: 7px;
-            padding: 7px 13px; cursor: pointer; transition: all .15s;
-        }
-        .copy:hover { background: #244056; border-color: #3b82f6; }
-        .copy.done { color: #34d399; border-color: #34d399; background: #14261d; }
-        .note { font-size: 12.5px; color: #71767b; margin-top: 12px; }
-        .lede { font-size: 14px; color: #a1a6ab; margin: -6px 0 16px; }
-        .profiles { list-style: none; margin: 0; padding: 0; }
-        .profiles li {
-            font-size: 13.5px; color: #a1a6ab; padding: 7px 0;
-            border-bottom: 1px solid #1f2327;
-        }
-        .profiles li:last-child { border-bottom: 0; }
-        .note code {
-            font-family: 'SF Mono', ui-monospace, Menlo, monospace; font-size: 11.5px;
-            color: #a9c7e0; background: #16202a; padding: 1px 5px; border-radius: 4px;
-        }
-        footer {
-            margin-top: 56px; padding-top: 28px; border-top: 1px solid #2f3336;
-            text-align: center; font-size: 13.5px; color: #71767b;
-        }
-        footer a { color: #60a5fa; text-decoration: none; }
-        footer a:hover { text-decoration: underline; }
-        footer .sep { margin: 0 10px; color: #2f3336; }
-    </style>
-</head>
-<body>
-    <div class="wrap">
-        <header>
-            <h1>dserv</h1>
-            <p class="tagline">Data acquisition &amp; experimental control for the lab</p>
-        </header>
-
-        <h2>Get started</h2>
-        <div class="cards">
-          <div class="card">
-            <div class="card-head">
-              <h3>Set up an acquisition box</h3>
-              <span class="platform">Linux · Raspberry Pi</span>
-            </div>
-            <p class="card-desc">Turn a fresh Linux machine into a dserv data-acquisition box — installs dserv, dlsh, stim2 and the agent, then registers it with this network.</p>
-            <div class="cmd">
-              <code>curl -sSL __BASE__/setup | bash</code>
-              <button class="copy" data-cmd="curl -sSL __BASE__/setup | bash">Copy</button>
-            </div>
-            <p class="note">Preview first with <code>| bash -s -- --dry-run</code>, or set the workgroup with <code>--workgroup mylab</code>. Ships with the stock systems tree (blinky) and <em>no</em> workgroup scripts &mdash; add <code>--scripts</code> to pull the workgroup&rsquo;s ESS systems too, or do it any time later with the card below.</p>
-          </div>
-
-          <div class="card">
-            <div class="card-head">
-              <h3>Pull a workgroup&rsquo;s scripts</h3>
-              <span class="platform">Linux · provisioned box</span>
-            </div>
-            <p class="card-desc">Scripts alone, on a box provisioned earlier: declares the registry pair on the box and syncs the workgroup&rsquo;s ESS systems into that user&rsquo;s <code>~/systems/ess</code>, touching nothing else &mdash; no agent, components or services. Also how a box joins a <em>new</em> workgroup&rsquo;s scripts.</p>
-            <div class="cmd">
-              <code>curl -sSL __BASE__/setup | sudo bash -s -- --scripts-only --workgroup mylab --user labuser</code>
-              <button class="copy" data-cmd="curl -sSL __BASE__/setup | sudo bash -s -- --scripts-only --workgroup mylab --user labuser">Copy</button>
-            </div>
-            <p class="note">The registry copy wins every collision, so push local edits first on a box with in-flight work. A running dserv adopts the declarations and sees the tree at its next restart or system load. <code>--user</code> defaults to whoever invoked sudo. Keeping a <em>second</em> workgroup&rsquo;s scripts around? Give each its own tree with <code>--systems-path ~/systems-mylab</code> &mdash; the flag declares that tree as the rig&rsquo;s <code>ess system_path</code>, workgroup and tree switch together, and switching back is a re-run of the other pair.</p>
-          </div>
-
-          <div class="card">
-            <div class="card-head">
-              <h3>Set up a display box</h3>
-              <span class="platform">Linux · stim2 only</span>
-            </div>
-            <p class="card-desc">The other half of a split rig: stim2 and dlsh with no dserv, for a machine that drives the stimulus display while control runs elsewhere.</p>
-            <div class="cmd">
-              <code>curl -sSL __BASE__/setup?profile=stim | bash</code>
-              <button class="copy" data-cmd="curl -sSL __BASE__/setup?profile=stim | bash">Copy</button>
-            </div>
-            <p class="note">Point the control box at it with <code>ESS_RMT_HOST</code>; its STIM chip then links straight here for updates.</p>
-          </div>
-
-          <div class="card">
-            <div class="card-head">
-              <h3>Set up a cage box and its clock</h3>
-              <span class="platform">Linux · one step</span>
-            </div>
-            <p class="card-desc">The from-scratch path for an in-cage rig: everything above, plus a time role applied at the end and recorded in <code>box.conf</code>. Recording it is what makes the role stick — a re-run re-applies the declaration, and the box&rsquo;s panel converges any drift back to it.</p>
-            <div class="cmd">
-              <code>curl -sSL "__BASE__/setup?profile=incage&amp;time_role=grandmaster+eth0" | bash</code>
-              <button class="copy" data-cmd="curl -sSL &quot;__BASE__/setup?profile=incage&amp;time_role=grandmaster+eth0&quot; | bash">Copy</button>
-            </div>
-            <p class="note">Keep the quotes — an unquoted <code>&amp;</code> would background the command and drop the role. Use <code>client+eth0</code> on boxes that follow the site clock, or <code>ntp-client+SERVER</code> where the NIC can&rsquo;t hardware-timestamp; exactly one grandmaster per segment. This is also the only way to give a role to a box you can&rsquo;t reach: the panel needs a socket <em>to</em> the box, while this needs only the box&rsquo;s own outbound fetch.</p>
-          </div>
-        </div>
-
-        <h2>Lab time</h2>
-        <div class="cards">
-          <div class="card">
-            <div class="card-head">
-              <h3>Put a box on the site clock</h3>
-              <span class="platform">Linux · PTP / NTP</span>
-            </div>
-            <p class="card-desc">One tool, three roles: a <strong>grandmaster</strong> defines a site&rsquo;s time, PTP <strong>clients</strong> follow it at microseconds on NICs that can hardware-timestamp, and the <strong>ntp-client</strong> tier (chrony) covers boxes that can&rsquo;t &mdash; still tens of microseconds on a wired LAN. Ships in the dserv package; this fetches it for boxes without one. Everything installs inert: assigning a role stays a deliberate, per-host step.</p>
-            <div class="cmd">
-              <code>curl -sSL __BASE__/ptp/setup | sudo bash</code>
-              <button class="copy" data-cmd="curl -sSL __BASE__/ptp/setup | sudo bash">Copy</button>
-            </div>
-            <p class="note">Then <code>dserv-ptp-setup candidates</code>, and one of <code>grandmaster IFACE</code> &middot; <code>client IFACE</code> &middot; <code>ntp-client SERVER</code> &mdash; or append the role to the curl: <code>| sudo bash -s -- client eth0</code>. Whichever way you set it, the role is recorded in <code>box.conf</code>. Provisioning a box from scratch? Declare it in the same step instead &mdash; see &ldquo;Set up a cage box and its clock&rdquo; above.</p>
-            <p class="note"><strong>Re-run the same line to update.</strong> Only changed files are rewritten, and running PTP daemons that changed are restarted so the update takes effect &mdash; clients re-lock (on a grandmaster, the whole segment), so do it between sessions; <code>DSERV_PTP_NO_RESTART=1</code> leaves the restart to you. <code>dserv-ptp-setup status</code> shows which tooling is installed and whether anything has changed since. No curl on the box? <code>wget -qO- __BASE__/ptp/setup | sudo bash</code> does the same.</p>
-          </div>
-        </div>
-
-        <h2>Other profiles</h2>
-        <p class="lede">Same command, different component set — append to <code>__BASE__/setup</code>:</p>
-        <div class="cards">
-          <div class="card">
-            __OTHER_PROFILES__
-            <p class="note">List them at any time with <code>curl -sSL __BASE__/setup/profiles</code>.</p>
-          </div>
-        </div>
-
-        <footer>
-            <a href="https://github.com/SheinbergLab/dserv">GitHub</a>
-            <span class="sep">·</span>
-            <span>Lab network directory: <code style="font-family:'SF Mono',ui-monospace,Menlo,monospace;color:#a9c7e0;">/w/&lt;workgroup&gt;</code></span>
-        </footer>
-    </div>
-
-    <script>
-    document.querySelectorAll('.copy').forEach(function (btn) {
-        btn.addEventListener('click', function () {
-            var cmd = btn.getAttribute('data-cmd');
-            navigator.clipboard.writeText(cmd).then(function () {
-                var prev = btn.textContent;
-                btn.textContent = 'Copied';
-                btn.classList.add('done');
-                setTimeout(function () { btn.textContent = prev; btn.classList.remove('done'); }, 1400);
-            });
-        });
-    });
-    </script>
-</body>
-</html>`
-
-	html = strings.ReplaceAll(html, "__OTHER_PROFILES__", otherProfiles)
-	html = strings.ReplaceAll(html, "__BASE__", base)
-
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write([]byte(html))
+// renderLandingPage fills landing.html's placeholders. The profiles are the
+// list the bootstrap resolves against, so the page cannot offer a box type
+// /setup does not know. JSON goes in through json.Marshal, which escapes
+// < > & -- safe inside the page's <script>. (The RP2350/WIZnet extio board
+// is deliberately not offered: /extio/setup still serves the boards in
+// service, but that line is being retired in favour of the NXP boxes.)
+func (a *Agent) renderLandingPage(base string) string {
+	baseJSON, _ := json.Marshal(base)
+	profilesJSON, _ := json.Marshal(a.getProfiles())
+	return strings.NewReplacer(
+		"__BASE_JSON__", string(baseJSON),
+		"__PROFILES_JSON__", string(profilesJSON),
+		"__BASE__", html.EscapeString(base),
+		"__VERSION__", html.EscapeString(version),
+	).Replace(landingPage)
 }
 
 // Workgroup directory page - shows hostname/IP list for a workgroup

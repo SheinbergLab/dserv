@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"regexp"
 	"runtime"
 	"strings"
@@ -31,6 +32,7 @@ var mirrorRigRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.:-]{0,252}$`)
 // BootstrapProfile defines a named set of components to install
 type BootstrapProfile struct {
 	Name        string   `json:"name"`
+	Title       string   `json:"title,omitempty"` // display name (the landing page's configurator)
 	Description string   `json:"description"`
 	Components  []string `json:"components"` // component IDs; empty or ["*"] means all
 
@@ -120,6 +122,7 @@ func (a *Agent) resolveReleaseAssets(repo string) (string, []bootstrapAsset) {
 var defaultProfiles = []BootstrapProfile{
 	{
 		Name:        "incage",
+		Title:       "In-cage rig",
 		Description: "Full in-cage data acquisition box (dserv + stim2 + dlsh)",
 		Components:  []string{"*"},
 	},
@@ -129,6 +132,7 @@ var defaultProfiles = []BootstrapProfile{
 		// shows up in /setup/profiles and reads as a deliberate choice at the
 		// call site (?profile=dev) instead of "the in-cage one, on my desk".
 		Name:        "dev",
+		Title:       "Development box",
 		Description: "Development box (dserv + stim2 + dlsh; stim2 windowed)",
 		Components:  []string{"*"},
 		StimMode:    "windowed",
@@ -139,6 +143,7 @@ var defaultProfiles = []BootstrapProfile{
 		// would pull it in via stim2's depends -- this profile's whole point
 		// is being read at a glance by someone provisioning a display box.
 		Name:        "stim",
+		Title:       "Display box",
 		Description: "Display box only (stim2 + dlsh, no dserv)",
 		Components:  []string{"stim2", "dlsh"},
 	},
@@ -150,6 +155,7 @@ var defaultProfiles = []BootstrapProfile{
 		// unit follows the box's arch the way stim2.service does: X11 on
 		// amd64, cage on arm64 (check_mirror picks it).
 		Name:        "mirror",
+		Title:       "Live mirror",
 		Description: "Live mirror of a rig's display (stim2 + dlsh interpreter; ?mirror=RIG)",
 		Components:  []string{"stim2", "dlsh", "dlsh-interp"},
 		StimMode:    "mirror",
@@ -162,12 +168,14 @@ var defaultProfiles = []BootstrapProfile{
 		// is the optional stim2-render add-on -- ?with=stim2-render, or the
 		// panel.
 		Name:        "server",
+		Title:       "Data server",
 		Description: "Data server (dserv + dlsh; stim2 installed for trial clips, no display)",
 		Components:  []string{"dserv", "dlsh", "stim2", "dlsh-interp"},
 		StimMode:    "headless",
 	},
 	{
 		Name:        "minimal",
+		Title:       "Minimal",
 		Description: "Minimal install (dserv + dlsh, agent only)",
 		Components:  []string{"dserv", "dlsh"},
 	},
@@ -879,6 +887,12 @@ check_root() {
             local refetch="${REGISTRY_URL}/setup?profile=${PROFILE}"
             [[ -n "$COMPONENTS_ARG" ]] && refetch="${REGISTRY_URL}/setup?components=${COMPONENTS_ARG}"
             [[ -n "$WITH_ADDONS" ]] && refetch="${refetch}&with=${WITH_ADDONS// /,}"
+            # And the URL's ?workgroup=. It is the script's DEFAULT, not a
+            # declaration, so it never rides as --workgroup -- and without
+            # this the root run fetched the registry's own default instead,
+            # silently putting the box in some other workgroup. The registry
+            # validated it (URL-safe) before it landed here.
+            [[ -n "$DEFAULT_WORKGROUP" ]] && refetch="${refetch}&workgroup=${DEFAULT_WORKGROUP}"
             local script=""
             script=$(curl -fsSL "$refetch") || script=""
             if [[ -z "$script" || "${script:0:2}" != '#!' ]]; then
@@ -2279,8 +2293,14 @@ func init() {
 // Query parameters:
 //   profile    - named profile (default: "incage")
 //   components - explicit comma-separated component IDs (overrides profile)
-//   workgroup  - override default workgroup
-//   role       - set box role
+//   workgroup  - the script's default workgroup (the --workgroup flag DECLARES one)
+//   with       - optional add-ons to install now (stim2-render)
+//   mirror     - the rig a mirror-profile box shows
+//   time_role  - declared time role ("client eth0"); --time-role overrides
+//
+// GET /setup/plan takes the same parameters and reports, as JSON, what the
+// script they select would install, offer and turn off (the landing page's
+// configurator).
 //
 // Examples:
 //   curl -sSL http://server/setup | bash              # incage profile (all)
@@ -2302,16 +2322,94 @@ func (a *Agent) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 	}
 	serverURL := fmt.Sprintf("%s://%s", scheme, host)
 
-	workgroup := r.URL.Query().Get("workgroup")
+	res, err := a.resolveBootstrap(r.URL.Query())
+	if err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	components := res.Components
+
+	// Pre-resolve each component's latest release server-side (shared cache),
+	// so fresh boxes download straight from GitHub's CDN without ever calling
+	// the rate-limited api.github.com.
+	resolved := make([]bootstrapComponent, 0, len(components))
+	for _, c := range components {
+		tag, assets := a.resolveReleaseAssets(c.Repo)
+		resolved = append(resolved, bootstrapComponent{Component: c, LatestTag: tag, Assets: assets})
+	}
+
+	compJSON, _ := json.Marshal(struct {
+		Components []bootstrapComponent `json:"components"`
+	}{Components: resolved})
+
+	// dserv-agent itself is installed by step_install_agent; resolve it too.
+	agentTag, agentAssets := a.resolveReleaseAssets(agentRepo)
+	agentJSON, _ := json.Marshal(struct {
+		Tag    string           `json:"tag"`
+		Assets []bootstrapAsset `json:"assets"`
+	}{Tag: agentTag, Assets: agentAssets})
+
+	cfg := BootstrapConfig{
+		ServerURL:        serverURL,
+		DefaultWG:        res.Workgroup,
+		Version:          version,
+		ComponentsJSON:   shellQuote(string(compJSON)),
+		AgentReleaseJSON: shellQuote(string(agentJSON)),
+		ProfileName:      res.Profile,
+		StimMode:         res.StimMode,
+		TimeRole:         res.TimeRole,
+		MirrorRig:        res.MirrorRig,
+		With:             strings.Join(res.With, " "),
+
+		ExplicitComponents: res.Explicit,
+		RetireServices:     strings.Join(res.Retire, " "),
+	}
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Content-Disposition", "inline; filename=\"dserv-setup.sh\"")
+
+	if err := bootstrapTmpl.Execute(w, cfg); err != nil {
+		http.Error(w, "Template error: "+err.Error(), 500)
+	}
+}
+
+// bootstrapResolution is what a /setup query resolves to: the box the script
+// will make. handleBootstrap renders it into the script and handleSetupPlan
+// reports it as JSON, so the landing page's configurator shows exactly what
+// the served script will do rather than a second opinion of it.
+type bootstrapResolution struct {
+	Workgroup  string
+	Profile    string // "custom" for an explicit ?components= list
+	StimMode   string
+	TimeRole   string
+	MirrorRig  string
+	Explicit   string      // raw ?components=, empty when provisioning by profile
+	Components []Component // the roster the box gets, add-ons riding along included
+	With       []string    // optional add-ons this run installs
+	Retire     []string    // units of components the profile excludes
+}
+
+// workgroupRe: ?workgroup= lands in the script inside double quotes and is
+// forwarded on the sudo re-fetch's URL, so nothing that expands or needs
+// escaping.
+var workgroupRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+
+// resolveBootstrap validates a /setup query and resolves it to the box it
+// describes. Errors are the operator's (a 400), never the server's.
+func (a *Agent) resolveBootstrap(q url.Values) (*bootstrapResolution, error) {
+	workgroup := q.Get("workgroup")
+	if workgroup != "" && !workgroupRe.MatchString(workgroup) {
+		return nil, fmt.Errorf("invalid workgroup (letters, digits, '.', '_' and '-')")
+	}
 	if workgroup == "" {
 		workgroup = a.cfg.Workgroup
 	}
 
-	profileName := r.URL.Query().Get("profile")
+	profileName := q.Get("profile")
 	if profileName == "" {
 		profileName = "incage"
 	}
-	explicitComponents := r.URL.Query().Get("components")
+	explicitComponents := q.Get("components")
 
 	// ?time_role=grandmaster+eth0 pre-declares the box's time role, so a box
 	// reachable ONLY by running this script -- one behind NAT at another site,
@@ -2319,27 +2417,24 @@ func (a *Agent) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 	// given a role. --time-role still overrides it: the flag is parsed after
 	// this assignment, and check_root forwards the flag across the sudo
 	// re-exec, so an operator's explicit choice always wins over the URL's.
-	timeRole := strings.TrimSpace(r.URL.Query().Get("time_role"))
+	timeRole := strings.TrimSpace(q.Get("time_role"))
 	if timeRole != "" && !timeRoleDeclRe.MatchString(timeRole) {
-		http.Error(w, "invalid time_role (want \"grandmaster IFACE\", \"client IFACE\", \"ntp-client SERVER\", or \"none\")", 400)
-		return
+		return nil, fmt.Errorf("invalid time_role (want \"grandmaster IFACE\", \"client IFACE\", \"ntp-client SERVER\", or \"none\")")
 	}
 
 	// ?mirror=HOST: the rig a mirror box shows. It lands in the script
 	// unquoted (MIRROR_RIG="..."), so only host characters pass.
-	mirrorRig := strings.TrimSpace(r.URL.Query().Get("mirror"))
+	mirrorRig := strings.TrimSpace(q.Get("mirror"))
 	if mirrorRig != "" && !mirrorRigRe.MatchString(mirrorRig) {
-		http.Error(w, "invalid mirror (want the rig's dserv host name or address)", 400)
-		return
+		return nil, fmt.Errorf("invalid mirror (want the rig's dserv host name or address)")
 	}
 
 	// ?with=ID[,ID]: optional add-ons to install now (stim2-render), with
 	// whatever they depend on. Ids land in the script unquoted, so they are
 	// checked against the roster before anything else.
-	with, err := a.parseWith(r.URL.Query().Get("with"))
+	with, err := a.parseWith(q.Get("with"))
 	if err != nil {
-		http.Error(w, err.Error(), 400)
-		return
+		return nil, err
 	}
 
 	// Filter components based on profile or explicit list
@@ -2397,48 +2492,17 @@ func (a *Agent) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Pre-resolve each component's latest release server-side (shared cache),
-	// so fresh boxes download straight from GitHub's CDN without ever calling
-	// the rate-limited api.github.com.
-	resolved := make([]bootstrapComponent, 0, len(components))
-	for _, c := range components {
-		tag, assets := a.resolveReleaseAssets(c.Repo)
-		resolved = append(resolved, bootstrapComponent{Component: c, LatestTag: tag, Assets: assets})
-	}
-
-	compJSON, _ := json.Marshal(struct {
-		Components []bootstrapComponent `json:"components"`
-	}{Components: resolved})
-
-	// dserv-agent itself is installed by step_install_agent; resolve it too.
-	agentTag, agentAssets := a.resolveReleaseAssets(agentRepo)
-	agentJSON, _ := json.Marshal(struct {
-		Tag    string           `json:"tag"`
-		Assets []bootstrapAsset `json:"assets"`
-	}{Tag: agentTag, Assets: agentAssets})
-
-	cfg := BootstrapConfig{
-		ServerURL:        serverURL,
-		DefaultWG:        workgroup,
-		Version:          version,
-		ComponentsJSON:   shellQuote(string(compJSON)),
-		AgentReleaseJSON: shellQuote(string(agentJSON)),
-		ProfileName:      profileName,
-		StimMode:         a.profileStimMode(profileName),
-		TimeRole:         timeRole,
-		MirrorRig:        mirrorRig,
-		With:             strings.Join(with, " "),
-
-		ExplicitComponents: explicitComponents,
-		RetireServices:     strings.Join(retire, " "),
-	}
-
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.Header().Set("Content-Disposition", "inline; filename=\"dserv-setup.sh\"")
-
-	if err := bootstrapTmpl.Execute(w, cfg); err != nil {
-		http.Error(w, "Template error: "+err.Error(), 500)
-	}
+	return &bootstrapResolution{
+		Workgroup:  workgroup,
+		Profile:    profileName,
+		StimMode:   a.profileStimMode(profileName),
+		TimeRole:   timeRole,
+		MirrorRig:  mirrorRig,
+		Explicit:   explicitComponents,
+		Components: components,
+		With:       with,
+		Retire:     retire,
+	}, nil
 }
 
 // GET /setup/status - health check for bootstrap script verification
@@ -2458,12 +2522,79 @@ func (a *Agent) handleBootstrapProfiles(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
+// setupPlanComponent is one roster entry as the configurator shows it.
+type setupPlanComponent struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Selected    bool   `json:"selected,omitempty"` // add-ons: installed by this run
+}
+
+// setupPlan is GET /setup/plan: what /setup with the same query would do.
+type setupPlan struct {
+	Profile   string               `json:"profile"`
+	StimMode  string               `json:"stimMode"`
+	Workgroup string               `json:"workgroup,omitempty"`
+	Mirror    string               `json:"mirror,omitempty"`
+	TimeRole  string               `json:"timeRole,omitempty"`
+	Install   []setupPlanComponent `json:"install"` // installed and kept current
+	Addons    []setupPlanComponent `json:"addons"`  // optional add-ons this box can have
+	Retire    []string             `json:"retire"`  // units turned off if present
+}
+
+// GET /setup/plan - resolve a /setup query without rendering the script.
+// No release lookups: this is about WHICH components, not which versions.
+func (a *Agent) handleSetupPlan(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	res, err := a.resolveBootstrap(r.URL.Query())
+	if err != nil {
+		writeJSON(w, 400, map[string]string{"error": err.Error()})
+		return
+	}
+	with := make(map[string]bool, len(res.With))
+	for _, id := range res.With {
+		with[id] = true
+	}
+	plan := setupPlan{
+		Profile:   res.Profile,
+		StimMode:  res.StimMode,
+		Workgroup: res.Workgroup,
+		Mirror:    res.MirrorRig,
+		TimeRole:  res.TimeRole,
+		Install:   []setupPlanComponent{},
+		Addons:    []setupPlanComponent{},
+		Retire:    res.Retire,
+	}
+	if plan.Retire == nil {
+		plan.Retire = []string{}
+	}
+	for _, c := range res.Components {
+		pc := setupPlanComponent{ID: c.ID, Name: c.Name, Description: c.Description}
+		if c.Optional {
+			// The install loop installs an add-on only when this run opts
+			// in (?with=, or named in ?components=); the rest ride in the
+			// roster for the panel to offer later.
+			pc.Selected = with[c.ID]
+			plan.Addons = append(plan.Addons, pc)
+			if !pc.Selected {
+				continue
+			}
+		}
+		plan.Install = append(plan.Install, pc)
+	}
+	writeJSON(w, 200, plan)
+}
+
 // registerBootstrapHandlers adds bootstrap endpoints to the mux.
 // No auth required — fresh boxes need bare curl access.
 func registerBootstrapHandlers(mux *http.ServeMux, agent *Agent) {
 	mux.HandleFunc("/setup", agent.handleBootstrap)
 	mux.HandleFunc("/setup/status", agent.handleBootstrapStatus)
 	mux.HandleFunc("/setup/profiles", agent.handleBootstrapProfiles)
+	mux.HandleFunc("/setup/plan", agent.handleSetupPlan)
 
 	// Board-side sibling: curl -fsSL http://server/extio/setup | bash
 	mux.HandleFunc("/extio/setup", agent.handleExtioSetup)
@@ -2483,6 +2614,8 @@ func registerBootstrapHandlers(mux *http.ServeMux, agent *Agent) {
 			agent.handleBootstrapStatus(w, r)
 		case "profiles":
 			agent.handleBootstrapProfiles(w, r)
+		case "plan":
+			agent.handleSetupPlan(w, r)
 		default:
 			http.NotFound(w, r)
 		}
