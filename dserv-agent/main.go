@@ -282,6 +282,13 @@ type Config struct {
 	RegistryURLs []string // Multiple registries for redundancy
 	Workgroup    string
 
+	// SetupWorkgroup is the workgroup /setup gives a box that names none and
+	// has none of its own (server mode). Deliberately NOT Workgroup: that is
+	// this agent's own mesh membership, and a public registry that polls
+	// itself would otherwise hand its lab's workgroup to every box anyone
+	// provisions from it. Empty (the default) means such a box joins none.
+	SetupWorkgroup string
+
 	// ESS Registry
 	ESSRegistryPath string
 
@@ -515,6 +522,8 @@ Environment:
 	// Mesh registry (client mode) - can specify multiple for redundancy
 	flag.Var(&registries, "registry", "Mesh registry URL (can be specified multiple times)")
 	flag.StringVar(&cfg.Workgroup, "workgroup", "", "Mesh workgroup name")
+	flag.StringVar(&cfg.SetupWorkgroup, "setup-workgroup", "",
+		"Server mode: workgroup /setup gives a box that names none and has none of its own (default: none)")
 
 	// ESS Registry
 	flag.StringVar(&cfg.ESSRegistryPath, "ess-registry", "",
@@ -598,6 +607,10 @@ Environment:
 		}
 	}
 	
+	if cfg.SetupWorkgroup != "" && !workgroupRe.MatchString(cfg.SetupWorkgroup) {
+		log.Fatalf("--setup-workgroup %q: letters, digits, '.', '_' and '-'", cfg.SetupWorkgroup)
+	}
+
 	if cfg.ServerMode {
 		// ===== SERVER MODE =====
 		agent.registry = &Registry{

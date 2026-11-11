@@ -192,8 +192,8 @@
           <h2>Workgroup &amp; scripts</h2>
           <div class="field">
             <label for="wg">Workgroup</label>
-            <input type="text" id="wg" data-share="wg" placeholder="e.g. mylab" spellcheck="false">
-            <p class="hint">Declared on the box (<code>local/rig.tcl</code>), replacing an earlier one. Leave empty to keep what the box already declares.</p>
+            <input type="text" id="wg" data-share="wg" placeholder="your lab&rsquo;s, e.g. mylab" spellcheck="false">
+            <p class="hint">The group a box belongs to on this registry: its directory page, mesh and ESS scripts. Declared on the box (<code>local/rig.tcl</code>), replacing an earlier one. Leave empty on a re-run to keep the box&rsquo;s own; a new box given none joins none.</p>
           </div>
           <label class="check" style="margin-top:10px"><input type="checkbox" id="scripts">
             <span><span class="t">Also pull the workgroup&rsquo;s ESS scripts</span>
@@ -472,8 +472,10 @@
       warn.push({ text: 'No rig named: fine on a re-run (the box keeps its rig), but a new mirror needs one.' });
     }
     if (S.scripts && !S.wg) {
-      warn.push({ text: 'Scripts with no workgroup pull the box\u2019s declared one' +
-        (plan && plan.workgroup ? ', or \u201c' + plan.workgroup + '\u201d on a fresh box.' : '; a fresh box has none to pull.') });
+      warn.push({ text: 'Scripts with no workgroup come from the box\u2019s own' +
+        (plan && plan.workgroup ? '.' : ': a new box has none, so name one above.') });
+    } else if (!S.wg && !(plan && plan.workgroup)) {
+      warn.push({ text: 'New box? Name its workgroup, or it joins none: no directory page, mesh or scripts until a re-run names one.' });
     }
 
     // what it does
@@ -497,7 +499,8 @@
     }
     does.push({ html: S.wg && RE.wg.test(S.wg)
       ? 'Declares workgroup <strong>' + esc(S.wg) + '</strong> and registers the box there.'
-      : 'Keeps the box\u2019s declared workgroup' + (plan && plan.workgroup ? ' (a fresh box: <strong>' + esc(plan.workgroup) + '</strong>).' : '.') });
+      : 'Keeps the box\u2019s own workgroup; a box with none ' +
+        (plan && plan.workgroup ? 'joins this registry\u2019s default, <strong>' + esc(plan.workgroup) + '</strong>.' : 'joins none.') });
     does.push({ html: S.scripts
       ? 'Pulls the workgroup\u2019s ESS scripts into <code>' + esc((S.sp || '~' + (S.user || '') + '/systems') + '/ess') + '</code>; registry copy wins.'
       : 'Leaves ESS scripts alone (a fresh box gets the stock tree).' });

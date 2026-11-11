@@ -221,3 +221,132 @@ func TestLandingPageRender(t *testing.T) {
 		t.Errorf("non-root path: %d, want 404", rec.Code)
 	}
 }
+
+// renderPlainScript renders the template with a given registry default
+// workgroup (the URL's ?workgroup=, else --setup-workgroup).
+func renderPlainScript(t *testing.T, defaultWG string) string {
+	t.Helper()
+	var b strings.Builder
+	if err := bootstrapTmpl.Execute(&b, BootstrapConfig{
+		ServerURL: "https://dserv.net", DefaultWG: defaultWG, Version: "test",
+		ProfileName: "incage",
+		ComponentsJSON:   shellQuote(`{"components":[]}`),
+		AgentReleaseJSON: shellQuote(`{"tag":"0.0.0","assets":[]}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "setup.sh")
+	os.WriteFile(path, []byte(b.String()), 0o644)
+	if out, err := exec.Command("bash", "-n", path).CombinedOutput(); err != nil {
+		t.Fatalf("not valid bash: %v\n%s", err, out)
+	}
+	return path
+}
+
+// runScriptFns runs the named functions out of a rendered script, after
+// its variable block, with the output helpers stubbed.
+func runScriptFns(t *testing.T, script string, fns []string, body string) string {
+	t.Helper()
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash not available")
+	}
+	var defs strings.Builder
+	for _, fn := range fns {
+		out, err := exec.Command("sed", "-n", "/^"+fn+"() {/,/^}/p", script).Output()
+		if err != nil || len(out) == 0 {
+			t.Fatalf("could not extract %s", fn)
+		}
+		defs.Write(out)
+	}
+	vars, _ := exec.Command("sed", "-En",
+		`/^(REGISTRY_URL|DEFAULT_WORKGROUP|PROFILE|DSERV_INSTALL_DIR)=/p`, script).Output()
+	prog := `info() { echo "info: $*"; }; ok() { echo "ok: $*"; }; warn() { echo "warn: $*"; }
+fail() { echo "fail: $*"; exit 1; }
+` + string(vars) + `WORKGROUP="$DEFAULT_WORKGROUP"; WORKGROUP_EXPLICIT=false
+` + defs.String() + body
+	out, err := exec.Command(bash, "-c", prog).CombinedOutput()
+	if err != nil {
+		t.Fatalf("script functions: %v\n%s", err, out)
+	}
+	return string(out)
+}
+
+// A run without --workgroup keeps the box's OWN workgroup; the registry's
+// default reaches only a box that has none. It used to be the registry's
+// default outright -- dserv.net's own workgroup, on every lab's box.
+func TestResolveWorkgroupKeepsTheBoxs(t *testing.T) {
+	fns := []string{"rig_setting_value", "agent_flag_value", "resolve_workgroup"}
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "local"), 0o755)
+	rig := filepath.Join(dir, "local", "rig.tcl")
+	conf := filepath.Join(dir, "box.conf")
+	unit := filepath.Join(dir, "dserv-agent.service")
+	env := `DSERV_INSTALL_DIR=` + dir + `; DSERV_BOX_CONF=` + conf + `; DSERV_AGENT_UNIT=` + unit + "\n"
+	run := func(defaultWG string) string {
+		out := runScriptFns(t, renderPlainScript(t, defaultWG), fns, env+`resolve_workgroup; echo "wg=[$WORKGROUP]"`)
+		i := strings.Index(out, "wg=[")
+		return out[i+4 : strings.Index(out[i:], "]")+i]
+	}
+
+	// Nothing on the box: the registry default, or none at all.
+	if got := run(""); got != "" {
+		t.Errorf("fresh box, no default: %q, want none", got)
+	}
+	if got := run("labdefault"); got != "labdefault" {
+		t.Errorf("fresh box with a default: %q", got)
+	}
+
+	// The deb unit's placeholder is not a workgroup.
+	os.WriteFile(unit, []byte("ExecStart=/usr/local/bin/dserv-agent --registry https://dserv.net --workgroup YOUR-WORKGROUP-NAME --no-tls\n"), 0o644)
+	if got := run(""); got != "" {
+		t.Errorf("placeholder unit: %q, want none", got)
+	}
+	// The agent's unit, then box.conf, then the declaration, each beating
+	// the registry's default.
+	os.WriteFile(unit, []byte("ExecStart=/usr/local/bin/dserv-agent --registry https://dserv.net --workgroup from-unit --no-tls\n"), 0o644)
+	if got := run("labdefault"); got != "from-unit" {
+		t.Errorf("agent unit: %q", got)
+	}
+	os.WriteFile(conf, []byte("profile=incage\nworkgroup=from-conf\n"), 0o644)
+	if got := run("labdefault"); got != "from-conf" {
+		t.Errorf("box.conf: %q", got)
+	}
+	os.WriteFile(rig, []byte("setting registry url https://dserv.net\nsetting registry workgroup from-rig\n"), 0o644)
+	if got := run("labdefault"); got != "from-rig" {
+		t.Errorf("rig.tcl: %q", got)
+	}
+
+	// --workgroup beats all of it.
+	out := runScriptFns(t, renderPlainScript(t, ""), fns,
+		env+`WORKGROUP=given; WORKGROUP_EXPLICIT=true; resolve_workgroup; echo "wg=[$WORKGROUP]"`)
+	if !strings.Contains(out, "wg=[given]") {
+		t.Errorf("explicit --workgroup: %s", out)
+	}
+}
+
+// A box with no workgroup gets an agent unit with no --workgroup, not an
+// empty one that would swallow --service as its value.
+func TestAgentUnitWithoutWorkgroup(t *testing.T) {
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not available")
+	}
+	if _, err := os.Stat("/etc/systemd/system/dserv-agent.service"); err == nil {
+		t.Skip("this machine has a real agent unit")
+	}
+	script := renderPlainScript(t, "")
+	stubs := `
+SKIP_AGENT=false; DRY_RUN=true; COMPONENTS_JSON='{"components":[]}'
+primary_service() { echo dserv; }; profile_services() { :; }; run() { :; }
+write_file() { echo "== $1"; cat; }
+`
+	for wg, want := range map[string]string{
+		"":      "--registry https://dserv.net \\\n    --service dserv",
+		"mylab": "--registry https://dserv.net \\\n    --workgroup mylab \\\n    --service dserv",
+	} {
+		out := runScriptFns(t, script, []string{"step_configure_agent"}, stubs+`WORKGROUP=`+wg+"\nstep_configure_agent\n")
+		if !strings.Contains(out, want) {
+			t.Errorf("workgroup %q: unit should contain\n%s\ngot:\n%s", wg, want, out)
+		}
+	}
+}

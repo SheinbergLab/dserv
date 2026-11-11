@@ -450,9 +450,10 @@ while [[ $# -gt 0 ]]; do
             echo "  --mirror HOST        mirror profile: the rig (its dserv host) whose"
             echo "                       display this box shows (also ?mirror=HOST;"
             echo "                       re-runs keep the rig already set)"
-            echo "  --workgroup NAME     Workgroup name (default: ${DEFAULT_WORKGROUP})."
-            echo "                       Given explicitly, it is DECLARED on the box"
+            echo "  --workgroup NAME     Workgroup name. Given, it is DECLARED on the box"
             echo "                       (local/rig.tcl), updating any earlier answer."
+            echo "                       Without it the box keeps its own; a box with"
+            echo "                       none gets: ${DEFAULT_WORKGROUP:-no workgroup}"
             echo "  --user USER          Local account owning the ESS systems tree"
             echo "                       (default: the user invoking sudo, else 'lab')"
             echo "  --dry-run            Show what would be done without making changes"
@@ -649,6 +650,35 @@ rig_setting_value() {
     local rig="${DSERV_INSTALL_DIR}/local/rig.tcl"
     [[ -f "$rig" ]] || return 0
     sed -nE "s|^setting[[:space:]]+$1[[:space:]]+$2[[:space:]]+(.*)$|\1|p" "$rig" | tail -1
+}
+
+# The workgroup this run uses when --workgroup was not given: the box's OWN,
+# never the registry's. Declared (rig.tcl) first, then box.conf, then the
+# agent unit's flag; only a box with none of those gets DEFAULT_WORKGROUP --
+# the URL's ?workgroup=, or the registry's --setup-workgroup, usually empty.
+#
+# This used to be DEFAULT_WORKGROUP outright, and a public registry's default
+# was its OWN workgroup: a flagless re-run on another lab's box moved that
+# box's agent into the registry's directory while rig.tcl still named the
+# lab's.
+resolve_workgroup() {
+    $WORKGROUP_EXPLICIT && return 0
+    local wg="" src="" conf="${DSERV_BOX_CONF:-/etc/dserv-agent/box.conf}"
+    local unit="${DSERV_AGENT_UNIT:-/etc/systemd/system/dserv-agent.service}"
+    wg=$(rig_setting_value registry workgroup); src="the rig's declaration"
+    if [[ -z "$wg" && -f "$conf" ]]; then
+        wg=$(sed -n 's/^workgroup=//p' "$conf" | head -1); src="box.conf"
+    fi
+    if [[ -z "$wg" && -f "$unit" ]]; then
+        wg=$(agent_flag_value --workgroup "$unit"); src="the agent's unit"
+        [[ "$wg" == YOUR-WORKGROUP-NAME ]] && wg=""   # the deb unit's placeholder
+    fi
+    if [[ -n "$wg" ]]; then
+        WORKGROUP="$wg"
+        info "workgroup: ${WORKGROUP} (${src})"
+    else
+        WORKGROUP="$DEFAULT_WORKGROUP"
+    fi
 }
 
 # The forced sibling: an EXPLICIT operator answer replaces whatever is
@@ -1320,6 +1350,12 @@ step_configure_agent() {
     echo "$COMPONENTS_JSON" | jq '.' | write_file /etc/dserv-agent/components.json
     ok "agent components: $(profile_services | tr '\n' ' ')(primary: ${svc_primary:-none})"
 
+    # No workgroup, no flag: the agent then runs without a mesh, and an
+    # empty --workgroup would swallow the next flag as its value.
+    local wg_arg=""
+    [[ -n "$WORKGROUP" ]] && wg_arg=" \\
+    --workgroup ${WORKGROUP}"
+
     if [[ ! -f "$svc_file" ]]; then
         # No service file (standalone install) — create one
         write_file "$svc_file" <<EOF
@@ -1331,8 +1367,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/dserv-agent \\
-    --registry ${REGISTRY_URL} \\
-    --workgroup ${WORKGROUP} \\
+    --registry ${REGISTRY_URL}${wg_arg} \\
     --service ${svc_primary} \\
     --components /etc/dserv-agent/components.json \\
     --listen 0.0.0.0:80
@@ -1357,7 +1392,7 @@ EOF
         fi
         ok "dserv-agent service exists — reconciling"
         set_agent_flag "$svc_file" --registry   "${REGISTRY_URL}"
-        set_agent_flag "$svc_file" --workgroup  "${WORKGROUP}"
+        [[ -n "$WORKGROUP" ]] && set_agent_flag "$svc_file" --workgroup "${WORKGROUP}"
         set_agent_flag "$svc_file" --service    "${svc_primary}"
         set_agent_flag "$svc_file" --components /etc/dserv-agent/components.json
     fi
@@ -1603,7 +1638,9 @@ step_configure_dserv() {
     # existing copies are inert. Clean by hand:
     #   rm -f ${DSERV_INSTALL_DIR}/etc/mesh.conf
     declare_setting registry url "${REGISTRY_URL}"
-    if $WORKGROUP_EXPLICIT; then
+    if [[ -z "$WORKGROUP" ]]; then
+        info "no workgroup to declare (join one any time: --scripts-only --workgroup NAME)"
+    elif $WORKGROUP_EXPLICIT; then
         # An explicit --workgroup IS the operator declaring: it replaces an
         # earlier answer (a box moving workgroups), and a running dserv
         # adopts it at its next restart. The template default only SEEDS.
@@ -1646,6 +1683,10 @@ step_sync_scripts() {
         info "ESS scripts not synced (the default): this box runs the stock"
         info "systems tree (blinky). Pull a workgroup's scripts any time with:"
         info "  curl -sSL ${REGISTRY_URL}/setup | sudo bash -s -- --scripts-only --workgroup NAME"
+        return
+    fi
+    if [[ -z "$WORKGROUP" ]]; then
+        warn "No workgroup to pull scripts from: name one with --workgroup NAME"
         return
     fi
 
@@ -2176,13 +2217,14 @@ main() {
 
     check_not_registry
     check_root
+    resolve_workgroup
 
     echo ""
     echo -e "${BOLD}╔══════════════════════════════════════════╗${NC}"
     echo -e "${BOLD}║       dserv bootstrap installer          ║${NC}"
     echo -e "${BOLD}╚══════════════════════════════════════════╝${NC}"
     echo -e "  registry:  ${REGISTRY_URL}"
-    echo -e "  workgroup: ${WORKGROUP}"
+    echo -e "  workgroup: ${WORKGROUP:-(none)}"
     echo -e "  profile:   ${PROFILE}"
     $DRY_RUN && echo -e "  ${YELLOW}** DRY RUN **${NC}"
     echo ""
@@ -2202,16 +2244,11 @@ main() {
         if [[ ${#missing[@]} -gt 0 ]]; then
             fail "missing required tool(s): ${missing[*]} — install them and re-run"
         fi
-        # Without an explicit --workgroup, refresh the rig's own DECLARED
-        # workgroup -- never the template default, which would silently
-        # fetch some other workgroup's tree onto a rig that moved.
-        if ! $WORKGROUP_EXPLICIT; then
-            local declared_wg
-            declared_wg=$(rig_setting_value registry workgroup)
-            if [[ -n "$declared_wg" ]]; then
-                WORKGROUP="$declared_wg"
-                info "workgroup: ${WORKGROUP} (the rig's declaration)"
-            fi
+        # Without an explicit --workgroup, resolve_workgroup (above) found
+        # the rig's own -- never the registry's, which would silently fetch
+        # some other workgroup's tree onto a rig that moved.
+        if [[ -z "$WORKGROUP" ]]; then
+            fail "This box declares no workgroup: name one with --workgroup NAME"
         fi
         step_configure_dserv
         step_sync_scripts
@@ -2268,7 +2305,11 @@ main() {
     echo -e "${BOLD}╚══════════════════════════════════════════╝${NC}"
     echo ""
     ok "Agent UI:  http://${ip_addr}/"
-    ok "Mesh:      ${REGISTRY_URL}/w/${WORKGROUP}"
+    if [[ -n "$WORKGROUP" ]]; then
+        ok "Mesh:      ${REGISTRY_URL}/w/${WORKGROUP}"
+    else
+        ok "Mesh:      none (no workgroup); re-run with --workgroup NAME to join one"
+    fi
     if $SYNC_SCRIPTS; then
         ok "Scripts:   ~/systems/ess from workgroup ${WORKGROUP}"
     else
@@ -2402,7 +2443,7 @@ func (a *Agent) resolveBootstrap(q url.Values) (*bootstrapResolution, error) {
 		return nil, fmt.Errorf("invalid workgroup (letters, digits, '.', '_' and '-')")
 	}
 	if workgroup == "" {
-		workgroup = a.cfg.Workgroup
+		workgroup = a.cfg.SetupWorkgroup
 	}
 
 	profileName := q.Get("profile")
