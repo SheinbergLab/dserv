@@ -152,10 +152,31 @@ func TestMirrorScript(t *testing.T) {
 		t.Errorf("check_mirror with ?mirror=: %v\n%s", err, out)
 	}
 
-	// Not amd64: refused before anything is installed.
-	out, err = runMirrorFunctions(t, script, "arm64", "", `check_mirror`)
-	if err == nil || !strings.Contains(out, "amd64") {
-		t.Errorf("check_mirror on arm64 should fail: %v\n%s", err, out)
+	// The display unit follows the arch: X11 on amd64, cage on arm64, both
+	// installed as stim2-mirror-display.service.
+	noMali := `MIRROR_MALI_PATHS=` + filepath.Join(t.TempDir(), "no-mali") + `; `
+	for arch, want := range map[string]string{
+		"amd64": "stim2-mirror-display.service",
+		"arm64": "stim2-mirror-display-cage.service",
+	} {
+		out, err = runMirrorFunctions(t, script, arch, "", noMali+`check_mirror; echo "src=$MIRROR_DISPLAY_SRC"`)
+		if err != nil || !strings.Contains(out, "src="+want) {
+			t.Errorf("check_mirror on %s: want src=%s: %v\n%s", arch, want, err, out)
+		}
+	}
+
+	// arm64 on a vendor Mali blob runs stim2 under Weston: no mirror unit yet.
+	mali := filepath.Join(t.TempDir(), "mali0")
+	os.WriteFile(mali, nil, 0o644)
+	out, err = runMirrorFunctions(t, script, "arm64", "", `MIRROR_MALI_PATHS=`+mali+`; check_mirror`)
+	if err == nil || !strings.Contains(out, "Weston") {
+		t.Errorf("check_mirror on a Mali board should fail: %v\n%s", err, out)
+	}
+
+	// Any other arch: refused before anything is installed.
+	out, err = runMirrorFunctions(t, script, "armhf", "", noMali+`check_mirror`)
+	if err == nil || !strings.Contains(out, "armhf") {
+		t.Errorf("check_mirror on armhf should fail: %v\n%s", err, out)
 	}
 
 	// A re-run with no rig keeps the box's own, from box.conf ...

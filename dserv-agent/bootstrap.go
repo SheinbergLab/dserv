@@ -146,10 +146,11 @@ var defaultProfiles = []BootstrapProfile{
 		// A second screen showing a rig's display live, drawn by a stim2 of
 		// its own from the rig's stim/frame stream. The rig is not a
 		// component: it comes from ?mirror=HOST (or --mirror), and a re-run
-		// without one keeps the rig the box already follows. amd64 only for
-		// now -- the mirror's display unit is the X11 flavor.
+		// without one keeps the rig the box already follows. The display
+		// unit follows the box's arch the way stim2.service does: X11 on
+		// amd64, cage on arm64 (check_mirror picks it).
 		Name:        "mirror",
-		Description: "Live mirror of a rig's display (stim2 + dlsh interpreter; amd64; ?mirror=RIG)",
+		Description: "Live mirror of a rig's display (stim2 + dlsh interpreter; ?mirror=RIG)",
 		Components:  []string{"stim2", "dlsh", "dlsh-interp"},
 		StimMode:    "mirror",
 	},
@@ -477,7 +478,7 @@ while [[ $# -gt 0 ]]; do
             echo "  incage    Full in-cage box (all components)"
             echo "  dev       Development box (all components; stim2 windowed)"
             echo "  stim      Display box only (stim2 + dlsh, no dserv)"
-            echo "  mirror    Live mirror of a rig's display (?mirror=RIG; amd64)"
+            echo "  mirror    Live mirror of a rig's display (?mirror=RIG)"
             echo "  server    Data server (stim2 installed for trial clips, no display)"
             echo "  minimal   Minimal install (dserv + dlsh)"
             echo ""
@@ -698,12 +699,19 @@ AGENT_COMPONENT_ID="dserv-agent"
 STIM_COMPONENT_ID="stim2"
 
 # A mirror box's units, shipped in stim2's tools/mirror/systemd: the mirror's
-# own stim2 fullscreen (X11, ports 5610-5613), and the driver that follows the
-# rig's dserv (dlsh, tools/mirror/mirror.tcl).
+# own stim2 fullscreen (ports 5610-5613), and the driver that follows the
+# rig's dserv (dlsh, tools/mirror/mirror.tcl). The display comes in two
+# flavors that install under the one name: X11 (xinit) on amd64, cage on
+# arm64 -- whichever stim2.service itself runs there. check_mirror sets
+# MIRROR_DISPLAY_SRC to the file for this box.
 MIRROR_DISPLAY_SVC="stim2-mirror-display"
+MIRROR_DISPLAY_SRC=""
 MIRROR_DRIVER_SVC="stim2-mirror"
 MIRROR_TOOLS="/usr/local/stim2/tools/mirror"
 MIRROR_DEFAULTS="/etc/default/stim2-mirror"
+# A vendor Mali blob (NXP i.MX95): stim2.service is the Weston kiosk there,
+# since cage segfaults on that GL stack, and the mirror has no Weston unit.
+MIRROR_MALI_PATHS="/dev/mali0 /usr/lib/libmali.so.0"
 
 has_component() {
     echo "$COMPONENTS_JSON" | jq -e --arg id "$1" \
@@ -1423,11 +1431,20 @@ LAUNCHER
 check_mirror() {
     [[ "$STIM_MODE" == "mirror" ]] || return 0
 
-    local arch
+    local arch p
     arch=$(dpkg --print-architecture 2>/dev/null || true)
-    if [[ "$arch" != "amd64" ]]; then
-        fail "The mirror profile is for amd64 boxes (its display unit is stim2's X11 flavor); this one is ${arch:-unknown}"
-    fi
+    case "$arch" in
+        amd64) MIRROR_DISPLAY_SRC="${MIRROR_DISPLAY_SVC}.service" ;;
+        arm64)
+            for p in $MIRROR_MALI_PATHS; do
+                if [[ -e "$p" ]]; then
+                    fail "This board runs stim2 under Weston (vendor Mali GL, ${p}); the mirror has no Weston display unit yet"
+                fi
+            done
+            MIRROR_DISPLAY_SRC="${MIRROR_DISPLAY_SVC}-cage.service" ;;
+        *)
+            fail "The mirror profile needs an amd64 (X11) or arm64 (cage) box; this one is ${arch:-unknown}" ;;
+    esac
 
     if [[ "$MIRROR_RIG" == none ]]; then
         fail "A mirror box needs a rig: --mirror none only makes sense for leaving the mirror profile"
@@ -1489,13 +1506,16 @@ step_stim_mirror() {
 
     info "Setting up the live mirror of ${MIRROR_RIG}..."
 
-    if [[ ! -f "${MIRROR_TOOLS}/mirror.tcl" ]] && ! $DRY_RUN; then
-        fail "stim2 has no mirror tools (${MIRROR_TOOLS}): it needs a newer stim2 (--reinstall after updating)"
+    # The display unit for this arch, not just the tools: a stim2 from before
+    # the cage flavor has mirror.tcl but no unit an arm64 box can run.
+    if [[ ! -f "${MIRROR_TOOLS}/mirror.tcl" || ! -f "${MIRROR_TOOLS}/systemd/${MIRROR_DISPLAY_SRC}" ]] && ! $DRY_RUN; then
+        fail "stim2 has no ${MIRROR_DISPLAY_SRC} (${MIRROR_TOOLS}/systemd): it needs a newer stim2 (--reinstall after updating)"
     fi
-    # stim2's postinst creates the stim user on amd64 (X11) boxes; the
-    # mirror's display and driver both run as it.
+    # stim2's postinst creates the stim user; the driver runs as it on every
+    # arch, and so does the X11 display (the cage one runs as root, like the
+    # cage stim2.service).
     if ! id stim &>/dev/null && ! $DRY_RUN; then
-        fail "no 'stim' user: stim2's package creates it on amd64 boxes -- re-run with --reinstall"
+        fail "no 'stim' user: stim2's package creates it -- re-run with --reinstall after updating stim2"
     fi
     # the display, and the render node (VAAPI, a headless stim2)
     local g
@@ -1506,16 +1526,20 @@ step_stim_mirror() {
     done
 
     # The units: package-shipped, refreshed when stim2 brings new ones.
+    # Either display flavor lands under the one unit name.
     local changed=false unit src dst
-    for unit in "$MIRROR_DISPLAY_SVC" "$MIRROR_DRIVER_SVC"; do
-        src="${MIRROR_TOOLS}/systemd/${unit}.service"
-        dst="/etc/systemd/system/${unit}.service"
+    for unit in "${MIRROR_DISPLAY_SVC}:${MIRROR_DISPLAY_SRC}" \
+                "${MIRROR_DRIVER_SVC}:${MIRROR_DRIVER_SVC}.service"; do
+        src="${MIRROR_TOOLS}/systemd/${unit#*:}"
+        dst="/etc/systemd/system/${unit%%:*}.service"
         if ! cmp -s "$src" "$dst" 2>/dev/null; then
             run install -m 0644 "$src" "$dst"
             changed=true
         fi
     done
-    run chmod 0755 "${MIRROR_TOOLS}/start-stim2-mirror.sh"
+    for src in "${MIRROR_TOOLS}"/start-stim2-mirror*.sh; do
+        [[ -f "$src" ]] && run chmod 0755 "$src"
+    done
 
     # The settings: the rig, and options the site may have edited (kept).
     if [[ ! -f "$MIRROR_DEFAULTS" ]]; then
@@ -1530,7 +1554,7 @@ step_stim_mirror() {
     fi
     run systemctl daemon-reload
 
-    # stim2.service and the mirror's display both want the X server on vt1.
+    # stim2.service and the mirror's display both want the display on vt1.
     local stim_svc
     stim_svc=$(echo "$COMPONENTS_JSON" | jq -r --arg id "$STIM_COMPONENT_ID" \
         '.components[] | select(.id == $id) | .service // empty')
