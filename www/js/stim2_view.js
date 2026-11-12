@@ -18,7 +18,10 @@
 // Time: the viewer's clock is App.pt, seconds from td.tStart (em_seconds,
 // which counts from the trial's first eye sample).  The clip's timing JSON
 // gives where em_seconds is 0 on the clip's timeline (em_zero_ms; else
-// obs_begin_ms, BEGINOBS, a few ms earlier).
+// obs_begin_ms, BEGINOBS, a few ms earlier).  A server from clip_version 5
+// starts the clip at BEGINOBS (obs_begin_ms 0), the stretch before the
+// trial's first new rig frame drawn as the rig's background (lead_ms); an
+// older one starts at that frame, and draw() paints the background itself.
 
 const Stim2View = {
   app: null,
@@ -135,106 +138,291 @@ const Stim2View = {
     mk('chkStim2Touch', 'touch', this.showTouch, on => { this.showTouch = on; this.draw(); });
     const b = document.createElement('button');
     b.id = 'btnStim2Export'; b.className = 'stim2-export-btn'; b.textContent = 'mp4';
-    b.title = 'Export this trial as a movie (stim2 draws the gaze and caption into it)';
+    b.title = 'Export this trial, or several as one movie (stim2 draws the gaze, touches and captions into it)';
     b.addEventListener('click', e => { e.stopPropagation(); this._exportPanel(b); });
     container.appendChild(b);
   },
 
-  // ── export: the selected trial as one movie, with the gaze shown here
-  // and a caption, drawn by stim2 (the render server's POST /export) ──
+  // ── export: trials of this file as one movie, drawn by stim2 (the render
+  // server's POST /export, stim2's tools/lib/reellib.tcl).  Which rows (this
+  // one, all, a range, a filter on the columns, or picked by hand), an
+  // optional title card, a caption per trial from a template over the
+  // row's columns, the gaze as this page has it and the session's touches.
+  // Each trial starts at its BEGINOBS (a render server from clip_version 5).
   _exportPanel(btn) {
     let p = document.getElementById('stim2Export');
     if (p) { p.remove(); return; }
+    const app = this.app, dg = app.dg, n = app.nRows, cur = app.cur;
+    // what this page remembers between opens; rows reset with the file
+    const st = this._xState && this._xState.dg === dg ? this._xState
+      : (this._xState = Object.assign({}, this._xState || {}, {
+          dg, scope: 'this', from: cur, to: n - 1, picks: new Set([cur]) }));
+    const hasGaze = !!app.hasEye;
+    const curTouch = !!(this.ready && this.timing && this.timing.touches && this.timing.touches.length);
+    const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    const lbl = i => {
+      const el = document.querySelector(`.ti[data-idx="${i}"] .lbl`);
+      return `${String(i).padStart(3, '0')} ${el ? el.textContent : ''}`;
+    };
     p = document.createElement('div');
     p.id = 'stim2Export'; p.className = 'stim2-export';
-    const hasGaze = !!(this.app.hasEye && this.app.td && this.app.td.eyeT && this.app.td.eyeT.length);
-    // touches: what the render server found in the session for this clip
-    const hasTouch = !!(this.ready && this.timing && this.timing.touches && this.timing.touches.length);
-    const dg = this.app.dg, i = this.app.cur;
-    const obsid = getScalar(dg, 'obsid', i);
     p.innerHTML = `
-      <div class="x-title">Export trial ${obsid != null ? Number(obsid) + 1 : ''}</div>
-      <input type="text" class="x-cap" maxlength="500" placeholder="caption (optional)">
+      <div class="x-title">Export movie</div>
+      <div class="x-row"><span class="x-lbl">trials</span>
+        <select class="x-scope">
+          <option value="this">this trial (row ${cur})</option>
+          <option value="all">all ${n} rows</option>
+          <option value="range">rows from … to …</option>
+          <option value="where">rows where …</option>
+          <option value="pick">pick rows…</option>
+        </select></div>
+      <div class="x-sub x-range x-row">rows <input type="number" class="x-from" min="0" max="${n - 1}" step="1">
+        to <input type="number" class="x-to" min="0" max="${n - 1}" step="1"></div>
+      <div class="x-sub x-where"><input type="text" class="x-whr" spellcheck="false"
+        placeholder="outcome == 1 and rt < 2"
+        title="column op value, joined by and (&&): == != < <= > >= ; a string value may be quoted"></div>
+      <div class="x-sub x-pick">
+        <div class="x-row"><button class="x-pall">all</button><button class="x-pnone">none</button></div>
+        <div class="x-picks">${Array.from({ length: n }, (_, i) =>
+          `<label><input type="checkbox" data-i="${i}"> ${esc(lbl(i))}</label>`).join('')}</div></div>
+      <div class="x-count"></div>
+      <label class="bt"><input type="checkbox" class="x-tcard"> title card</label>
+      <div class="x-sub x-card x-row"><input type="text" class="x-ttext" maxlength="500" placeholder="title">
+        <input type="number" class="x-tdur" min="0.5" max="60" step="0.5" title="seconds"> s</div>
+      <input type="text" class="x-cap" maxlength="500" spellcheck="false" placeholder="caption, e.g. Trial {trial} · {outcome}"
+        title="{column} is that column's value in the row; {trial} the trial number (obsid + 1), {row} the row, {n} and {N} its place in the movie">
+      <div class="x-capprev"></div>
       <div class="x-row">
         <select class="x-at" title="Where the caption goes">
           <option value="nw">top left</option><option value="n">top</option><option value="ne">top right</option>
           <option value="sw">bottom left</option><option value="s">bottom</option><option value="se">bottom right</option>
         </select>
-        <label class="bt"><input type="checkbox" class="x-gaze"${hasGaze && this.showGaze ? ' checked' : ''}${hasGaze ? '' : ' disabled'}> gaze</label>
-        <label class="bt"><input type="checkbox" class="x-touch"${hasTouch && this.showTouch ? ' checked' : ''}${hasTouch ? '' : ' disabled'}> touch</label>
+        <label class="bt"><input type="checkbox" class="x-gaze"${hasGaze ? '' : ' disabled'}> gaze</label>
+        <label class="bt" title="the touchscreen presses the session logged"><input type="checkbox" class="x-touch"> touch</label>
       </div>
       <div class="x-row"><button class="primary x-go">Export</button><button class="x-close">Close</button></div>
       <div class="x-status"></div>`;
     document.body.appendChild(p);
+    const $ = s => p.querySelector(s);
+    const scope = $('.x-scope'), from = $('.x-from'), to = $('.x-to'), whr = $('.x-whr');
+    const tcard = $('.x-tcard'), ttext = $('.x-ttext'), tdur = $('.x-tdur');
+    const cap = $('.x-cap'), at = $('.x-at'), gz = $('.x-gaze'), tc = $('.x-touch'), go = $('.x-go');
+    scope.value = st.scope; from.value = st.from; to.value = st.to;
+    whr.value = st.where || '';
+    tcard.checked = !!st.title; ttext.value = st.titleText || ''; tdur.value = st.titleDur || 2;
+    cap.value = st.caption || ''; at.value = st.at || 'nw';
+    gz.checked = hasGaze && (st.gaze != null ? st.gaze : this.showGaze);
+    tc.checked = st.touch != null ? st.touch : (this.showTouch && curTouch);
+    for (const c of p.querySelectorAll('.x-picks input')) c.checked = st.picks.has(Number(c.dataset.i));
+
+    // the rows the choice names, or an error message
+    const rows = () => {
+      switch (scope.value) {
+        case 'this': return [cur];
+        case 'all': return Array.from({ length: n }, (_, i) => i);
+        case 'range': {
+          let a = Math.round(Number(from.value)), b = Math.round(Number(to.value));
+          if (!Number.isFinite(a) || !Number.isFinite(b)) return 'rows: two row numbers';
+          a = Math.max(0, Math.min(n - 1, a)); b = Math.max(0, Math.min(n - 1, b));
+          if (a > b) [a, b] = [b, a];
+          return Array.from({ length: b - a + 1 }, (_, k) => a + k);
+        }
+        case 'where': {
+          const f = this._where(whr.value);
+          if (typeof f === 'string') return f;
+          return Array.from({ length: n }, (_, i) => i).filter(f);
+        }
+        case 'pick': return [...p.querySelectorAll('.x-picks input')].filter(c => c.checked).map(c => Number(c.dataset.i));
+      }
+      return [];
+    };
+    const update = () => {
+      for (const k of ['range', 'where', 'pick']) $('.x-' + k).style.display = scope.value === k ? '' : 'none';
+      $('.x-card').style.display = tcard.checked ? '' : 'none';
+      const r = rows(), count = $('.x-count');
+      let ok = Array.isArray(r) && r.length > 0;
+      if (!Array.isArray(r)) count.textContent = r;
+      else if (!r.length) count.textContent = 'no rows';
+      else {
+        const items = r.length + (tcard.checked ? 1 : 0);
+        count.textContent = `${r.length} trial${r.length === 1 ? '' : 's'}` + (tcard.checked ? ' + title card' : '') +
+          (items > 50 ? ' (at most 50 items: fewer rows)' : '');
+        if (items > 50) ok = false;
+      }
+      count.classList.toggle('x-bad', !ok);
+      const prev = $('.x-capprev');
+      if (cap.value.trim() && Array.isArray(r) && r.length) {
+        prev.textContent = '→ ' + this._caption(cap.value.trim(), r[0], 0, r.length);
+      } else prev.textContent = '';
+      go.disabled = !ok || (tcard.checked && !ttext.value.trim());
+      Object.assign(st, { scope: scope.value, from: from.value, to: to.value, where: whr.value,
+        title: tcard.checked, titleText: ttext.value, titleDur: tdur.value, caption: cap.value, at: at.value,
+        gaze: gz.checked, touch: tc.checked,
+        picks: new Set([...p.querySelectorAll('.x-picks input')].filter(c => c.checked).map(c => Number(c.dataset.i))) });
+    };
+    p.addEventListener('input', update);
+    p.addEventListener('change', update);
+    $('.x-pall').addEventListener('click', () => { p.querySelectorAll('.x-picks input').forEach(c => { c.checked = true; }); update(); });
+    $('.x-pnone').addEventListener('click', () => { p.querySelectorAll('.x-picks input').forEach(c => { c.checked = false; }); update(); });
+
     const r = btn.getBoundingClientRect();
     p.style.left = Math.max(8, Math.min(window.innerWidth - p.offsetWidth - 8, r.right - p.offsetWidth)) + 'px';
     p.style.bottom = (window.innerHeight - r.top + 6) + 'px';
-    const close = () => { p.remove(); document.removeEventListener('mousedown', outside); document.removeEventListener('keydown', esc); };
-    const outside = e => { if (!p.contains(e.target) && e.target !== btn) close(); };
-    const esc = e => { if (e.key === 'Escape') close(); };
+    p.style.maxHeight = (r.top - 14) + 'px';
+    const close = () => { p.remove(); document.removeEventListener('mousedown', outside); };
+    const outside = e => { if (!p.contains(e.target) && e.target !== btn && !this._exporting) close(); };
     document.addEventListener('mousedown', outside);
-    document.addEventListener('keydown', esc);
-    p.querySelector('.x-close').addEventListener('click', close);
-    const cap = p.querySelector('.x-cap');
-    cap.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') go.click(); if (e.key === 'Escape') close(); });
-    const go = p.querySelector('.x-go');
-    go.addEventListener('click', async () => {
-      go.disabled = true;
-      try {
-        await this.exportTrial(i, {
-          caption: cap.value.trim(),
-          caption_at: p.querySelector('.x-at').value,
-          gaze: p.querySelector('.x-gaze').checked,
-          touch: p.querySelector('.x-touch').checked,
-        }, msg => { p.querySelector('.x-status').textContent = msg; });
-      } finally { go.disabled = false; }
+    // keys stay in the panel (the viewer's own would step trials, play)
+    p.addEventListener('keydown', e => {
+      e.stopPropagation();
+      if (e.key === 'Escape') close();
+      else if (e.key === 'Enter' && e.target.type === 'text' && !go.disabled) go.click();
     });
-    cap.focus();
+    $('.x-close').addEventListener('click', close);
+    go.addEventListener('click', async () => {
+      const rs = rows();
+      if (!Array.isArray(rs) || !rs.length) return;
+      go.disabled = true; this._exporting = true;
+      try {
+        await this.exportRows(rs, {
+          title: tcard.checked ? { text: ttext.value.trim(), dur: Number(tdur.value) || 2 } : null,
+          caption: cap.value.trim(), caption_at: at.value,
+          gaze: gz.checked, touch: tc.checked,
+        }, msg => { $('.x-status').textContent = msg; });
+      } finally { go.disabled = false; this._exporting = false; update(); }
+    });
+    update();
+    (scope.value === 'where' ? whr : cap).focus();
   },
 
-  // row i's reel item: the trial, its caption, and the gaze as this page
-  // draws it (em_seconds from the trial's first sample; blinks left out
-  // when they are masked here)
+  // a filter over the rows' columns: "col op value and ...", each clause a
+  // scalar column against a number or a string.  Returns a function of the
+  // row, or a message saying what is wrong.
+  _where(expr) {
+    const dg = this.app.dg;
+    const s = String(expr || '').trim();
+    if (!s) return 'rows where: a condition, e.g. outcome == 1';
+    const clauses = s.split(/\s*(?:&&|\band\b|,)\s*/i).filter(Boolean);
+    const tests = [];
+    for (const c of clauses) {
+      const m = c.match(/^([A-Za-z_][\w.\/<>-]*)\s*(==|!=|<=|>=|<|>|=)\s*(.+)$/);
+      if (!m) return `rows where: cannot read "${c}" (column op value)`;
+      const [, col, op, raw] = m;
+      const list = dg.getList(col);
+      if (!list) return `rows where: no column ${col}`;
+      if (list.dataType === DF_LIST) return `rows where: ${col} is a list per row, not a value`;
+      let v = raw.trim();
+      const q = v.match(/^(['"])(.*)\1$/);
+      const num = !q && v !== '' && Number.isFinite(Number(v));
+      v = q ? q[2] : num ? Number(v) : v;
+      tests.push(i => {
+        let x = getScalar(dg, col, i);
+        if (x == null) return false;
+        if (num) x = Number(x); else x = String(x);
+        switch (op) {
+          case '==': case '=': return x === v;
+          case '!=': return x !== v;
+          case '<': return x < v;
+          case '<=': return x <= v;
+          case '>': return x > v;
+          case '>=': return x >= v;
+        }
+        return false;
+      });
+    }
+    return i => tests.every(t => t(i));
+  },
+
+  // a caption from a template: {col} the row's value in that column (a
+  // number to at most 3 decimals), {trial} obsid + 1, {row} the row, {n}
+  // and {N} the trial's place in the movie and how many there are.  An
+  // unknown name stays as written, so the preview shows the mistake.
+  _caption(tpl, i, k, N) {
+    const dg = this.app.dg;
+    const fmt = v => typeof v === 'number' && !Number.isInteger(v) ? String(+v.toFixed(3)) : String(v);
+    return tpl.replace(/\{([A-Za-z_#][\w.\/-]*)\}/g, (m, name) => {
+      if (name === 'trial') { const o = getScalar(dg, 'obsid', i); return o == null ? m : String(Number(o) + 1); }
+      if (name === 'row') return String(i);
+      if (name === 'n') return String(k + 1);
+      if (name === 'N') return String(N);
+      const v = getScalar(dg, name, i);
+      return v == null ? m : fmt(v);
+    });
+  },
+
+  // row i's gaze as this page draws it: the current row's parsed trial,
+  // else read from the DG as parseTrialRow does (em_seconds counted from
+  // the row's first sample, blinks left out when they are masked here)
+  _gazeOf(i) {
+    const app = this.app, dg = app.dg;
+    let T, H, V, B, t0;
+    if (i === app.cur && app.td && app.td.eyeT) {
+      ({ eyeT: T, eyeH: H, eyeV: V, blink: B, tStart: t0 } = app.td);
+    } else {
+      if (!app.hasEye) return null;
+      T = getSublistData(dg, 'em_seconds', i); H = getSublistData(dg, 'em_h_deg', i);
+      V = getSublistData(dg, 'em_v_deg', i); B = getSublistData(dg, 'in_blink', i);
+      t0 = T && T.length > 1 ? T[0] : 0;
+    }
+    if (!T || !H || !V) return null;
+    const t = [], x = [], y = [];
+    const mask = app.maskBlinks && B;
+    for (let k = 0; k < T.length; k++) {
+      if (mask && B[k] !== 0) continue;
+      const h = H[k], v = V[k];
+      if (!Number.isFinite(h) || !Number.isFinite(v)) continue;
+      t.push(Math.round((T[k] - t0) * 1e4) / 1e4);
+      x.push(Math.round(h * 1e3) / 1e3); y.push(Math.round(v * 1e3) / 1e3);
+    }
+    return t.length ? { t, x, y } : null;
+  },
+
+  // row i's reel item: the trial, its caption (already filled in), the gaze
   _trialItem(i, opts) {
     const dg = this.app.dg;
     const fn = String(getScalar(dg, 'filename', i)).split(/[\\/]/).pop();
     const item = { type: 'trial', file: fn, obsid: Number(getScalar(dg, 'obsid', i)) };
     if (opts.caption) { item.caption = opts.caption; item.caption_at = opts.caption_at || 'nw'; }
-    const td = i === this.app.cur ? this.app.td : null;
-    if (opts.gaze && td && td.eyeT && td.eyeH && td.eyeV) {
-      const t = [], x = [], y = [];
-      const mask = this.app.maskBlinks && td.blink;
-      for (let k = 0; k < td.eyeT.length; k++) {
-        if (mask && td.blink[k] !== 0) continue;
-        const h = td.eyeH[k], v = td.eyeV[k];
-        if (!Number.isFinite(h) || !Number.isFinite(v)) continue;
-        t.push(Math.round((td.eyeT[k] - td.tStart) * 1e4) / 1e4);
-        x.push(Math.round(h * 1e3) / 1e3); y.push(Math.round(v * 1e3) / 1e3);
-      }
-      if (t.length) item.gaze = { t, x, y };
-    }
+    if (opts.gaze) { const g = this._gazeOf(i); if (g) item.gaze = g; }
     // the server reads the touches from the session itself
     if (opts.touch) item.touch = true;
     return item;
   },
 
-  // render and download; say(msg) reports progress
-  async exportTrial(i, opts, say) {
+  // one trial (the old single-trial call)
+  exportTrial(i, opts, say) { return this.exportRows([i], opts, say); },
+
+  // rows into one movie, rendered and downloaded; say(msg) reports progress.
+  // opts: title {text, dur} or null, caption (a template), caption_at,
+  // gaze, touch
+  async exportRows(rows, opts, say) {
     if (!this.available) { say('no render server'); return; }
     const dg = this.app.dg;
-    if (getScalar(dg, 'filename', i) == null || getScalar(dg, 'obsid', i) == null) {
-      say('no filename/obsid columns: cannot find this trial'); return;
-    }
-    const item = this._trialItem(i, opts);
-    const name = `${item.file.replace(/\.(trials\.dgz|obs\.dgz|ess|dgz)$/, '')}_trial${item.obsid + 1}.mp4`;
-    say('rendering…');
+    const bad = rows.find(i => getScalar(dg, 'filename', i) == null || getScalar(dg, 'obsid', i) == null);
+    if (bad !== undefined) { say(`row ${bad}: no filename/obsid columns, cannot find its trial`); return; }
+    const items = [];
+    if (opts.title && opts.title.text) items.push({ type: 'card', text: opts.title.text, dur: Math.max(0.5, Math.min(60, opts.title.dur || 2)) });
+    rows.forEach((i, k) => {
+      const caption = opts.caption ? this._caption(opts.caption, i, k, rows.length) : '';
+      items.push(this._trialItem(i, Object.assign({}, opts, { caption })));
+    });
+    const trialItems = items.filter(it => it.type === 'trial');
+    const first = trialItems[0], last = trialItems[trialItems.length - 1];
+    const base = first.file.replace(/\.(trials\.dgz|obs\.dgz|ess|dgz)$/, '');
+    const name = trialItems.length === 1 ? `${base}_trial${first.obsid + 1}.mp4`
+      : `${base}_trials${first.obsid + 1}-${last.obsid + 1}_n${trialItems.length}.mp4`;
+    const what = trialItems.length === 1 ? 'the trial' : `${trialItems.length} trials`;
+    say(`rendering ${what}…`);
     const poll = setInterval(async () => {
       try {
         const s = await (await fetch(this.server + '/status')).json();
         if (s.rendering && s.rendering.job.startsWith('export/')) {
-          say(`rendering… ${Math.round(s.rendering.progress * 100)}%`);
+          const f = s.rendering.progress, k = Math.min(items.length, Math.floor(f * items.length) + 1);
+          say(`rendering… ${Math.round(f * 100)}%` + (items.length > 1 ? ` (item ${k} of ${items.length})` : ''));
         } else if (s.rendering) {
           say(`waiting for trial ${s.rendering.job.split('/').pop()} to finish…`);
+        } else if (s.fetching && s.fetching.length) {
+          say('copying the session from the rig…');
         }
       } catch (e) { /* the answer will come */ }
     }, 400);
@@ -242,7 +430,7 @@ const Stim2View = {
     try {
       r = await fetch(this.server + '/export', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fps: 60, items: [item] }),
+        body: JSON.stringify({ fps: 60, items }),
       });
       j = await r.json();
     } catch (e) {
@@ -258,7 +446,7 @@ const Stim2View = {
       setTimeout(() => URL.revokeObjectURL(a.href), 10000);
       const size = blob.size < 1048576 ? `${Math.max(1, Math.round(blob.size / 1024))} KB`
                                        : `${(blob.size / 1048576).toFixed(1)} MB`;
-      say(`saved ${name} (${size})`);
+      say(`saved ${name} (${size})${j.cached ? ', from the cache' : ''}`);
     } catch (e) {
       say(`the movie did not download: ${e.message}`);
     }
@@ -545,6 +733,14 @@ const Stim2View = {
       ctx.textAlign = 'right'; ctx.textBaseline = 'bottom';
       ctx.fillText('rig screen not redrawn yet', R.x + R.w - 8, R.y + R.h - 20);
       ctx.fillText(`first frame at ${this.ptOf(0).toFixed(3)} s`, R.x + R.w - 8, R.y + R.h - 6);
+    } else if (this.timing.lead_ms > 0 && t * 1000 < this.timing.first_frame_ms) {
+      // The clip's lead (a render server from clip_version 5 starts the
+      // clip at BEGINOBS): the same stretch, drawn into the clip as the
+      // rig's background.  Say so the same way.
+      ctx.fillStyle = 'rgba(136,153,180,0.85)'; ctx.font = '10px "JetBrains Mono", monospace';
+      ctx.textAlign = 'right'; ctx.textBaseline = 'bottom';
+      ctx.fillText('rig screen not redrawn yet', R.x + R.w - 8, R.y + R.h - 20);
+      ctx.fillText(`first frame at ${this.ptOf(this.timing.first_frame_ms / 1000).toFixed(3)} s`, R.x + R.w - 8, R.y + R.h - 6);
     }
     if (this.showTouch) this._drawTouch(ctx, R, t * 1000);
     if (this.showGaze) this._drawGaze(ctx, R, pt);
