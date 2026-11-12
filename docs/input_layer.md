@@ -69,6 +69,10 @@ experiment-level semantics.
   where `event_type ∈ {0 = PRESS, 1 = DRAG, 2 = RELEASE}`.
   Coordinates are in display-pixel space, after the existing rotation /
   raw-to-pixel mapping from `modules/touch/touch.c`.
+  DRAG is published by default for touchscreens (`track_drag` 1 since
+  2026-11; `-track_drag 0` turns it off per device). ESS subscribes to
+  `mtouch/event` directly and logs PRESS / MOVE / RELEASE as TOUCH events
+  inside observation periods; `touch_windows.c` ignores DRAG.
 
 This is bit-for-bit identical to today. `touch_windows.c` and every state
 system that calls `::ess::touch_win_set` continue to work without change.

@@ -550,29 +550,55 @@ const Stim2View = {
     if (this.showGaze) this._drawGaze(ctx, R, pt);
   },
 
-  // the touchscreen presses, as the export draws them (replaylib's
-  // _touch_at): a 1.6 deg ring from the press until its release (250 ms
-  // when none was logged), then at the release point fading over 400 ms
+  // the touch strokes, as the export draws them (replaylib's _touch_at):
+  // a 1.6 deg ring where the finger is, with a trail of its path over the
+  // last 500 ms, from touch-down until the release (250 ms past the last
+  // sample when none was logged), then at the release point fading over
+  // 400 ms.  A stroke without a path (a tap, or a file from before ESS
+  // logged drags) is a ring at the press, then at the release.
   _drawTouch(ctx, R, ms) {
     const scr = this.timing.screen || {}, marks = this.timing.touches;
     if (!marks || !marks.length || !scr.halfx || !scr.halfy) return;
     const toX = h => R.x + (0.5 + h / (2 * scr.halfx)) * R.w;
     const toY = v => R.y + (0.5 - v / (2 * scr.halfy)) * R.h;
     const rpx = Math.max(4, 0.8 / (2 * scr.halfx) * R.w);
-    const HOLD = 250, FADE = 400;
+    const HOLD = 250, FADE = 400, TRAIL = 500;
+    const col = a => `rgba(255,77,230,${a.toFixed(3)})`;
     ctx.save();
     ctx.beginPath(); ctx.rect(R.x, R.y, R.w, R.h); ctx.clip();
-    ctx.lineWidth = Math.max(1.5, rpx * 0.24);
-    for (const [on, x, y, up0, xu0, yu0] of marks) {
+    ctx.lineCap = 'round';
+    for (const [on, x, y, up0, xu0, yu0, path] of marks) {
       if (on > ms) break;
-      const up = up0 == null ? on + HOLD : up0;
-      let px = x, py = y, a = 1;
-      if (ms >= up) {
-        if (ms >= up + FADE) continue;
-        if (up0 != null) { px = xu0; py = yu0; }
-        a = 1 - (ms - up) / FADE;
+      const n = path ? path.length / 3 : 0;
+      const last = n ? path[3 * (n - 1)] : on;
+      const up = up0 == null ? last + HOLD : up0;
+      if (ms >= up + FADE) continue;
+      const a = ms < up ? 1 : 1 - (ms - up) / FADE;
+      const tt = Math.min(ms, up);
+      let px = x, py = y;
+      if (n) {
+        // the finger at tt, and its trail back TRAIL ms, newest first
+        const tr = [];
+        for (let i = n - 1; i >= 0; i--) {
+          const ts = path[3 * i];
+          if (ts > tt) continue;
+          if (tt - ts > TRAIL) break;
+          tr.push([ts, path[3 * i + 1], path[3 * i + 2]]);
+        }
+        if (tr.length) { px = tr[0][1]; py = tr[0][2]; }
+        ctx.lineWidth = Math.max(1, rpx * 0.16);
+        for (let k = 1; k < tr.length; k++) {
+          ctx.strokeStyle = col(0.7 * 0.95 * a * (1 - (tt - tr[k][0]) / TRAIL));
+          ctx.beginPath();
+          ctx.moveTo(toX(tr[k - 1][1]), toY(tr[k - 1][2]));
+          ctx.lineTo(toX(tr[k][1]), toY(tr[k][2]));
+          ctx.stroke();
+        }
+      } else if (ms >= up && up0 != null) {
+        px = xu0; py = yu0;
       }
-      ctx.strokeStyle = `rgba(255,77,230,${(0.95 * a).toFixed(3)})`;
+      ctx.lineWidth = Math.max(1.5, rpx * 0.24);
+      ctx.strokeStyle = col(0.95 * a);
       ctx.beginPath(); ctx.arc(toX(px), toY(py), rpx, 0, Math.PI * 2); ctx.stroke();
     }
     ctx.restore();

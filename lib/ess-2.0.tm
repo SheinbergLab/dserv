@@ -1455,14 +1455,14 @@ oo::class create System {
             # touch windows, the dial's touch source, the sling -- works
             # unchanged here.
             #
-            # DRAG is OPT-IN: stim2 calls onMouseMove on every cursor
-            # motion, so the bridge stays inert (one variable test) unless a
-            # consumer that needs drags has set ::mouse_bridge_drag (the
-            # sling's touch source does, and clears it on deinit). Even
-            # then it sends only while the button is down and only when the
-            # pixel changed. The consumer's deinit also clears the down
-            # flag, so a release lost to a focus change cannot leave the
-            # bridge streaming.
+            # DRAG is on, as for a real touchscreen (the input module's
+            # track_drag default): ESS logs it as TOUCH MOVE. stim2 calls
+            # onMouseMove on every cursor motion, but the bridge sends only
+            # while the button is down and only when the pixel changed;
+            # hover costs one variable test. ::mouse_bridge_drag 0 turns it
+            # off. A consumer's deinit (the sling's) clears the down flag,
+            # so a release lost to a focus change cannot leave the bridge
+            # streaming.
             #
             # It ALSO stands in for the input module's mouse, when this
             # dserv has none: with ::mouse_bridge_mouse set (configure_stim
@@ -1479,7 +1479,7 @@ oo::class create System {
             # in two pixel spaces would fight.
             namespace inscope :: {
                 set ::mouse_bridge_down 0
-                set ::mouse_bridge_drag 0
+                set ::mouse_bridge_drag 1
                 set ::mouse_bridge_lx -1
                 set ::mouse_bridge_ly -1
                 if { ![info exists ::mouse_bridge_mouse] } { set ::mouse_bridge_mouse 0 }
@@ -3526,6 +3526,7 @@ namespace eval ess {
         lassign $obs_pending_args current total
         set T [dservTimestamp $dp]
         ::ess::evt_put BEGINOBS INFO $T $current $total
+        touch_obs_begin $T
         dservSetData ess/in_obs $T 1 "1"
         rpioPinOn $obs_pin
         set in_obs 1
@@ -3580,7 +3581,9 @@ namespace eval ess {
         lassign $obs_pending_args current total
         variable in_obs
         variable obs_pin
-        ::ess::evt_put BEGINOBS INFO [now] $current $total
+        set T [now]
+        ::ess::evt_put BEGINOBS INFO $T $current $total
+        touch_obs_begin $T
         dservSet ess/in_obs 1
         rpioPinOn $obs_pin
         # a bound obs still deserves a physical line (the +31 principle):
@@ -3671,7 +3674,9 @@ namespace eval ess {
         }
         # classic path -- byte-identical to the unbound behavior a system
         # that never calls obs_schedule_bind has always had
-        ::ess::evt_put BEGINOBS INFO [now] $current $total
+        set T [now]
+        ::ess::evt_put BEGINOBS INFO $T $current $total
+        touch_obs_begin $T
         dservSet ess/in_obs 1
         rpioPinOn $obs_pin
         if {$obs_sched_box ne ""} {
@@ -6397,17 +6402,38 @@ namespace eval ess {
         return [list $x_deg $y_deg]
     }
 
+    # mtouch/event {x y type} (0 PRESS, 1 DRAG, 2 RELEASE), stamped by the
+    # input module with the kernel's event time: logged as TOUCH PRESS,
+    # MOVE and RELEASE while an observation period is open.
+    #
+    # Read here, straight from mtouch/event -- not from triggers.tcl's
+    # ess/touch_press and ess/touch_release, which are set by a trigger in
+    # the main interp and so reach this interp only AFTER the touch_windows
+    # status the same event produced (Dataserver::update runs the processor
+    # before it notifies; triggers queue behind both).  A press that ended
+    # the trial then arrived after end_obs and was never logged: on hb5
+    # (2026-11-12) most responding presses were missing from the file, and
+    # last_touch_press lagged the window status that a system acted on.
+    # Here the event comes before its window status, every time.
+    #
+    # Drags are TOUCH MOVE, every one, so a trial's finger path is in the
+    # data: logged only -- no do_update, no _deg datapoint -- since touch
+    # windows ignore drags too, so nothing a system does changes.
     proc touch_evt_put { name data } {
-	# events closer than 15ms aparts skipped
+	# presses or releases closer than 15ms apart are skipped
 	set min_us 15000
 	set timestamp [dservTimestamp $name]
 	if {!$::ess::in_obs} return
-	lassign $data x y
+	lassign $data x y type
+	if { $type == 1 } {
+	    ::ess::evt_put TOUCH MOVE $timestamp $x $y
+	    return
+	}
 	# calibrated-deg version, parallel to the raw-pixel datapoint —
 	# protocols and viz that work in stim space subscribe to
 	# ess/touch_{press,release}_deg instead of the raw pixel pair.
 	lassign [touch_pixels_to_deg $x $y] x_deg y_deg
-	if { $name == "ess/touch_press" } {
+	if { $type == 0 } {
 	    variable last_touch_press
 	    if { [expr ($timestamp-$last_touch_press)>$min_us] } {
 		::ess::evt_put TOUCH PRESS $timestamp $x $y
@@ -6417,7 +6443,7 @@ namespace eval ess {
 		# can fire even when the press lands outside any window
 		do_update
 	    }
-	} elseif { $name == "ess/touch_release" } {
+	} elseif { $type == 2 } {
 	    variable last_touch_release
 	    if { [expr ($timestamp-$last_touch_release)>$min_us] } {
 		::ess::evt_put TOUCH RELEASE $timestamp $x $y
@@ -6460,18 +6486,35 @@ namespace eval ess {
         variable touch_win_scale_h [expr {$touch_win_h / $touch_win_deg_h}]
 
 
-	# inject press/release events
-	dservAddExactMatch ess/touch_press
-        dpointSetScript ess/touch_press ::ess::touch_evt_put
-	dservAddExactMatch ess/touch_release  
-        dpointSetScript ess/touch_release ::ess::touch_evt_put
+	# log presses, drags and releases (touch_evt_put).  AddScript, as
+	# the sling's touch source also listens to mtouch/event; removed
+	# first so a second touch_init does not log every event twice.
+	dservAddExactMatch mtouch/event
+	catch { dpointRemoveScript mtouch/event ::ess::touch_evt_put }
+	dpointAddScript mtouch/event ::ess::touch_evt_put
     }
 
     proc touch_deinit {} {
         variable touch_windows
 	dservRemoveMatch $touch_windows(dpoint)/status
-	dservRemoveMatch ess/touch_press
-	dservRemoveMatch ess/touch_release
+	# the script only: another consumer may still want the match
+	catch { dpointRemoveScript mtouch/event ::ess::touch_evt_put }
+    }
+
+    # At BEGINOBS (time T): a finger already on the screen gets a TOUCH
+    # MOVE where it is, so a trial that starts mid-contact (pressed during
+    # the last trial or the ITI, when nothing is logged) still has its
+    # finger from the first moment.  Read from mtouch/event's last value in
+    # the datapoint table, current whatever this interp has handled: a last
+    # event that is a PRESS or DRAG means a finger is down.  A MOVE with no
+    # PRESS before it in the period means "down since before the period".
+    proc touch_obs_begin {T} {
+        variable touch_active
+        if {![info exists touch_active] || !$touch_active} return
+        if {[catch {dservGet mtouch/event} v] || [llength $v] < 3} return
+        lassign $v x y type
+        if {$type ni {0 1}} return
+        ::ess::evt_put TOUCH MOVE $T $x $y
     }
     
     proc touch_check_state {win} {

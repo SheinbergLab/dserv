@@ -26,7 +26,9 @@
 #
 # Event type: 0 = PRESS, 1 = DRAG, 2 = RELEASE (same semantics for all),
 # plus 3 = MOVE for the mouse only — motion with no button held, which has
-# no touch-device equivalent.
+# no touch-device equivalent. Touchscreens report DRAG by default (ESS logs
+# it as TOUCH MOVE, so a replay can draw the stroke); turn it off per
+# device with -track_drag 0.
 #
 # Timestamps are the kernel's event time (evdev ev.time, switched to
 # CLOCK_MONOTONIC at open), not the time the reader thread saw the event.

@@ -2586,8 +2586,13 @@ int Dserv_input_Init(Tcl_Interp *interp)
   st->tclserver = tclserver_get_from_interp(interp);
   pthread_mutex_init(&st->devices_lock, NULL);
 
-  register_class(st, "touchscreen", "mtouch/event",
-                 touchscreen_matches, touchscreen_reader);
+  input_class_t *ts = register_class(st, "touchscreen", "mtouch/event",
+                                     touchscreen_matches, touchscreen_reader);
+  /* Touchscreens report DRAG by default: ESS logs it (TOUCH MOVE, so a
+     trial's finger path is in the data) and the sling and the dial's
+     touch source steer by it. The touch_windows processor ignores DRAG,
+     so window behaviour is unchanged. -track_drag 0 turns it off. */
+  if (ts) ts->track_drag = 1;
   register_class(st, "trackpad", "mtouch/trackpad",
                  trackpad_matches, trackpad_reader);
   register_class(st, "mouse", "mouse/event",

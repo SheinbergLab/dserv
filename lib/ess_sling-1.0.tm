@@ -815,9 +815,10 @@ namespace eval ess {
             sling_touch_range
             dservAddExactMatch mtouch/event
             dpointAddScript    mtouch/event ::ess::sling_touch_sample
-            # Ask the stim-side mouse->touch bridge (configure_stim, dev
-            # Mac) for DRAG events; it is inert otherwise. No stim, or a
-            # real touchscreen rig, and this is simply a no-op.
+            # The stim-side mouse->touch bridge (configure_stim, dev Mac)
+            # sends DRAG by default now; ask anyway, in case a script
+            # turned it off. No stim, or a real touchscreen rig, and this
+            # is simply a no-op.
             catch { rmtSend {set ::mouse_bridge_drag 1} }
         }
 
@@ -840,10 +841,11 @@ namespace eval ess {
         catch { dpointRemoveScript mouse/event       ::ess::sling_mouse_sample }
         catch { dpointRemoveScript mouse/event/range ::ess::sling_mouse_range }
         catch { dpointRemoveScript mtouch/event      ::ess::sling_touch_sample }
-        # Switch the stim-side drag bridge back off, and clear its down
-        # flag in case a release was lost -- so nothing keeps streaming
-        # mtouch/event after the sling is gone.
-        catch { rmtSend {set ::mouse_bridge_drag 0; set ::mouse_bridge_down 0} }
+        # Clear the stim-side bridge's down flag in case a release was
+        # lost, so nothing keeps streaming mtouch/event after the sling is
+        # gone. Its DRAG stays on: ESS logs drags (TOUCH MOVE) for every
+        # system now, not only the sling.
+        catch { rmtSend {set ::mouse_bridge_down 0} }
         set sling_armed   0
         set sling_engaged 0
         set sling_active  0
