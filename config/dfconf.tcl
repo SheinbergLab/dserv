@@ -604,11 +604,9 @@ proc create_obs_file {ess_path file_id basename} {
     
     set ess_mtime [file mtime $ess_path]
     
+    # (df::make_obs: the same stage tools/dfconvert runs by hand)
     if {[catch {
-        set g [dslog::readESS $ess_path]
-        set n_obs [dl_length $g:e_types]
-        dg_write $g $obs_path
-        dg_delete $g
+        set n_obs [df::make_obs $ess_path $obs_path]
     } err]} {
         log_processing $file_id "obs" "error" $err
         record_conversion $file_id "obs" "" "error" $err $ess_mtime "" ""
@@ -651,39 +649,12 @@ proc create_trials_file {obs_path file_id basename system protocol} {
     
     set extractor_mtime [file mtime $extractor]
     
+    # (df::make_trials: the system's extract_trials_from_obs on the obs DG,
+    # else load_data on the .ess; the same stage tools/dfconvert runs)
     if {[catch {
-        # Source extractor
-        uplevel #0 [list source $extractor]
-        
-        # Load obs data
-        set g [dg_read $obs_path]
-        
-        # Get metadata from obs
-        set meta [df::extract_metadata_from_obs $g]
-        
-        # Try obs-aware extractor first, fall back to File-based
-        set trials_proc "::${system}::extract_trials_from_obs"
-        if {[info commands $trials_proc] ne ""} {
-            set trials [{*}$trials_proc $g $meta]
-        } else {
-            # Fall back: get ess path and use original load_data
-            set ess_path [dfdb eval {SELECT filepath FROM datafiles WHERE id = $file_id}]
-            dg_delete $g
-            set trials [df::load_data $ess_path]
-        }
-        
-        # Count trials
-        set cols [dg_tclListnames $trials]
-        set n_trials 0
-        if {[llength $cols] > 0} {
-            set n_trials [dl_length $trials:[lindex $cols 0]]
-        }
-        
-        # Write output
-        dg_write $trials $trials_path
-        
-        catch {dg_delete $g}
-        dg_delete $trials
+        set ess_path [dfdb eval {SELECT filepath FROM datafiles WHERE id = $file_id}]
+        set r [df::make_trials $obs_path $trials_path -ess $ess_path -system $system]
+        set n_trials [dict get $r n_trials]
     } err]} {
         log_processing $file_id "trials" "error" $err
         record_conversion $file_id "trials" "" "error" $err $obs_mtime $extractor $extractor_mtime

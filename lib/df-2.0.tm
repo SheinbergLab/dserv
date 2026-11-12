@@ -430,9 +430,91 @@ namespace eval df {
         
         # Validate rectangular result
         validate_rectangular $result "extract_trials_from_obs for $obs_path"
-        
+
         dg_delete $g
         return $result
+    }
+
+    #
+    # The two conversion stages, as dfconf runs them when a datafile
+    # closes and as tools/dfconvert runs them by hand (docs/datafiles.md).
+    # Each writes OUT through a hidden .part_OUT beside it and a rename, so a
+    # reader never sees half a file and a failure leaves what was there
+    # (the name keeps OUT's extension: dg_write compresses by it).
+    #
+    proc _part {path} { file join [file dirname $path] .part_[file tail $path] }
+
+    # Stage 1: FILE.ess -> obs DG.  Uses dslog's current wideTypes: with it
+    # off (df's wide_datafiles setting) every 64-bit datapoint (stim/frame,
+    # dserv timestamps) keeps its columns but loses its values.  Returns
+    # the number of obs periods.
+    proc make_obs {ess_path obs_path} {
+        file mkdir [file dirname $obs_path]
+        set part [_part $obs_path]
+        set g [dslog::readESS $ess_path]
+        try {
+            set n_obs [dl_length $g:e_types]
+            dg_write $g $part
+        } on error {e opts} {
+            catch { file delete $part }
+            return -options $opts $e
+        } finally {
+            dg_delete $g
+        }
+        file rename -force $part $obs_path
+        return $n_obs
+    }
+
+    # Stage 2: trials DG through ESS_ROOT/SYSTEM/SYSTEM_extract.tcl.  The
+    # extractor's ::SYSTEM::extract_trials_from_obs reads the obs DG when it
+    # has one; otherwise load_data reads the .ess (-ess PATH), with the
+    # protocol's extractor after.  SYSTEM is -system, else read from the obs
+    # DG.  Returns a dict: n_trials, extractor, extractor_mtime, from (obs
+    # or ess).
+    proc make_trials {obs_path trials_path args} {
+        variable ess_root
+        array set o {-ess "" -system ""}
+        foreach {k v} $args {
+            if {![info exists o($k)]} { error "df::make_trials: unknown option $k" }
+            set o($k) $v
+        }
+        if {$ess_root eq ""} { error "ESS root not set" }
+        set g [dg_read $obs_path]
+        try {
+            set system $o(-system)
+            if {$system eq ""} { set system [dict get [extract_metadata_from_obs $g] system] }
+            if {$system eq ""} { error "no system in $obs_path" }
+            set extractor [file join $ess_root $system ${system}_extract.tcl]
+            if {![file exists $extractor]} { error "No extractor found: $extractor" }
+            uplevel #0 [list source $extractor]
+            set trials_proc "::${system}::extract_trials_from_obs"
+            if {[info commands $trials_proc] ne ""} {
+                set trials [$trials_proc $g [extract_metadata_from_obs $g]]
+                set from obs
+            } else {
+                if {$o(-ess) eq ""} { error "$extractor reads .ess files only (no extract_trials_from_obs): give the .ess" }
+                set trials [load_data $o(-ess)]
+                set from ess
+            }
+        } finally {
+            # (an extractor may have deleted it, as dfconf always allowed)
+            catch { dg_delete $g }
+        }
+        set cols [dg_tclListnames $trials]
+        set n_trials [expr {[llength $cols] ? [dl_length $trials:[lindex $cols 0]] : 0}]
+        file mkdir [file dirname $trials_path]
+        set part [_part $trials_path]
+        try {
+            dg_write $trials $part
+        } on error {e opts} {
+            catch { file delete $part }
+            return -options $opts $e
+        } finally {
+            dg_delete $trials
+        }
+        file rename -force $part $trials_path
+        dict create n_trials $n_trials extractor $extractor \
+            extractor_mtime [file mtime $extractor] from $from
     }
     
     #
