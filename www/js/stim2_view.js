@@ -26,6 +26,7 @@ const Stim2View = {
   available: false,     // the server answered
   enabled: true,        // the stim2 checkbox
   showGaze: true,
+  showTouch: true,      // the session's touchscreen presses (the clip timing's touches)
   box: null, video: null, overlay: null, octx: null, statusEl: null,
   timing: null, ready: false, req: 0,
   zero: 0,              // clip seconds at td.tStart + 0
@@ -131,6 +132,7 @@ const Stim2View = {
       if (on) this.load(this.app.cur); else this.video.pause();
     });
     mk('chkStim2Gaze', 'gaze', this.showGaze, on => { this.showGaze = on; this.draw(); });
+    mk('chkStim2Touch', 'touch', this.showTouch, on => { this.showTouch = on; this.draw(); });
     const b = document.createElement('button');
     b.id = 'btnStim2Export'; b.className = 'stim2-export-btn'; b.textContent = 'mp4';
     b.title = 'Export this trial as a movie (stim2 draws the gaze and caption into it)';
@@ -146,6 +148,8 @@ const Stim2View = {
     p = document.createElement('div');
     p.id = 'stim2Export'; p.className = 'stim2-export';
     const hasGaze = !!(this.app.hasEye && this.app.td && this.app.td.eyeT && this.app.td.eyeT.length);
+    // touches: what the render server found in the session for this clip
+    const hasTouch = !!(this.ready && this.timing && this.timing.touches && this.timing.touches.length);
     const dg = this.app.dg, i = this.app.cur;
     const obsid = getScalar(dg, 'obsid', i);
     p.innerHTML = `
@@ -157,6 +161,7 @@ const Stim2View = {
           <option value="sw">bottom left</option><option value="s">bottom</option><option value="se">bottom right</option>
         </select>
         <label class="bt"><input type="checkbox" class="x-gaze"${hasGaze && this.showGaze ? ' checked' : ''}${hasGaze ? '' : ' disabled'}> gaze</label>
+        <label class="bt"><input type="checkbox" class="x-touch"${hasTouch && this.showTouch ? ' checked' : ''}${hasTouch ? '' : ' disabled'}> touch</label>
       </div>
       <div class="x-row"><button class="primary x-go">Export</button><button class="x-close">Close</button></div>
       <div class="x-status"></div>`;
@@ -180,6 +185,7 @@ const Stim2View = {
           caption: cap.value.trim(),
           caption_at: p.querySelector('.x-at').value,
           gaze: p.querySelector('.x-gaze').checked,
+          touch: p.querySelector('.x-touch').checked,
         }, msg => { p.querySelector('.x-status').textContent = msg; });
       } finally { go.disabled = false; }
     });
@@ -207,6 +213,8 @@ const Stim2View = {
       }
       if (t.length) item.gaze = { t, x, y };
     }
+    // the server reads the touches from the session itself
+    if (opts.touch) item.touch = true;
     return item;
   },
 
@@ -538,7 +546,36 @@ const Stim2View = {
       ctx.fillText('rig screen not redrawn yet', R.x + R.w - 8, R.y + R.h - 20);
       ctx.fillText(`first frame at ${this.ptOf(0).toFixed(3)} s`, R.x + R.w - 8, R.y + R.h - 6);
     }
+    if (this.showTouch) this._drawTouch(ctx, R, t * 1000);
     if (this.showGaze) this._drawGaze(ctx, R, pt);
+  },
+
+  // the touchscreen presses, as the export draws them (replaylib's
+  // _touch_at): a 1.6 deg ring from the press until its release (250 ms
+  // when none was logged), then at the release point fading over 400 ms
+  _drawTouch(ctx, R, ms) {
+    const scr = this.timing.screen || {}, marks = this.timing.touches;
+    if (!marks || !marks.length || !scr.halfx || !scr.halfy) return;
+    const toX = h => R.x + (0.5 + h / (2 * scr.halfx)) * R.w;
+    const toY = v => R.y + (0.5 - v / (2 * scr.halfy)) * R.h;
+    const rpx = Math.max(4, 0.8 / (2 * scr.halfx) * R.w);
+    const HOLD = 250, FADE = 400;
+    ctx.save();
+    ctx.beginPath(); ctx.rect(R.x, R.y, R.w, R.h); ctx.clip();
+    ctx.lineWidth = Math.max(1.5, rpx * 0.24);
+    for (const [on, x, y, up0, xu0, yu0] of marks) {
+      if (on > ms) break;
+      const up = up0 == null ? on + HOLD : up0;
+      let px = x, py = y, a = 1;
+      if (ms >= up) {
+        if (ms >= up + FADE) continue;
+        if (up0 != null) { px = xu0; py = yu0; }
+        a = 1 - (ms - up) / FADE;
+      }
+      ctx.strokeStyle = `rgba(255,77,230,${(0.95 * a).toFixed(3)})`;
+      ctx.beginPath(); ctx.arc(toX(px), toY(py), rpx, 0, Math.PI * 2); ctx.stroke();
+    }
+    ctx.restore();
   },
 
   _drawGaze(ctx, R, pt) {
