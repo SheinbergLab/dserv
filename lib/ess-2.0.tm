@@ -3956,7 +3956,17 @@ namespace eval ess {
         } else {
             set dtypename $dtypeinfo
         }
-        set dtype [dict get $param_datatypes $dtypename]
+        # A param drawn as a choice list has its choices as its datatype
+        # ("none left right"), which is no key of the table. Its value is
+        # a word, so it is a string to a client that knows no choices. An
+        # error here would be worse than a wrong code: this proc ends the
+        # list by raising one, so a client walking the params by index
+        # would stop at the first choice param and miss the rest.
+        if { [dict exists $param_datatypes $dtypename] } {
+            set dtype [dict get $param_datatypes $dtypename]
+        } else {
+            set dtype [dict get $param_datatypes string]
+        }
         return "{$name} {[lindex $vals 0]} [expr {$index + 1}] $type $dtype"
     }
 
