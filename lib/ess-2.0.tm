@@ -2200,6 +2200,7 @@ namespace eval ess {
     variable participant_id {}
     variable participant_subjects {human}
     variable participant_idle_timeout 2700   ;# seconds; 0 = never expires
+    variable participant_pattern ""          ;# e.g. h###; "" = any valid id
     variable participant_idle_since 0
 
     # for tracking begin/end obs and sync'ing with external systems.
@@ -2965,7 +2966,8 @@ namespace eval ess {
     #   ess::participant_required     1 = a file opened now would be refused
     #
     # Published: ess/participant (the id or ""), ess/subject_base (the roster
-    # entry), ess/participant_subjects (the roster entries that take an id)
+    # entry), ess/participant_subjects (the roster entries that take an id),
+    # ess/participant_pattern (the id format, see set_participant_pattern)
     # and ess/participant_expires (epoch seconds, 0 = not counting).
     # ess/subject keeps following ID/SUBJECT, so it reads the bound id.
     #
@@ -2986,7 +2988,9 @@ namespace eval ess {
             set expires [expr {$participant_idle_since + $participant_idle_timeout}]
         }
         variable participant_subjects
+        variable participant_pattern
         dservSet ess/participant_subjects $participant_subjects
+        dservSet ess/participant_pattern $participant_pattern
         dservSet ess/subject_base $subject_base
         dservSet ess/participant_expires $expires
         dservSet ess/participant $participant_id
@@ -3032,6 +3036,11 @@ namespace eval ess {
         set id [canonical_subject_name $id]
         if {[subject_takes_participant $id]} {
             error "\"$id\" is the subject class, not a participant id"
+        }
+        variable participant_pattern
+        if {![participant_matches $id]} {
+            error "participant id \"$id\" does not match this rig's format\
+                $participant_pattern (# is a digit)"
         }
         if {$open_datafile ne ""} {
             error "cannot change the participant while data file\
@@ -3095,6 +3104,31 @@ namespace eval ess {
             ${participant_idle_timeout}s: back to $subject_base" "config"
         clear_participant
         return 1
+    }
+
+    # The rig's id format, as a template: literal characters plus # for one
+    # digit (h### takes h017, not h17 or p017). It exists to catch the typo
+    # that silently makes a new "participant", and to keep names out. Empty
+    # means any valid subject id. Returns the normalized pattern, so it also
+    # serves as the rig setting's validator.
+    proc participant_pattern_norm {pattern} {
+        set pattern [string tolower [string trim $pattern]]
+        if {$pattern ne "" && ![regexp {^[a-z0-9#][a-z0-9_#-]*$} $pattern]} {
+            error "invalid participant id format \"$pattern\": use letters,\
+                digits, _ or -, and # for each digit (e.g. h###)"
+        }
+        return $pattern
+    }
+
+    proc set_participant_pattern {pattern} {
+        variable participant_pattern [participant_pattern_norm $pattern]
+        publish_participant
+    }
+
+    proc participant_matches {id} {
+        variable participant_pattern
+        if {$participant_pattern eq ""} { return 1 }
+        return [regexp "^[string map {# {[0-9]}} $participant_pattern]\$" $id]
     }
 
     # minutes, as the rig setting gives it; 0 = never expire

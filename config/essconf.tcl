@@ -534,7 +534,17 @@ is open or ESS is running. 0 keeps an id until it is ended by hand."
 
 ::ess::set_stop_after_trial [settings::get ess stop_after_trial]
 ::ess::set_juice_gate       [settings::get ess juice_gate]
+settings::declare ess participant_pattern -default "h###" \
+    -validate ::ess::participant_pattern_norm \
+    -apply ::ess::set_participant_pattern \
+    -doc "the format a participant id must have, written as a template:
+letters and digits stand for themselves and # stands for one digit, so
+h### accepts h017 but not h17, p017 or a name. It catches the typo
+that would otherwise start a new participant. Empty accepts any id
+made of letters, digits, _ and -."
+
 ::ess::set_participant_timeout [settings::get ess participant_timeout]
+::ess::set_participant_pattern [settings::get ess participant_pattern]
 
 # Pull the workgroup's subject list from the registry. This OVERRIDES the
 # env/hardcoded default that ess-2.0.tm set during load (which stays the

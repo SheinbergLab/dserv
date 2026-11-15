@@ -97,6 +97,7 @@ class ESSControl {
             subjectBase: '',
             participant: '',
             participantSubjects: ['human'],
+            participantPattern: '',     // e.g. h### (# = a digit); '' = free form
             lastParticipant: '',
             currentSystem: '',
             currentProtocol: '',
@@ -686,9 +687,6 @@ class ESSControl {
         this.elements.participantSet.addEventListener('click', () => {
             this.showParticipantModal();
         });
-        this.elements.identitySubject.addEventListener('click', () => {
-            if (this.subjectTakesParticipant()) this.showParticipantModal();
-        });
         
         this.elements.systemSelect.addEventListener('change', (e) => {
             if (this.handleCloneOption(e.target, e.target.value, 'system',
@@ -1042,6 +1040,10 @@ class ESSControl {
         this.dpManager.subscribe('ess/participant_subjects', (data) => {
             this.state.participantSubjects = this.parseListData(data.value);
             this.updateParticipantDisplay();
+        });
+
+        this.dpManager.subscribe('ess/participant_pattern', (data) => {
+            this.state.participantPattern = data.value || '';
         });
 
         this.dpManager.subscribe('ess/participant', (data) => {
@@ -2920,7 +2922,7 @@ updateConfigRunButtons() {
     /**
      * A queue (or single-config run) that reached a human config with no id
      * waits in needs_subject. Prompt once per wait; a cancelled prompt leaves
-     * it waiting, and the ID row / header reopen the dialog.
+     * it waiting, and the ID row reopens the dialog.
      */
     maybePromptForQueue() {
         const waiting = this.state.queueState && this.state.queueState.status === 'needs_subject';
@@ -2945,6 +2947,13 @@ updateConfigRunButtons() {
         const last = this.state.lastParticipant;
         const base = this.state.subjectBase || 'human';
         const fileOpen = !!this.state.currentDatafile;
+        // the rig's format (h###): shown, and an example built from it
+        const pattern = this.state.participantPattern;
+        let n = 0;
+        const digits = (pattern.match(/#/g) || []).length;
+        const example = pattern
+            ? pattern.replace(/#/g, () => (String(17).padStart(digits, '0'))[n++])
+            : 'h017';
 
         const modal = document.createElement('div');
         modal.className = 'ess-modal-overlay ess-participant-overlay';
@@ -2959,8 +2968,9 @@ updateConfigRunButtons() {
                     <div class="ess-modal-section">
                         <label class="ess-modal-label" for="ess-participant-input">ID for this ${this.escapeHtml(base)} subject</label>
                         <input type="text" class="ess-modal-input" id="ess-participant-input"
-                               placeholder="e.g. p017" autocomplete="off" autocapitalize="off" spellcheck="false">
+                               placeholder="e.g. ${this.escapeAttr(example)}" autocomplete="off" autocapitalize="off" spellcheck="false">
                         <div class="ess-participant-hint">
+                            ${pattern ? `Format: <strong>${this.escapeHtml(pattern)}</strong> (# is a digit).` : ''}
                             ${current
                                 ? `Currently <strong>${this.escapeHtml(current)}</strong>.`
                                 : (last ? `Last used: <strong>${this.escapeHtml(last)}</strong> (ended).` : '')}
@@ -3520,16 +3530,9 @@ updateConfigRunButtons() {
         const protocol = this.state.currentProtocol || '';
         const variant = this.state.currentVariant || '';
         
-        // Update subject display. A class subject with no id bound says so:
-        // that is the state in which no data file will open.
-        const needsId = this.participantRequired();
-        this.elements.identitySubject.classList.toggle('needs-id', needsId);
-        this.elements.identitySubject.classList.toggle('clickable', this.subjectTakesParticipant());
-        this.elements.identitySubject.title = this.subjectTakesParticipant()
-            ? (needsId ? 'No participant ID set: click to set one' : 'Participant ID: click to change')
-            : '';
+        // Update subject display
         if (subject) {
-            this.elements.identitySubject.textContent = needsId ? `${subject} (no ID)` : subject;
+            this.elements.identitySubject.textContent = subject;
             this.elements.identitySubject.style.display = '';
         } else {
             this.elements.identitySubject.textContent = '';
@@ -4619,6 +4622,7 @@ updateConfigRunButtons() {
         const dps = [
             'ess/subject_ids', 'ess/subject', 'ess/systems', 'ess/system',
             'ess/subject_base', 'ess/participant_subjects', 'ess/participant',
+            'ess/participant_pattern',
             'ess/protocols', 'ess/protocol', 'ess/variants', 'ess/variant',
             'ess/status', 'ess/load_error', 'ess/last_good_system',
             'ess/stop_pending', 'ess/hold',

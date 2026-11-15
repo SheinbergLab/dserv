@@ -12,6 +12,7 @@
 #   - the binding lapses after an idle timeout, but never with a file open
 #     or ESS running
 #   - only a system that declared set_subject_dependent reloads on a bind
+#   - a rig id format (h###) rejects the near-miss ids a typo produces
 #   - a queue that needs an id waits (needs_subject) and carries on from
 #     the same place when one is bound
 #
@@ -71,6 +72,7 @@ namespace eval ::ess {
     variable participant_subjects {human}
     variable participant_idle_timeout 2700
     variable participant_idle_since 0
+    variable participant_pattern ""
     variable open_datafile {}
     variable current
     array set current { system s protocol p variant v state_system fake_system }
@@ -84,7 +86,9 @@ namespace eval ::ess {
 foreach p { canonical_subject_name set_subject subject_takes_participant
             publish_participant participant_touch participant_reload
             participant_required set_participant clear_participant
-            participant_expire set_participant_timeout } {
+            participant_expire set_participant_timeout
+            participant_pattern_norm set_participant_pattern
+            participant_matches } {
     pull_ess $p
 }
 
@@ -178,6 +182,26 @@ check "same id: none"       $ess::reloads 1
 ess::clear_participant
 check "ending reloads too"  $ess::reloads 2
 set ::sys_dependent 0
+
+puts "A rig id format:"
+ess::clear_participant
+ess::set_participant_pattern " H### "
+check "normalized"          $ess::participant_pattern h###
+check "published"           $::DP(ess/participant_pattern) h###
+check "accepts h017"        [ess::set_participant H017] h017
+check_err "too few digits"  { ess::set_participant h17 }   "*does not match*h###*"
+check_err "too many digits" { ess::set_participant h0170 } "*does not match*"
+check_err "wrong prefix"    { ess::set_participant p017 }  "*does not match*"
+check_err "a name"          { ess::set_participant jsmith } "*does not match*"
+check "still h017"          $ess::participant_id h017
+check_err "bad format"      { ess::set_participant_pattern "h ##!" } "*invalid participant id format*"
+check "format unchanged"    $ess::participant_pattern h###
+ess::set_participant_pattern "s2-##"
+check "literal - and digit" [ess::set_participant s2-07] s2-07
+check_err "literal is literal" { ess::set_participant s3-07 } "*does not match*"
+ess::set_participant_pattern ""
+check "empty: free form"    [ess::set_participant anything_goes] anything_goes
+ess::clear_participant
 
 # ---------------------------------------------------------------------------
 # queue side

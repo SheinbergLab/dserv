@@ -6606,11 +6606,13 @@ select.ess-param-select {
 }
 
 /* Participant binding: a private id bound over a class subject ("human") */
-.ess-identity-subject.clickable { cursor: pointer; }
-.ess-identity-subject.clickable:hover { text-decoration: underline; }
-.ess-identity-subject.needs-id { color: var(--ess-error); }
+/* .ess-setup-row is display:flex, which beats the hidden attribute */
+.ess-setup-row[hidden] { display: none; }
 
 .ess-participant-value {
+    /* line up with the text inside the selects above and below */
+    display: block;
+    padding: 5px 7px;
     font-size: 11px;
     font-weight: 600;
     font-family: 'SF Mono', Monaco, Consolas, monospace;
