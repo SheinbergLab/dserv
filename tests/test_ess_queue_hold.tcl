@@ -51,7 +51,7 @@ namespace eval ess_queues {
 set i [string first "    array set state \{" $::src]
 namespace eval ess_queues [string range $::src $i [string first "\n    \}\n" $::src $i]]\n\}
 
-foreach p {ess_start start_run on_ess_hold on_ess_run_state publish_state} { pull $p }
+foreach p {ess_start start_run participant_needed on_ess_hold on_ess_run_state publish_state} { pull $p }
 
 set FAIL 0
 proc check { label got want } {

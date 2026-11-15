@@ -91,6 +91,13 @@ class ESSControl {
             protocols: [],
             variants: [],
             currentSubject: '',
+            // participant binding: a private id bound over a class subject
+            // ("human"). currentSubject then reads the id; subjectBase is
+            // the roster entry the select shows.
+            subjectBase: '',
+            participant: '',
+            participantSubjects: ['human'],
+            lastParticipant: '',
             currentSystem: '',
             currentProtocol: '',
             currentVariant: '',
@@ -243,6 +250,15 @@ class ESSControl {
                                 </select>
                             </div>
                             <button id="ess-manage-subjects" class="ess-reload-btn" title="Manage Subjects">⚙</button>
+                        </div>
+
+                        <!-- Participant id (only for a subject that takes one) -->
+                        <div class="ess-setup-row" id="ess-participant-row" hidden>
+                            <span class="ess-control-label">ID</span>
+                            <div class="ess-control-input">
+                                <span class="ess-participant-value" id="ess-participant-value"></span>
+                            </div>
+                            <button id="ess-participant-set" class="ess-mini-btn" type="button">Set ID…</button>
                         </div>
                         
                         <!-- System -->
@@ -559,6 +575,9 @@ class ESSControl {
             // Setup tab elements
             subjectSelect: this.container.querySelector('#ess-subject-select'),
             manageSubjects: this.container.querySelector('#ess-manage-subjects'),
+            participantRow: this.container.querySelector('#ess-participant-row'),
+            participantValue: this.container.querySelector('#ess-participant-value'),
+            participantSet: this.container.querySelector('#ess-participant-set'),
             systemSelect: this.container.querySelector('#ess-system-select'),
             protocolSelect: this.container.querySelector('#ess-protocol-select'),
             variantSelect: this.container.querySelector('#ess-variant-select'),
@@ -663,6 +682,12 @@ class ESSControl {
         // Setup tab - Selection changes
         this.elements.subjectSelect.addEventListener('change', (e) => {
             this.setSubject(e.target.value);
+        });
+        this.elements.participantSet.addEventListener('click', () => {
+            this.showParticipantModal();
+        });
+        this.elements.identitySubject.addEventListener('click', () => {
+            if (this.subjectTakesParticipant()) this.showParticipantModal();
         });
         
         this.elements.systemSelect.addEventListener('change', (e) => {
@@ -1006,8 +1031,30 @@ class ESSControl {
         
         this.dpManager.subscribe('ess/subject', (data) => {
             this.state.currentSubject = data.value;
-            this.updateSelectValue(this.elements.subjectSelect, data.value);
-            this.updateIdentityHeader();
+            this.updateParticipantDisplay();
+        });
+
+        this.dpManager.subscribe('ess/subject_base', (data) => {
+            this.state.subjectBase = data.value || '';
+            this.updateParticipantDisplay();
+        });
+
+        this.dpManager.subscribe('ess/participant_subjects', (data) => {
+            this.state.participantSubjects = this.parseListData(data.value);
+            this.updateParticipantDisplay();
+        });
+
+        this.dpManager.subscribe('ess/participant', (data) => {
+            const id = data.value || '';
+            if (!id && this.state.participant) {
+                this.state.lastParticipant = this.state.participant;
+            }
+            this.state.participant = id;
+            this.updateParticipantDisplay();
+            // bound from here or from another page: a prompt has its answer
+            if (id && typeof this._participantPromptResolve === 'function') {
+                this._participantPromptResolve(id);
+            }
         });
         
         this.dpManager.subscribe('ess/registry/workgroup', (data) => {
@@ -1235,9 +1282,7 @@ class ESSControl {
         const subjects = this.parseListData(data);
         this.state.subjects = subjects;
         this.populateSelect(this.elements.subjectSelect, subjects, '-- Select Subject --');
-        if (this.state.currentSubject) {
-            this.updateSelectValue(this.elements.subjectSelect, this.state.currentSubject);
-        }
+        this.updateParticipantDisplay();
         if (typeof this._manageSubjectsListSync === 'function') {
             this._manageSubjectsListSync();
         }
@@ -2824,9 +2869,202 @@ updateConfigRunButtons() {
         if (this.elements.volumePct) this.elements.volumePct.textContent = `${pct}%`;
     }
 
-    openDatafile() {
+    async openDatafile() {
+        // ESS refuses a file under a class subject ("human") with no
+        // participant id; ask first rather than fail silently.
+        if (this.participantRequired()) {
+            const id = await this.showParticipantModal({
+                reason: 'A participant ID is needed before a data file can be opened.'
+            });
+            if (!id) return;
+        }
         this.sendCommand('ess::file_open [ess::file_suggest]');
         this.emit('log', { message: 'Opening datafile...', level: 'info' });
+    }
+
+    // =========================================================================
+    // Participant binding
+    // =========================================================================
+
+    /** Does the selected roster subject take a participant id? */
+    subjectTakesParticipant() {
+        const base = (this.state.subjectBase || this.state.currentSubject || '').toLowerCase();
+        return !!base && this.state.participantSubjects.includes(base);
+    }
+
+    /** True when a data file opened now would be refused for want of an id. */
+    participantRequired() {
+        return this.subjectTakesParticipant() && !this.state.participant;
+    }
+
+    /**
+     * The subject select shows the roster entry; the id bound over it lives
+     * in its own row and in the identity header.
+     */
+    updateParticipantDisplay() {
+        const s = this.state;
+        const selected = s.participant ? (s.subjectBase || s.currentSubject) : s.currentSubject;
+        if (selected) this.updateSelectValue(this.elements.subjectSelect, selected);
+
+        const takes = this.subjectTakesParticipant();
+        this.elements.participantRow.hidden = !takes;
+        if (takes) {
+            this.elements.participantValue.textContent = s.participant || 'not set';
+            this.elements.participantValue.classList.toggle('unset', !s.participant);
+            this.elements.participantSet.textContent = s.participant ? 'Change…' : 'Set ID…';
+        }
+        this.updateIdentityHeader();
+        this.maybePromptForQueue();
+    }
+
+    /**
+     * A queue (or single-config run) that reached a human config with no id
+     * waits in needs_subject. Prompt once per wait; a cancelled prompt leaves
+     * it waiting, and the ID row / header reopen the dialog.
+     */
+    maybePromptForQueue() {
+        const waiting = this.state.queueState && this.state.queueState.status === 'needs_subject';
+        if (!waiting) { this._queuePrompted = false; return; }
+        if (this._queuePrompted || this.state.participant) return;
+        this._queuePrompted = true;
+        const cfg = this.state.queueState.current_config;
+        this.showParticipantModal({
+            reason: `${cfg ? `"${cfg}"` : 'This run'} is waiting for a participant ID.`
+        });
+    }
+
+    /**
+     * Ask for a participant id and bind it (ess::set_participant). Resolves
+     * with the bound id, or '' if dismissed. ESS owns the rules -- id format,
+     * no change under an open file -- and its error is shown as is.
+     */
+    showParticipantModal({ reason = '' } = {}) {
+        if (this._participantModalPromise) return this._participantModalPromise;
+
+        const current = this.state.participant;
+        const last = this.state.lastParticipant;
+        const base = this.state.subjectBase || 'human';
+        const fileOpen = !!this.state.currentDatafile;
+
+        const modal = document.createElement('div');
+        modal.className = 'ess-modal-overlay ess-participant-overlay';
+        modal.innerHTML = `
+            <div class="ess-modal ess-participant-modal">
+                <div class="ess-modal-header">
+                    <span class="ess-modal-title">Participant ID</span>
+                    <button class="ess-modal-close" type="button">×</button>
+                </div>
+                <div class="ess-modal-body">
+                    ${reason ? `<div class="ess-participant-reason">${this.escapeHtml(reason)}</div>` : ''}
+                    <div class="ess-modal-section">
+                        <label class="ess-modal-label" for="ess-participant-input">ID for this ${this.escapeHtml(base)} subject</label>
+                        <input type="text" class="ess-modal-input" id="ess-participant-input"
+                               placeholder="e.g. p017" autocomplete="off" autocapitalize="off" spellcheck="false">
+                        <div class="ess-participant-hint">
+                            ${current
+                                ? `Currently <strong>${this.escapeHtml(current)}</strong>.`
+                                : (last ? `Last used: <strong>${this.escapeHtml(last)}</strong> (ended).` : '')}
+                            Data files and trials are recorded under this ID until it is ended
+                            or the rig has been idle.
+                        </div>
+                        <div class="ess-participant-error" id="ess-participant-error" hidden></div>
+                    </div>
+                </div>
+                <div class="ess-modal-footer">
+                    ${current ? '<button class="ess-modal-btn cancel ess-participant-end" type="button">End participant</button>' : ''}
+                    <span class="ess-participant-footer-spacer"></span>
+                    <button class="ess-modal-btn cancel ess-participant-cancel" type="button">Cancel</button>
+                    <button class="ess-modal-btn primary" type="button" disabled>Set ID</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(modal);
+
+        const inputEl = modal.querySelector('#ess-participant-input');
+        const errorEl = modal.querySelector('#ess-participant-error');
+        const okBtn = modal.querySelector('.ess-modal-btn.primary');
+        const endBtn = modal.querySelector('.ess-participant-end');
+        let busy = false;
+
+        const showError = (msg) => {
+            errorEl.textContent = msg;
+            errorEl.hidden = !msg;
+        };
+        if (fileOpen) {
+            showError('A data file is open. Close it before changing the participant.');
+            inputEl.disabled = true;
+            if (endBtn) endBtn.disabled = true;
+        }
+
+        this._participantModalPromise = new Promise((resolve) => {
+            const finish = (id) => {
+                document.removeEventListener('keydown', onKeyDown);
+                modal.remove();
+                this._participantModalPromise = null;
+                this._participantPromptResolve = null;
+                resolve(id || '');
+            };
+            // a bind seen on ess/participant (ours, or another page's) closes
+            // the prompt -- but not a dialog opened to CHANGE an existing id
+            this._participantPromptResolve = current ? null : finish;
+
+            const submit = async () => {
+                const id = inputEl.value.trim();
+                if (busy || !id || fileOpen) return;
+                busy = true;
+                okBtn.disabled = true;
+                showError('');
+                try {
+                    // evalAsync, not sendRaw: it rejects on the "!TCL_ERROR" string
+                    // `send` hands back as a successful result
+                    const bound = await this.dpManager.connection.evalAsync(
+                        `send ess {ess::set_participant {${id}}}`);
+                    this.emit('log', { message: `Participant set: ${bound || id}`, level: 'info' });
+                    finish(String(bound || id).trim());
+                } catch (e) {
+                    busy = false;
+                    okBtn.disabled = false;
+                    showError(String(e.message || e).replace(/^!?TCL_ERROR\s*/, ''));
+                    inputEl.focus();
+                    inputEl.select();
+                }
+            };
+
+            const end = async () => {
+                if (busy) return;
+                busy = true;
+                try {
+                    await this.dpManager.connection.evalAsync('send ess {ess::clear_participant}');
+                    this.emit('log', { message: `Participant ended: ${current}`, level: 'info' });
+                    finish('');
+                } catch (e) {
+                    busy = false;
+                    showError(String(e.message || e).replace(/^!?TCL_ERROR\s*/, ''));
+                }
+            };
+
+            const onKeyDown = (e) => {
+                if (e.key === 'Escape' && !busy) finish('');
+            };
+            document.addEventListener('keydown', onKeyDown);
+            modal.querySelector('.ess-modal-close').addEventListener('click', () => { if (!busy) finish(''); });
+            modal.querySelector('.ess-participant-cancel').addEventListener('click', () => { if (!busy) finish(''); });
+            modal.addEventListener('mousedown', (e) => {
+                if (e.target === modal && !busy) finish('');
+            });
+            if (endBtn) endBtn.addEventListener('click', end);
+            okBtn.addEventListener('click', submit);
+            inputEl.addEventListener('input', () => {
+                okBtn.disabled = !inputEl.value.trim() || fileOpen;
+                if (!fileOpen) showError('');
+            });
+            inputEl.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') { e.preventDefault(); submit(); }
+            });
+        });
+
+        inputEl.focus();
+        return this._participantModalPromise;
     }
     
     closeDatafile() {
@@ -3282,9 +3520,16 @@ updateConfigRunButtons() {
         const protocol = this.state.currentProtocol || '';
         const variant = this.state.currentVariant || '';
         
-        // Update subject display
+        // Update subject display. A class subject with no id bound says so:
+        // that is the state in which no data file will open.
+        const needsId = this.participantRequired();
+        this.elements.identitySubject.classList.toggle('needs-id', needsId);
+        this.elements.identitySubject.classList.toggle('clickable', this.subjectTakesParticipant());
+        this.elements.identitySubject.title = this.subjectTakesParticipant()
+            ? (needsId ? 'No participant ID set: click to set one' : 'Participant ID: click to change')
+            : '';
         if (subject) {
-            this.elements.identitySubject.textContent = subject;
+            this.elements.identitySubject.textContent = needsId ? `${subject} (no ID)` : subject;
             this.elements.identitySubject.style.display = '';
         } else {
             this.elements.identitySubject.textContent = '';
@@ -3404,7 +3649,8 @@ updateConfigRunButtons() {
         }
 
         // Build a pseudo-config object for create mode
-        const subject = this.state.currentSubject || '';
+        const subject = (this.state.participant && this.state.subjectBase)
+            || this.state.currentSubject || '';
         this.state.editingConfig = {
             name: '',  // Empty - user must provide
             description: '',
@@ -4372,6 +4618,7 @@ updateConfigRunButtons() {
         // Unsubscribe from all datapoints
         const dps = [
             'ess/subject_ids', 'ess/subject', 'ess/systems', 'ess/system',
+            'ess/subject_base', 'ess/participant_subjects', 'ess/participant',
             'ess/protocols', 'ess/protocol', 'ess/variants', 'ess/variant',
             'ess/status', 'ess/load_error', 'ess/last_good_system',
             'ess/stop_pending', 'ess/hold',
@@ -4475,6 +4722,7 @@ updateConfigRunButtons() {
                 
                 this.renderQueueStatus();
                 this.updateQueueControls();
+                this.maybePromptForQueue();
                 this.renderQueuePlaylist();
                 this.updateConfigRunButtons();		
             }
@@ -4551,6 +4799,10 @@ updateConfigRunButtons() {
         if (essLoading && (qs.status === 'loading' || qs.status === 'ready')) {
             statusEl.textContent = 'loading...';
             statusEl.classList.add('loading');
+        } else if (qs.status === 'needs_subject') {
+            statusEl.textContent = 'needs participant ID';
+            statusEl.classList.add('held');
+            statusEl.title = 'Set a participant ID (Setup tab) to continue';
         } else if (qs.status === 'between_runs') {
             statusEl.textContent = 'waiting';
             statusEl.classList.add('waiting');
@@ -4619,7 +4871,9 @@ updateConfigRunButtons() {
         const isFinished = qs.status === 'finished';
         const isReady = qs.status === 'ready';
         const isBetweenRuns = qs.status === 'between_runs';
-        const isRunActive = qs.status === 'running' || qs.status === 'ready';
+        // needs_subject: a run waiting for a participant id can be abandoned
+        const isRunActive = qs.status === 'running' || qs.status === 'ready' ||
+            qs.status === 'needs_subject';
         
         // Reset button: enabled when session selected and ESS not busy (not for single runs)
         this.elements.queueResetBtn.disabled = !this.state.selectedQueue || essBusy || isSingleRun;

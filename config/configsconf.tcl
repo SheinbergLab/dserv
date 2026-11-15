@@ -216,6 +216,34 @@ proc on_ess_hold_change {dpoint data} {
 dservAddExactMatch ess/hold
 dpointSetScript ess/hold on_ess_hold_change
 
+# a queue waiting on a participant id continues when one is bound
+proc on_ess_participant_change {dpoint data} {
+    ::ess_queues::on_ess_participant $data
+}
+
+dservAddExactMatch ess/participant
+dpointSetScript ess/participant on_ess_participant_change
+
+#=========================================================================
+# Participant Watchdog (Timer 3) - end an idle participant binding
+#=========================================================================
+#
+# ESS owns the rule (ess::participant_expire) and publishes when the binding
+# would lapse; this only supplies the clock, and reads a datapoint each tick
+# so nothing is sent to ess until there is something to expire.
+#
+proc participant_watchdog_callback {dpoint data} {
+    if {![dservExists ess/participant_expires]} { return }
+    set expires [dservGet ess/participant_expires]
+    if {![string is integer -strict $expires] || $expires <= 0} { return }
+    if {[clock seconds] < $expires} { return }
+    catch { send ess ::ess::participant_expire }
+}
+
+dservAddExactMatch queueTimer/3
+dpointSetScript queueTimer/3 participant_watchdog_callback
+timerTickInterval 3 30000 30000
+
 proc on_ess_snapshot_change {dpoint_name value} {
     if {$value ne "" && [json_get $value source] eq "config"} {
         # Config load completed on ESS side - finalize bookkeeping

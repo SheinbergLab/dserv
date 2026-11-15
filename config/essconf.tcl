@@ -524,8 +524,17 @@ reading (each reward reports one) stops ESS after that trial. The
 control page says why. Needs the usb juicer, the only one with a
 level sensor; with any other route, or no juicer, it never blocks."
 
+settings::declare ess participant_timeout -default 45 -type int \
+    -apply ::ess::set_participant_timeout \
+    -doc "minutes a participant id stays bound to the 'human' subject
+with no data file open. After that the subject goes back to 'human'
+and the next data file asks for an id again, so one participant is
+not recorded under the previous one's id. Never counts while a file
+is open or ESS is running. 0 keeps an id until it is ended by hand."
+
 ::ess::set_stop_after_trial [settings::get ess stop_after_trial]
 ::ess::set_juice_gate       [settings::get ess juice_gate]
+::ess::set_participant_timeout [settings::get ess participant_timeout]
 
 # Pull the workgroup's subject list from the registry. This OVERRIDES the
 # env/hardcoded default that ess-2.0.tm set during load (which stays the

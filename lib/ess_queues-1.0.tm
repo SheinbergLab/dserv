@@ -43,6 +43,7 @@ namespace eval ::ess_queues {
         auto_datafile   1
         datafile_open   0
         hold            ""
+        resume          ""
     }
     
     # Status values:
@@ -52,6 +53,8 @@ namespace eval ::ess_queues {
     #   running      - ESS is running
     #   flushing     - waiting for datapoints to flush
     #   paused       - manually paused
+    #   needs_subject - waiting for a participant id (ess::set_participant);
+    #                   state(resume) says whether the load or the run waits
     #   between_runs - between repeats or items
     #   finished     - queue complete
     
@@ -946,6 +949,16 @@ proc ::ess_queues::load_current_item {} {
         publish_state
         return
     }
+    # A human config with no participant bound: wait for the id BEFORE the
+    # load, so a variant that keys its trials off the participant is built
+    # once, for the right one. on_ess_participant picks this up again.
+    if {[participant_needed [dict get $config subject]]} {
+        log info "Waiting for a participant id before loading $config_name"
+        set state(status) needs_subject
+        set state(resume) load
+        publish_state
+        return
+    }
     if {[catch {::ess::configs::load_sync $config} err]} {
         log error "Failed to load config: $err"
         set state(status) paused
@@ -965,6 +978,16 @@ proc ::ess_queues::start_run {} {
     variable state
     
     if {$state(status) ne "ready"} {
+        return
+    }
+
+    # The binding can lapse between runs (idle timeout during a long
+    # pause). Ask before the counters move and before file_open refuses.
+    if {$state(auto_datafile) && [participant_needed ""]} {
+        log info "Waiting for a participant id before the next run"
+        set state(status) needs_subject
+        set state(resume) run
+        publish_state
         return
     }
     
@@ -1046,6 +1069,9 @@ proc ::ess_queues::open_datafile {} {
     } elseif {$result == -1} {
         log error "Another datafile is already open"
         return 0
+    } elseif {$result == -4} {
+        log error "Datafile refused: no participant id bound"
+        return 0
     }
     
     set state(datafile_open) 1
@@ -1067,9 +1093,10 @@ proc ::ess_queues::generate_file_basename_queue {config} {
         return $basename
     }
     
-    # Get values from config
-    set subject [dict get $config subject]
-    if {$subject eq ""} { set subject "unknown" }
+    # The subject ESS will stamp in the file -- the bound participant for a
+    # human config -- not the config's stored one (see
+    # ess::configs::effective_subject).
+    set subject [::ess::configs::effective_subject $config]
     
     set system [dict get $config system]
     set protocol [dict get $config protocol]
@@ -1188,6 +1215,35 @@ proc ::ess_queues::on_ess_hold {msg} {
         log warning "Run held: $msg"
     }
     publish_state
+}
+
+# Would ESS refuse a datafile for want of a participant id? subj is the
+# subject a config is about to select ("" = whatever ESS has now). An ESS
+# that cannot answer is not a reason to stall the queue.
+proc ::ess_queues::participant_needed {subj} {
+    if {[catch {send ess "::ess::participant_required {$subj}"} need]} {
+        return 0
+    }
+    return [expr {[string is true -strict $need] ? 1 : 0}]
+}
+
+# ess/participant: an id was bound (or ended). A queue waiting on one
+# carries on from where it stopped.
+proc ::ess_queues::on_ess_participant {id} {
+    variable state
+    if {$state(status) ne "needs_subject" || $id eq ""} return
+    log info "Participant $id bound, continuing"
+    set resume $state(resume)
+    set state(resume) ""
+    if {$resume eq "run"} {
+        set state(status) ready
+        publish_state
+        start_run
+    } else {
+        set state(status) loading
+        publish_state
+        load_current_item
+    }
 }
 
 proc ::ess_queues::tick {} {

@@ -526,6 +526,12 @@ namespace eval ess::configs {
         set protocol      [dservGet ess/protocol]
         set variant       [dservGet ess/variant]
         set subject       [dservGet ess/subject]
+        # a bound participant is not part of a config: store the roster
+        # entry ("human") it was bound over
+        if {[dservExists ess/participant] && [dservGet ess/participant] ne "" &&
+            [dservExists ess/subject_base]} {
+            set subject [dservGet ess/subject_base]
+        }
         
         if {$system eq ""} {
             error "No system loaded - cannot save config"
@@ -801,6 +807,8 @@ namespace eval ess::configs {
             error "Another datafile is already open"
         } elseif {$result == -2} {
             error "Failed to create datafile: $basename (logger error)"
+        } elseif {$result == -4} {
+            error "Participant id required: ess::set_participant <id>, then run again"
         }
 
         # result may be the actual basename used (if suffix was added)
@@ -863,6 +871,19 @@ namespace eval ess::configs {
         return $result
     }
     
+    # The subject a datafile for this config is named after. Called AFTER the
+    # config is loaded, so ESS already holds the answer: the config's subject,
+    # resolved to the bound participant when that subject is a class
+    # ("human"), or whatever was current if the config names none. The
+    # config's own field is only the fallback for an ESS that cannot say.
+    proc effective_subject {config} {
+        set subject ""
+        catch { set subject [send ess {set ::ess::subject_id}] }
+        if {$subject eq ""} { set subject [dict get $config subject] }
+        if {$subject eq ""} { set subject "unknown" }
+        return $subject
+    }
+
     # Generate filename from config's template
     proc generate_file_basename {config} {
         set template [dict get $config file_template]
@@ -873,8 +894,7 @@ namespace eval ess::configs {
         }
         
         # Get values
-        set subject [dict get $config subject]
-        if {$subject eq ""} { set subject "unknown" }
+        set subject [effective_subject $config]
         
         set system [dict get $config system]
         set protocol [dict get $config protocol]

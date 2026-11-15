@@ -1775,6 +1775,21 @@ oo::class create System {
         set _callbacks(subject) subject_cb
     }
 
+    # A system/protocol whose loaders key trials off WHO is being run (a
+    # per-participant list, a seed from the id) says so here. It is what
+    # decides whether binding a participant id (ess::set_participant) has
+    # to regenerate the trials; everything else just gets the new id
+    # stamped. Default: not dependent.
+    method set_subject_dependent { {on 1} } {
+        my variable _subject_dependent
+        set _subject_dependent [expr {$on ? 1 : 0}]
+    }
+
+    method subject_dependent {} {
+        my variable _subject_dependent
+        return [expr {[info exists _subject_dependent] && $_subject_dependent}]
+    }
+
     # Fired by set_variant_args after merging; cb body receives `vargs`
     # (the just-changed dict) and runs as a method on the system object,
     # so [my get_variant_args] gives the full current args. Lets a protocol
@@ -2175,6 +2190,17 @@ namespace eval ess {
     variable open_datafile {}
     variable subject_id {}
     variable subject_ids {}
+
+    # Participant binding (see set_participant). subject_id stays THE
+    # subject -- the one in ID/SUBJECT, the trial rows and file names -- and
+    # these say how it got its value:
+    #   subject_base     what set_subject was given: the roster entry
+    #   participant_id   the id bound over a participant-class base, or ""
+    variable subject_base {}
+    variable participant_id {}
+    variable participant_subjects {human}
+    variable participant_idle_timeout 2700   ;# seconds; 0 = never expires
+    variable participant_idle_since 0
 
     # for tracking begin/end obs and sync'ing with external systems.
     # obs_pin -1 = no host obs line, THE NORM: rigs with an extio box let
@@ -2887,8 +2913,25 @@ namespace eval ess {
 
     proc set_subject {subj} {
         variable subject_id
+        variable subject_base
+        variable participant_id
 	variable _loading_from_config
         set subj [string tolower $subj]
+
+        # A participant-class subject ("human") names a KIND of subject, not
+        # an individual. While a participant id is bound, selecting the class
+        # again -- which every human config does on load -- resolves to that
+        # id rather than undoing it. Any other subject ends the binding.
+        if {[subject_takes_participant $subj]} {
+            participant_expire
+            set subject_base $subj
+            if {$participant_id ne ""} { set subj $participant_id }
+        } else {
+            set subject_base $subj
+            set participant_id ""
+        }
+        publish_participant
+
         set changed [expr {$subj ne $subject_id}]
         set subject_id $subj
         ::ess::evt_put ID SUBJECT [now] $subject_id
@@ -2906,6 +2949,158 @@ namespace eval ess {
 	    reload_variant
 	}
 
+    }
+
+    #
+    # Participant binding
+    #
+    # Human subjects are run under private ids (p017, ...) that cannot all
+    # live in the roster. The roster carries the class ("human"); the id is
+    # bound over it before any data file opens, and stays bound across
+    # config loads and queue items until someone ends it or the rig has sat
+    # idle for participant_idle_timeout.
+    #
+    #   ess::set_participant p017     bind (refused while a file is open)
+    #   ess::clear_participant        back to the class
+    #   ess::participant_required     1 = a file opened now would be refused
+    #
+    # Published: ess/participant (the id or ""), ess/subject_base (the roster
+    # entry), ess/participant_subjects (the roster entries that take an id)
+    # and ess/participant_expires (epoch seconds, 0 = not counting).
+    # ess/subject keeps following ID/SUBJECT, so it reads the bound id.
+    #
+    proc subject_takes_participant {subj} {
+        variable participant_subjects
+        return [expr {[string tolower $subj] in $participant_subjects}]
+    }
+
+    proc publish_participant {} {
+        variable participant_id
+        variable subject_base
+        variable open_datafile
+        variable participant_idle_timeout
+        variable participant_idle_since
+        set expires 0
+        if {$participant_id ne "" && $open_datafile eq "" &&
+            $participant_idle_timeout > 0} {
+            set expires [expr {$participant_idle_since + $participant_idle_timeout}]
+        }
+        variable participant_subjects
+        dservSet ess/participant_subjects $participant_subjects
+        dservSet ess/subject_base $subject_base
+        dservSet ess/participant_expires $expires
+        dservSet ess/participant $participant_id
+    }
+
+    # Restart the idle clock: at bind, and when a data file closes.
+    proc participant_touch {} {
+        variable participant_idle_since [clock seconds]
+        publish_participant
+    }
+
+    # Regenerate the trials for a new identity, but only for a system that
+    # declared it depends on one (set_subject_dependent).
+    proc participant_reload {} {
+        variable current
+        variable _loading_from_config
+        if {$current(system) eq {} ||
+            ([info exists _loading_from_config] && $_loading_from_config)} {
+            return
+        }
+        if {[$current(state_system) subject_dependent]} {
+            reload_variant
+        }
+    }
+
+    # 1 when a data file opened now would be recorded under the class name.
+    # subj: the subject a config is about to select; default the current one.
+    proc participant_required {{subj ""}} {
+        variable subject_base
+        variable participant_id
+        participant_expire
+        if {$subj eq ""} { set subj $subject_base }
+        return [expr {[subject_takes_participant $subj] && $participant_id eq ""}]
+    }
+
+    proc set_participant {id} {
+        variable subject_id
+        variable subject_base
+        variable participant_id
+        variable participant_subjects
+        variable open_datafile
+
+        set id [canonical_subject_name $id]
+        if {[subject_takes_participant $id]} {
+            error "\"$id\" is the subject class, not a participant id"
+        }
+        if {$open_datafile ne ""} {
+            error "cannot change the participant while data file\
+                [file tail $open_datafile] is open: close it first"
+        }
+        # entering a participant id IS choosing a human subject
+        if {![subject_takes_participant $subject_base]} {
+            set subject_base [lindex $participant_subjects 0]
+        }
+        set changed [expr {$id ne $subject_id}]
+        set participant_id $id
+        set subject_id $id
+        ::ess::evt_put ID SUBJECT [now] $subject_id
+        participant_touch
+        if {$changed} { participant_reload }
+        return $id
+    }
+
+    proc clear_participant {} {
+        variable subject_id
+        variable subject_base
+        variable participant_id
+        variable open_datafile
+        if {$participant_id eq ""} { return }
+        if {$open_datafile ne ""} {
+            error "cannot end the participant while data file\
+                [file tail $open_datafile] is open: close it first"
+        }
+        set participant_id ""
+        set subject_id $subject_base
+        ::ess::evt_put ID SUBJECT [now] $subject_id
+        publish_participant
+        participant_reload
+        return
+    }
+
+    # The watchdog. Called lazily wherever the binding is consulted, and on a
+    # slow timer from the configs subprocess. Never fires with a file open or
+    # ESS running: an id is only dropped when nothing is being collected.
+    # Returns 1 if it ended a binding.
+    proc participant_expire {} {
+        variable current
+        variable subject_base
+        variable participant_id
+        variable open_datafile
+        variable participant_idle_timeout
+        variable participant_idle_since
+        if {$participant_id eq "" || $participant_idle_timeout <= 0 ||
+            $open_datafile ne ""} {
+            return 0
+        }
+        if {$current(system) ne {} &&
+            ![catch {$current(state_system) status} st] && $st eq "running"} {
+            set participant_idle_since [clock seconds]
+            return 0
+        }
+        if {[clock seconds] - $participant_idle_since < $participant_idle_timeout} {
+            return 0
+        }
+        ess_info "participant $participant_id idle\
+            ${participant_idle_timeout}s: back to $subject_base" "config"
+        clear_participant
+        return 1
+    }
+
+    # minutes, as the rig setting gives it; 0 = never expire
+    proc set_participant_timeout {minutes} {
+        variable participant_idle_timeout [expr {int($minutes * 60)}]
+        publish_participant
     }
 
     proc set_subjects {args} {
@@ -4656,6 +4851,15 @@ namespace eval ess {
             return -1
         }
 
+        # No file is recorded under the class name: a participant-class
+        # subject needs its id bound first. Before anything else, for the
+        # same reason as the stream check below -- nothing to unwind.
+        if {[participant_required]} {
+            print "subject \"$::ess::subject_base\" needs a participant id:\
+                ess::set_participant <id>. file NOT opened."
+            return -4
+        }
+
         # RESOLVE ANALOG STREAMS FIRST, before any file exists. A protocol that
         # declares a stream it cannot get is not allowed to record: running a
         # whole session and discovering afterwards that a declared signal is
@@ -4730,6 +4934,7 @@ namespace eval ess {
         dservLoggerResume $filename
         set open_datafile $filename
 
+        publish_participant                   ;# idle clock stops while open
         dservSet ess/datafile $f              ;# just filename for frontends
 	dservSet ess/datafile_path $filename  ;# full path for subprocesses
 	
@@ -4958,6 +5163,7 @@ namespace eval ess {
 	dservSet ess/lastfile $lastfile
 	dservSet ess/datafile {}
 	dservSet ess/datafile_path {}
+	participant_touch       ;# the participant idle clock runs from here
 	
 	# call the system's specific file_close callback
 	catch {$current(state_system) file_close $filename}
@@ -5036,6 +5242,7 @@ namespace eval ess {
         set_start_callback set_end_callback set_reset_callback set_quit_callback
         set_file_suggest_callback set_file_open_callback set_file_close_callback
         set_subject_callback set_variant_args_callback configure_stim update_stimdg
+        set_subject_dependent subject_dependent
         file_suggest file_open file_close set_subject
         name get_system set_version get_version set_protocol get_protocol
         set_variants get_variants set_variant get_variant add_variant
@@ -8222,7 +8429,8 @@ namespace eval ess {
             system        $current(system) \
             protocol      $current(protocol) \
             variant       $current(variant) \
-            subject       $subject_id \
+            subject       [expr {$::ess::participant_id ne "" ?
+                                 $::ess::subject_base : $subject_id}] \
             variant_args  [get_variant_args] \
             params        [get_param_vals]]
         
