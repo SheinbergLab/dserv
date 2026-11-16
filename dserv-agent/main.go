@@ -652,7 +652,7 @@ Environment:
 
 		// Bootstrap endpoint: curl -sSL http://server/setup | bash
 		registerBootstrapHandlers(mux, agent)
-		log.Printf("  Bootstrap: /setup (box) · /extio/setup (extio board)")
+		log.Printf("  Bootstrap: /setup (box) · /extio/setup (extio board) · /extio/teensy (Teensy 4.x)")
 		
 		// Start cleanup goroutine
 		go agent.registryCleanupLoop()
@@ -917,9 +917,11 @@ func requestBaseURL(r *http.Request) string {
 func (a *Agent) renderLandingPage(base string) string {
 	baseJSON, _ := json.Marshal(base)
 	profilesJSON, _ := json.Marshal(a.getProfiles())
+	firmwareJSON, _ := json.Marshal(a.firmwareRoot() != "") // the Teensy mode needs a shelf
 	return strings.NewReplacer(
 		"__BASE_JSON__", string(baseJSON),
 		"__PROFILES_JSON__", string(profilesJSON),
+		"__FIRMWARE_JSON__", string(firmwareJSON),
 		"__BASE__", html.EscapeString(base),
 		"__VERSION__", html.EscapeString(version),
 	).Replace(landingPage)

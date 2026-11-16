@@ -156,12 +156,41 @@ if len(h) == 28:
 PY
 )
 
+# THE TEENSY FIRST-FLASH HEX, merged here and published beside the .bin.
+#
+# The .bin is only what an MCUboot box updates ITSELF with. A blank Teensy has
+# no MCUboot yet, and its HalfKay loader takes exactly one file, so getting a
+# new board going needs MCUboot + the signed app merged into one Intel HEX
+# (tools/merge_ota_hex.py). Publishing it with every release is what lets
+# dserv.net/extio/teensy hand a person the current firmware, instead of a hex
+# someone merged once by hand and forgot to refresh. The merge needs the
+# sysbuild's mcuboot image, so it only happens for a sysbuild dir, and it needs
+# python3 + intelhex (both in the zephyrproject venv). A failed merge stops
+# the publish: a Teensy release without its hex would leave /extio/teensy
+# quietly serving the PREVIOUS one.
+HEX=""
+case "$BUILD_KEY" in
+  teensy4*)
+    if [ -d "$BUILD_DIR/mcuboot" ] && [ -n "$BIN" ]; then
+      HEX_TMP=$(mktemp -d)
+      trap 'rm -rf "$HEX_TMP"' EXIT
+      HEX="$HEX_TMP/$BUILD_KEY.hex"
+      python3 "$HERE/tools/merge_ota_hex.py" -d "$BUILD_DIR" -o "$HEX" \
+        || { echo "!! merging the first-flash hex failed (is the zephyrproject venv active?)" >&2; exit 1; }
+      HEX_SUM=$(shasum -a 256 "$HEX" 2>/dev/null | cut -d' ' -f1 || sha256sum "$HEX" | cut -d' ' -f1)
+    else
+      echo ">> (no $BUILD_DIR/mcuboot: plain build, so no first-flash hex to publish)"
+    fi
+    ;;
+esac
+
 echo ">> shelf   $SHELF/api/firmware/extio/$CHANNEL"
 echo ">> build   $BUILD_KEY   (board=$BOARD_ID, from $BOARD_TARGET)"
 echo ">> version $VERSION  (dirty=$DIRTY)"
 [ -n "$BIN" ] && echo ">> bin     $BIN"
 [ -n "$UF2" ] && echo ">> uf2     $UF2"
 echo ">>          $SIZE bytes  sha256=$SUM"
+[ -n "$HEX" ] && echo ">> hex     $BUILD_KEY.hex  (MCUboot + app, first flash; sha256=$HEX_SUM)"
 if [ -n "$IMGVER" ]; then
   echo ">> imgver  $IMGVER  (from the MCUboot header -- what the box will report as fw_ver)"
 else
@@ -194,6 +223,7 @@ OTA=0; [ -n "$BIN" ] && OTA=1
 # new publishes unambiguous.
 BIN_ARG=""; [ -n "$BIN" ] && BIN_ARG="-F bin=@$BIN;filename=$BUILD_KEY.bin"
 UF2_ARG=""; [ -n "$UF2" ] && UF2_ARG="-F uf2=@$UF2;filename=$BUILD_KEY.uf2"
+HEX_ARG=""; [ -n "$HEX" ] && HEX_ARG="-F hex=@$HEX;filename=$BUILD_KEY.hex"
 echo ">> ota     $OTA  ($([ "$OTA" = 1 ] && echo 'framed cmd/ota/* usable' || echo 'UF2 only -- use extio_uf2_push'))"
 
 [ "$DRY" = 1 ] && { echo ">> dry run, nothing sent"; exit 0; }
@@ -207,7 +237,7 @@ CODE=$(curl -sS -o "$RESP" -w '%{http_code}' \
   -H "Authorization: Bearer $DSERV_AGENT_FIRMWARE_TOKEN" \
   -F "version=$VERSION" -F "build=$BUILD_KEY" -F "board=$BOARD_ID" \
   -F "variant=$BUILD_KEY" -F "dirty=$DIRTY" -F "imgver=$IMGVER" \
-  -F "ota=$OTA" $BIN_ARG $UF2_ARG \
+  -F "ota=$OTA" $BIN_ARG $UF2_ARG $HEX_ARG \
   "$SHELF/api/firmware/extio/$CHANNEL") \
   || { echo "!! push failed (curl error)" >&2; rm -f "$RESP"; exit 1; }
 
@@ -250,7 +280,7 @@ except Exception:
 imgs = d.get("images") or (d.get("manifest") or {}).get("images") or []
 for im in imgs:
     if im.get("build") == key:
-        print(im.get("binSha256", ""))
+        print(im.get("binSha256", ""), im.get("hexSha256", "-"))
         break
 else:
     print("NO_SUCH_BUILD")
@@ -259,15 +289,30 @@ if [ "$REMOTE" = "NO_SUCH_BUILD" ]; then
   echo "!! shelf has no image for build '$BUILD_KEY' at $VERSION -- the upload
    did not land where a box will look for it." >&2; exit 1
 fi
-if [ -n "$REMOTE" ]; then
-  if [ "$REMOTE" = "$SUM" ]; then
+# "<binSha256> <hexSha256>"; the hex field reads "-" when the shelf has none.
+REMOTE_BIN=${REMOTE%% *}
+REMOTE_HEX=${REMOTE#* }
+if [ -n "$REMOTE_BIN" ]; then
+  if [ "$REMOTE_BIN" = "$SUM" ]; then
     echo ">> shelf sha256 MATCHES the local image ($BUILD_KEY)"
   else
-    echo "!! shelf sha256 $REMOTE != local $SUM for build '$BUILD_KEY'
+    echo "!! shelf sha256 $REMOTE_BIN != local $SUM for build '$BUILD_KEY'
    -- do NOT OTA this version" >&2; exit 1
+  fi
+fi
+if [ -n "$HEX" ] && [ -n "$REMOTE" ]; then
+  if [ "$REMOTE_HEX" = "$HEX_SUM" ]; then
+    echo ">> shelf hex sha256 MATCHES the local merged hex"
+  else
+    echo "!! shelf hex sha256 '$REMOTE_HEX' != local $HEX_SUM for build '$BUILD_KEY'
+   -- /extio/teensy would serve a bad first-flash image" >&2; exit 1
   fi
 fi
 
 echo
 echo "Next, on the box's dserv:"
 echo "  dservctl extio \"extio_ota_push_shelf <box> $CHANNEL\""
+if [ -n "$HEX" ]; then
+  echo "A blank $BOARD_ID, from the computer it is plugged into:"
+  echo "  curl -sSL \"$SHELF/extio/teensy?board=$BOARD_ID&channel=$CHANNEL\" | bash"
+fi

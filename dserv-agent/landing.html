@@ -159,7 +159,7 @@
 
       <div class="card">
         <h2>What are you doing?</h2>
-        <div class="tiles three" role="radiogroup">
+        <div class="tiles three" id="modes" role="radiogroup">
           <label class="tile"><input type="radio" name="mode" value="setup">
             <span class="t">Set up or update a box</span>
             <span class="d">A fresh Linux machine, or re-run on one to update it.</span></label>
@@ -169,6 +169,9 @@
           <label class="tile"><input type="radio" name="mode" value="clock">
             <span class="t">Put a box on the site clock</span>
             <span class="d">PTP/NTP tooling and a time role, on any Linux box.</span></label>
+          <label class="tile" id="teensy-tile" hidden><input type="radio" name="mode" value="teensy">
+            <span class="t">Flash an extio Teensy</span>
+            <span class="d">Put extio I/O firmware on a Teensy 4.0 or 4.1 over USB.</span></label>
         </div>
       </div>
 
@@ -279,11 +282,36 @@
           <p class="hint">Everything installs inert; a role is a deliberate, per-host step. Not sure which interface? Install the tooling, then run <code>dserv-ptp-setup candidates</code>. The role is recorded in <code>box.conf</code> either way.</p>
         </div>
       </div>
+
+      <!-- ===== extio Teensy first flash ===== -->
+      <div data-mode="teensy" hidden>
+        <div class="card">
+          <h2>Which Teensy?</h2>
+          <div class="tiles two" role="radiogroup">
+            <label class="tile"><input type="radio" name="tboard" value="teensy40">
+              <span class="t">Teensy 4.0<span class="tag">teensy40</span></span>
+              <span class="d">The short one: 1.4 &times; 0.7 in, 2 MB flash.</span></label>
+            <label class="tile"><input type="radio" name="tboard" value="teensy41">
+              <span class="t">Teensy 4.1<span class="tag">teensy41</span></span>
+              <span class="d">The long one: 2.4 &times; 0.7 in, 8 MB flash, SD card slot.</span></label>
+          </div>
+          <p class="hint" id="t-info"></p>
+          <div class="actions" id="t-dl-row" hidden>
+            <a class="btn" id="t-dl">Download .hex</a>
+            <span class="hint" style="margin-top:0">For Windows, or PJRC&rsquo;s Teensy Loader app: <em>File &rsaquo; Open HEX File</em>, then press the button.</span>
+          </div>
+        </div>
+        <div class="card">
+          <h2>This run</h2>
+          <label class="check"><input type="checkbox" id="t-dry">
+            <span><span class="t">Dry run</span><span class="d">Download and check the image; flash nothing.</span></span></label>
+        </div>
+      </div>
     </form>
 
     <aside class="out">
       <div class="card">
-        <h2>Run this on the box</h2>
+        <h2 id="out-title">Run this on the box</h2>
         <div class="cmd"><pre id="cmd"></pre></div>
         <div class="actions">
           <button type="button" class="primary" id="copy">Copy</button>
@@ -347,6 +375,7 @@
 
   var BASE = __BASE_JSON__;
   var PROFILES = __PROFILES_JSON__;
+  var FIRMWARE = __FIRMWARE_JSON__;   // this registry hosts a firmware shelf (--firmware-dir)
 
   // The registry's own validators, so the page refuses what /setup would.
   var RE = {
@@ -371,11 +400,13 @@
     dry: false, reinstall: false,
     swg: '', suser: '', ssp: '', sdry: false,
     ctr: 'tools', ctra: '',
+    tboard: 'teensy40', tdry: false,
     wget: false
   };
   var KEYS = { mode: 'm', profile: 'p', mirror: 'rig', wg: 'wg', user: 'u', sp: 'sp', tr: 'tr', tra: 'ta',
-               swg: 'swg', suser: 'su', ssp: 'ssp', ctr: 'ctr', ctra: 'cta' };
-  var FLAGS = { scripts: 's', dry: 'dry', reinstall: 're', sdry: 'sdry', wget: 'wget' };
+               swg: 'swg', suser: 'su', ssp: 'ssp', ctr: 'ctr', ctra: 'cta', tboard: 'tb' };
+  var FLAGS = { scripts: 's', dry: 'dry', reinstall: 're', sdry: 'sdry', tdry: 'tdry', wget: 'wget' };
+  var TEENSY = { teensy40: 'Teensy 4.0', teensy41: 'Teensy 4.1' };
 
   var DEFAULTS = JSON.parse(JSON.stringify(S));
   function readHash() {
@@ -394,7 +425,8 @@
     var q = new URLSearchParams();
     Object.keys(KEYS).forEach(function (k) {
       if (S[k] && !(k === 'mode' && S[k] === 'setup') && !(k === 'profile' && S[k] === 'incage')
-          && !(k === 'tr' && S[k] === 'keep') && !(k === 'ctr' && S[k] === 'tools')) q.set(KEYS[k], S[k]);
+          && !(k === 'tr' && S[k] === 'keep') && !(k === 'ctr' && S[k] === 'tools')
+          && !(k === 'tboard' && S[k] === 'teensy40')) q.set(KEYS[k], S[k]);
     });
     Object.keys(FLAGS).forEach(function (k) { if (S[k]) q.set(FLAGS[k], '1'); });
     if (S.with.length) q.set('w', S.with.join(','));
@@ -557,6 +589,46 @@
     return parts;
   }
 
+  // What /extio/teensy would flash, per board: the same server-side lookup
+  // the script is built from, so the page names the exact image.
+  var tinfo = {}, tpending = {};
+  function loadTeensyInfo() {
+    var b = S.tboard;
+    if (tinfo[b] || tpending[b]) return;
+    tpending[b] = true;
+    fetch('/extio/teensy/info?board=' + encodeURIComponent(b))
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+      .then(function (res) { delete tpending[b]; tinfo[b] = res.ok ? { rel: res.j } : { err: res.j.error || 'No image.' }; if (b === S.tboard) render(); })
+      .catch(function () { delete tpending[b]; tinfo[b] = { err: 'Could not ask the registry which image it has.' }; if (b === S.tboard) render(); });
+  }
+
+  function teensyCommand(warn, does) {
+    var title = TEENSY[S.tboard];
+    var parts = [P(fetcher(BASE + '/extio/teensy?board=' + S.tboard) + ' | bash')];
+    if (S.tdry) parts.push(P(' -s -- --dry-run'));
+
+    var info = tinfo[S.tboard], rel = info && info.rel;
+    if (info && info.err) warn.push({ err: true, text: info.err });
+    $('t-info').innerHTML = rel
+      ? 'Flashes <code>' + esc(rel.file) + '</code>' + (rel.imgVersion ? ', firmware <strong>' + esc(rel.imgVersion) + '</strong>' : '') +
+        ' (' + esc(rel.channel + ' ' + rel.version) + ', published ' + esc((rel.publishedAt || '').slice(0, 10)) + ').'
+      : (info ? '' : 'Asking the registry which image it has…');
+    $('t-dl-row').hidden = !rel;
+    if (rel) { $('t-dl').href = rel.url; $('t-dl').setAttribute('download', rel.file); }
+
+    does.push({ html: 'Runs on <strong>macOS or Linux</strong>, on the computer the ' + esc(title) + ' is plugged into.' });
+    does.push({ html: 'Installs <code>teensy_loader_cli</code> if it is missing (Homebrew on macOS, <code>apt</code> on Debian/Ubuntu).' });
+    does.push({ html: 'Downloads ' + (rel ? '<code>' + esc(rel.file) + '</code>' : 'the newest image for this board') +
+      ' and checks its sha256 before flashing.' });
+    if (S.tdry) does.push({ cls: 'dry', html: '<strong>Dry run:</strong> stops there and prints the flash command.' });
+    else {
+      does.push({ html: 'Flashes MCUboot and the extio app together. <strong>Press the Program button</strong> when asked; a brand-new Teensy usually starts on its own.' });
+      does.push({ html: 'Waits for the board to come back as <code>extio USB box</code>. Restart dserv on that computer so it finds the box.' });
+    }
+    does.push({ html: 'Only a <strong>blank board</strong> needs this. A box already running extio firmware updates over the wire: <code>extio_ota_push_shelf</code>.' });
+    return parts;
+  }
+
   function esc(s) {
     return String(s).replace(/[&<>"']/g, function (c) {
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
@@ -576,7 +648,9 @@
     var warn = [], does = [], parts;
     if (S.mode === 'scripts') parts = scriptsCommand(warn, does);
     else if (S.mode === 'clock') parts = clockCommand(warn, does);
+    else if (S.mode === 'teensy') parts = teensyCommand(warn, does);
     else parts = setupCommand(warn, does);
+    $('out-title').textContent = S.mode === 'teensy' ? 'Run this where the Teensy is plugged in' : 'Run this on the box';
 
     var pre = $('cmd'), text = '', incomplete = [];
     pre.textContent = '';
@@ -699,6 +773,8 @@
     $('dry').checked = S.dry; $('reinstall').checked = S.reinstall;
     $('s-wg').value = S.swg; $('s-user').value = S.suser; $('s-sp').value = S.ssp; $('s-dry').checked = S.sdry;
     $('c-tr').value = S.ctr; $('c-tra').value = S.ctra; $('wget').checked = S.wget;
+    document.querySelectorAll('input[name=tboard]').forEach(function (r) { r.checked = r.value === S.tboard; });
+    $('t-dry').checked = S.tdry;
     if (S.user || S.sp) $('scripts-more').querySelector('details').open = true;
     syncConditional();
   }
@@ -730,14 +806,15 @@
 
   var TEXT = { mirror: 'mirror', wg: 'wg', user: 'user', sp: 'sp', tra: 'tra',
                's-wg': 'swg', 's-user': 'suser', 's-sp': 'ssp', 'c-tra': 'ctra' };
-  var BOOL = { scripts: 'scripts', dry: 'dry', reinstall: 'reinstall', 's-dry': 'sdry', wget: 'wget' };
+  var BOOL = { scripts: 'scripts', dry: 'dry', reinstall: 'reinstall', 's-dry': 'sdry', 't-dry': 'tdry', wget: 'wget' };
 
   $('cfg').addEventListener('input', onChange);
   $('cfg').addEventListener('change', onChange);
   $('wget').addEventListener('change', onChange);
   function onChange(e) {
     var t = e.target, id = t.id;
-    if (t.name === 'mode') S.mode = t.value;
+    if (t.name === 'mode') { S.mode = t.value; if (S.mode === 'teensy') loadTeensyInfo(); }
+    else if (t.name === 'tboard') { S.tboard = t.value; loadTeensyInfo(); }
     else if (t.name === 'profile') { S.profile = t.value; syncConditional(); loadPlan(); return; }
     else if (t.dataset.addon) {
       var a = t.dataset.addon;
@@ -794,11 +871,16 @@
     if (!PROFILES.some(function (p) { return p.name === S.profile; })) S.profile = PROFILES.length ? PROFILES[0].name : 'incage';
     if (S.tr !== 'keep' && S.tr !== 'none' && !ROLES[S.tr]) S.tr = 'keep';
     if (S.ctr !== 'tools' && !ROLES[S.ctr]) S.ctr = 'tools';
-    if (['setup', 'scripts', 'clock'].indexOf(S.mode) < 0) S.mode = 'setup';
+    if (['setup', 'scripts', 'clock'].concat(FIRMWARE ? ['teensy'] : []).indexOf(S.mode) < 0) S.mode = 'setup';
+    if (!TEENSY[S.tboard]) S.tboard = 'teensy40';
     syncInputs();
     render();
     loadPlan();
+    if (S.mode === 'teensy') loadTeensyInfo();
   }
+
+  // The Teensy tile only where the registry hosts firmware; four tiles sit 2x2.
+  if (FIRMWARE) { $('teensy-tile').hidden = false; $('modes').className = 'tiles two'; }
 
   renderProfiles();
   if (!readHash()) S.wg = S.swg = store.get('wg');   // the account is per box: never remembered into a new page

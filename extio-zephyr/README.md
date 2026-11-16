@@ -164,6 +164,12 @@ PORTING.md, "FRDM-MCXN947: first build".
 
 Teensy flashing needs `teensy_loader_cli` (`brew install teensy_loader_cli`);
 the build emits `build/zephyr/zephyr.hex`, which is what the loader wants.
+That is the plain (no-bootloader) build. The OTA build's first flash is
+MCUboot + the signed app merged into one hex (`tools/merge_ota_hex.py`), and
+`publish.sh` puts that merged hex on the shelf beside the `.bin`, so a blank
+board needs no checkout at all:
+`curl -sSL "https://dserv.net/extio/teensy?board=teensy40" | bash`
+(or the "Flash an extio Teensy" option on the dserv.net landing page).
 BLE on `frdm_rw612` additionally needs `west blobs fetch hal_nxp` (accept NXP's
 controller-firmware license).
 

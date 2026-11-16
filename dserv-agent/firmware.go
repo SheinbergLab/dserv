@@ -15,6 +15,7 @@
 //
 //	<root>/extio/<channel>/<version>/<file>.uf2   # the image(s)
 //	<root>/extio/<channel>/<version>/<file>.bin   # optional flat slot image
+//	<root>/extio/<channel>/<version>/<file>.hex   # optional HalfKay first flash (Teensy)
 //	<root>/extio/<channel>/<version>/manifest.json
 //	<root>/extio/<channel>/latest.json            # {"version": "..."} pointer
 //
@@ -62,7 +63,7 @@ var (
 	fwVersionRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 	fwBuildRe   = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`) // build.sh target name (unique key)
 	fwIdentRe   = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`) // board / variant tokens
-	fwFileRe    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*\.(uf2|bin)$`)
+	fwFileRe    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*\.(uf2|bin|hex)$`)
 	// MCUboot sem_ver, exactly as the firmware renders it: major.minor.rev+build.
 	// Tighter than fwVersionRe on purpose -- this field has ONE legal shape, and
 	// its whole value is being byte-comparable with what a box reports.
@@ -96,6 +97,17 @@ type FirmwareImage struct {
 	Bin        string `json:"bin,omitempty"` // optional flat .bin filename (on-box updater)
 	BinSize    int64  `json:"binSize,omitempty"`
 	BinSHA256  string `json:"binSha256,omitempty"`
+
+	// Hex is the FIRST-FLASH image for a board whose bootloader takes one Intel
+	// HEX file -- the Teensy 4.x, whose HalfKay loader is the only way onto a
+	// blank board (no SWD). It is MCUboot and the signed app merged into one
+	// file (extio-zephyr/tools/merge_ota_hex.py), so it is NOT the same bytes
+	// as Bin: Bin is only the slot image an MCUboot box updates itself with,
+	// and on a blank board there is no MCUboot yet to accept it. Served to a
+	// person at a USB port by /extio/teensy (teensy_setup.go).
+	Hex       string `json:"hex,omitempty"`
+	HexSize   int64  `json:"hexSize,omitempty"`
+	HexSHA256 string `json:"hexSha256,omitempty"`
 
 	// ImgVersion is the MCUboot sem_ver carried in the .bin's own header --
 	// "0.4.0+91" -- and it is the ONLY field here that a running box can be
@@ -353,7 +365,7 @@ func (a *Agent) handleFirmwareArtifact(w http.ResponseWriter, r *http.Request) {
 // upserts its manifest entry. Multipart form:
 //
 //	fields: version (req), target (req), board, dirty (bool), notes
-//	files:  uf2 (req), bin (optional flat slot image)
+//	files:  uf2, bin (flat slot image), hex (Teensy first flash) -- at least one
 //
 // Called once per target by the publisher (build.sh --push / dservctl fw
 // push). sha256 is computed here, not trusted from the client.
@@ -457,9 +469,25 @@ func (a *Agent) handleFirmwarePublish(w http.ResponseWriter, r *http.Request, ch
 		return
 	}
 
-	if img.File == "" && img.Bin == "" {
+	// Merged first-flash hex (Teensy). Optional, and checked for the one thing a
+	// wrong upload would get wrong: an Intel HEX file is ASCII records that each
+	// start with ':'. A .bin renamed .hex would otherwise be served to HalfKay,
+	// which rejects it only after the person has pressed the button.
+	if hexName, hexSize, hexSum, herr := saveFirmwareUpload(r, "hex", versionDir, "hex"); herr == nil {
+		if !looksLikeIntelHex(filepath.Join(versionDir, hexName)) {
+			os.Remove(filepath.Join(versionDir, hexName))
+			writeJSON(w, 400, map[string]string{"error": "hex: not an Intel HEX file (first byte is not ':')"})
+			return
+		}
+		img.Hex, img.HexSize, img.HexSHA256 = hexName, hexSize, hexSum
+	} else if herr != errNoUpload {
+		writeJSON(w, 400, map[string]string{"error": "hex: " + herr.Error()})
+		return
+	}
+
+	if img.File == "" && img.Bin == "" && img.Hex == "" {
 		writeJSON(w, 400, map[string]string{
-			"error": "need at least one of uf2 (bench/provisioning image) or bin (OTA slot image)"})
+			"error": "need at least one of uf2 (bench/provisioning image), bin (OTA slot image) or hex (Teensy first flash)"})
 		return
 	}
 
@@ -499,9 +527,25 @@ func (a *Agent) handleFirmwarePublish(w http.ResponseWriter, r *http.Request, ch
 	if sum == "" {
 		sum = img.BinSHA256
 	}
+	if sum == "" {
+		sum = img.HexSHA256
+	}
 	writeJSON(w, 200, map[string]any{"ok": true, "channel": channel, "version": version,
 		"build": build, "sha256": sum, "uf2Sha256": img.SHA256, "binSha256": img.BinSHA256,
-		"manifest": m})
+		"hexSha256": img.HexSHA256, "manifest": m})
+}
+
+// looksLikeIntelHex reports whether the file's first byte is ':', the start
+// of every Intel HEX record.
+func looksLikeIntelHex(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	b := make([]byte, 1)
+	n, _ := f.Read(b)
+	return n == 1 && b[0] == ':'
 }
 
 func (a *Agent) writeManifest(m *FirmwareManifest) error {
