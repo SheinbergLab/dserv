@@ -584,6 +584,11 @@ namespace eval ess {
         variable stim_frame_log
         if { !$stim_frame_log } { return 0 }
         dservLoggerAddMatch $filename stim/frame 0 0 1
+        # Records stim2's modules send on the same stream, one per frame
+        # they drew (stimFrameRecord). stim/gazewin: which eye sample each
+        # gaze-window frame was drawn from (stim2 docs/gazewin.md). Nothing
+        # arrives, and nothing is logged, unless that module is in use.
+        dservLoggerAddMatch $filename stim/gazewin 0 0 1
         return 1
     }
     # END stim_frame_log
