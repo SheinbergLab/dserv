@@ -2640,8 +2640,12 @@ func registerBootstrapHandlers(mux *http.ServeMux, agent *Agent) {
 	// Board-side sibling: curl -fsSL http://server/extio/setup | bash
 	mux.HandleFunc("/extio/setup", agent.handleExtioSetup)
 
-	// Teensy 4.x first flash: curl -sSL "http://server/extio/teensy?board=teensy40" | bash
-	// (teensy_setup.go; /info is the same lookup as JSON, for the landing page)
+	// Zephyr-board first flash (Teensy 4.x, FRDM-MCXN947):
+	//   curl -sSL "http://server/extio/flash?board=frdm_mcxn947" | bash
+	// (extio_flash.go; /info is the same lookup as JSON, for the landing page).
+	// /extio/teensy is the original URL, the same endpoint for teensy boards only.
+	mux.HandleFunc("/extio/flash", agent.handleFlashSetup)
+	mux.HandleFunc("/extio/flash/info", agent.handleFlashInfo)
 	mux.HandleFunc("/extio/teensy", agent.handleTeensySetup)
 	mux.HandleFunc("/extio/teensy/info", agent.handleTeensyInfo)
 

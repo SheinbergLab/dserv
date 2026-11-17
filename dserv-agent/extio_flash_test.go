@@ -105,9 +105,9 @@ func TestTeensyPicksNewestPublishWithHex(t *testing.T) {
 	if rr.Code != 200 {
 		t.Fatalf("info: %d %s", rr.Code, rr.Body.String())
 	}
-	var rel teensyRelease
+	var rel flashRelease
 	json.Unmarshal(rr.Body.Bytes(), &rel)
-	if rel.Version != "0.61.0" || rel.MCU != "TEENSY40" ||
+	if rel.Version != "0.61.0" || rel.Target != "TEENSY40" || rel.Flasher != "teensy" ||
 		rel.URL != "http://registry.test/firmware/extio/dev/0.61.0/teensy40_mimxrt1062.hex" {
 		t.Fatalf("picked %+v", rel)
 	}
@@ -136,6 +136,7 @@ func TestTeensyScript(t *testing.T) {
 	s := rr.Body.String()
 	for _, want := range []string{
 		"TEENSY_MCU='TEENSY40'",
+		"BOARD_TITLE='Teensy 4.0'",
 		"HEX_URL='http://registry.test/firmware/extio/dev/0.61.0/teensy40_mimxrt1062.hex'",
 		"FW_IMGVER='0.4.0+102'",
 		"\nmain \"$@\"\n",
@@ -148,7 +149,7 @@ func TestTeensyScript(t *testing.T) {
 
 	// errors are a script that says so, not text bash would try to run
 	for _, url := range []string{"/extio/teensy", "/extio/teensy?board=arduino", "/extio/teensy?board=teensy41",
-		"/extio/teensy?board=teensy40&channel=../x"} {
+		"/extio/teensy?board=teensy40&channel=../x", "/extio/teensy?board=frdm_mcxn947"} {
 		rr := teensyGet(a, (*Agent).handleTeensySetup, url)
 		if rr.Code < 400 || !strings.Contains(rr.Body.String(), "exit 1") {
 			t.Errorf("%s: %d %q", url, rr.Code, rr.Body.String())
@@ -172,5 +173,68 @@ func bashN(t *testing.T, script string) {
 	cmd.Stdin = strings.NewReader(script)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Errorf("bash -n: %v\n%s", err, out)
+	}
+}
+
+func TestFlashPyOCDScript(t *testing.T) {
+	a := newFwAgent(t)
+	publishFiles(t, a, "dev", "0.61.0", "frdm_mcxn947_mcxn947_cpu0",
+		map[string][]byte{"bin": []byte("b"), "hex": []byte(fakeHex)})
+
+	rr := teensyGet(a, (*Agent).handleFlashInfo, "/extio/flash/info?board=frdm_mcxn947")
+	var rel flashRelease
+	json.Unmarshal(rr.Body.Bytes(), &rel)
+	if rr.Code != 200 || rel.Flasher != "pyocd" || rel.Target != "mcxn947" || rel.File != "frdm_mcxn947_mcxn947_cpu0.hex" {
+		t.Fatalf("info: %d %s", rr.Code, rr.Body.String())
+	}
+
+	rr = teensyGet(a, (*Agent).handleFlashSetup, "/extio/flash?board=frdm_mcxn947")
+	if rr.Code != 200 {
+		t.Fatalf("script: %d %s", rr.Code, rr.Body.String())
+	}
+	s := rr.Body.String()
+	pin := flashBoards["frdm_mcxn947"].PyOCD
+	for _, want := range []string{
+		"PYOCD_TARGET='mcxn947'",
+		"PYOCD_VERSION='" + pin.Version + "'",
+		"PACK_SHA256='" + pin.PackSHA256 + "'",
+		"PACK_NAME='NXP.MCXN947_DFP.19.0.0.pack'",
+		"HEX_URL='http://registry.test/firmware/extio/dev/0.61.0/frdm_mcxn947_mcxn947_cpu0.hex'",
+		"--no-config",
+		"\nmain \"$@\"\n",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("script lacks %q", want)
+		}
+	}
+	if strings.Contains(s, "teensy_loader_cli") {
+		t.Errorf("pyocd board was served the teensy script")
+	}
+	bashN(t, s)
+
+	// the generic endpoint serves the teensy boards too, with the teensy script
+	publishFiles(t, a, "dev", "0.61.1", "teensy40_mimxrt1062", map[string][]byte{"hex": []byte(fakeHex)})
+	rr = teensyGet(a, (*Agent).handleFlashSetup, "/extio/flash?board=teensy40")
+	if rr.Code != 200 || !strings.Contains(rr.Body.String(), "teensy_loader_cli") {
+		t.Fatalf("teensy via /extio/flash: %d", rr.Code)
+	}
+}
+
+// Every pyocd board's pack pin must be complete: an empty sha256 would make the
+// script compare against "" and refuse every download.
+func TestFlashBoardsPinned(t *testing.T) {
+	for name, b := range flashBoards {
+		if b.Name != name || b.Build == "" || b.Target == "" {
+			t.Errorf("%s: incomplete entry %+v", name, b)
+		}
+		switch b.Flasher {
+		case flasherTeensy:
+		case flasherPyOCD:
+			if b.PyOCD == nil || b.PyOCD.Version == "" || b.PyOCD.PackURL == "" || len(b.PyOCD.PackSHA256) != 64 {
+				t.Errorf("%s: incomplete pyocd pin %+v", name, b.PyOCD)
+			}
+		default:
+			t.Errorf("%s: unknown flasher %q", name, b.Flasher)
+		}
 	}
 }

@@ -170,8 +170,8 @@
             <span class="t">Put a box on the site clock</span>
             <span class="d">PTP/NTP tooling and a time role, on any Linux box.</span></label>
           <label class="tile" id="teensy-tile" hidden><input type="radio" name="mode" value="teensy">
-            <span class="t">Flash an extio Teensy</span>
-            <span class="d">Put extio I/O firmware on a Teensy 4.0 or 4.1 over USB.</span></label>
+            <span class="t">Flash an extio board</span>
+            <span class="d">Put extio I/O firmware on a blank Teensy 4.x or FRDM-MCXN947 over USB.</span></label>
         </div>
       </div>
 
@@ -283,10 +283,10 @@
         </div>
       </div>
 
-      <!-- ===== extio Teensy first flash ===== -->
+      <!-- ===== extio board first flash (mode value stays "teensy": old links) ===== -->
       <div data-mode="teensy" hidden>
         <div class="card">
-          <h2>Which Teensy?</h2>
+          <h2>Which board?</h2>
           <div class="tiles two" role="radiogroup">
             <label class="tile"><input type="radio" name="tboard" value="teensy40">
               <span class="t">Teensy 4.0<span class="tag">teensy40</span></span>
@@ -294,17 +294,20 @@
             <label class="tile"><input type="radio" name="tboard" value="teensy41">
               <span class="t">Teensy 4.1<span class="tag">teensy41</span></span>
               <span class="d">The long one: 2.4 &times; 0.7 in, 8 MB flash, SD card slot.</span></label>
+            <label class="tile"><input type="radio" name="tboard" value="frdm_mcxn947">
+              <span class="t">FRDM-MCXN947<span class="tag">frdm_mcxn947</span></span>
+              <span class="d">NXP&rsquo;s dev board: on-chip analog, Ethernet. Flashed through its own MCU-Link.</span></label>
           </div>
           <p class="hint" id="t-info"></p>
           <div class="actions" id="t-dl-row" hidden>
             <a class="btn" id="t-dl">Download .hex</a>
-            <span class="hint" style="margin-top:0">For Windows, or PJRC&rsquo;s Teensy Loader app: <em>File &rsaquo; Open HEX File</em>, then press the button.</span>
+            <span class="hint" style="margin-top:0" id="t-dl-hint"></span>
           </div>
         </div>
         <div class="card">
           <h2>This run</h2>
           <label class="check"><input type="checkbox" id="t-dry">
-            <span><span class="t">Dry run</span><span class="d">Download and check the image; flash nothing.</span></span></label>
+            <span><span class="t">Dry run</span><span class="d">Download and check everything; flash nothing.</span></span></label>
         </div>
       </div>
     </form>
@@ -406,7 +409,7 @@
   var KEYS = { mode: 'm', profile: 'p', mirror: 'rig', wg: 'wg', user: 'u', sp: 'sp', tr: 'tr', tra: 'ta',
                swg: 'swg', suser: 'su', ssp: 'ssp', ctr: 'ctr', ctra: 'cta', tboard: 'tb' };
   var FLAGS = { scripts: 's', dry: 'dry', reinstall: 're', sdry: 'sdry', tdry: 'tdry', wget: 'wget' };
-  var TEENSY = { teensy40: 'Teensy 4.0', teensy41: 'Teensy 4.1' };
+  var TEENSY = { teensy40: 'Teensy 4.0', teensy41: 'Teensy 4.1', frdm_mcxn947: 'FRDM-MCXN947' };  // every /extio/flash board
 
   var DEFAULTS = JSON.parse(JSON.stringify(S));
   function readHash() {
@@ -589,22 +592,22 @@
     return parts;
   }
 
-  // What /extio/teensy would flash, per board: the same server-side lookup
+  // What /extio/flash would flash, per board: the same server-side lookup
   // the script is built from, so the page names the exact image.
   var tinfo = {}, tpending = {};
   function loadTeensyInfo() {
     var b = S.tboard;
     if (tinfo[b] || tpending[b]) return;
     tpending[b] = true;
-    fetch('/extio/teensy/info?board=' + encodeURIComponent(b))
+    fetch('/extio/flash/info?board=' + encodeURIComponent(b))
       .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
       .then(function (res) { delete tpending[b]; tinfo[b] = res.ok ? { rel: res.j } : { err: res.j.error || 'No image.' }; if (b === S.tboard) render(); })
       .catch(function () { delete tpending[b]; tinfo[b] = { err: 'Could not ask the registry which image it has.' }; if (b === S.tboard) render(); });
   }
 
   function teensyCommand(warn, does) {
-    var title = TEENSY[S.tboard];
-    var parts = [P(fetcher(BASE + '/extio/teensy?board=' + S.tboard) + ' | bash')];
+    var title = TEENSY[S.tboard], pyocd = S.tboard === 'frdm_mcxn947';
+    var parts = [P(fetcher(BASE + '/extio/flash?board=' + S.tboard) + ' | bash')];
     if (S.tdry) parts.push(P(' -s -- --dry-run'));
 
     var info = tinfo[S.tboard], rel = info && info.rel;
@@ -615,13 +618,26 @@
       : (info ? '' : 'Asking the registry which image it has…');
     $('t-dl-row').hidden = !rel;
     if (rel) { $('t-dl').href = rel.url; $('t-dl').setAttribute('download', rel.file); }
+    $('t-dl-hint').innerHTML = pyocd
+      ? 'For Windows: <code>pyocd flash --no-config -t mcxn947 --pack NXP.MCXN947_DFP.19.0.0.pack</code> with this file.'
+      : 'For Windows, or PJRC&rsquo;s Teensy Loader app: <em>File &rsaquo; Open HEX File</em>, then press the button.';
 
     does.push({ html: 'Runs on <strong>macOS or Linux</strong>, on the computer the ' + esc(title) + ' is plugged into.' });
-    does.push({ html: 'Installs <code>teensy_loader_cli</code> if it is missing (Homebrew on macOS, <code>apt</code> on Debian/Ubuntu).' });
+    if (pyocd) {
+      does.push({ html: 'Plug the USB cable into <strong>J17</strong> (the MCU-Link port; it also powers the board), with jumper <strong>J19 off</strong>.' });
+      does.push({ html: 'Sets up <strong>pyOCD and NXP&rsquo;s MCXN947 device pack</strong> in <code>~/.extio</code>, both pinned to the tested versions and separate from any Python, pyOCD or Zephyr you already have (once; needs <code>python3</code>).' });
+    } else {
+      does.push({ html: 'Installs <code>teensy_loader_cli</code> if it is missing (Homebrew on macOS, <code>apt</code> on Debian/Ubuntu).' });
+    }
     does.push({ html: 'Downloads ' + (rel ? '<code>' + esc(rel.file) + '</code>' : 'the newest image for this board') +
       ' and checks its sha256 before flashing.' });
-    if (S.tdry) does.push({ cls: 'dry', html: '<strong>Dry run:</strong> stops there and prints the flash command.' });
-    else {
+    if (S.tdry) does.push({ cls: 'dry', html: pyocd
+      ? '<strong>Dry run:</strong> stops after finding the board&rsquo;s probe, and prints the flash command.'
+      : '<strong>Dry run:</strong> stops there and prints the flash command.' });
+    else if (pyocd) {
+      does.push({ html: 'Flashes MCUboot and the extio app together (about 30 s; no buttons), then resets the board.' });
+      does.push({ html: 'The extio box itself is on the board&rsquo;s <strong>other</strong> USB-C or its Ethernet: connect that to its dserv and restart dserv.' });
+    } else {
       does.push({ html: 'Flashes MCUboot and the extio app together. <strong>Press the Program button</strong> when asked; a brand-new Teensy usually starts on its own.' });
       does.push({ html: 'Waits for the board to come back as <code>extio USB box</code>. Restart dserv on that computer so it finds the box.' });
     }
@@ -650,7 +666,7 @@
     else if (S.mode === 'clock') parts = clockCommand(warn, does);
     else if (S.mode === 'teensy') parts = teensyCommand(warn, does);
     else parts = setupCommand(warn, does);
-    $('out-title').textContent = S.mode === 'teensy' ? 'Run this where the Teensy is plugged in' : 'Run this on the box';
+    $('out-title').textContent = S.mode === 'teensy' ? 'Run this where the board is plugged in' : 'Run this on the box';
 
     var pre = $('cmd'), text = '', incomplete = [];
     pre.textContent = '';
@@ -879,7 +895,7 @@
     if (S.mode === 'teensy') loadTeensyInfo();
   }
 
-  // The Teensy tile only where the registry hosts firmware; four tiles sit 2x2.
+  // The board-flash tile only where the registry hosts firmware; four tiles sit 2x2.
   if (FIRMWARE) { $('teensy-tile').hidden = false; $('modes').className = 'tiles two'; }
 
   renderProfiles();

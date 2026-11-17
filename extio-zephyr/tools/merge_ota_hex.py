@@ -1,16 +1,28 @@
 #!/usr/bin/env python3
-"""merge_ota_hex.py -- one hex out of MCUboot + the signed app, for HalfKay.
+"""merge_ota_hex.py -- one hex out of MCUboot + the signed app: the first flash.
 
-The FRDM boards flash their two sysbuild images over SWD, and `west flash`
-places each one for you. A Teensy has no debug port: HalfKay takes exactly ONE
-file, so the bootloader and the application have to arrive already merged.
+`west flash` places each sysbuild image for you. Anything else gets ONE file:
+a Teensy's HalfKay takes exactly one, and the hosted first flash
+(dserv.net/extio/flash, fed by publish.sh) hands out one per board, so the
+bootloader and the application have to arrive already merged.
 
     python3 tools/merge_ota_hex.py -d build-teensy40-ota -o teensy40-ota.hex
     teensy_loader_cli --mcu=TEENSY40 -s -v teensy40-ota.hex
 
-That is the ONE-TIME migration flash -- it needs the Program button, like every
-Teensy reflash of this firmware. Afterwards the box updates over the wire and
-this script is only needed again if MCUboot itself changes.
+    python3 tools/merge_ota_hex.py -d build-mcxn-ota -o mcxn947-ota.hex
+    pyocd flash -t mcxn947 mcxn947-ota.hex      # the pinned pack: pyocd.yaml
+
+That is the ONE-TIME migration flash (on a Teensy it needs the Program button,
+like every Teensy reflash of this firmware). Afterwards the box updates over
+the wire and this script is only needed again if MCUboot itself changes.
+
+The board needs CONFIG_BUILD_OUTPUT_HEX in BOTH images. The Teensy defconfig
+has it; sysbuild.cmake turns it on for the MCXN947.
+
+The app's signature is NOT the .bin's. imgtool signs the .bin and the .hex
+separately and this board's RSA-PSS signature is salted, so the last 256 bytes
+differ between them while the payload and hash are identical. Both are valid;
+compare checksums per artifact, never the hex's app against the .bin.
 
 USE THE *SIGNED* APP. zephyr.hex is the unsigned link and MCUboot will refuse
 it, leaving a box that enumerates nothing; zephyr.signed.hex carries the image
@@ -81,7 +93,9 @@ def main() -> int:
     for p in (boot, app):
         if not p.is_file():
             sys.exit(f"missing {p}\nbuild first:\n"
-                     f"  west build -b <board> --sysbuild . -d {args.build_dir}")
+                     f"  west build -b <board> --sysbuild . -d {args.build_dir}\n"
+                     f"(an MCXN947 build dir from before hex output was turned "
+                     f"on in sysbuild.cmake has only .bin files: rebuild it)")
 
     flash_base, dead_sector = flash_geometry(
         build / args.app_image / "zephyr" / ".config")
@@ -93,8 +107,9 @@ def main() -> int:
     if b1 >= a0:
         sys.exit(f"images OVERLAP: mcuboot 0x{b0:x}-0x{b1:x} runs into app "
                  f"0x{a0:x}-0x{a1:x}.\nMCUboot has most likely outgrown "
-                 f"boot_partition -- widen it in boards/teensy40_partitions.dtsi "
-                 f"(and move slot0/slot1 down to match).")
+                 f"boot_partition -- widen it in the board's partitions "
+                 f"(boards/<board>_partitions.dtsi on a Teensy) and move "
+                 f"slot0/slot1 down to match.")
 
     merged = IntelHex()
     merged.merge(ih_boot, overlap="error")
@@ -113,7 +128,7 @@ def main() -> int:
     print(f"-> {args.output}   ends 0x{end_rel:06x}, "
           f"{dead_sector - end_rel} B clear of the final sector (0x{dead_sector:06x})")
     print("   (offsets are flash-relative; the hex itself is mapped at "
-          f"0x{flash_base:08x}, which is what HalfKay wants)")
+          f"0x{flash_base:08x}, the address the flasher writes to)")
     if args.allow_unsigned:
         print("WARNING: unsigned app -- MCUboot will refuse to boot this.")
     return 0

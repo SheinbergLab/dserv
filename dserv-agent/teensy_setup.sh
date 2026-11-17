@@ -1,12 +1,12 @@
-# teensy_setup.sh -- flash extio firmware onto a Teensy 4.x (body of /extio/teensy).
+# teensy_setup.sh -- flash extio firmware onto a Teensy 4.x (body of /extio/flash for the teensy boards).
 #
-# Served behind a preamble written by teensy_setup.go that sets, for the image
-# the registry picked: TEENSY_BOARD TEENSY_TITLE TEENSY_MCU FW_SHELF_URL
+# Served behind a preamble written by extio_flash.go that sets, for the image
+# the registry picked: BOARD_NAME BOARD_TITLE TEENSY_MCU FW_SHELF_URL
 # FW_CHANNEL FW_VERSION FW_IMGVER FW_PUBLISHED HEX_URL HEX_NAME HEX_SHA256
 # HEX_SIZE. Run it as the preamble's caller does:
 #
-#   curl -sSL "https://dserv.net/extio/teensy?board=teensy40" | bash
-#   curl -sSL "https://dserv.net/extio/teensy?board=teensy40" | bash -s -- --dry-run
+#   curl -sSL "https://dserv.net/extio/flash?board=teensy40" | bash
+#   curl -sSL "https://dserv.net/extio/flash?board=teensy40" | bash -s -- --dry-run
 #
 # Everything is inside main(), called on the last line, so bash has read the
 # whole script before anything runs. Under curl|bash the script IS stdin, and a
@@ -20,9 +20,9 @@ die()  { warn "$*"; exit 1; }
 
 usage() {
   cat >&2 <<EOF
-Flash extio firmware onto a ${TEENSY_TITLE:-Teensy 4.x} over USB.
+Flash extio firmware onto a ${BOARD_TITLE:-Teensy 4.x} over USB.
 
-  curl -sSL "${FW_SHELF_URL:-https://dserv.net}/extio/teensy?board=${TEENSY_BOARD:-teensy40}" | bash [-s -- OPTIONS]
+  curl -sSL "${FW_SHELF_URL:-https://dserv.net}/extio/flash?board=${BOARD_NAME:-teensy40}" | bash [-s -- OPTIONS]
 
 URL parameters choose the image:  board=teensy40|teensy41  channel=dev  version=<v>
 
@@ -90,14 +90,14 @@ main() {
     shift
   done
 
-  : "${HEX_URL:?no image URL -- run this through ${FW_SHELF_URL:-https://dserv.net}/extio/teensy?board=...}"
+  : "${HEX_URL:?no image URL -- run this through ${FW_SHELF_URL:-https://dserv.net}/extio/flash?board=...}"
 
   SUDO=""
   if [ "$(uname -s)" = Linux ] && [ "$(id -u)" != 0 ]; then
     command -v sudo >/dev/null 2>&1 && SUDO=sudo
   fi
 
-  say "extio firmware for a $TEENSY_TITLE"
+  say "extio firmware for a $BOARD_TITLE"
   say "  image   $HEX_NAME  ($FW_CHANNEL $FW_VERSION${FW_IMGVER:+, firmware $FW_IMGVER})"
   say "  from    $FW_SHELF_URL, published $FW_PUBLISHED"
 
@@ -139,7 +139,7 @@ main() {
     say "into the bootloader by itself, so the button is needed."
     say "(If dserv on this machine has it open, that is fine: flashing does not use its port.)"
   fi
-  say "Make sure the board is a $TEENSY_TITLE, plugged into this computer with a DATA cable."
+  say "Make sure the board is a $BOARD_TITLE, plugged into this computer with a DATA cable."
   say "When the loader says it is waiting, press the Program button on the Teensy"
   say "(the small white button). A brand-new Teensy usually starts on its own."
   echo >&2
@@ -151,7 +151,7 @@ main() {
   for i in $(seq 1 20); do
     if extio_box_present; then
       echo >&2
-      say "Done: the $TEENSY_TITLE is running extio firmware${FW_IMGVER:+ $FW_IMGVER}."
+      say "Done: the $BOARD_TITLE is running extio firmware${FW_IMGVER:+ $FW_IMGVER}."
       say "Next:"
       say "  - Restart dserv on the computer it is plugged into, so dserv finds the box."
       say "  - Later updates go over the wire, with no button press:"

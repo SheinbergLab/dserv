@@ -156,21 +156,24 @@ if len(h) == 28:
 PY
 )
 
-# THE TEENSY FIRST-FLASH HEX, merged here and published beside the .bin.
+# THE FIRST-FLASH HEX, merged here and published beside the .bin.
 #
-# The .bin is only what an MCUboot box updates ITSELF with. A blank Teensy has
-# no MCUboot yet, and its HalfKay loader takes exactly one file, so getting a
-# new board going needs MCUboot + the signed app merged into one Intel HEX
-# (tools/merge_ota_hex.py). Publishing it with every release is what lets
-# dserv.net/extio/teensy hand a person the current firmware, instead of a hex
-# someone merged once by hand and forgot to refresh. The merge needs the
-# sysbuild's mcuboot image, so it only happens for a sysbuild dir, and it needs
-# python3 + intelhex (both in the zephyrproject venv). A failed merge stops
-# the publish: a Teensy release without its hex would leave /extio/teensy
-# quietly serving the PREVIOUS one.
+# The .bin is only what an MCUboot box updates ITSELF with. A blank board has
+# no MCUboot yet, so getting one going needs MCUboot + the signed app merged
+# into one Intel HEX (tools/merge_ota_hex.py) -- one file for a Teensy's HalfKay
+# loader, and one file for pyOCD on an FRDM-MCXN947. Publishing it with every
+# release is what lets dserv.net/extio/flash hand a person the current
+# firmware, instead of a hex someone merged once by hand and forgot to
+# refresh. The merge needs the sysbuild's mcuboot image, so it only happens for
+# a sysbuild dir, and it needs python3 + intelhex (both in the zephyrproject
+# venv). A failed merge stops the publish: a release without its hex would
+# leave /extio/flash quietly serving the PREVIOUS one.
+#
+# The boards listed here are exactly the ones dserv-agent's extio_flash.go
+# knows how to flash; a hex for any other board would sit unused on the shelf.
 HEX=""
 case "$BUILD_KEY" in
-  teensy4*)
+  teensy4*|frdm_mcxn947*)
     if [ -d "$BUILD_DIR/mcuboot" ] && [ -n "$BIN" ]; then
       HEX_TMP=$(mktemp -d)
       trap 'rm -rf "$HEX_TMP"' EXIT
@@ -305,7 +308,7 @@ if [ -n "$HEX" ] && [ -n "$REMOTE" ]; then
     echo ">> shelf hex sha256 MATCHES the local merged hex"
   else
     echo "!! shelf hex sha256 '$REMOTE_HEX' != local $HEX_SUM for build '$BUILD_KEY'
-   -- /extio/teensy would serve a bad first-flash image" >&2; exit 1
+   -- /extio/flash would serve a bad first-flash image" >&2; exit 1
   fi
 fi
 
@@ -314,5 +317,5 @@ echo "Next, on the box's dserv:"
 echo "  dservctl extio \"extio_ota_push_shelf <box> $CHANNEL\""
 if [ -n "$HEX" ]; then
   echo "A blank $BOARD_ID, from the computer it is plugged into:"
-  echo "  curl -sSL \"$SHELF/extio/teensy?board=$BOARD_ID&channel=$CHANNEL\" | bash"
+  echo "  curl -sSL \"$SHELF/extio/flash?board=$BOARD_ID&channel=$CHANNEL\" | bash"
 fi

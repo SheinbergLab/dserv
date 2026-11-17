@@ -66,4 +66,12 @@ if("${BOARD}" MATCHES "^frdm_mcxn947")
     BOARD       frdm_mcxn947/mcxn947/cpu1
   )
   add_dependencies(${DEFAULT_IMAGE} cpu1)
+
+  # Intel HEX out of MCUboot and the app, which this board does not emit by
+  # default (the Teensy defconfig does). publish.sh merges the two into the
+  # first-flash .hex that dserv.net/extio/flash serves to pyOCD; a hex carries
+  # its own addresses, where the .bin images only flash correctly because west
+  # knows each one's partition. The .bin the box OTAs itself with is unchanged.
+  set_config_bool(mcuboot CONFIG_BUILD_OUTPUT_HEX y)
+  set_config_bool(${DEFAULT_IMAGE} CONFIG_BUILD_OUTPUT_HEX y)
 endif()

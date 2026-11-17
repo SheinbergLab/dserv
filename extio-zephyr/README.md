@@ -168,8 +168,15 @@ That is the plain (no-bootloader) build. The OTA build's first flash is
 MCUboot + the signed app merged into one hex (`tools/merge_ota_hex.py`), and
 `publish.sh` puts that merged hex on the shelf beside the `.bin`, so a blank
 board needs no checkout at all:
-`curl -sSL "https://dserv.net/extio/teensy?board=teensy40" | bash`
-(or the "Flash an extio Teensy" option on the dserv.net landing page).
+`curl -sSL "https://dserv.net/extio/flash?board=teensy40" | bash`
+(or the "Flash an extio board" option on the dserv.net landing page).
+
+The FRDM-MCXN947 gets the same treatment: `publish.sh` merges its hex too
+(sysbuild.cmake turns on hex output for it), and
+`curl -sSL "https://dserv.net/extio/flash?board=frdm_mcxn947" | bash` flashes a
+blank board over its onboard MCU-Link (cable in J17, J19 off) with pyOCD and
+the pinned 19.0.0 pack -- both installed under `~/.extio`, independent of any
+Zephyr or pyOCD already on the machine.
 BLE on `frdm_rw612` additionally needs `west blobs fetch hal_nxp` (accept NXP's
 controller-firmware license).
 
