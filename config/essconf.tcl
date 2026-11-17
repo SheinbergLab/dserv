@@ -545,6 +545,16 @@ the row is just visible pixels. Takes effect at the next system load.
 A stim script fires a trigger with 'tlock pulse' or 'tlock toggle'; each
 is recorded as stim/tlock."
 
+settings::declare tlock toggle -default 0x0000 \
+    -validate ::ess::display_tlock_toggle_norm \
+    -apply ::ess::set_display_tlock_toggle \
+    -doc "toggle mode: the digital outputs that change level on every frame
+stim2 draws, as a bit mask. 0x0001 is DOUT 0 on the monitor's DB25,
+0x4000 the trigger-out BNC; 0 leaves toggle mode off (a stim script can
+still ask for it). Each edge on the output is then one frame reaching
+the panel, and a refresh stim2 missed is an edge that does not come.
+Used only while 'enabled' is on; takes effect at the next system load."
+
 settings::declare tlock din -default "" \
     -candidates tlock_din \
     -apply ::ess::set_display_tlock_din \
@@ -558,6 +568,7 @@ and the light whether edges arrive when triggers are sent."
 
 ::ess::set_stop_after_trial [settings::get ess stop_after_trial]
 ::ess::set_display_tlock    [settings::get tlock enabled]
+::ess::set_display_tlock_toggle [settings::get tlock toggle]
 ::ess::set_display_tlock_din [settings::get tlock din]
 ::ess::set_juice_gate       [settings::get ess juice_gate]
 settings::declare ess participant_pattern -default "h###" \

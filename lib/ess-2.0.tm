@@ -605,6 +605,23 @@ namespace eval ess {
         catch { display_tlock_health }
     }
 
+    # The output bits toggle mode flips on each frame (setting `tlock
+    # toggle`; 0: toggle mode is left to the stim script). The setting's
+    # value is normalised to 0xNNNN by display_tlock_toggle_norm.
+    variable display_tlock_toggle 0
+    proc display_tlock_toggle_norm {v} {
+        set v [string trim $v]
+        if { $v eq "" || [string tolower $v] in {off none no false} } { return 0x0000 }
+        if { ![string is integer -strict $v] || $v < 0 || $v > 0xFFFF } {
+            error "tlock toggle: the output bits as a number from 0 to 0xFFFF\
+ (0x0001 is DOUT 0 on the DB25, 0x4000 the trigger-out BNC; 0 is off)"
+        }
+        return [format "0x%04X" $v]
+    }
+    proc set_display_tlock_toggle {v} {
+        variable display_tlock_toggle [expr {int([display_tlock_toggle_norm $v])}]
+    }
+
     # Turn stim2's tlock pass on, when this rig declares it. Called by
     # configure_stim right after the prelude, whose `postpass reset` turns
     # every pass off: so a rig that does not declare it never has the pass
@@ -620,6 +637,14 @@ namespace eval ess {
         set r [rmtSend {expr {[llength [info commands tlock]] ? [tlock on] : -1}}]
         if { [string trim $r] eq "1" } {
             set display_tlock_stim 1
+            # toggle mode, where the rig asks for it (setting `tlock
+            # toggle`): these outputs change level on every frame drawn, so
+            # every session on this rig marks its frames with no word from
+            # the stim script. Recorded like the `tlock on` above.
+            variable display_tlock_toggle
+            if { $display_tlock_toggle != 0 } {
+                rmtSend [format "tlock toggle 0x%04X" $display_tlock_toggle]
+            }
             catch { display_tlock_health }
             return 1
         }
