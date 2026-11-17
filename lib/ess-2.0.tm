@@ -589,6 +589,9 @@ namespace eval ess {
         # gaze-window frame was drawn from (stim2 docs/gazewin.md). Nothing
         # arrives, and nothing is logged, unless that module is in use.
         dservLoggerAddMatch $filename stim/gazewin 0 0 1
+        # stim/tlock: which swap carried each CRS T-Lock trigger pulse to a
+        # Display++, and the pulse (stim2 docs/tlock.md).
+        dservLoggerAddMatch $filename stim/tlock 0 0 1
         return 1
     }
     # END stim_frame_log
