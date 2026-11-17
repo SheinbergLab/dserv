@@ -1442,7 +1442,7 @@ namespace eval ess {
                                  durable 1 status ok address ""]
             }
             tlock_din {
-                # For `ess display_tlock_din`: the input a Display++'s
+                # For `tlock din`: the input a Display++'s
                 # trigger output is wired to, named by LABEL (the resolver
                 # is ::ess::display_tlock_din_resolve, ess-2.0.tm).
                 #

@@ -597,11 +597,12 @@ namespace eval ess {
         return 1
     }
     # The rig's display is a CRS Display++ whose trigger output stim2 should
-    # drive (setting `ess display_tlock`, essconf.tcl; stim2 docs/tlock.md).
+    # drive (setting `tlock enabled`, essconf.tcl; stim2 docs/tlock.md).
     # Cached here; configure_stim acts on it at each system load.
     variable display_tlock 0
     proc set_display_tlock {on} {
         variable display_tlock [expr {$on ? 1 : 0}]
+        catch { display_tlock_health }
     }
 
     # Turn stim2's tlock pass on, when this rig declares it. Called by
@@ -614,15 +615,22 @@ namespace eval ess {
     # on, 0 if the rig does not ask for it, -1 if stim2 cannot.
     proc stim_tlock_enable {} {
         variable display_tlock
+        variable display_tlock_stim
         if { !$display_tlock } { return 0 }
         set r [rmtSend {expr {[llength [info commands tlock]] ? [tlock on] : -1}}]
-        if { [string trim $r] eq "1" } { return 1 }
-        ::ess::ess_warning "this rig declares a Display++ trigger (ess display_tlock)\
+        if { [string trim $r] eq "1" } {
+            set display_tlock_stim 1
+            catch { display_tlock_health }
+            return 1
+        }
+        set display_tlock_stim -1
+        catch { display_tlock_health }
+        ::ess::ess_warning "this rig declares a Display++ trigger (tlock enabled)\
  but stim2 has no tlock command: no trigger packets are drawn" "stim"
         return -1
     }
     # The digital input the Display++ trigger output is wired to (setting
-    # `ess display_tlock_din`, essconf.tcl), so the data file carries the
+    # `tlock din`, essconf.tcl), so the data file carries the
     # edges beside stim/tlock without the analysis knowing the wiring. Named
     # the way `dial stick_commit` names its press: by LABEL, so it follows
     # whichever box is present and survives a re-pin. Three spellings:
@@ -641,6 +649,7 @@ namespace eval ess {
     proc set_display_tlock_din {v} {
         variable display_tlock_din [string trim $v]
         catch { display_tlock_din_publish }
+        catch { display_tlock_health }
     }
 
     # Where the declared line is right now: a dict of status (none | ok |
@@ -683,11 +692,11 @@ namespace eval ess {
                     detail "no box announces a line or a group labelled $v"]
     }
 
-    # ess/display_tlock_din: the resolution, for a page and for the data
+    # tlock/din: the resolution, for a page and for the data
     # file (which stream the trigger edges are)
     proc display_tlock_din_publish {} {
         set r [display_tlock_din_resolve]
-        dservSet ess/display_tlock_din $r
+        dservSet tlock/din $r
         return $r
     }
 
@@ -700,18 +709,88 @@ namespace eval ess {
     proc stim_tlock_din_match { filename } {
         variable display_tlock
         if { !$display_tlock } { return 0 }
+        catch { display_tlock_health }
         set r [display_tlock_din_publish]
         switch -- [dict get $r status] {
             none { return 0 }
             unresolved {
-                ::ess::ess_warning "Display++ trigger input (ess display_tlock_din):\
+                ::ess::ess_warning "Display++ trigger input (tlock din):\
  [dict get $r detail] -- its edges are not in this data file" "stim"
                 return 0
             }
         }
-        dservLoggerAddMatch $filename ess/display_tlock_din 0 0 1
+        dservLoggerAddMatch $filename tlock/din 0 0 1
         dservLoggerAddMatch $filename [dict get $r dp] 0 0 1
         return 1
+    }
+
+    # THE GREEN LIGHT (tlock/health, the gear's dot on the tlock section;
+    # see settings-1.0.tm). It answers the question the two knobs cannot:
+    # packets are going out -- are edges coming back?
+    #
+    #   off    not enabled on this rig, or enabled with no input declared
+    #   error  stim2 has no tlock command; the label resolves to nothing;
+    #          or stim2 has sent trigger frames (stim/tlock) and the input's
+    #          last edge is more than 2 s older than the last of them: a
+    #          loose BNC, a monitor not reading the packet, the wrong line
+    #   ok     the input is there, and its edges keep up with the packets
+    #          (or none has been sent yet)
+    #
+    # It costs nothing between trials: no subscription to the edges, which
+    # come at up to the refresh rate. It is worked out when a setting
+    # changes, at a system load, at a data file's open and at each end_obs,
+    # from two datapoint timestamps; and published only when it changes.
+    variable display_tlock_stim 0     ;# 1 stim2 took `tlock on`, -1 it cannot
+    variable display_tlock_health_last "?"
+    proc display_tlock_health {} {
+        variable display_tlock
+        variable display_tlock_stim
+        variable display_tlock_health_last
+        if { !$display_tlock } {
+            set h "off not enabled on this rig"
+        } elseif { $display_tlock_stim < 0 } {
+            set h "error stim2 has no tlock command: no trigger packets are drawn"
+        } else {
+            set r [display_tlock_din_resolve]
+            switch -- [dict get $r status] {
+                none       { set h "off packets are drawn; no input is declared for the trigger" }
+                unresolved { set h "error [dict get $r detail]" }
+                default {
+                    # the newest edge on the line (a group's datapoint is a
+                    # pattern over boxes) against the newest trigger frame
+                    set t_edge 0
+                    set dp [dict get $r dp]
+                    set keys [list $dp]
+                    if { [string match {*[*]*} $dp] } {
+                        set keys {}
+                        catch { set keys [dservKeys $dp] }
+                    }
+                    foreach k $keys {
+                        set t 0
+                        catch { set t [dservTimestamp $k] }
+                        if { [string is wideinteger -strict $t] && $t > $t_edge } { set t_edge $t }
+                    }
+                    set t_pkt 0
+                    catch { set t_pkt [dservTimestamp stim/tlock] }
+                    if { ![string is wideinteger -strict $t_pkt] } { set t_pkt 0 }
+                    if { $t_pkt == 0 } {
+                        set h "ok [dict get $r detail]; no trigger sent yet"
+                    } elseif { $t_edge == 0 } {
+                        set h "error [dict get $r detail]: triggers sent, no edge ever seen"
+                    } elseif { $t_pkt - $t_edge > 2000000 } {
+                        set h "error [dict get $r detail]: triggers sent, but the last edge\
+ is [expr {($t_pkt - $t_edge) / 1000000}] s older than the last of them"
+                    } else {
+                        set h "ok [dict get $r detail]; edges arriving"
+                    }
+                }
+            }
+        }
+        if { $h ne $display_tlock_health_last } {
+            set display_tlock_health_last $h
+            dservSet tlock/health $h
+        }
+        return $h
     }
     # END stim_frame_log
 
@@ -4265,6 +4344,9 @@ namespace eval ess {
         ::ess::evt_put ENDOBS $status [now]
         set in_obs 0
         dservSet ess/in_obs 0
+        # the Display++ trigger's green light, once a trial (off: one test)
+        variable display_tlock
+        if { $display_tlock } { catch { display_tlock_health } }
         trial_boundary
     }
 
@@ -5288,7 +5370,7 @@ namespace eval ess {
         if {[dservExists stim/script]} { dservTouch stim/script }
         # which datapoint the Display++ trigger input is (stim_tlock_din_match)
         variable display_tlock
-        if { $display_tlock && [dservExists ess/display_tlock_din] } { dservTouch ess/display_tlock_din }
+        if { $display_tlock && [dservExists tlock/din] } { dservTouch tlock/din }
         variable stim_lib_names
         foreach _lib $stim_lib_names {
             if {[dservExists stim/lib/$_lib]} { dservTouch stim/lib/$_lib }

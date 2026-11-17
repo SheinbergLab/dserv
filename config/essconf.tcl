@@ -532,30 +532,33 @@ and the next data file asks for an id again, so one participant is
 not recorded under the previous one's id. Never counts while a file
 is open or ESS is running. 0 keeps an id until it is ended by hand."
 
-settings::declare ess display_tlock -default 0 -type bool \
+# The Display++ trigger (stim2 docs/tlock.md): its own section in the gear,
+# with a light (tlock/health, ::ess::display_tlock_health) that says
+# whether the monitor's edges are coming back.
+settings::declare tlock enabled -default 0 -type bool \
     -apply ::ess::set_display_tlock \
     -doc "this rig's display is a CRS Display++ and stim2 should drive its
 trigger output. stim2 then draws the T-Lock packet on one row at the top
 left of every frame, which the monitor reads to set its trigger BNC and
 digital outputs. Only for a Display++ (or Bits#): on any other monitor
 the row is just visible pixels. Takes effect at the next system load.
-A stim script fires a trigger with 'tlock pulse'; each one is recorded
-as stim/tlock."
+A stim script fires a trigger with 'tlock pulse' or 'tlock toggle'; each
+is recorded as stim/tlock."
 
-settings::declare ess display_tlock_din -default "" \
+settings::declare tlock din -default "" \
     -candidates tlock_din \
     -apply ::ess::set_display_tlock_din \
     -doc "the digital input the Display++ trigger output is wired to, so
 its edges are saved in the data file beside stim/tlock. Name it by
 label: the label of a DI line on an extio box (preferred), or the name of
 a group holding that line. A datapoint name (anything with a slash) is
-taken as written. Empty: none. Used only while display_tlock is on;
-takes effect at the next data file. ess/display_tlock_din shows where
-the label resolves."
+taken as written. Empty: none. Used only while 'enabled' is on; takes
+effect at the next data file. tlock/din shows where the label resolves,
+and the light whether edges arrive when triggers are sent."
 
 ::ess::set_stop_after_trial [settings::get ess stop_after_trial]
-::ess::set_display_tlock    [settings::get ess display_tlock]
-::ess::set_display_tlock_din [settings::get ess display_tlock_din]
+::ess::set_display_tlock    [settings::get tlock enabled]
+::ess::set_display_tlock_din [settings::get tlock din]
 ::ess::set_juice_gate       [settings::get ess juice_gate]
 settings::declare ess participant_pattern -default "h###" \
     -validate ::ess::participant_pattern_norm \
