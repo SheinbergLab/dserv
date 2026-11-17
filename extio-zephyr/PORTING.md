@@ -6476,3 +6476,49 @@ sample and still discarded. Beyond 5% is dropped. `sync/rate_sample_ppb`
 - [ ] Other boards: what clocks the RW612's 1 MHz OS timer has not been read.
       A box on a TTL sync pin with an RC kernel timer had the same fault.
 - [ ] `wiznet-io/common/pico_clock.h` keeps the flat clamp (crystal boards).
+
+## 2026-11-17 (later) — the RC oscillator does not hold a rate either: stamp from the 1588 clock; 0.4.0+104
+
+**+103 on the rig.** With `sync/rate_ppb` settled at 2305–2317 ppm, in-trial
+drift of the trigger line fell from 2300 ppm to −1…−35 ppm (one trial −89):
+30–60 ms per trial became 0.2–1.5 ms. Not zero, and edge-minus-flip also
+stepped 0.4–1.2 ms between trials and only returned to its 8.1 ms baseline
+when the session ended.
+
+**Why.** The oscillator's rate moves. Same box, no reboot, PTP locked
+throughout (box 1588 time minus dserv time flat to 0.15 ms over 25 s):
+
+| when | `sync/rate_ppb` |
+|---|---|
+| 16:51–16:54, just after a session | 2 305 000 – 2 317 000 |
+| 17:23, idle ~25 min | 1 806 000 |
+| 17:24–17:28, idle | 1 778 000 – 1 830 000, moving up to 2 ppm/s |
+
+A run that started 75 s after boot showed 536→375 ppm of drift falling
+through the session, first read as the EMA converging; more likely the
+oscillator moving under it. Self-heating with activity is the guess; not
+measured against temperature. Whatever the cause, a rate held for a trial
+cannot follow it.
+
+**Fix.** While PTP holds the clock, `event_stamp()` no longer extrapolates
+from box_clock's last anchor. It pairs the 1588 clock with the box timer at
+the moment of stamping (`ptp_fresh`) and maps the event relative to that pair
+(`box_clock_stamp_at`). The oscillator then only has to hold between the
+event and the read: milliseconds. `at_abs` targets and the PTP-held obs epoch
+are mapped the same way (`box_clock_unstamp_at`). Nothing in `boxclk` moves
+during an obs. Falls back to box_clock when PTP does not hold the clock, the
+offset is not set, the 1588 counter is not at master time, or the paired
+read is interrupted twice (window over 100 µs).
+
+Published with the rate telemetry: `sync/stamp` (`ptp` | `anchor`),
+`sync/stamp_ptp_n`, `sync/stamp_fallbacks`.
+
+**Not done.**
+
+- [ ] Run on the rig: edge-minus-flip slope and trial-start level should both
+      be flat, whatever `sync/rate_ppb` is doing.
+- [ ] Obs-relative `at` schedules still count the lead on the box timer from
+      the obs epoch: a 10 s lead is 5 ms out for a 500 ppm rate error.
+      `at_abs` is not affected the same way only because its leads are short.
+- [ ] Cost of the paired read per stamp is three register reads; not timed.
+- [ ] Boards with no 1588 clock are unchanged and rest on the rate estimator.

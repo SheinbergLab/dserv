@@ -216,4 +216,34 @@ static inline uint64_t box_clock_unstamp(const box_clock_t *c, uint64_t dserv_us
     return (uint64_t) box;
 }
 
+/* ---- stamping from a reference taken NOW --------------------------------
+ *
+ * The mapping above extrapolates from the last anchor, so it is only as good
+ * as the rate is steady, and on a box whose timer is an RC oscillator it is
+ * not: the MCXN947's moved 500 ppm between an idle half hour and a session
+ * (2026-11-17), which no rate held across a trial can follow.
+ *
+ * A box with a disciplined clock it can read at any moment (the 1588 clock)
+ * does not need to extrapolate. Pair that clock with the box timer now
+ * (ref_box, ref_dserv) and map an event relative to the pair: the rate then
+ * only has to cover the time between the event and the read -- milliseconds
+ * for an edge waiting in the FIFO -- where even an unlearned 2300 ppm is a
+ * few microseconds. No shared state moves, so nothing steps mid-trial. */
+static inline uint64_t box_clock_stamp_at(int32_t rate_ppb, uint64_t ref_box,
+                                          uint64_t ref_dserv, uint64_t box_us)
+{
+    int64_t dt   = (int64_t) box_us - (int64_t) ref_box;
+    int64_t corr = (dt * (int64_t) rate_ppb) / 1000000000LL;
+    return (uint64_t)((int64_t) ref_dserv + dt + corr);
+}
+
+/* The inverse: a dserv instant onto the box timer, from the same pair. */
+static inline uint64_t box_clock_unstamp_at(int32_t rate_ppb, uint64_t ref_box,
+                                            uint64_t ref_dserv, uint64_t dserv_us)
+{
+    int64_t dd = (int64_t) dserv_us - (int64_t) ref_dserv;
+    int64_t db = (dd * 1000000000LL) / (1000000000LL + (int64_t) rate_ppb);
+    return (uint64_t)((int64_t) ref_box + db);
+}
+
 #endif /* BOX_CLOCK_H */

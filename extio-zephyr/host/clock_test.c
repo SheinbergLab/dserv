@@ -141,6 +141,48 @@ int main(void)
     CHECK(c.rate_ppb == 0 && !c.rate_valid, "sw anchors never teach it");
     CHECK(box_clock_stamp(&c, 2600000) == 2600000 + 499914, "offset-only stamping");
 
+    /* The oscillator does not hold its rate: 2300 ppm slow for the first
+       half of a 26 s trial, 1800 for the rest (what psychobox did between a
+       session and an idle half hour). The estimate is the stale 2300. An
+       event is stamped 2 ms after it happened, from a reference pair read
+       at that moment -- the 1588 clock, which is right by construction. */
+    printf("stamping from a reference taken at the stamp:\n");
+    {
+        uint64_t t0 = T0 + 100000000, tb0 = B0 + 77;     /* trial start, both clocks */
+        int32_t  est = 2305300;                          /* ppb, learned before */
+        long long worst_at = 0, worst_anchor = 0;
+        box_clock_t a = {0};
+        box_clock_reset(&a);
+        box_clock_sync(&a, t0, tb0, 1);
+        a.rate_ppb = est; a.rate_valid = 1;              /* the anchor path's rate */
+        for (int ms = 0; ms <= 26000; ms += 50) {
+            /* true box time at dserv time t0+ms: slow by 2300, then 1800 ppm */
+            int64_t el = (int64_t) ms * 1000;
+            int64_t h  = el < 13000000 ? el : 13000000;
+            int64_t bx = (h - h * 2300 / 1000000) + ((el - h) - (el - h) * 1800 / 1000000);
+            uint64_t ev_d = t0 + (uint64_t) el, ev_b = tb0 + (uint64_t) bx;
+            /* reference pair 2 ms later (box timer advances ~1996 us) */
+            uint64_t ref_d = ev_d + 2000, ref_b = ev_b + 1996;
+            long long e1 = (long long) box_clock_stamp_at(est, ref_b, ref_d, ev_b) - (long long) ev_d;
+            long long e2 = (long long) box_clock_stamp(&a, ev_b) - (long long) ev_d;
+            if (llabs(e1) > llabs(worst_at)) worst_at = e1;
+            if (llabs(e2) > llabs(worst_anchor)) worst_anchor = e2;
+        }
+        printf("       worst error over the trial: fresh reference %lld us, last anchor %lld us\n",
+               worst_at, worst_anchor);
+        CHECK(llabs(worst_at) <= 3, "fresh reference: within 3 us all trial");
+        CHECK(llabs(worst_anchor) > 5000, "last anchor: milliseconds out (the fault)");
+        /* with no rate at all the fresh mapping is still only 2 ms * 2300 ppm */
+        long long e0 = (long long) box_clock_stamp_at(0, tb0 + 1996, t0 + 2000, tb0) - (long long) t0;
+        CHECK(llabs(e0) <= 6, "and with no learned rate: under 6 us");
+        /* the inverse, for an at_abs target 80 ms ahead */
+        uint64_t tgt = box_clock_unstamp_at(est, tb0, t0, t0 + 80000);
+        long long eb = (long long) tgt - (long long)(tb0 + 80000 - 80000LL * 2300 / 1000000);
+        CHECK(llabs(eb) <= 2, "unstamp_at: an 80 ms lead lands within 2 us");
+        CHECK(box_clock_stamp_at(est, tb0, t0, box_clock_unstamp_at(est, tb0, t0, t0 + 5000000))
+              - (t0 + 5000000) + 2 <= 4, "stamp_at inverts unstamp_at");
+    }
+
     printf(fails ? "\n%d FAILED\n" : "\nall passed\n", fails);
     return fails ? 1 : 0;
 }

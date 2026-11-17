@@ -144,6 +144,64 @@ static int ptp_reanchor(uint32_t *window_us)
 		       box_us, 1 /* trusted */);
 	return 0;
 }
+
+/* ---- stamping from the PTP clock, read at the moment of stamping ----------
+ *
+ * box_clock maps box time to dserv time from its LAST ANCHOR, and anchoring
+ * stops for the length of an obs. That leaves every stamp in a trial resting
+ * on one learned rate, and on this silicon the box timer is an RC oscillator
+ * whose rate does not hold: 2305 ppm after a session, 1800 ppm idle half an
+ * hour later, wandering 1-2 ppm per second in between (psychobox,
+ * 2026-11-17; PORTING.md). With the rate right at the start of a trial the
+ * stamps were still up to 1.5 ms out by its end.
+ *
+ * The 1588 clock has none of that -- crystal, disciplined, readable in three
+ * register reads -- so while PTP holds the clock, pair it with the box timer
+ * HERE, at the stamp, and map the event relative to that pair
+ * (box_clock_stamp_at). Anchor age no longer exists as an error term. Nothing
+ * in boxclk moves, so nothing steps during an obs, which was the reason for
+ * not anchoring there in the first place.
+ *
+ * Fails (-1, caller falls back to box_clock) when PTP does not hold the
+ * clock, the host has not given the offset, the 1588 counter is not set to
+ * master time (box_ptp.h: a free-running one reads seconds since boot), or
+ * the paired read was interrupted twice running. */
+#define PTP_FRESH_WINDOW_US 100
+static int      clock_ptp_held;       /* defined with its story further down */
+static uint32_t stamp_ptp_n;          /* stamps mapped from a fresh PTP read  */
+static uint32_t stamp_fallback_n;     /* PTP held, but the fresh read failed  */
+
+static int ptp_fresh(uint64_t *box_us, uint64_t *dserv_us)
+{
+	if (!clock_ptp_held || !ptp_offset_valid) {
+		return -1;
+	}
+	for (int i = 0; i < 2; i++) {
+		uint64_t ptp_us;
+		uint32_t win = 0;
+
+		if (ptp_pair_read(box_us, &ptp_us, &win) != 0) {
+			break;
+		}
+		if (ptp_us < 100000000000000ULL) {       /* not set to master time */
+			break;
+		}
+		if (win <= PTP_FRESH_WINDOW_US) {
+			*dserv_us = (uint64_t)((int64_t) ptp_us + ptp_offset_us);
+			return 0;
+		}
+	}
+	stamp_fallback_n++;
+	return -1;
+}
+
+static int32_t boxclk_rate(void)
+{
+	int64_t off; uint64_t anchor; int32_t rate; uint8_t synced;
+
+	box_clock_snap(&boxclk, &off, &anchor, &rate, &synced);
+	return rate;
+}
 #endif /* CONFIG_PTP_CLOCK */
 
 static void publish_do(uint8_t pin, uint8_t level, uint64_t stamp);
@@ -956,6 +1014,16 @@ static inline uint64_t event_stamp(uint64_t t_us)
 	 * ~1 ms of a hardware ground truth. */
 	return t_us;
 #else
+#if defined(CONFIG_PTP_CLOCK)
+	/* while PTP holds the clock, map from a PTP reading taken now, not from
+	 * the last anchor (ptp_fresh, above). 0 stays 0: "no time". */
+	uint64_t ref_box, ref_dserv;
+
+	if (t_us && ptp_fresh(&ref_box, &ref_dserv) == 0) {
+		stamp_ptp_n++;
+		return box_clock_stamp_at(boxclk_rate(), ref_box, ref_dserv, t_us);
+	}
+#endif
 	return box_clock_stamp(&boxclk, t_us);
 #endif
 }
@@ -1027,6 +1095,23 @@ static void publish_sync_rate(uint64_t ts, int event)
 		dserv_msg_int(f, nm, ts, (int32_t) boxclk.rate_rejects);
 		if (event) { box_pub_event(f); } else { box_pub_bulk(f); }
 	}
+#if defined(CONFIG_PTP_CLOCK)
+	/* which mapping the event stamps are getting (event_stamp): `stamp` is
+	 * "ptp" while they come from a PTP reading at the stamp, "anchor" when
+	 * they extrapolate from box_clock's last anchor; stamp_fallbacks counts
+	 * the times PTP held the clock and the fresh read still failed. */
+	dserv_state_name(&cfg, nm, sizeof nm, "sync/stamp");
+	dserv_msg_string(f, nm, ts, (clock_ptp_held && ptp_offset_valid) ? "ptp" : "anchor");
+	if (event) { box_pub_event(f); } else { box_pub_bulk(f); }
+
+	dserv_state_name(&cfg, nm, sizeof nm, "sync/stamp_ptp_n");
+	dserv_msg_int(f, nm, ts, (int32_t) stamp_ptp_n);
+	if (event) { box_pub_event(f); } else { box_pub_bulk(f); }
+
+	dserv_state_name(&cfg, nm, sizeof nm, "sync/stamp_fallbacks");
+	dserv_msg_int(f, nm, ts, (int32_t) stamp_fallback_n);
+	if (event) { box_pub_event(f); } else { box_pub_bulk(f); }
+#endif
 }
 
 /* Clock-alignment telemetry, published at every obs anchor. This is how you tell
@@ -1428,7 +1513,17 @@ static int fast_msg(const dserv_msg_t *m, const char *leaf, uint64_t arr_us)
 				return 1;
 			}
 
-			uint64_t target_box = box_clock_unstamp(&boxclk, T);
+			/* T onto the box timer: from a PTP reading taken now when
+			 * PTP holds the clock (ptp_fresh), so the armed lead does
+			 * not inherit the age of the last anchor; else box_clock. */
+			uint64_t target_box, ref_box, ref_dserv;
+
+			if (ptp_fresh(&ref_box, &ref_dserv) == 0) {
+				target_box = box_clock_unstamp_at(boxclk_rate(), ref_box,
+								  ref_dserv, T);
+			} else {
+				target_box = box_clock_unstamp(&boxclk, T);
+			}
 			int64_t  lead_us    = (int64_t) target_box - (int64_t) now;
 
 			/* NEVER fire late. A box that silently fires milliseconds after T
@@ -1582,9 +1677,16 @@ static int fast_msg(const dserv_msg_t *m, const char *leaf, uint64_t arr_us)
 		box_obs_set(obs);            /* keep the LEVEL, not just the edge */
 		if (obs) {
 #if defined(CONFIG_PTP_CLOCK)
-			obs_begin_us = ptp_held
-				? box_clock_unstamp(&boxclk, m->timestamp)
-				: anchor_box;
+			if (ptp_held) {
+				uint64_t ref_box, ref_dserv;
+
+				obs_begin_us = ptp_fresh(&ref_box, &ref_dserv) == 0
+					? box_clock_unstamp_at(boxclk_rate(), ref_box,
+							       ref_dserv, m->timestamp)
+					: box_clock_unstamp(&boxclk, m->timestamp);
+			} else {
+				obs_begin_us = anchor_box;
+			}
 #else
 			obs_begin_us = anchor_box;   /* epoch for box-scheduled events */
 #endif
