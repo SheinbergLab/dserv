@@ -542,8 +542,20 @@ the row is just visible pixels. Takes effect at the next system load.
 A stim script fires a trigger with 'tlock pulse'; each one is recorded
 as stim/tlock."
 
+settings::declare ess display_tlock_din -default "" \
+    -candidates press_group \
+    -apply ::ess::set_display_tlock_din \
+    -doc "the digital input the Display++ trigger output is wired to, so
+its edges are saved in the data file beside stim/tlock. Name it by
+label: the label of a DI line on an extio box (preferred), or the name of
+a group holding that line. A datapoint name (anything with a slash) is
+taken as written. Empty: none. Used only while display_tlock is on;
+takes effect at the next data file. ess/display_tlock_din shows where
+the label resolves."
+
 ::ess::set_stop_after_trial [settings::get ess stop_after_trial]
 ::ess::set_display_tlock    [settings::get ess display_tlock]
+::ess::set_display_tlock_din [settings::get ess display_tlock_din]
 ::ess::set_juice_gate       [settings::get ess juice_gate]
 settings::declare ess participant_pattern -default "h###" \
     -validate ::ess::participant_pattern_norm \

@@ -527,6 +527,36 @@ assert {[catch {::ess::stim_tlock_enable} r] == 0 && $r == -1 && [fake_tlock_ons
 rmtSend "fake_tlock 1"
 ::ess::set_display_tlock 0
 assert {[::ess::stim_tlock_enable] == 0 && [fake_tlock_ons] == 1} "turned off again: nothing is sent"
+
+# the input the trigger is wired to (ess display_tlock_din): resolved by
+# label against what the boxes announce, and matched into the data file
+set ::matches {}
+assert {[dict get [::ess::display_tlock_din_resolve] status] eq "none"} "no input declared: none"
+::ess::set_display_tlock 1
+assert {[::ess::stim_tlock_din_match /tmp/x.ess] == 0 && $::matches eq {}} "none declared: no match"
+::ess::set_display_tlock_din tlock
+assert {[dict get [::ess::display_tlock_din_resolve] status] eq "unresolved"} "a label no box announces: unresolved"
+assert {[::ess::stim_tlock_din_match /tmp/x.ess] == 0 && $::matches eq {}} "unresolved: a warning, no match"
+dservSet extio/testbox/state/label/14 tlock
+set r [::ess::display_tlock_din_resolve]
+assert {[dict get $r status] eq "ok" && [dict get $r kind] eq "di" &&
+        [dict get $r dp] eq "extio/testbox/state/di/14"} "a DI line's label resolves to its edge datapoint ($r)"
+assert {[::ess::stim_tlock_din_match /tmp/x.ess] == 1 &&
+        $::matches eq {{/tmp/x.ess ess/display_tlock_din 0 0 1} {/tmp/x.ess extio/testbox/state/di/14 0 0 1}}} \
+    "... and is matched, every edge, with the record of which datapoint it is ($::matches)"
+assert {[dict get [dservGet ess/display_tlock_din] dp] eq "extio/testbox/state/di/14"} "ess/display_tlock_din carries the resolution"
+dservSet extio/testbox/state/group/dpp_sync/pins 15
+::ess::set_display_tlock_din dpp_sync
+set r [::ess::display_tlock_din_resolve]
+assert {[dict get $r kind] eq "group" && [dict get $r dp] eq "extio/*/state/group/dpp_sync"} \
+    "a group's name resolves to the group datapoint on any box ($r)"
+::ess::set_display_tlock_din extio/other/state/di/3
+set r [::ess::display_tlock_din_resolve]
+assert {[dict get $r kind] eq "path" && [dict get $r dp] eq "extio/other/state/di/3"} "a datapoint name is taken as written"
+set ::matches {}
+::ess::set_display_tlock 0
+assert {[::ess::stim_tlock_din_match /tmp/x.ess] == 0 && $::matches eq {}} "display_tlock off: the input is not matched"
+::ess::set_display_tlock_din ""
 assert {[string first "::ess::stim_tlock_enable\n" $src] > [string first "rmtSend \[list stim::prelude live" $src] &&
         [string first "::ess::stim_tlock_enable\n" $src] < [string first "set result \[rmtSend \$script\]" $src]} \
     "configure_stim turns it on after the prelude (whose postpass reset turns it off) and before the stim script"
