@@ -521,12 +521,26 @@ assert {[field [rec] seq] == $seq0} "... and no stim/cmd record"
 assert {[::ess::stim_tlock_enable] == 1 && [fake_tlock_ons] == 1} "declared: stim2 is told tlock on"
 assert {[field [rec] seq] == $seq0 + 1 && [string match "*tlock on*" [field [rec] cmd]]} \
     "... as a stim/cmd record, so a replay draws the row too"
+# toggle mode by the rig's setting (tlock toggle): sent after `tlock on`
+assert {[::ess::rmtSend_raw fake_tlock_toggle] eq ""} "no toggle setting: tlock toggle is not sent"
+assert {[::ess::display_tlock_toggle_norm 1] eq "0x0001" && [::ess::display_tlock_toggle_norm 0x4000] eq "0x4000" &&
+        [::ess::display_tlock_toggle_norm off] eq "0x0000" && [::ess::display_tlock_toggle_norm ""] eq "0x0000"} \
+    "the toggle setting is normalised to 0xNNNN; off and empty are 0"
+assert {[catch {::ess::display_tlock_toggle_norm 0x10000}] && [catch {::ess::display_tlock_toggle_norm dout0}]} \
+    "17 bits and a word are refused"
+::ess::set_display_tlock_toggle 0x0001
+set seq1 [field [rec] seq]
+assert {[::ess::stim_tlock_enable] == 1 && [fake_tlock_ons] == 2 &&
+        [::ess::rmtSend_raw fake_tlock_toggle] eq "0x0001"} "with the setting: tlock on, then tlock toggle 0x0001"
+assert {[field [rec] seq] == $seq1 + 2 && [field [rec] cmd] eq "\"tlock toggle 0x0001\""} \
+    "... both as stim/cmd records"
+::ess::set_display_tlock_toggle 0
 rmtSend "fake_tlock 0"
-assert {[catch {::ess::stim_tlock_enable} r] == 0 && $r == -1 && [fake_tlock_ons] == 1} \
+assert {[catch {::ess::stim_tlock_enable} r] == 0 && $r == -1 && [fake_tlock_ons] == 2} \
     "a stim2 without the tlock module: -1 and a warning, no error"
 rmtSend "fake_tlock 1"
 ::ess::set_display_tlock 0
-assert {[::ess::stim_tlock_enable] == 0 && [fake_tlock_ons] == 1} "turned off again: nothing is sent"
+assert {[::ess::stim_tlock_enable] == 0 && [fake_tlock_ons] == 2} "turned off again: nothing is sent"
 
 # the input the trigger is wired to (tlock din): resolved by
 # label against what the boxes announce, and matched into the data file
