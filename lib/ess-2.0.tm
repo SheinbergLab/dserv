@@ -594,6 +594,31 @@ namespace eval ess {
         dservLoggerAddMatch $filename stim/tlock 0 0 1
         return 1
     }
+    # The rig's display is a CRS Display++ whose trigger output stim2 should
+    # drive (setting `ess display_tlock`, essconf.tcl; stim2 docs/tlock.md).
+    # Cached here; configure_stim acts on it at each system load.
+    variable display_tlock 0
+    proc set_display_tlock {on} {
+        variable display_tlock [expr {$on ? 1 : 0}]
+    }
+
+    # Turn stim2's tlock pass on, when this rig declares it. Called by
+    # configure_stim right after the prelude, whose `postpass reset` turns
+    # every pass off: so a rig that does not declare it never has the pass
+    # on, whatever the last system did. Sent with rmtSend, so the data file
+    # records it and a replay draws the same row. The command is guarded
+    # rather than caught: a stim2 without the tlock module answers -1, and
+    # that is a warning here, not an error there. Returns 1 if the pass is
+    # on, 0 if the rig does not ask for it, -1 if stim2 cannot.
+    proc stim_tlock_enable {} {
+        variable display_tlock
+        if { !$display_tlock } { return 0 }
+        set r [rmtSend {expr {[llength [info commands tlock]] ? [tlock on] : -1}}]
+        if { [string trim $r] eq "1" } { return 1 }
+        ::ess::ess_warning "this rig declares a Display++ trigger (ess display_tlock)\
+ but stim2 has no tlock command: no trigger packets are drawn" "stim"
+        return -1
+    }
     # END stim_frame_log
 
     # BEGIN screen_snapshot
@@ -1585,6 +1610,10 @@ oo::class create System {
         } else {
             rmtSend $rmtcmd
         }
+
+        # A Display++ rig: the T-Lock trigger packets, on from here (after
+        # the prelude's reset, before the stim script, which arms pulses)
+        ::ess::stim_tlock_enable
 
         # Frame-tag events: swapTag payloads arrive from dserv_tag_evt
         # (above, in the stim2 interp) on the single stim/tagevt datapoint;

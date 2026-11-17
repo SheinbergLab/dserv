@@ -532,7 +532,18 @@ and the next data file asks for an id again, so one participant is
 not recorded under the previous one's id. Never counts while a file
 is open or ESS is running. 0 keeps an id until it is ended by hand."
 
+settings::declare ess display_tlock -default 0 -type bool \
+    -apply ::ess::set_display_tlock \
+    -doc "this rig's display is a CRS Display++ and stim2 should drive its
+trigger output. stim2 then draws the T-Lock packet on one row at the top
+left of every frame, which the monitor reads to set its trigger BNC and
+digital outputs. Only for a Display++ (or Bits#): on any other monitor
+the row is just visible pixels. Takes effect at the next system load.
+A stim script fires a trigger with 'tlock pulse'; each one is recorded
+as stim/tlock."
+
 ::ess::set_stop_after_trial [settings::get ess stop_after_trial]
+::ess::set_display_tlock    [settings::get ess display_tlock]
 ::ess::set_juice_gate       [settings::get ess juice_gate]
 settings::declare ess participant_pattern -default "h###" \
     -validate ::ess::participant_pattern_norm \
