@@ -111,7 +111,8 @@ main() {
   say "loader  $(command -v teensy_loader_cli)"
 
   # 2. the image, checked against the sha256 the registry computed at publish
-  local tmp
+  # tmp is GLOBAL on purpose: the EXIT trap runs after main() has returned,
+  # when a `local` is gone, and under set -u that is "tmp: unbound variable".
   tmp=$(mktemp -d)
   trap 'rm -rf "$tmp"' EXIT
   local hex="$tmp/$HEX_NAME"

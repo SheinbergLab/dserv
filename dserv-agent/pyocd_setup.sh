@@ -175,7 +175,8 @@ main() {
   fetch_pack "$home/packs"
 
   # 2. the image, checked against the sha256 the registry computed at publish
-  local tmp
+  # tmp is GLOBAL on purpose: the EXIT trap runs after main() has returned,
+  # when a `local` is gone, and under set -u that is "tmp: unbound variable".
   tmp=$(mktemp -d)
   trap 'rm -rf "$tmp"' EXIT
   local hex="$tmp/$HEX_NAME"
@@ -200,11 +201,33 @@ main() {
   [ -n "$SUDO" ] && say "looking for the board's probe (sudo: the MCU-Link needs root on Linux)"
   # `pyocd json` rather than parsing the `pyocd list` table, whose columns
   # change shape when pyOCD recognises the board.
+  #
+  # Listing OPENS each probe (to read its board info), so a probe that is on
+  # the bus but not answering fails the whole listing with status 1 and an
+  # "error" -- NOT an empty list. Seen on a fresh FRDM-MCXN947 (MCU-Link
+  # CMSIS-DAP V3.128): USBTimeoutError on the first DAP_Info, from every
+  # pyOCD on the machine. Reporting that as "no probe found" sends the user
+  # after the cable and jumper when the probe is right there.
   local listing ids n
   listing=$("${pyocd[@]}" json --no-config --probes 2>/dev/null </dev/null \
     | "$PYOCD_PY" -c 'import json, sys
-for b in json.load(sys.stdin).get("boards", []):
+try:
+    j = json.load(sys.stdin)
+except Exception:
+    print("!ERR\tpyOCD gave no answer when asked for probes"); sys.exit()
+if j.get("status", 0) != 0:
+    lines = [l for l in str(j.get("error", "")).splitlines() if l.strip()]
+    print("!ERR\t" + (lines[-1].strip() if lines else "unknown pyOCD error")); sys.exit()
+for b in j.get("boards", []):
     print("%s\t%s" % (b.get("unique_id", "?"), b.get("info") or b.get("product_name", "")))' 2>/dev/null) || true
+  case "$listing" in
+    '!ERR'*)
+      die "pyOCD could not talk to a debug probe: ${listing#*	}
+   A probe that is plugged in but not answering fails this way. Unplug the
+   cable from J17, wait a few seconds, plug it back in, and re-run. Close
+   anything else that might be using the probe first (another pyOCD,
+   LinkServer, MCUXpresso, a debugger session)." ;;
+  esac
   ids=$(printf '%s\n' "$listing" | cut -f1 | grep . || true)
   n=$(printf '%s' "$ids" | grep -c . || true)
   if [ -n "$listing" ]; then
