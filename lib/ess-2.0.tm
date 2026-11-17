@@ -592,6 +592,8 @@ namespace eval ess {
         # stim/tlock: which swap carried each CRS T-Lock trigger pulse to a
         # Display++, and the pulse (stim2 docs/tlock.md).
         dservLoggerAddMatch $filename stim/tlock 0 0 1
+        # ... and the input its trigger output is wired to, where declared
+        stim_tlock_din_match $filename
         return 1
     }
     # The rig's display is a CRS Display++ whose trigger output stim2 should
@@ -618,6 +620,98 @@ namespace eval ess {
         ::ess::ess_warning "this rig declares a Display++ trigger (ess display_tlock)\
  but stim2 has no tlock command: no trigger packets are drawn" "stim"
         return -1
+    }
+    # The digital input the Display++ trigger output is wired to (setting
+    # `ess display_tlock_din`, essconf.tcl), so the data file carries the
+    # edges beside stim/tlock without the analysis knowing the wiring. Named
+    # the way `dial stick_commit` names its press: by LABEL, so it follows
+    # whichever box is present and survives a re-pin. Three spellings:
+    #
+    #   <label>     a DI line's own label (extio/<dev>/state/label/<pin>):
+    #               its edges, extio/<dev>/state/di/<pin>. Looked for first.
+    #               Or a group's name: extio/*/state/group/<label>.
+    #   a/b/c       anything with a slash is a datapoint (or a match
+    #               pattern) as written
+    #   ""          none
+    #
+    # Prefer a plain DI line over a chord group for toggle mode: a group is
+    # chord-settled by the firmware, and edges a refresh apart may not
+    # survive that.
+    variable display_tlock_din ""
+    proc set_display_tlock_din {v} {
+        variable display_tlock_din [string trim $v]
+        catch { display_tlock_din_publish }
+    }
+
+    # Where the declared line is right now: a dict of status (none | ok |
+    # unresolved), kind (di | group | path), dp (the datapoint or match
+    # pattern; "" unless ok) and detail. Resolved when asked, never cached:
+    # boxes come and go.
+    proc display_tlock_din_resolve {} {
+        variable display_tlock_din
+        set v $display_tlock_din
+        if { $v eq "" } {
+            return [dict create status none kind "" dp "" detail "no input declared"]
+        }
+        if { [string match */* $v] } {
+            return [dict create status ok kind path dp $v detail "datapoint $v"]
+        }
+        set io extio
+        if { [info exists ::ess::io_class] && $::ess::io_class ne "" } { set io $::ess::io_class }
+        # a DI line labelled so: label datapoints are <io>/<dev>/state/label/<pin>
+        set keys {}
+        catch { set keys [dservKeys $io/*/state/label/*] }
+        foreach k [lsort $keys] {
+            set lab ""
+            catch { set lab [string trim [lindex [split [dservGet $k] \x00] 0]] }
+            if { $lab ne $v } continue
+            set parts [split $k /]
+            set dev [lindex $parts 1]
+            set pin [lindex $parts end]
+            return [dict create status ok kind di dp $io/$dev/state/di/$pin \
+                        detail "$dev pin $pin, labelled $v"]
+        }
+        # a chord group of that name, on whichever box announces it
+        set keys {}
+        catch { set keys [dservKeys $io/*/state/group/$v/pins] }
+        if { [llength $keys] } {
+            set dev [lindex [split [lindex [lsort $keys] 0] /] 1]
+            return [dict create status ok kind group dp $io/*/state/group/$v \
+                        detail "group $v on $dev"]
+        }
+        return [dict create status unresolved kind "" dp "" \
+                    detail "no box announces a line or a group labelled $v"]
+    }
+
+    # ess/display_tlock_din: the resolution, for a page and for the data
+    # file (which stream the trigger edges are)
+    proc display_tlock_din_publish {} {
+        set r [display_tlock_din_resolve]
+        dservSet ess/display_tlock_din $r
+        return $r
+    }
+
+    # The datafile matches for the trigger input (open_datafile, through
+    # stim_frame_log_match): the line's edges, every one, unbuffered, and
+    # the record saying which datapoint that is (re-emitted once the logger
+    # runs: open_datafile's dservTouch). Only on a rig that draws
+    # the packets (display_tlock) and declares the input. Returns 1 when
+    # the edges were matched.
+    proc stim_tlock_din_match { filename } {
+        variable display_tlock
+        if { !$display_tlock } { return 0 }
+        set r [display_tlock_din_publish]
+        switch -- [dict get $r status] {
+            none { return 0 }
+            unresolved {
+                ::ess::ess_warning "Display++ trigger input (ess display_tlock_din):\
+ [dict get $r detail] -- its edges are not in this data file" "stim"
+                return 0
+            }
+        }
+        dservLoggerAddMatch $filename ess/display_tlock_din 0 0 1
+        dservLoggerAddMatch $filename [dict get $r dp] 0 0 1
+        return 1
     }
     # END stim_frame_log
 
@@ -5192,6 +5286,9 @@ namespace eval ess {
         foreach _dp $_reemit { dservTouch $_dp }
         if {[dservExists stim/bind]} { dservTouch stim/bind }
         if {[dservExists stim/script]} { dservTouch stim/script }
+        # which datapoint the Display++ trigger input is (stim_tlock_din_match)
+        variable display_tlock
+        if { $display_tlock && [dservExists ess/display_tlock_din] } { dservTouch ess/display_tlock_din }
         variable stim_lib_names
         foreach _lib $stim_lib_names {
             if {[dservExists stim/lib/$_lib]} { dservTouch stim/lib/$_lib }
