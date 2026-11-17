@@ -1441,9 +1441,67 @@ namespace eval ess {
                                          a declaration, not a failure" \
                                  durable 1 status ok address ""]
             }
+            tlock_din {
+                # For `ess display_tlock_din`: the input a Display++'s
+                # trigger output is wired to, named by LABEL (the resolver
+                # is ::ess::display_tlock_din_resolve, ess-2.0.tm).
+                #
+                # Labelled input LINES first, and of those any whose label
+                # says tlock at the top: a line's edges are stamped one by
+                # one, which is what a trigger wants. Chord groups after,
+                # marked: the firmware settles a group's members into one
+                # event, and edges a refresh apart may not survive that.
+                # An unlabelled pin is not offered -- label it on the box
+                # first, so the setting survives a box swap.
+                set lines {}
+                set groups {}
+                foreach dev [input_boxes] {
+                    array unset ingroup
+                    foreach g [input_box_groups $dev] {
+                        foreach p [input_commalist $io_class/$dev/state/group/$g/pins] {
+                            set ingroup($p) $g
+                        }
+                        set dp $io_class/$dev/state/group/$g
+                        lappend groups [dict create route $g label "group $g" \
+                             detail "$dev: a chord group -- settled by the box,\
+                                     so edges one refresh apart may merge;\
+                                     prefer a line" \
+                             durable 1 selectable 1 \
+                             status [expr {[dservExists $dp] ? "ok" : "unresolved"}] \
+                             address $dp]
+                    }
+                    foreach p [input_commalist $io_class/$dev/state/pins/in] {
+                        set lab [input_pin_label $dev $p]
+                        if { $lab eq "" } continue
+                        set dp $io_class/$dev/state/di/$p
+                        set why "$dev pin $p"
+                        if { [info exists ingroup($p)] } {
+                            append why ", also in group $ingroup($p)"
+                        }
+                        # announced is resolved: a line that has not changed
+                        # since the box came up has no edge datapoint yet,
+                        # and that is not a fault
+                        if { ![dservExists $dp] } { append why " (no edge seen yet)" }
+                        lappend lines [dict create route $lab label $lab \
+                             detail $why durable 1 selectable 1 \
+                             status ok address $dp]
+                    }
+                }
+                foreach c $lines {
+                    if { [string match -nocase *tlock* [dict get $c route]] } { lappend out $c }
+                }
+                foreach c $lines {
+                    if { ![string match -nocase *tlock* [dict get $c route]] } { lappend out $c }
+                }
+                lappend out {*}$groups
+                lappend out [dict create route "" label none \
+                                 detail "no input wired to the trigger: its\
+                                         edges are not logged" \
+                                 durable 1 selectable 1 status ok address ""]
+            }
             default {
                 error "input_candidates: unknown kind '$kind'\
-                       (want button | group | out)"
+                       (want button | group | press_group | tlock_din | out)"
             }
         }
         return $out

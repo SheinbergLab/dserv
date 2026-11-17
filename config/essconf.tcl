@@ -543,7 +543,7 @@ A stim script fires a trigger with 'tlock pulse'; each one is recorded
 as stim/tlock."
 
 settings::declare ess display_tlock_din -default "" \
-    -candidates press_group \
+    -candidates tlock_din \
     -apply ::ess::set_display_tlock_din \
     -doc "the digital input the Display++ trigger output is wired to, so
 its edges are saved in the data file beside stim/tlock. Name it by
