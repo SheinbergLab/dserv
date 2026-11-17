@@ -556,8 +556,9 @@ set r [::ess::display_tlock_din_resolve]
 assert {[dict get $r status] eq "ok" && [dict get $r kind] eq "di" &&
         [dict get $r dp] eq "extio/testbox/state/di/14"} "a DI line's label resolves to its edge datapoint ($r)"
 assert {[::ess::stim_tlock_din_match /tmp/x.ess] == 1 &&
-        $::matches eq {{/tmp/x.ess tlock/din 0 0 1} {/tmp/x.ess extio/testbox/state/di/14 0 0 1}}} \
-    "... and is matched, every edge, with the record of which datapoint it is ($::matches)"
+        $::matches eq {{/tmp/x.ess tlock/din 0 0 1} {/tmp/x.ess extio/testbox/state/di/14 0 0 1}\
+ {/tmp/x.ess extio/testbox/state/sync/* 0 0 1} {/tmp/x.ess extio/testbox/state/in_obs 0 0 1}}} \
+    "... and is matched, every edge, with the record of which datapoint it is and the box's clock anchors ($::matches)"
 assert {[dict get [dservGet tlock/din] dp] eq "extio/testbox/state/di/14"} "tlock/din carries the resolution"
 dservSet extio/testbox/state/group/dpp_sync/pins 15
 ::ess::set_display_tlock_din dpp_sync

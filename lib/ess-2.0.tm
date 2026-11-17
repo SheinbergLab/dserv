@@ -746,6 +746,21 @@ namespace eval ess {
         }
         dservLoggerAddMatch $filename tlock/din 0 0 1
         dservLoggerAddMatch $filename [dict get $r dp] 0 0 1
+        # The clock behind those edge stamps. A box maps its own timer onto
+        # dserv time from anchors (extio-zephyr box_clock.h): state/sync/*
+        # is each anchor's offset, the learned rate, the last raw rate
+        # sample and how many were refused, and state/in_obs is when the
+        # box itself saw the obs begin and end (it stops re-anchoring in
+        # between). Without them a step or a slope in edge-minus-flip
+        # cannot be put down to an anchor or ruled out as one. About one
+        # set a second outside an obs; only for a box DI line, where the
+        # device is known.
+        set dp [dict get $r dp]
+        if { [dict get $r kind] eq "di" &&
+             [regexp {^(.+/state)/di/[^/]+$} $dp -> base] } {
+            dservLoggerAddMatch $filename $base/sync/* 0 0 1
+            dservLoggerAddMatch $filename $base/in_obs 0 0 1
+        }
         return 1
     }
 
