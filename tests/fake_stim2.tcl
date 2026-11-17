@@ -88,6 +88,8 @@ set ::frame_enabled 0
 set ::frame_host {}
 set ::frame_enables 0
 set ::frame_disables 0
+set ::tlock 1
+set ::tlock_ons 0
 set ::version 1
 set ::stimversion 1
 set ::dlsh 1
@@ -137,6 +139,14 @@ proc reply_for { cmd } {
         "fake_frame_state" {
             return [list enabled $::frame_enabled host $::frame_host \
                         enables $::frame_enables disables $::frame_disables]
+        }
+        "fake_tlock *"   { set ::tlock [lindex $cmd 1]; return "" }
+        "fake_tlock_ons" { return $::tlock_ons }
+        "expr *info commands tlock*tlock on*" {
+            # ess's guarded `tlock on` (stim_tlock_enable): 1 from a stim2
+            # with the tlock module, -1 from one without
+            if { $::tlock } { incr ::tlock_ons; return 1 }
+            return -1
         }
         "fake_quit"      { after 50 exit; return "" }
         "stimAckHeader"  {

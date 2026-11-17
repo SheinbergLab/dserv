@@ -509,6 +509,27 @@ assert {[dict get [fake_frame_state] disables] == 2} "... and sends nothing"
 set ::matches {}
 assert {[::ess::stim_frame_log_match /tmp/x.ess] == 0 && $::matches eq {}} \
     "stim_frame_log_match adds nothing when the flag is 0"
+
+# --- 7c. a Display++ rig: the tlock pass, by the rig's setting ------------
+# (ess display_tlock, config/essconf.tcl; stim2 docs/tlock.md)
+proc fake_tlock_ons {} { return [::ess::rmtSend_raw fake_tlock_ons] }
+set seq0 [field [rec] seq]
+assert {$::ess::display_tlock == 0} "display_tlock is off unless the rig declares it"
+assert {[::ess::stim_tlock_enable] == 0 && [fake_tlock_ons] == 0} "not declared: nothing is sent"
+assert {[field [rec] seq] == $seq0} "... and no stim/cmd record"
+::ess::set_display_tlock 1
+assert {[::ess::stim_tlock_enable] == 1 && [fake_tlock_ons] == 1} "declared: stim2 is told tlock on"
+assert {[field [rec] seq] == $seq0 + 1 && [string match "*tlock on*" [field [rec] cmd]]} \
+    "... as a stim/cmd record, so a replay draws the row too"
+rmtSend "fake_tlock 0"
+assert {[catch {::ess::stim_tlock_enable} r] == 0 && $r == -1 && [fake_tlock_ons] == 1} \
+    "a stim2 without the tlock module: -1 and a warning, no error"
+rmtSend "fake_tlock 1"
+::ess::set_display_tlock 0
+assert {[::ess::stim_tlock_enable] == 0 && [fake_tlock_ons] == 1} "turned off again: nothing is sent"
+assert {[string first "::ess::stim_tlock_enable\n" $src] > [string first "rmtSend \[list stim::prelude live" $src] &&
+        [string first "::ess::stim_tlock_enable\n" $src] < [string first "set result \[rmtSend \$script\]" $src]} \
+    "configure_stim turns it on after the prelude (whose postpass reset turns it off) and before the stim script"
 # re-enable with another host (a reconnect to a different display), then
 # a disable when stim2 has gone away must not throw
 assert {[::ess::stim_frame_enable 10.0.0.7] == 1 && [dict get [fake_frame_state] host] eq "10.0.0.7"} \
