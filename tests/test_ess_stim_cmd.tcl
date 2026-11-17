@@ -511,7 +511,7 @@ assert {[::ess::stim_frame_log_match /tmp/x.ess] == 0 && $::matches eq {}} \
     "stim_frame_log_match adds nothing when the flag is 0"
 
 # --- 7c. a Display++ rig: the tlock pass, by the rig's setting ------------
-# (ess display_tlock, config/essconf.tcl; stim2 docs/tlock.md)
+# (tlock enabled, config/essconf.tcl; stim2 docs/tlock.md)
 proc fake_tlock_ons {} { return [::ess::rmtSend_raw fake_tlock_ons] }
 set seq0 [field [rec] seq]
 assert {$::ess::display_tlock == 0} "display_tlock is off unless the rig declares it"
@@ -528,7 +528,7 @@ rmtSend "fake_tlock 1"
 ::ess::set_display_tlock 0
 assert {[::ess::stim_tlock_enable] == 0 && [fake_tlock_ons] == 1} "turned off again: nothing is sent"
 
-# the input the trigger is wired to (ess display_tlock_din): resolved by
+# the input the trigger is wired to (tlock din): resolved by
 # label against what the boxes announce, and matched into the data file
 set ::matches {}
 assert {[dict get [::ess::display_tlock_din_resolve] status] eq "none"} "no input declared: none"
@@ -542,9 +542,9 @@ set r [::ess::display_tlock_din_resolve]
 assert {[dict get $r status] eq "ok" && [dict get $r kind] eq "di" &&
         [dict get $r dp] eq "extio/testbox/state/di/14"} "a DI line's label resolves to its edge datapoint ($r)"
 assert {[::ess::stim_tlock_din_match /tmp/x.ess] == 1 &&
-        $::matches eq {{/tmp/x.ess ess/display_tlock_din 0 0 1} {/tmp/x.ess extio/testbox/state/di/14 0 0 1}}} \
+        $::matches eq {{/tmp/x.ess tlock/din 0 0 1} {/tmp/x.ess extio/testbox/state/di/14 0 0 1}}} \
     "... and is matched, every edge, with the record of which datapoint it is ($::matches)"
-assert {[dict get [dservGet ess/display_tlock_din] dp] eq "extio/testbox/state/di/14"} "ess/display_tlock_din carries the resolution"
+assert {[dict get [dservGet tlock/din] dp] eq "extio/testbox/state/di/14"} "tlock/din carries the resolution"
 dservSet extio/testbox/state/group/dpp_sync/pins 15
 ::ess::set_display_tlock_din dpp_sync
 set r [::ess::display_tlock_din_resolve]
@@ -553,10 +553,31 @@ assert {[dict get $r kind] eq "group" && [dict get $r dp] eq "extio/*/state/grou
 ::ess::set_display_tlock_din extio/other/state/di/3
 set r [::ess::display_tlock_din_resolve]
 assert {[dict get $r kind] eq "path" && [dict get $r dp] eq "extio/other/state/di/3"} "a datapoint name is taken as written"
+
+# the green light (tlock/health): worked out from two timestamps
+proc hl {} { return [lindex [::ess::display_tlock_health] 0] }
+assert {[hl] eq "error" && [string match "*no tlock command*" [dservGet tlock/health]]} \
+    "a stim2 that refused tlock on (above): error ([dservGet tlock/health])"
+set ::ess::display_tlock_stim 1
+::ess::set_display_tlock_din nothere
+assert {[hl] eq "error"} "a label nothing announces: error ([dservGet tlock/health])"
+::ess::set_display_tlock_din tlock
+assert {[hl] eq "ok" && [string match "*no trigger sent yet*" [dservGet tlock/health]]} \
+    "resolved, no stim/tlock yet: ok ([dservGet tlock/health])"
+dservSet stim/tlock 1
+assert {[hl] eq "error" && [string match "*no edge ever seen*" [dservGet tlock/health]]} \
+    "trigger frames sent and no edge on the line: error ([dservGet tlock/health])"
+dservSet extio/testbox/state/di/14 1
+assert {[hl] eq "ok" && [string match "*edges arriving*" [dservGet tlock/health]]} \
+    "an edge as new as the packets: ok ([dservGet tlock/health])"
+::ess::set_display_tlock_din ""
+assert {[hl] eq "off"} "enabled with no input declared: off"
+::ess::set_display_tlock_din extio/other/state/di/3
 set ::matches {}
 ::ess::set_display_tlock 0
 assert {[::ess::stim_tlock_din_match /tmp/x.ess] == 0 && $::matches eq {}} "display_tlock off: the input is not matched"
 ::ess::set_display_tlock_din ""
+assert {[hl] eq "off" && [string match "off not enabled*" [dservGet tlock/health]]} "not enabled: off"
 assert {[string first "::ess::stim_tlock_enable\n" $src] > [string first "rmtSend \[list stim::prelude live" $src] &&
         [string first "::ess::stim_tlock_enable\n" $src] < [string first "set result \[rmtSend \$script\]" $src]} \
     "configure_stim turns it on after the prelude (whose postpass reset turns it off) and before the stim script"
