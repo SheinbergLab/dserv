@@ -16,6 +16,10 @@
  * stable to ~2ppm), so between anchors a pure offset drifts ~43us per second
  * -- with hardware-edge anchors (~10us class, see the TTL sync input) that
  * between-anchor drift is the DOMINANT stamping error on multi-second trials.
+ * NOT EVERY BOX CLOCK IS A CRYSTAL: the FRDM-MCXN947's kernel timer (the OS
+ * timer on CLK_1M) runs from the chip's internal RC oscillator, measured
+ * 2300 ppm slow against PTP on a rig (2026-11-17) -- 2.3 ms per second of
+ * trial, 60 ms by the end of a 26 s one. See "Far samples" below.
  * We learn the relative rate from consecutive TRUSTED anchors only -- the
  * caller marks an anchor trusted when its box time is an IRQ-latched TTL edge
  * (jitter ~us); frame-arrival (sw) anchors still snap the offset but carry
@@ -25,10 +29,25 @@
  *     sample_ppb = (d_dserv - d_box) * 1e9 / d_box
  *
  * is folded in with an EMA (alpha 1/8: measured 2ppm pair noise -> <1ppm
- * steady state, still tracks thermal wander over minutes) and clamped to
- * +/-500 ppm -- a host clock step (chrony) makes one wild sample, which the
- * clamp discards while the offset snap absorbs the step itself. Trusted-pair
+ * steady state, still tracks thermal wander over minutes). Trusted-pair
  * endpoints may span intervening sw anchors: slope only needs the endpoints.
+ *
+ * FAR SAMPLES. A host clock step (chrony) makes one wild sample, which must
+ * not move the rate while the offset snap absorbs the step itself. This used
+ * to be a flat +/-500 ppm clamp, which also threw away every sample from a
+ * box whose clock really is further off than that: the rate stayed 0, nothing
+ * said so, and the stamps drifted for the length of each trial. So:
+ *
+ *   - a sample within NEAR (+/-500 ppm) of the current estimate (0 before
+ *     the first) is folded in, as before;
+ *   - a sample further off is held as a candidate and counted in
+ *     rate_rejects. If the NEXT sample agrees with it (within AGREE,
+ *     200 ppm), the pair is the box's real rate and becomes the estimate.
+ *     A step is one sample, never two alike, so it is still discarded;
+ *   - beyond MAX (5%) is never a clock rate: dropped.
+ *
+ * rate_last_ppb is the last raw sample, taken or not, so the host can see
+ * what the estimator is being told.
  *
  *     stamp(t) = t + offset + (t - anchor_box) * rate / 1e9
  *
@@ -46,7 +65,9 @@
 
 #include <stdint.h>
 
-#define BOX_CLOCK_RATE_MAX_PPB   500000     /* +/-500 ppm sanity clamp        */
+#define BOX_CLOCK_RATE_NEAR_PPB  500000     /* +/-500 ppm of the estimate: fold in */
+#define BOX_CLOCK_RATE_AGREE_PPB 200000     /* two far samples this close: believe */
+#define BOX_CLOCK_RATE_MAX_PPB   50000000   /* +/-5%: beyond this, not a clock rate */
 #define BOX_CLOCK_PAIR_MIN_US    500000     /* pairs closer than 0.5s: skip   */
 #define BOX_CLOCK_PAIR_MAX_US    600000000  /* pairs further than 600s: stale */
 
@@ -66,6 +87,10 @@ typedef struct {
     uint8_t  synced;
     uint8_t  have_trust;
     uint8_t  rate_valid;      /* at least one accepted slope sample          */
+    uint8_t  have_pend;       /* a far sample is waiting for a second        */
+    int32_t  pend_ppb;        /* that sample                                 */
+    int32_t  rate_last_ppb;   /* the last raw slope sample, taken or not     */
+    uint32_t rate_rejects;    /* slope samples not folded in (far or absurd) */
     /* Seqlock, added with the +29 RX fast path: anchors are written on the
      * eth reader thread while event stamping keeps happening on the service
      * loop, and a preemption mid-64-bit-read must not hand a stamp half of
@@ -81,7 +106,42 @@ static inline void box_clock_reset(box_clock_t *c)
     c->offset_us = 0; c->anchor_box_us = 0; c->rate_ppb = 0;
     c->trust_dserv_us = c->trust_box_us = 0;
     c->synced = 0; c->have_trust = 0; c->rate_valid = 0;
+    c->have_pend = 0; c->pend_ppb = 0; c->rate_last_ppb = 0; c->rate_rejects = 0;
     BOX_CLOCK_FENCE(); c->seq++;
+}
+
+/* One slope sample (ppb) from a trusted pair: see "Far samples" above. The
+ * caller holds the seqlock. */
+static inline void box_clock_rate_sample(box_clock_t *c, int64_t sample)
+{
+    if (sample < -BOX_CLOCK_RATE_MAX_PPB || sample > BOX_CLOCK_RATE_MAX_PPB) {
+        c->rate_last_ppb = sample < 0 ? -BOX_CLOCK_RATE_MAX_PPB : BOX_CLOCK_RATE_MAX_PPB;
+        c->rate_rejects++;
+        c->have_pend = 0;
+        return;
+    }
+    c->rate_last_ppb = (int32_t) sample;
+
+    int64_t d = sample - (c->rate_valid ? c->rate_ppb : 0);
+    if (d >= -BOX_CLOCK_RATE_NEAR_PPB && d <= BOX_CLOCK_RATE_NEAR_PPB) {
+        if (!c->rate_valid) { c->rate_ppb = (int32_t) sample; c->rate_valid = 1; }
+        else c->rate_ppb += (int32_t)(d / 8);
+        c->have_pend = 0;
+        return;
+    }
+    /* far from the estimate: a step, or a rate we have not believed yet */
+    if (c->have_pend) {
+        int64_t dp = sample - c->pend_ppb;
+        if (dp >= -BOX_CLOCK_RATE_AGREE_PPB && dp <= BOX_CLOCK_RATE_AGREE_PPB) {
+            c->rate_ppb   = (int32_t)((sample + c->pend_ppb) / 2);
+            c->rate_valid = 1;
+            c->have_pend  = 0;
+            return;
+        }
+    }
+    c->pend_ppb  = (int32_t) sample;
+    c->have_pend = 1;
+    c->rate_rejects++;
 }
 
 /* Re-align from one sync edge. trusted = box_us is a hardware edge latch
@@ -100,10 +160,7 @@ static inline void box_clock_sync(box_clock_t *c, uint64_t dserv_us,
             int64_t d_dserv = (int64_t)(dserv_us - c->trust_dserv_us);
             if (d_box >= BOX_CLOCK_PAIR_MIN_US && d_box <= BOX_CLOCK_PAIR_MAX_US) {
                 int64_t sample = ((d_dserv - d_box) * 1000000000LL) / d_box;
-                if (sample >= -BOX_CLOCK_RATE_MAX_PPB && sample <= BOX_CLOCK_RATE_MAX_PPB) {
-                    if (!c->rate_valid) { c->rate_ppb = (int32_t) sample; c->rate_valid = 1; }
-                    else c->rate_ppb += (int32_t)((sample - c->rate_ppb) / 8);
-                }
+                box_clock_rate_sample(c, sample);
             }
         }
         c->trust_dserv_us = dserv_us;
@@ -143,7 +200,7 @@ static inline uint64_t box_clock_stamp(const box_clock_t *c, uint64_t box_us)
 
 /* The inverse: a dserv-time instant onto the box clock (at_abs targets, the
  * PTP-held obs epoch). Two fixed-point iterations converge to well under a
- * microsecond at the +/-500 ppm clamp. Lived in main.c as dserv_to_box_us;
+ * microsecond at a fraction of a percent of rate. Lived in main.c as dserv_to_box_us;
  * moved here so the snapshot guard covers every reader of the mapping. */
 static inline uint64_t box_clock_unstamp(const box_clock_t *c, uint64_t dserv_us)
 {

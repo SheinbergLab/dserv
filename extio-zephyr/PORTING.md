@@ -6430,3 +6430,49 @@ Everything else is a re-run of what the nRF52840 passed on 2026-08-22.
    four buttons (both debounced and raw), obs mirror on an LED, `sync pin` with
    a jumper, the loopback pulse sweep, and finally **an actual OTA** — which no
    Nordic board here has yet exercised, only built.
+
+## 2026-11-17 — the MCXN947's box clock is an RC oscillator, and the rate estimator was refusing to say so
+
+**Found from a datafile, not a bench test.** A Display++ trigger line (stim2's
+`tlock toggle`, one edge per video frame) on `psychobox` (FRDM-MCXN947,
+0.4.0+102, `sync/source` = `ptp`) against stim2's flip times:
+
+- inside every obs the DI stamps ran **2293–2320 ppm slow** against the flips
+  (11 stretches, two sessions), with 33 µs sd about the line: 2.3 ms per
+  second, 60 ms early by the end of a 26 s trial;
+- outside obs the same line showed a 1.00 s sawtooth of 2.05–2.34 ms: the 1 Hz
+  PTP re-anchor snapping the offset back.
+
+**Cause.** `now_us()` is the kernel timer. On this board that is the OS timer,
+which Zephyr's board init attaches to `CLK_1M` — the internal 12 MHz FRO
+divided down, not the crystal that PLL0 and the 1588 clock run from. (Read
+from `boards/nxp/frdm_mcxn947/board.c`; the same oscillator family the
+`ain/calibrate` comment measures at −2897 and +500 ppm.) The 1 Hz re-anchor
+is skipped during an obs on the promise that box_clock's rate estimator
+covers a trial, and that estimator clamped samples to ±500 ppm. Every sample
+was discarded, `rate_valid` never set, `sync/rate_ppb` never published, and
+nothing else said anything.
+
+**Fix (box_clock.h, "Far samples").** A sample within ±500 ppm of the current
+estimate folds in as before. One further off is held; a second that agrees
+with it (200 ppm) becomes the estimate. A host clock step is still one
+sample and still discarded. Beyond 5% is dropped. `sync/rate_sample_ppb`
+(last raw sample) and `sync/rate_rejects` are published beside
+`sync/rate_ppb`, at obs anchors and on the 1 Hz PTP re-anchor.
+`host/clock_test.c` covers it:
+`cc -O2 -Wall -I../src/core -o clock_test clock_test.c && ./clock_test`.
+
+**Not done.**
+
+- [ ] Flash a box and confirm on the rig: `sync/rate_ppb` near +2300000 within
+      a few seconds of PTP lock, `rate_rejects` at 1, and the trigger line's
+      edge-minus-flip slope over a trial near zero.
+- [ ] The oscillator wanders: the slope differed by about ±13 ppm between
+      trials a few seconds apart. A rate held for a whole trial therefore
+      leaves up to ~0.3 ms at the end of a 26 s one. Closing that means
+      re-anchoring during an obs (harmless once each step is microseconds,
+      but it moves the epoch `at`/`at_abs` targets are mapped through) or
+      moving this board's kernel timer to SysTick on the PLL.
+- [ ] Other boards: what clocks the RW612's 1 MHz OS timer has not been read.
+      A box on a TTL sync pin with an RC kernel timer had the same fault.
+- [ ] `wiznet-io/common/pico_clock.h` keeps the flat clamp (crystal boards).

@@ -1000,6 +1000,35 @@ static void publish_do(uint8_t pin, uint8_t level, uint64_t stamp)
 	box_pub_event(f);
 }
 
+/* The rate estimator, as the host needs to see it (box_clock.h, "Far
+ * samples"): `rate_ppb` once a rate is believed, `rate_sample_ppb` the last
+ * raw slope sample whether or not it was taken, `rate_rejects` how many were
+ * not. A sample far from rate_ppb with rejects climbing is an estimator that
+ * is refusing what it is told -- the state that let an MCXN947 drift 2300 ppm
+ * through every trial with nothing on the wire to show it. Event class at an
+ * obs anchor (the record of what stamped a datafile); bulk on the 1 Hz PTP
+ * re-anchor, where the next one supersedes it. */
+static void publish_sync_rate(uint64_t ts, int event)
+{
+	uint8_t f[DSERV_MSG_LEN];
+	char nm[80];
+
+	if (boxclk.rate_valid) {
+		dserv_state_name(&cfg, nm, sizeof nm, "sync/rate_ppb");
+		dserv_msg_int(f, nm, ts, boxclk.rate_ppb);
+		if (event) { box_pub_event(f); } else { box_pub_bulk(f); }
+	}
+	if (boxclk.have_trust) {
+		dserv_state_name(&cfg, nm, sizeof nm, "sync/rate_sample_ppb");
+		dserv_msg_int(f, nm, ts, boxclk.rate_last_ppb);
+		if (event) { box_pub_event(f); } else { box_pub_bulk(f); }
+
+		dserv_state_name(&cfg, nm, sizeof nm, "sync/rate_rejects");
+		dserv_msg_int(f, nm, ts, (int32_t) boxclk.rate_rejects);
+		if (event) { box_pub_event(f); } else { box_pub_bulk(f); }
+	}
+}
+
 /* Clock-alignment telemetry, published at every obs anchor. This is how you tell
  * from the host side whether stamping is trustworthy: `source` says whether the
  * anchor was the hardware TTL edge or mere frame arrival, `transport_us` is the
@@ -1033,11 +1062,7 @@ static void publish_sync(uint64_t dserv_us, uint64_t box_us, int64_t offset_us,
 		dserv_msg_int64(f, nm, dserv_us, transport_us);
 		box_pub_event(f);
 	}
-	if (boxclk.rate_valid) {          /* learned crystal rate: hw anchors only */
-		dserv_state_name(&cfg, nm, sizeof nm, "sync/rate_ppb");
-		dserv_msg_int(f, nm, dserv_us, boxclk.rate_ppb);
-		box_pub_event(f);
-	}
+	publish_sync_rate(dserv_us, 1);
 }
 
 /* (Re)seed every group from the pins' CURRENT logical levels, so a switch
@@ -4399,8 +4424,9 @@ int main(void)
 			 *
 			 * Skipped during an obs (a re-anchor steps the offset), which is
 			 * also why the 1 Hz cadence is harmless: the drift it corrects is
-			 * the box crystal against PTP, and box_clock's rate estimator
-			 * covers the gap across a trial. */
+			 * the box clock against PTP, and box_clock's rate estimator
+			 * covers the gap across a trial -- provided it has a rate, which
+			 * sync/rate_ppb (below) is there to show. */
 			if (ptp_offset_valid && !box_obs_active()) {
 				uint32_t win = 0;
 
@@ -4415,6 +4441,8 @@ int main(void)
 							 "sync/offset_us");
 					dserv_msg_int64(f, name, 0, boxclk.offset_us);
 					box_pub_bulk(f);
+
+					publish_sync_rate(0, 0);
 				}
 			}
 #endif
