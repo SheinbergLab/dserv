@@ -352,6 +352,15 @@ static int process_locked(dpoint_process_info_t *pinfo, void *params)
   }
   // Ignore DRAG events (type 1) - no window state changes
 
+  /* Every PRESS and RELEASE publishes status, changed or not. ESS wakes
+     its state machine on this status, not on mtouch/event: it hears
+     mtouch/event first, before this status, so a wake there would see
+     the previous states. A press outside every window changes nothing
+     (release already forced all OUT) but must still wake ESS, so a
+     mistouch is seen -- with states 0, which is then current. */
+  if (event_type == 0 || event_type == 2)
+    retval = DPOINT_PROCESS_DSERV;
+
   if (retval == DPOINT_PROCESS_DSERV) {
     uint16_t *vals = (uint16_t *) p->status_dpoint.data.buf;
     vals[0] = changes;

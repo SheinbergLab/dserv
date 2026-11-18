@@ -6925,6 +6925,15 @@ namespace eval ess {
     # last_touch_press lagged the window status that a system acted on.
     # Here the event comes before its window status, every time.
     #
+    # So this proc logs and never wakes the state machine: a do_update
+    # here would run with touch_windows(states) from BEFORE this press,
+    # and touch_in_win would call every tap outside every window (a
+    # detection hit scored a miss, a choice aborted as a mistouch; on the
+    # rig, 2026-11-18).  The wake is the status that follows
+    # (touch_window_process), which the processor publishes for every
+    # press and release, in a window or not -- so a mistouch still wakes,
+    # and ess/touch_press_deg, set here first, is current by then.
+    #
     # Drags are TOUCH MOVE, every one, so a trial's finger path is in the
     # data: logged only -- no do_update, no _deg datapoint -- since touch
     # windows ignore drags too, so nothing a system does changes.
@@ -6948,9 +6957,6 @@ namespace eval ess {
 		::ess::evt_put TOUCH PRESS $timestamp $x $y
 		dservSet ess/touch_press_deg [list $x_deg $y_deg]
 		set last_touch_press $timestamp
-		# wake the state machine on a new press so transitions
-		# can fire even when the press lands outside any window
-		do_update
 	    }
 	} elseif { $type == 2 } {
 	    variable last_touch_release
@@ -6958,7 +6964,6 @@ namespace eval ess {
 		::ess::evt_put TOUCH RELEASE $timestamp $x $y
 		dservSet ess/touch_release_deg [list $x_deg $y_deg]
 		set last_touch_release $timestamp
-		do_update
 	    }
 	}
     }
