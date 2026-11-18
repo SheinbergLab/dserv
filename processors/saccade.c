@@ -67,7 +67,28 @@
  * event reaching a consumer.
  *
  * Inactive by default (like windows): set active 1 from the system that
- * wants events. Inactive costs one branch per sample.
+ * wants events. Inactive costs an uncontended lock per sample.
+ *
+ * THREADS. onProcess runs on whichever thread set eyetracking/sample (the
+ * em subprocess's), and processSetParam/processGetParam on the caller's
+ * (an ess interp's) -- concurrently, and dserv takes no lock around either.
+ * So each instance has its own mutex, held for a whole sample and for each
+ * param call: a `reset` or a threshold change lands between samples, never
+ * inside one.
+ *
+ * The lock is not enough for the "dpoint" rename. onProcess hands dserv a
+ * pointer to event_dpoint, and dserv copies it AFTER onProcess returns,
+ * outside any lock here -- freeing the old name in setProcessParams could
+ * free it under that copy. So a rename only records the new name; onProcess
+ * installs it at the start of the next sample. That runs on the thread that
+ * made the previous copy, after the copy, so the old name is no longer in
+ * use when it is freed.
+ *
+ * Both that argument and the event buffer itself assume ONE producer
+ * thread for eyetracking/sample (true: only the em subprocess publishes
+ * it). A second publisher on another thread could overwrite the event
+ * buffer while dserv copies the first -- the output-by-pointer contract
+ * every processor shares, not something a lock in here can fix.
  *
  * SAMPLE-RATE INDEPENDENCE. Every parameter is in seconds, deg or deg/s,
  * never in samples, so the same settings mean the same thing at 250 Hz and
@@ -90,6 +111,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <math.h>
+#include <pthread.h>
 
 #include <Datapoint.h>
 #include <dpoint_process.h>
@@ -146,6 +168,9 @@ typedef struct process_params_s {
 
   /* ---- counters (read-only) ---- */
   int n_samples, n_onsets, n_landed, n_offsets, n_aborts, n_invalid, n_gaps;
+
+  pthread_mutex_t lock;
+  char  *pending_name;		/* rename waiting for the next sample, or NULL */
 
   int warned_type;
   int dummyInt;
@@ -244,12 +269,16 @@ void *newProcessParams(void)
   p->event_dpoint.data.type = DSERV_DOUBLE;
   p->event_dpoint.data.len = NOUT * sizeof(double);
   p->event_dpoint.data.buf = calloc(NOUT, sizeof(double));
+  pthread_mutex_init(&p->lock, NULL);
+  p->pending_name = NULL;
   return p;
 }
 
 void freeProcessParams(void *pstruct)
 {
   process_params_t *p = (process_params_t *) pstruct;
+  pthread_mutex_destroy(&p->lock);
+  free(p->pending_name);
   free(p->event_dpoint.varname);
   free(p->event_dpoint.data.buf);
   free(p);
@@ -269,7 +298,7 @@ void freeProcessParams(void *pstruct)
   { "base_dur",        &p->base_dur,        &p->dummyInt, PU_DOUBLE },	\
   { "min_onset_disp",  &p->min_onset_disp,  &p->dummyInt, PU_DOUBLE }
 
-int getProcessParams(dpoint_process_param_setting_t *pinfo)
+static int get_param_locked(dpoint_process_param_setting_t *pinfo)
 {
   process_params_t *p = (process_params_t *) pinfo->params;
   PARAM_ENTRY params[] = {
@@ -298,6 +327,15 @@ int getProcessParams(dpoint_process_param_setting_t *pinfo)
   return 0;
 }
 
+int getProcessParams(dpoint_process_param_setting_t *pinfo)
+{
+  process_params_t *p = (process_params_t *) pinfo->params;
+  pthread_mutex_lock(&p->lock);
+  int rc = get_param_locked(pinfo);
+  pthread_mutex_unlock(&p->lock);
+  return rc;
+}
+
 static void clamp_params(process_params_t *p)
 {
   /* sample-count bounds are applied in to_samples */
@@ -308,17 +346,21 @@ static void clamp_params(process_params_t *p)
   update_counts(p);
 }
 
-int setProcessParams(dpoint_process_param_setting_t *pinfo)
+static int set_param_locked(dpoint_process_param_setting_t *pinfo)
 {
   process_params_t *p = (process_params_t *) pinfo->params;
   char *name = pinfo->pname;
   char **vals = pinfo->pval;
 
   if (!strcmp(name, "dpoint")) {
-    free(p->event_dpoint.varname);
-    p->event_dpoint.varname = malloc(strlen(vals[0]) + strlen("/event") + 1);
-    sprintf(p->event_dpoint.varname, "%s/event", vals[0]);
-    p->event_dpoint.varlen = strlen(p->event_dpoint.varname);
+    /* recorded, not applied: see THREADS in the header */
+    char *nm = malloc(strlen(vals[0]) + strlen("/event") + 1);
+    sprintf(nm, "%s/event", vals[0]);
+    free(p->pending_name);		/* a rename never applied is superseded */
+    p->pending_name = nm;
+    /* Even when inactive: an event emitted just before `active 0` may
+       still be under dserv's copy. No event can be emitted before the
+       next onProcess, which installs the name first. */
     return DPOINT_PROCESS_IGNORE;
   }
   if (!strcmp(name, "reset")) {
@@ -342,6 +384,15 @@ int setProcessParams(dpoint_process_param_setting_t *pinfo)
      off may be arbitrarily old */
   if (!was_active && p->active) reset_history(p);
   return DPOINT_PROCESS_IGNORE;
+}
+
+int setProcessParams(dpoint_process_param_setting_t *pinfo)
+{
+  process_params_t *p = (process_params_t *) pinfo->params;
+  pthread_mutex_lock(&p->lock);
+  int rc = set_param_locked(pinfo);
+  pthread_mutex_unlock(&p->lock);
+  return rc;
 }
 
 static int emit(process_params_t *p, dpoint_process_info_t *pinfo, int event,
@@ -377,12 +428,9 @@ static int abort_flight(process_params_t *p, dpoint_process_info_t *pinfo,
   return emit(p, pinfo, SAC_EV_ABORT, t, h, v, t - p->onset_t);
 }
 
-int onProcess(dpoint_process_info_t *pinfo, void *params)
+static int process_sample(process_params_t *p, dpoint_process_info_t *pinfo)
 {
-  process_params_t *p = (process_params_t *) params;
   ds_datapoint_t *in = pinfo->input_dpoint;
-
-  if (!p->active) return DPOINT_PROCESS_IGNORE;
 
   if (in->data.type != DSERV_DOUBLE || in->data.len < 4 * sizeof(double)) {
     if (p->warned_type != (int) in->data.type) {
@@ -585,4 +633,24 @@ int onProcess(dpoint_process_info_t *pinfo, void *params)
     }
   }
   return DPOINT_PROCESS_IGNORE;
+}
+
+int onProcess(dpoint_process_info_t *pinfo, void *params)
+{
+  process_params_t *p = (process_params_t *) params;
+
+  /* locked even when inactive, so a pending rename is installed here and
+     only here; uncontended, the lock is tens of ns at a few hundred Hz */
+  pthread_mutex_lock(&p->lock);
+  if (p->pending_name) {
+    /* the previous event (if any) was copied by this thread before it
+       called us again, so the old name is free to go */
+    free(p->event_dpoint.varname);
+    p->event_dpoint.varname = p->pending_name;
+    p->event_dpoint.varlen = strlen(p->event_dpoint.varname);
+    p->pending_name = NULL;
+  }
+  int rc = p->active ? process_sample(p, pinfo) : DPOINT_PROCESS_IGNORE;
+  pthread_mutex_unlock(&p->lock);
+  return rc;
 }

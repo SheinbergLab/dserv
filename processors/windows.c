@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <math.h>
+#include <pthread.h>
 
 #include <Datapoint.h>
 #include <dpoint_process.h>
@@ -69,6 +70,10 @@ typedef struct process_params_s {
   
   ds_datapoint_t status_dpoint;
   ds_datapoint_t settings_dpoint;
+
+  /* see THREADS above onProcess */
+  pthread_mutex_t lock;
+  char *pending_status;		/* status rename for the next sample, or NULL */
   
   int dummyInt;
 } process_params_t;
@@ -124,6 +129,9 @@ void *newProcessParams(void)
   p->settings_dpoint.data.type = DSERV_FLOAT;
   p->settings_dpoint.data.len = 10*sizeof(float);  // 10 float values
   p->settings_dpoint.data.buf = malloc(p->settings_dpoint.data.len);
+
+  pthread_mutex_init(&p->lock, NULL);
+  p->pending_status = NULL;
   
   return p;
 }
@@ -137,6 +145,9 @@ void freeProcessParams(void *pstruct)
 
   free(p->settings_dpoint.varname);
   free(p->settings_dpoint.data.buf);
+
+  pthread_mutex_destroy(&p->lock);
+  free(p->pending_status);
 
   free(p);
 }
@@ -164,7 +175,7 @@ int check_state(process_params_t *p, int win)
 }
 
 
-int getProcessParams(dpoint_process_param_setting_t *pinfo)
+static int get_param_locked(dpoint_process_param_setting_t *pinfo)
 {
   char *result_str;
   int win = pinfo->index;
@@ -172,7 +183,7 @@ int getProcessParams(dpoint_process_param_setting_t *pinfo)
   process_params_t *p = (process_params_t *) pinfo->params;
   int inside;
 
-  if (win < 0 || win > NWIN)
+  if (win < 0 || win >= NWIN)
     return 0;
   
   PARAM_ENTRY params[] = {
@@ -202,7 +213,7 @@ int getProcessParams(dpoint_process_param_setting_t *pinfo)
   return 0;
 }
 
-int setProcessParams(dpoint_process_param_setting_t *pinfo)
+static int set_param_locked(dpoint_process_param_setting_t *pinfo)
 {
   int result = DPOINT_PROCESS_IGNORE;
   int win = pinfo->index;
@@ -213,21 +224,36 @@ int setProcessParams(dpoint_process_param_setting_t *pinfo)
 
   /* if the special dpoint param name is passed, change the dpoint name */
   if (!strcmp(name, "dpoint")) {
-    /* status */
-    if (p->status_dpoint.varname) free(p->status_dpoint.varname);
-    p->status_dpoint.varname = malloc(strlen(vals[0])+2+strlen(status_str));
-    sprintf(p->status_dpoint.varname, "%s/%s", vals[0], status_str);
-    p->status_dpoint.varlen = strlen(p->status_dpoint.varname);
+    char *st = malloc(strlen(vals[0])+2+strlen(status_str));
+    sprintf(st, "%s/%s", vals[0], status_str);
+    char *se = malloc(strlen(vals[0])+2+strlen(params_str));
+    sprintf(se, "%s/%s", vals[0], params_str);
 
-    /* params */
-    if (p->settings_dpoint.varname) free(p->settings_dpoint.varname);
-    p->settings_dpoint.varname = malloc(strlen(vals[0])+2+strlen(params_str));
-    sprintf(p->settings_dpoint.varname, "%s/%s", vals[0], params_str);
-    p->settings_dpoint.varlen = strlen(p->settings_dpoint.varname);
+    /* ess re-sends the SAME name on every system load: nothing to do */
+    if (!strcmp(st, p->status_dpoint.varname)) {
+      free(st);
+      free(p->pending_status);	/* an older pending rename is undone */
+      p->pending_status = NULL;
+    } else {
+      /* status is emitted by onProcess on the sample thread and copied
+         there after it returns: install it on that thread, next sample */
+      free(p->pending_status);
+      p->pending_status = st;
+    }
+
+    /* settings is emitted by this function and copied by our caller,
+       on this thread, after we return: safe to swap here */
+    if (strcmp(se, p->settings_dpoint.varname)) {
+      free(p->settings_dpoint.varname);
+      p->settings_dpoint.varname = se;
+      p->settings_dpoint.varlen = strlen(se);
+    } else {
+      free(se);
+    }
     return DPOINT_PROCESS_IGNORE;
   }
 
-  if (win < 0 || win > NWIN) return -1;
+  if (win < 0 || win >= NWIN) return -1;
   
   /* by passing in "settings" as the param to set, kick a param update */
   if (!strcmp(name, params_str)) {
@@ -285,7 +311,7 @@ int setProcessParams(dpoint_process_param_setting_t *pinfo)
   return result;
 }
 
-int onProcess(dpoint_process_info_t *pinfo, void *params)
+static int process_locked(dpoint_process_info_t *pinfo, void *params)
 {
   process_params_t *p = (process_params_t *) params;
   float x, y;
@@ -410,4 +436,55 @@ int onProcess(dpoint_process_info_t *pinfo, void *params)
   }
 
   return retval;
+}
+
+/*
+ * THREADS. onProcess runs on the thread that set eyetracking/position; the
+ * param calls run on the caller's (an ess interp's) -- concurrently, and
+ * dserv locks neither. One mutex per instance makes each param call and
+ * each sample atomic with respect to the other.
+ *
+ * The output-name rename needs more than the lock: dserv copies the status
+ * dpoint AFTER onProcess returns, outside it, so freeing the old name from
+ * setProcessParams could free it under that copy (ess renames on every
+ * system load, while samples flow). The new status name is installed here,
+ * at the start of the next sample, on the thread that made the previous
+ * copy -- after it. This assumes one thread publishes the input, which is
+ * also what the shared status buffer already assumed.
+ *
+ * NOT covered: em_region_set / touch_region_set send type, center and size
+ * as separate processSetParam calls, and a sample can land between them
+ * and see a half-moved window.
+ */
+int onProcess(dpoint_process_info_t *pinfo, void *params)
+{
+  process_params_t *p = (process_params_t *) params;
+  pthread_mutex_lock(&p->lock);
+  if (p->pending_status) {
+    free(p->status_dpoint.varname);
+    p->status_dpoint.varname = p->pending_status;
+    p->status_dpoint.varlen = strlen(p->status_dpoint.varname);
+    p->pending_status = NULL;
+  }
+  int rc = process_locked(pinfo, params);
+  pthread_mutex_unlock(&p->lock);
+  return rc;
+}
+
+int getProcessParams(dpoint_process_param_setting_t *pinfo)
+{
+  process_params_t *p = (process_params_t *) pinfo->params;
+  pthread_mutex_lock(&p->lock);
+  int rc = get_param_locked(pinfo);
+  pthread_mutex_unlock(&p->lock);
+  return rc;
+}
+
+int setProcessParams(dpoint_process_param_setting_t *pinfo)
+{
+  process_params_t *p = (process_params_t *) pinfo->params;
+  pthread_mutex_lock(&p->lock);
+  int rc = set_param_locked(pinfo);
+  pthread_mutex_unlock(&p->lock);
+  return rc;
 }
