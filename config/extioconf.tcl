@@ -816,15 +816,283 @@ proc extio_ain_manifest {} {
 set ::extio_ain_streams_last ""
 proc extio_ain_publish_manifest {args} {
     set m [extio_ain_manifest]
-    if { $m eq $::extio_ain_streams_last } return              ;# publish on CHANGE only
-    set ::extio_ain_streams_last $m
-    dservSet extio/ain/streams $m
-    puts "extio: analog streams = {[dict keys $m]}"
+    if { $m ne $::extio_ain_streams_last } {                  ;# publish on CHANGE only
+        set ::extio_ain_streams_last $m
+        dservSet extio/ain/streams $m
+        puts "extio: analog streams = {[dict keys $m]}"
+    }
+    # the rig's record list resolves against the same live set (and against
+    # DI labels the manifest does not carry), so it is re-judged on every
+    # call; it too publishes only on change
+    extio_record_publish
 }
 
 proc extio_label_invalidate {dp data} {      ;# a relabel stales every map for that box
     if { [regexp {^extio/([^/]+)/state/label/} $dp -> box] } {
         foreach k [array names ::extio_gmap $box/*] { unset -nocomplain ::extio_gmap($k) }
+    }
+    extio_record_publish                     ;# a DI line may have just gained or lost its name
+}
+
+# ---- extio/record: what THIS RIG puts in every data file -------------------
+#
+# Two questions decide which extio streams go into a recording, and they
+# belong to different people:
+#
+#   what the EXPERIMENT needs   the record_streams param (ess-2.0.tm,
+#                               ain_resolve_streams): system -> protocol ->
+#                               variant, analog only, and a declared stream
+#                               that is missing REFUSES the open
+#   what the RIG has wired      this setting: a photodiode on the screen, the
+#                               Display++ trigger line, a lever the rig always
+#                               logs -- in every file, whatever is loaded
+#
+# The rig half is a declaration (local/rig.tcl, the gear), because how the
+# rig is wired is a fact about the rig: no system should have to name a
+# photodiode to get it, and every system that does not care about it should
+# not be made to require it. ::ess::file_open records the UNION.
+#
+# Values are names, resolved by LABEL so they follow a re-pin or a swapped box
+# (the `tlock din` rule):
+#   <group>     an analog group (extio/ain/streams): its sample blocks
+#   <label>     a labelled DI line (state/pins/in + state/label/<pin>): its
+#               edges, extio/<box>/state/di/<pin>
+#   <group>     a chord group (state/group/<name>): its settled events
+#   <box>/<n>   any of those, on one box -- only when two live boxes
+#               announce the same name
+#
+# A name that resolves to nothing does NOT refuse the open (that is
+# record_streams' contract, and it is right there: the experiment depends on
+# the stream). An unplugged photodiode should not stop a session; it should
+# be visible -- in the gear's light (extio/health), as a warning at the open,
+# and in the file, which records extio/record itself.
+#
+# Published as extio/record, re-judged on every discovery tick and every
+# label or analog-group change, published on change:
+#
+#   dservGet extio/record ->
+#     declared {photodiode tlock}
+#     streams {
+#       photodiode {status ok kind ain box box01
+#                   dpoint extio/box01/state/ain/photodiode key box01/photodiode
+#                   stream {<the extio/ain/streams entry>} detail ...}
+#       tlock      {status missing kind {} box {} dpoint {}
+#                   detail {no live box announces ...}}
+#     }
+#
+# status is ok | missing | ambiguous (then `hits` lists the candidates).
+# ::ess::file_open reads this datapoint; it never sends to this interp (the
+# extio/ain/streams rule: a blocking send on the open path can wedge it).
+
+proc extio_record_norm {v} {
+    set v [string trim $v]
+    if { [string tolower $v] in {none off no false 0} } { return "" }
+    set out {}
+    foreach n [regexp -all -inline {[^\s,]+} $v] {
+        if { ![regexp {^[^/{}\\\[\]"$;]+(/[^/{}\\\[\]"$;]+)?$} $n] } {
+            error "extio record: '$n' is not a name. Give analog group names,\
+                   DI line labels or chord group names, separated by spaces;\
+                   <box>/<name> only when two boxes announce the same name"
+        }
+        if { $n ni $out } { lappend out $n }
+    }
+    return [join $out " "]
+}
+
+proc extio_record_label {box pin} {             ;# a pin's label, "" if none
+    set lab ""
+    catch { set lab [string trim [lindex [split [dservGet extio/$box/state/label/$pin] \x00] 0]] }
+    return $lab
+}
+
+proc extio_record_commalist {dp} {
+    set out {}
+    if { [catch { set csv [dservGet $dp] }] } { return {} }
+    foreach p [split $csv ,] {
+        set p [string trim $p]
+        if { $p ne "" } { lappend out $p }
+    }
+    return $out
+}
+
+# Everything on the live boxes a name could mean, each as a dict
+# {kind box dpoint detail ?key stream?}.
+proc extio_record_hits {name} {
+    set want_box ""
+    set nm $name
+    if { [string first / $name] >= 0 } { lassign [split $name /] want_box nm }
+    set hits {}
+    # analog groups: the manifest is already live-only
+    set man $::extio_ain_streams_last
+    if { $man eq "" } { set man [dict create] }
+    dict for {k s} $man {
+        if { [dict get $s group] ne $nm } continue
+        if { $want_box ne "" && [dict get $s box] ne $want_box } continue
+        set rate [expr {[dict exists $s rate_hz] ? " @ [dict get $s rate_hz] Hz" : ""}]
+        lappend hits [dict create kind ain box [dict get $s box] \
+                          dpoint [dict get $s dpoint] key $k stream $s \
+                          detail "[dict get $s box]: analog group $nm,\
+                                  channels [join [dict get $s labels] { }]$rate"]
+    }
+    foreach box [lsort [array names ::extio_known]] {
+        if { $want_box ne "" && $box ne $want_box } continue
+        # a labelled DI line
+        foreach p [extio_record_commalist extio/$box/state/pins/in] {
+            if { [extio_record_label $box $p] ne $nm } continue
+            lappend hits [dict create kind di box $box \
+                              dpoint extio/$box/state/di/$p \
+                              detail "$box: DI pin $p, labelled $nm"]
+        }
+        # a chord group (an empty pins list is a tombstoned one)
+        if { [llength [extio_record_commalist extio/$box/state/group/$nm/pins]] } {
+            lappend hits [dict create kind group box $box \
+                              dpoint extio/$box/state/group/$nm \
+                              detail "$box: chord group $nm"]
+        }
+    }
+    return $hits
+}
+
+proc extio_record_resolve {} {
+    set declared [settings::get extio record]
+    set streams [dict create]
+    foreach name $declared {
+        set hits [extio_record_hits $name]
+        switch -- [llength $hits] {
+            0 {
+                dict set streams $name [dict create status missing kind "" box "" \
+                    dpoint "" detail "no live box announces an analog group,\
+                                      DI line label or chord group named $name"]
+            }
+            1 {
+                dict set streams $name [dict merge [lindex $hits 0] {status ok}]
+            }
+            default {
+                set where {}
+                foreach h $hits { lappend where "[dict get $h box] ([dict get $h kind])" }
+                dict set streams $name [dict create status ambiguous kind "" box "" \
+                    dpoint "" hits $hits \
+                    detail "$name matches [join $where {, }]: qualify it as\
+                            <box>/$name, or rename one"]
+            }
+        }
+    }
+    return [dict create declared $declared streams $streams]
+}
+
+set ::extio_record_last ""
+set ::extio_health_last ""
+proc extio_record_publish {args} {
+    if { [catch { extio_record_resolve } r] } {
+        puts "extio: record list did not resolve: $r"
+        return
+    }
+    if { $r ne $::extio_record_last } {
+        set ::extio_record_last $r
+        dservSet extio/record $r
+    }
+    extio_health_publish $r
+}
+
+# THE GREEN LIGHT for the extio section of the gear (settings-1.0.tm): the
+# boxes this host sees, and whether the rig's record list resolves on them.
+#   off    no box is live (gray: a rig with no extio box is a working rig)
+#   error  a declared record name is missing or ambiguous
+#   ok     boxes live, and every declared name resolves
+proc extio_health_publish {r} {
+    set boxes [lsort [array names ::extio_known]]
+    set n [llength $boxes]
+    set bad {}
+    set good {}
+    dict for {name e} [dict get $r streams] {
+        if { [dict get $e status] eq "ok" } {
+            lappend good $name
+        } else {
+            lappend bad "$name [dict get $e status]"
+        }
+    }
+    if { [llength $bad] } {
+        set h "error recording: [join $bad {, }]"
+        if { !$n } { append h " (no box is live)" }
+    } elseif { !$n } {
+        set h "off no box is live"
+    } else {
+        set h "ok $n box[expr {$n == 1 ? {} : {es}}] live ([join $boxes {, }])"
+        if { [llength $good] } { append h "; recording [join $good {, }]" }
+    }
+    if { $h ne $::extio_health_last } {
+        set ::extio_health_last $h
+        dservSet extio/health $h
+    }
+}
+
+settings::declare extio record -default "" \
+    -validate {extio_record_norm} \
+    -candidates extio:record \
+    -apply {extio_record_publish} \
+    -doc "extio streams THIS RIG puts in every data file, whatever system is
+loaded: a photodiode on the screen, a trigger line, a lever the rig always
+logs. Name them by label, separated by spaces: an analog group name (its
+sample blocks, inside each obs), a DI line's label (every edge, the whole
+file) or a chord group name (its events). <box>/<name> only when two boxes
+announce the same name. A protocol's record_streams param adds analog
+streams on top. A name no live box answers to does not stop a file from
+opening: the light turns red, the open warns, and the file says so.
+Takes effect at the next data file."
+
+# The gear's Pick... for `extio record` (SettingsModal: `send extio
+# {::extio::candidates record}`): everything a live box announces that
+# could be logged, as a multi-select. Names declared but not answering
+# now are listed too, so they can be unticked.
+namespace eval ::extio {
+    proc candidates {kind} {
+        if { $kind ne "record" } {
+            error "extio candidates: unknown kind '$kind' (want record)"
+        }
+        set rows {}
+        set man $::extio_ain_streams_last
+        if { $man eq "" } { set man [dict create] }
+        dict for {k s} $man {
+            set rate [expr {[dict exists $s rate_hz] ? " @ [dict get $s rate_hz] Hz" : ""}]
+            lappend rows [list [dict get $s box] [dict get $s group] \
+                "[dict get $s group] ([join [dict get $s labels] { }])" \
+                "[dict get $s box]: analog$rate -- sample blocks, inside each obs"]
+        }
+        foreach box [lsort [array names ::extio_known]] {
+            foreach p [::extio_record_commalist extio/$box/state/pins/in] {
+                set lab [::extio_record_label $box $p]
+                if { $lab eq "" } continue         ;# label it first: a pin number does not survive a swap
+                lappend rows [list $box $lab $lab \
+                    "$box: DI pin $p -- every edge, the whole file"]
+            }
+            foreach k [lsort [dservKeys extio/$box/state/group/*/pins]] {
+                if { ![regexp {/state/group/([^/]+)/pins$} $k -> g] } continue
+                if { ![llength [::extio_record_commalist $k]] } continue
+                lappend rows [list $box $g "group $g" \
+                    "$box: chord group -- its settled events, the whole file"]
+            }
+        }
+        # a bare name is the durable form; qualify only where it collides
+        array set count {}
+        foreach r $rows { incr count([lindex $r 1]) }
+        set out {}
+        set seen {}
+        foreach r $rows {
+            lassign $r box nm label detail
+            set route [expr {$count($nm) > 1 ? "$box/$nm" : $nm}]
+            lappend seen $route
+            lappend out [dict create route $route label $label detail $detail \
+                             multi 1 durable 1 selectable 1 status ok address "" \
+                             note "ticked ones go into every data file on this\
+                                   rig, whatever system is loaded"]
+        }
+        foreach nm [settings::get extio record] {
+            if { $nm in $seen } continue
+            lappend out [dict create route $nm label $nm \
+                             detail "declared, but no live box announces it" \
+                             multi 1 durable 1 selectable 1 status unresolved address ""]
+        }
+        return $out
     }
 }
 

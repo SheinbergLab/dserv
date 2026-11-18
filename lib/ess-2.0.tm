@@ -5127,6 +5127,65 @@ namespace eval ess {
                     missing $missing ambiguous $ambiguous]
     }
 
+    ########################################################################
+    # WHAT THE RIG RECORDS, on top of what the system asks for
+    #
+    # The setting `extio record` (extioconf.tcl) names streams this rig puts
+    # in every file -- a photodiode, a trigger line -- and extio resolves it
+    # against the live boxes into extio/record. Read here, never asked for:
+    # a datapoint read cannot wedge the open (the extio/ain/streams rule).
+    #
+    # Merges into the analog result of ain_resolve_streams, so the decode key
+    # (ess/ain/recorded) covers rig streams the same way, with each recorded
+    # entry's `source` saying who asked: param, rig, or both. Returns the
+    # merged analog dict plus what to match for the digital streams and what
+    # did not resolve:
+    #
+    #   ain       the ain_resolve_streams dict, rig streams merged in
+    #   digital   {dpoint kind box} for each DI line / chord group
+    #   unresolved {name detail} for each missing or ambiguous name
+    #
+    # A name that does not resolve never refuses the open: that is
+    # record_streams' contract, for streams an experiment depends on. The rig
+    # list is the rig's, and an unplugged photodiode should not stop a
+    # session. The caller warns, and the file carries extio/record.
+    proc rig_record_merge {ain} {
+        dict for {k s} [dict get $ain recorded] {
+            dict set ain recorded $k source param
+        }
+        set digital {}
+        set unresolved {}
+        set rec ""
+        if { [dservExists extio/record] } { catch { set rec [dservGet extio/record] } }
+        if { $rec eq "" || ![dict exists $rec streams] } {
+            return [dict create ain $ain digital {} unresolved {}]
+        }
+        dict for {name e} [dict get $rec streams] {
+            if { [dict get $e status] ne "ok" } {
+                lappend unresolved [list $name [dict get $e detail]]
+                continue
+            }
+            switch -- [dict get $e kind] {
+                ain {
+                    set k [dict get $e key]
+                    if { [dict exists $ain recorded $k] } {
+                        dict set ain recorded $k source both
+                    } else {
+                        dict set ain recorded $k [dict merge [dict get $e stream] {source rig}]
+                    }
+                    if { [dict exists $ain declined $k] } {
+                        dict unset ain declined $k
+                    }
+                }
+                di - group {
+                    lappend digital [list [dict get $e dpoint] [dict get $e kind] \
+                                         [dict get $e box]]
+                }
+            }
+        }
+        return [dict create ain $ain digital $digital unresolved $unresolved]
+    }
+
     proc file_open {f {overwrite 0}} {
         variable current
         variable open_datafile
@@ -5376,13 +5435,47 @@ namespace eval ess {
         # buffering them would discard the per-block sample time the box's
         # hardware pacing exists to produce. obs_limited, like every other
         # high-rate source here.
+        #
+        # The rig's own list (setting `extio record`) joins here: its analog
+        # groups are matched exactly like the protocol's, so one extractor
+        # (df ain_samples_in_obs) reads both; `source` in the key says which
+        # asked.
+        set rig [rig_record_merge $ain]
+        set ain [dict get $rig ain]
         dict for {k s} [dict get $ain recorded] {
             dservLoggerAddMatch $filename [dict get $s dpoint] 1
         }
         # The decode key, in the file: which columns each block carries, what
-        # they are called, and what was available but deliberately declined.
+        # they are called, who asked for each, and what was available but
+        # deliberately declined.
         dservSet ess/ain/recorded $ain
         dservLoggerAddMatch $filename ess/ain/recorded
+
+        # The rig's digital streams: every edge or group event, unbuffered
+        # and NOT obs-limited -- the stim_tlock_din_match policy, for the
+        # same reason: these mark when things happened against the display,
+        # and an edge just after ENDOBS is still data. For a DI line, the
+        # box's clock-sync records too (see stim_tlock_din_match), so an
+        # edge time can be checked against the anchor it was mapped by.
+        foreach d [dict get $rig digital] {
+            lassign $d _dp _kind _box
+            dservLoggerAddMatch $filename $_dp 0 0 1
+            if { $_kind eq "di" } {
+                dservLoggerAddMatch $filename extio/$_box/state/sync/* 0 0 1
+                dservLoggerAddMatch $filename extio/$_box/state/in_obs 0 0 1
+            }
+        }
+        # What the rig declared and how each name resolved -- including the
+        # ones that did not, so "no photodiode in this file" reads as
+        # "declared, box absent", not as a mystery.
+        if { [dservExists extio/record] } {
+            dservLoggerAddMatch $filename extio/record
+            lappend _reemit extio/record
+        }
+        foreach u [dict get $rig unresolved] {
+            ::ess::ess_warning "extio record: [lindex $u 0] is not in this\
+                data file -- [lindex $u 1]" "extio"
+        }
 
         # Camera grabs (::ess::camera_grab). NOT obs_limited: the frame is
         # encoded off-thread and can be published just after ENDOBS; an

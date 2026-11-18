@@ -385,6 +385,92 @@ function tickAges(root) {
       el.className = 'age ' + (a > 60 ? 'dead' : a > 10 ? 'old' : '');
     }
   }
+  /* log checkboxes: a pin's name is its LABEL, which edits in place */
+  syncRecord(root);
+}
+
+/* ---- log: the rig's `extio record` setting, shown where things are named ----
+ *
+ * NOT box config. Whether a stream goes into data files is the RIG's
+ * declaration (local/rig.tcl, the gear's extio section), so a ticked box
+ * writes `settings::put extio record ... -persist` in the extio interp and
+ * nothing here touches the box -- it is not in the dirty/Save ledger either,
+ * because it is already saved the moment it is set. The checkboxes mirror
+ * settings/extio/record; whether each name RESOLVES is the gear's light
+ * (extio/health), judged by extioconf against the live boxes.
+ *
+ * A name is the durable form: a DI line's LABEL, a group's name. A box
+ * prefix (<box>/<name>) is added only when another live box announces the
+ * same name, which is the one case the bare name cannot settle. */
+let recordList = [];              /* settings/extio/record, split */
+let recPendingUntil = 0;          /* a write in flight: don't let the tick revert the click */
+
+function onRecordSetting(msg) {
+  const v = msg.data !== undefined ? msg.data : msg.value;
+  recordList = String(v ?? '').split('\x00')[0].trim().split(/\s+/).filter(Boolean);
+  recPendingUntil = 0;
+  syncRecord(document);
+}
+
+function recName(el) {
+  if (el.dataset.recPin !== undefined) {
+    return String(get(el.dataset.recBox, 'label/' + el.dataset.recPin, '') || '').trim();
+  }
+  return el.dataset.recName || '';
+}
+
+function recBox(b, spec) {
+  const attr = spec.pin !== undefined ? `data-rec-pin="${spec.pin}"` : `data-rec-name="${esc(spec.name)}"`;
+  return `<input type="checkbox" data-rec-box="${esc(b)}" ${attr} onchange="toggleRecord(this)">`;
+}
+
+function isRecorded(b, name) {
+  return name !== '' && (recordList.includes(name) || recordList.includes(`${b}/${name}`));
+}
+
+function syncRecord(root) {
+  if (Date.now() < recPendingUntil) return;
+  for (const el of root.querySelectorAll('[data-rec-box]')) {
+    const b = el.dataset.recBox, name = recName(el);
+    el.disabled = name === '';
+    el.checked = isRecorded(b, name);
+    el.title = name === ''
+      ? 'label this line to log it — a label survives a re-pin, a pin number does not'
+      : `put ${name} in every data file on this rig (setting extio record)`;
+  }
+}
+
+/* does another box announce this name too? then the bare name is ambiguous */
+function announces(box, name) {
+  if (csvNums(get(box, 'pins/in')).some(p => String(get(box, 'label/' + p, '') || '').trim() === name)) return true;
+  if (String(get(box, `group/${name}/pins`, '') || '') !== '') return true;
+  if (String(get(box, `ain/group/${name}/chans`, '') || '') !== '') return true;
+  return false;
+}
+
+async function toggleRecord(el) {
+  const b = el.dataset.recBox, name = recName(el);
+  if (name === '') { el.checked = false; return; }
+  let list = recordList.filter(n => n !== name && n !== `${b}/${name}`);
+  if (el.checked) {
+    const clash = [...boxes.keys()].some(o => o !== b && liveness(o).cls !== 'bad' && announces(o, name));
+    list.push(clash ? `${b}/${name}` : name);
+  }
+  if (list.some(n => /[{}\\\[\]"$;\s]/.test(n))) {
+    el.checked = !el.checked;
+    el.title = 'a name with braces, brackets or quotes cannot be logged — relabel it';
+    return;
+  }
+  recPendingUntil = Date.now() + 3000;
+  let r = '';
+  try {
+    r = await conn.send(`settings::put extio record {${list.join(' ')}} -persist`, 'extio');
+  } catch (e) { r = '!TCL_ERROR ' + e.message; }
+  if (String(r).startsWith('!TCL_ERROR')) {
+    recPendingUntil = 0;
+    syncRecord(document);
+    el.title = 'not set: ' + String(r).replace(/^!TCL_ERROR\s*/, '');
+  }
 }
 
 /* ---- writes: named procs in the extio interp, never raw datapoint pokes ---- */
@@ -1683,8 +1769,9 @@ function buildPanel(b) {
               data-ctl="${esc(b)}|pin/${p}/active_low" data-bind="pins/active_low"
               data-bind-box="${esc(b)}" data-csv-key="${p}"
               onchange="cfgSet('${b}','pin/${p}/active_low',this.checked?1:0,this)">`}</td>
+      <td>${(!res && !own && (mode === 'in' || mode === 'in_pullup')) ? recBox(b, { pin: p }) : ''}</td>
     </tr>`;
-  }).join('') || '<tr><td colspan="7" class="age">no pins announced</td></tr>';
+  }).join('') || '<tr><td colspan="8" class="age">no pins announced</td></tr>';
 
   /* GROUPS, one row per SLOT -- the announced ones filled in, the rest
    * CREATABLE. Only rendering announced groups is what made creation
@@ -1711,7 +1798,7 @@ function buildPanel(b) {
              onchange="cfgSet('${b}','group/${i}/settle_ms',this.value,this)"></td>
         <td><input type="checkbox" data-ctl="${esc(b)}|group/${i}/quiet"
              onchange="cfgSet('${b}','group/${i}/quiet',this.checked?1:0,this)"></td>
-        <td class="age" colspan="2">unused — type a pin list to create</td></tr>`;
+        <td class="age" colspan="3">unused — type a pin list to create</td></tr>`;
     }
     return `<tr class="row"><td><b>${i}</b></td>
       <td>${field(b, `group/${gn}/label`, `group/${i}/label`, { wide: 1, fallback: gn })}</td>
@@ -1722,6 +1809,7 @@ function buildPanel(b) {
            data-ctl="${esc(b)}|group/${i}/quiet" data-bind="group/${gn}/quiet" data-bind-box="${esc(b)}"
            onchange="cfgSet('${b}','group/${i}/quiet',this.checked?1:0,this)"></td>
       <td><span data-grp-box="${esc(b)}" data-grp="${esc(gn)}"></span> ${ageSpan(b, `group/${gn}`)}</td>
+      <td>${recBox(b, { name: gn })}</td>
       <td><button class="danger" title="free this slot (pins → off)" data-ctl="${esc(b)}|btn/group/${i}/clear"
            onclick="clearGroup('${b}',${i},'${esc(gn)}')">✕</button></td></tr>`;
   }).join('');
@@ -1752,7 +1840,7 @@ function buildPanel(b) {
     blobOnly.map(gn => `<tr class="row"><td class="age">?</td>
       <td><b>${esc(gn)}</b></td>
       <td colspan="7" class="age">publishing, but this firmware does not announce its slot/config</td>
-      <td>${lastCell(gn)}</td><td></td></tr>`).join('') +
+      <td>${lastCell(gn)}</td><td></td><td></td></tr>`).join('') +
     Array.from({ length: agmax }, (_, i) => {
       const gn = agslot.get(i);
       if (gn === undefined) {
@@ -1775,7 +1863,7 @@ function buildPanel(b) {
                onchange="cfgSet('${b}','ain/group/${i}/batch',this.value,this)"></td>
           <td><input type="checkbox" data-ctl="${esc(b)}|ain/group/${i}/average"
                onchange="cfgSet('${b}','ain/group/${i}/average',this.checked?1:0,this)"></td>
-          <td class="age" colspan="2">unused — type channels to create</td></tr>`;
+          <td class="age" colspan="3">unused — type channels to create</td></tr>`;
       }
       return `<tr class="row"><td><b>${i}</b></td>
         <td>${field(b, `ain/group/${gn}/label`, `ain/group/${i}/label`, { wide: 1, fallback: gn })}</td>
@@ -1789,6 +1877,7 @@ function buildPanel(b) {
              data-ctl="${esc(b)}|ain/group/${i}/average" data-bind="ain/group/${gn}/avg" data-bind-box="${esc(b)}"
              onchange="cfgSet('${b}','ain/group/${i}/average',this.checked?1:0,this)"></td>
         <td>${lastCell(gn)}</td>
+        <td>${recBox(b, { name: gn })}</td>
         <td><button class="danger" title="free this slot" data-ctl="${esc(b)}|btn/ain-group/${i}/clear"
              onclick="clearAinGroup('${b}',${i},'${esc(gn)}')">✕</button></td></tr>`;
     }).join('');
@@ -1892,7 +1981,7 @@ function buildPanel(b) {
        follower role: boxes wired to the leader's line hardware-stamp the same edge.</p>
 
     <h2>pins</h2>
-    <table><tr><th>pin</th><th>mode</th><th>level</th><th>label</th><th>debounce ms</th><th>pulse µs</th><th>act low</th></tr>${pinRows}</table>
+    <table><tr><th>pin</th><th>mode</th><th>level</th><th>label</th><th>debounce ms</th><th>pulse µs</th><th>act low</th><th title="Put this stream in every data file on this rig, whatever system is loaded. A rig setting (extio record, the gear\'s extio section), not box config: it is saved as soon as it is ticked.">log</th></tr>${pinRows}</table>
     <p class="note">${allTooLong
        ? '<b>This box could not announce its pin map.</b> It replied <code>!toolong</code>, meaning the datapoint name plus the value would not fit one 128-byte frame — almost always because the BOX NAME is too long. Shorten it (the pin map needs the name under ~9 characters on firmware that sends <code>pins/all</code> as a list; newer firmware sends a range and has room for any legal name) and the manifest re-announces on rename. Only ACTIVE pins are shown below until then.'
        : havePinsAll
@@ -1902,7 +1991,7 @@ function buildPanel(b) {
        : sk ? ' The grey name beside each pin is what is printed on the board, announced by the box itself — box pin numbers are an internal index and need not match it.' : ''}</p>
 
     <h2>digital groups</h2>
-    <table><tr><th>#</th><th>label</th><th>pins</th><th>settle ms</th><th>quiet</th><th>value</th><th></th></tr>${groups}</table>
+    <table><tr><th>#</th><th>label</th><th>pins</th><th>settle ms</th><th>quiet</th><th>value</th><th title="Put this stream in every data file on this rig, whatever system is loaded. A rig setting (extio record, the gear\'s extio section), not box config: it is saved as soon as it is ticked.">log</th><th></th></tr>${groups}</table>
     <p class="note">A group publishes its member pins as ONE atomic bitmask event
        (<code>state/group/&lt;label&gt;</code>, bit <i>i</i> = <i>i</i>-th lowest pin), settled over
        <code>settle ms</code> so a rolling chord (joystick diagonal) arrives as one event stamped at
@@ -1910,7 +1999,7 @@ function buildPanel(b) {
        publishes. Type a pin list into a free slot to create a group; ✕ frees the slot.</p>
 
     <h2>analog groups</h2>
-    <table><tr><th>#</th><th>label</th><th>chans</th><th title="Per-CHANNEL role labels, in this group's column order. They name the columns of the published block, so a logged recording says what each number is. Channel-scoped: a channel shared by two groups shows the same label in both rows.">column labels</th><th>mode</th><th>deadband</th><th>decimate</th><th>batch</th><th>avg</th><th>last</th><th></th></tr>${aingroups}</table>
+    <table><tr><th>#</th><th>label</th><th>chans</th><th title="Per-CHANNEL role labels, in this group's column order. They name the columns of the published block, so a logged recording says what each number is. Channel-scoped: a channel shared by two groups shows the same label in both rows.">column labels</th><th>mode</th><th>deadband</th><th>decimate</th><th>batch</th><th>avg</th><th>last</th><th title="Put this stream in every data file on this rig, whatever system is loaded. A rig setting (extio record, the gear\'s extio section), not box config: it is saved as soon as it is ticked.">log</th><th></th></tr>${aingroups}</table>
     <p class="note">An analog group publishes a named set of ADC channels together as
        self-describing blocks on <code>state/ain/&lt;label&gt;</code>. <code>onchange</code> emits when a
        member moves more than <code>deadband</code> counts (joystick); <code>continuous</code> takes every
@@ -1929,6 +2018,14 @@ function buildPanel(b) {
        for you if you widen the channel set; older firmware stores what you type and silently
        clamps when sampling — the row flags that case.${
        agAnnounced ? '' : ' <b>This firmware does not announce analog group config</b> — dashed fields are write-only (a write still configures the box); update the firmware for full readback.'}</p>
+    <p class="note"><b>log</b> (here, on digital groups and on input pins) puts the stream in
+       every data file this rig writes, whatever system is loaded — a photodiode, a trigger
+       line. It is the rig's setting <code>extio record</code>, not box config: it is saved as
+       soon as it is ticked, needs no Save, and the gear's extio section shows whether each
+       name resolves. Analog groups are logged as their sample blocks inside each obs (the
+       block size is <code>batch</code> above); input lines and digital groups as every edge,
+       for the whole file. A system's <code>record_streams</code> param adds analog streams on
+       top. Pins are logged by <i>label</i>, so label a line before ticking it.</p>
 
     <h2>analog</h2>
     <table>
@@ -2069,6 +2166,7 @@ async function init() {
    * is up populates itself when dserv arrives instead of needing a reload. */
   dp = new DatapointManager(conn, { autoGetKeys: false });
   dp.subscribe('extio/*', onExtio);
+  dp.subscribe('settings/extio/record', onRecordSetting);
 
   /* SEED FROM THE RETAINED VALUES, or the page shows only what happens to be
    * published after it loads.
@@ -2100,7 +2198,7 @@ async function init() {
   const wantBox = qs.get('box');
   if (wantBox) pendingSelect = wantBox;
 
-  const seed = () => { fetched = new Set(); dp.refreshKeys(); };
+  const seed = () => { fetched = new Set(); dp.refreshKeys(); dp.sendGet('settings/extio/record'); };
 
   try {
     await conn.connect();

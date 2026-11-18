@@ -28,6 +28,40 @@ again from the current extractor. Work files live in
 Exports go to `<export>/{ess,obs,trials}`, and from there to wherever
 sessions are kept (`~/data/` on a dev Mac).
 
+## extio streams in a file
+
+Two declarations decide which extio streams a file carries, and
+`::ess::file_open` records both:
+
+| who decides | where | covers | if a name is missing |
+|---|---|---|---|
+| the experiment | `record_streams` param (system → protocol → variant) | analog groups | the file does not open |
+| the rig | setting `extio record` (gear → extio, or the **log** column on `extio-config.html`) | analog groups, labelled DI lines, chord groups | the file opens; ESS warns, and the gear's extio light turns red |
+
+Use the rig setting for something wired to the rig rather than needed by
+one experiment, such as a photodiode on the screen or a trigger line. Names
+are labels: an analog group's name, a DI line's label or a chord group's
+name. Use `<box>/<name>` only when two live boxes announce the same name.
+extioconf resolves the list against the live boxes into `extio/record`;
+`file_open` reads that datapoint and never sends to extio.
+
+- **Analog groups**, from either source, are matched the same way: one
+  unbuffered record per block, inside each obs. `df::File
+  ain_samples_in_obs` reads them. The number of samples in a block is the
+  group's `batch` on the box (`extio-config.html`, analog groups); it is
+  not a logging setting.
+- **DI lines and chord groups** from the rig list are logged unbuffered
+  and not obs-limited, the same as the `tlock din` input: every edge for
+  the whole file. Edges between obs land in the obs DG's `<session>`
+  columns. For a DI line, the box's `state/sync/*` and `state/in_obs` are
+  logged too, so an edge time can be checked against the clock anchor it
+  was mapped with.
+- **The decode key** is `ess/ain/recorded`. Each analog entry has a
+  `source` field (`param`, `rig` or `both`). `extio/record` is also in the
+  file: it holds what the rig declared and how each name resolved,
+  including names that did not resolve. So a missing photodiode can be
+  read as "declared, box absent".
+
 ## Wide types: `df wide_datafiles`
 
 dslog reads 64-bit datapoints narrowed to 32-bit types unless
