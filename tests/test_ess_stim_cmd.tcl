@@ -496,8 +496,8 @@ assert {[dict get $status enabled] == 1 && [dict get $status host] eq "stimhost.
 set ::matches {}
 proc ::ess::dservLoggerAddMatch { args } { lappend ::matches $args }
 assert {[::ess::stim_frame_log_match /tmp/x.ess] == 1} "stim_frame_log_match adds a match when the flag is 1"
-assert {$::matches eq {{/tmp/x.ess stim/frame 0 0 1} {/tmp/x.ess stim/gazewin 0 0 1} {/tmp/x.ess stim/tlock 0 0 1}}} \
-    "the matches are stim/frame, stim/gazewin and stim/tlock, not obs-limited, unbuffered, every record ($::matches)"
+assert {$::matches eq {{/tmp/x.ess stim/frame 0 0 1} {/tmp/x.ess stim/gazewin 0 0 1} {/tmp/x.ess stim/latedraw 0 0 1} {/tmp/x.ess stim/tlock 0 0 1}}} \
+    "the matches are stim/frame, stim/gazewin, stim/latedraw and stim/tlock, not obs-limited, unbuffered, every record ($::matches)"
 # disable: once, raw, flag back to 0; a second disable sends nothing
 assert {[::ess::stim_frame_disable] == 1} "stim_frame_disable sends the stop when the flag is 1"
 assert {$::ess::stim_frame_log == 0} "flag 0 after disable"
