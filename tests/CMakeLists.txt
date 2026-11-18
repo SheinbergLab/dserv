@@ -129,6 +129,21 @@ else()
 endif()
 
 #
+# df::add_recorded_streams (lib/df-2.0.tm) on a synthetic obs DG: the
+# streams a file's decode keys name reach the trials DG with no extractor
+# involved. Needs dlsh for the dl_* commands, nothing else.
+#
+if(DLSH_EXECUTABLE)
+  add_test(
+      NAME df_recorded_streams
+      COMMAND ${DLSH_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tests/test_df_recorded_streams.tcl"
+  )
+  set_property(TEST df_recorded_streams PROPERTY PASS_REGULAR_EXPRESSION "all checks passed")
+else()
+  message(STATUS "dlsh not found -- skipping df_recorded_streams")
+endif()
+
+#
 # Module unit tests -- pure Tcl, dserv STUBBED.
 #
 # Unlike the tests above these need no server, no rig and no hardware: they

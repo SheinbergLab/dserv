@@ -357,6 +357,10 @@ namespace eval df {
                 set result [{*}$proto_proc $f $result {*}$args]
             }
         }
+
+        # streams the file's decode keys name, which no extractor has to
+        # know about (add_recorded_streams)
+        set result [_add_recorded_streams_safely $result [$f group] $filepath]
         
         # Validate rectangular result
         validate_rectangular $result "extract_trials for $filepath"
@@ -427,6 +431,10 @@ namespace eval df {
                 set result [{*}$proto_proc $g $meta $result {*}$args]
             }
         }
+
+        # (an extractor may have deleted the obs DG: read it again then)
+        if {[catch {dg_tclListnames $g}]} { set g [dg_read $obs_path] }
+        set result [_add_recorded_streams_safely $result $g $obs_path]
         
         # Validate rectangular result
         validate_rectangular $result "extract_trials_from_obs for $obs_path"
@@ -490,6 +498,9 @@ namespace eval df {
             set trials_proc "::${system}::extract_trials_from_obs"
             if {[info commands $trials_proc] ne ""} {
                 set trials [$trials_proc $g [extract_metadata_from_obs $g]]
+                # (an extractor may have deleted the obs DG: read it again then)
+                if {[catch {dg_tclListnames $g}]} { set g [dg_read $obs_path] }
+                set trials [_add_recorded_streams_safely $trials $g $obs_path]
                 set from obs
             } else {
                 if {$o(-ess) eq ""} { error "$extractor reads .ess files only (no extract_trials_from_obs): give the .ess" }
@@ -516,7 +527,226 @@ namespace eval df {
         dict create n_trials $n_trials extractor $extractor \
             extractor_mtime [file mtime $extractor] from $from
     }
-    
+
+    ########################################################################
+    # RECORDED STREAMS -> TRIALS
+    #
+    # A trials DG has the columns its system's extractor writes, and an
+    # extractor can only write streams it knows by name. Streams the RIG
+    # declares (setting `extio record`) are, by design, known to no system,
+    # and a protocol's record_streams analog groups had no reader either. So
+    # this step runs after every extractor and adds them from the decode keys
+    # every file carries -- never from the extractor:
+    #
+    #   ess/ain/recorded   analog groups, from record_streams and the rig
+    #   extio/record       the rig's list; its DI lines and chord groups
+    #
+    # Columns, one row per trial, picked from the obs DG by the trials'
+    # obsid (every extractor writes it):
+    #
+    #   <group>_t          analog: ms from obs onset, one per scan (float)
+    #   <group>_<label>    analog: one column per channel, named by its
+    #                      label (ch<N> if unlabelled), raw counts (short)
+    #   <name>_t <name>    DI line / chord group: each edge or group event
+    #                      inside the obs, ms from obs onset, and its value
+    #
+    # <group> gains a <box>_ prefix only when two boxes' groups share a
+    # name. A column the extractor already wrote is left alone: a system
+    # that knows a stream better than this step does wins. A stream the key
+    # names but the obs DG does not carry gets EMPTY lists in every row (the
+    # trials stay rectangular, and the column's presence says it was
+    # declared) plus a line on stdout.
+    #
+    # Analog block times are as precise as <dst>: microseconds when the file
+    # was read with dslog::wideTypes on (df wide_datafiles, the default),
+    # whole ms otherwise.
+
+    # A decode key from an obs DG (or a df::File group): the last record of
+    # <session>NAME, else the first record inside any obs. "" if absent.
+    proc session_key {g name} {
+        if {[dl_exists $g:<session>$name]} {
+            # a list of string lists (readESS wraps the session's records):
+            # flatten it before taking the last record
+            set col $g:<session>$name
+            if {[dl_datatype $col] eq "list"} {
+                set recs [dl_tcllist [dl_unpack $col]]
+            } else {
+                set recs [dl_tcllist $col]
+            }
+            if {[llength $recs]} { return [string trimright [lindex $recs end] \x00] }
+        }
+        if {[dl_exists $g:<ds>$name]} {
+            foreach obs [dl_tcllist $g:<ds>$name] {
+                if {[llength $obs]} { return [string trimright [lindex $obs 0] \x00] }
+            }
+        }
+        return ""
+    }
+
+    # Decode one recorded extio analog stream, per obs. g is an obs DG (or a
+    # df::File's readESS group); varname the block datapoint. Returns a list,
+    # one entry per obs in `obs` (default: every obs), each
+    #   {times {ch0-samples ch1-samples ...}}
+    # times in ms from obs onset (block <dst> + k*interval_us), samples raw.
+    # Each record is a self-describing block: 12-byte header + scan-major
+    # int16 samples (lib/extio-1.0.tm is the canonical decoder).
+    proc ain_obs_decode {g varname {obs {}}} {
+        if {[catch {package require extio} err]} {
+            error "decoding extio analog blocks needs lib/extio-1.0.tm on the\
+                   module path: $err"
+        }
+        set vcol $g:<ds>$varname
+        set tcol $g:<dst>$varname
+        set ncol $g:<dsn>$varname
+        if {![dl_exists $vcol]} {
+            error "no <ds>$varname column -- stream not recorded"
+        }
+        if {![dl_exists $tcol]} {
+            error "no <dst>$varname column -- file was read with a\
+                   pre-timestamp readESS (rebuild dlsh)"
+        }
+        if {![llength $obs]} {
+            set n [dl_length $vcol]
+            for {set o 0} {$o < $n} {incr o} { lappend obs $o }
+        }
+        set out {}
+        foreach o $obs {
+            dl_local obs_bytes [dl_unpack [dl_choose $vcol [dl_ilist $o]]]
+            dl_toString $obs_bytes bytes     ;# fills `bytes`, returns the length
+            set times  [dl_tcllist [dl_unpack [dl_choose $tcol [dl_ilist $o]]]]
+            set counts [dl_tcllist [dl_unpack [dl_choose $ncol [dl_ilist $o]]]]
+            set pos 0
+            set sample_t {}
+            set nchan 0
+            set chans {}
+            array unset ch
+            foreach t $times n $counts {
+                set block [string range $bytes $pos [expr {$pos + $n - 1}]]
+                incr pos $n
+                set d [extio::ain_decode $block]
+                set bn [dict get $d nchan]
+                if {$bn <= 0} { continue }
+                if {$nchan == 0} {
+                    set nchan $bn
+                    for {set c 0} {$c < $nchan} {incr c} { set ch($c) {} }
+                }
+                set interval [dict get $d interval_us]
+                set k 0
+                foreach row [extio::ain_scans $d] {
+                    lappend sample_t [expr {$t + $k * $interval / 1000.0}]
+                    for {set c 0} {$c < $nchan} {incr c} {
+                        lappend ch($c) [lindex $row $c]
+                    }
+                    incr k
+                }
+            }
+            for {set c 0} {$c < $nchan} {incr c} { lappend chans $ch($c) }
+            lappend out [list $sample_t $chans]
+        }
+        return $out
+    }
+
+    proc _colname {s} { regsub -all {[^A-Za-z0-9_]} $s _ }
+
+    # Append every recorded stream to trials (see the block comment above).
+    # g is the obs DG the trials came from. Returns trials. Older files (no
+    # decode key) and trials with no obsid come back untouched.
+    proc add_recorded_streams {trials g} {
+        if {![dl_exists $trials:obsid]} {
+            puts "df: recorded streams not added: trials have no obsid column"
+            return $trials
+        }
+        set obsid  [dl_tcllist $trials:obsid]
+        set n_rows [llength $obsid]
+        set have   [dg_tclListnames $trials]
+
+        # ---- analog: ess/ain/recorded ----
+        set ain [session_key $g ess/ain/recorded]
+        set rec {}
+        if {$ain ne "" && [dict exists $ain recorded]} { set rec [dict get $ain recorded] }
+        array set gcount {}
+        dict for {k s} $rec { incr gcount([dict get $s group]) }
+        dict for {k s} $rec {
+            set grp [dict get $s group]
+            set dp  [dict get $s dpoint]
+            set base [_colname [expr {$gcount($grp) > 1 ? "[dict get $s box]_$grp" : $grp}]]
+            set labels [expr {[dict exists $s labels] ? [dict get $s labels] : {}}]
+            set nchan  [expr {[dict exists $s chans] ? [llength [dict get $s chans]] : [llength $labels]}]
+            set cols [list ${base}_t]
+            for {set c 0} {$c < $nchan} {incr c} {
+                set lab [lindex $labels $c]
+                if {$lab eq ""} { set lab ch[lindex [dict get $s chans] $c] }
+                lappend cols ${base}_[_colname $lab]
+            }
+            set skip {}
+            foreach c $cols { if {$c in $have} { lappend skip $c } }
+            if {[llength $skip] == [llength $cols]} continue     ;# the extractor has it
+            if {![dl_exists $g:<ds>$dp]} {
+                puts "df: $dp is in ess/ain/recorded but has no data in any obs --\
+                      [join $cols {, }] are empty"
+                foreach c $cols {
+                    if {$c in $skip} continue
+                    set ty [expr {$c eq "${base}_t" ? "float" : "short"}]
+                    dl_set $trials:$c [dl_repeat [dl_llist [dl_create $ty]] $n_rows]
+                }
+                continue
+            }
+            set dec [ain_obs_decode $g $dp $obsid]
+            dl_local tcol [dl_llist]
+            for {set c 0} {$c < $nchan} {incr c} { dl_local v$c [dl_llist] }
+            foreach row $dec {
+                lassign $row ts chs
+                dl_append $tcol [dl_flist {*}$ts]
+                for {set c 0} {$c < $nchan} {incr c} {
+                    dl_local cv [dl_create short]
+                    set samples [lindex $chs $c]
+                    if {[llength $samples]} {
+                        dl_fromString [binary format s* $samples] $cv
+                    }
+                    dl_append [set v$c] $cv
+                }
+            }
+            if {"${base}_t" ni $skip} { dl_set $trials:${base}_t $tcol }
+            for {set c 0} {$c < $nchan} {incr c} {
+                set cn [lindex $cols [expr {$c + 1}]]
+                if {$cn ni $skip} { dl_set $trials:$cn [set v$c] }
+            }
+        }
+
+        # ---- digital: the rig's DI lines and chord groups, extio/record ----
+        set xr [session_key $g extio/record]
+        if {$xr ne "" && [dict exists $xr streams]} {
+            dict for {name e} [dict get $xr streams] {
+                if {[dict get $e status] ne "ok"} continue
+                if {[dict get $e kind] ni {di group}} continue
+                set dp   [dict get $e dpoint]
+                set base [_colname $name]
+                if {"${base}_t" in $have || $base in $have} continue
+                if {![dl_exists $g:<ds>$dp]} {
+                    puts "df: $dp ($name) is in extio/record but changed in no\
+                          obs -- ${base}_t, $base are empty"
+                    dl_set $trials:${base}_t [dl_repeat [dl_llist [dl_create double]] $n_rows]
+                    dl_set $trials:$base     [dl_repeat [dl_llist [dl_create long]] $n_rows]
+                    continue
+                }
+                dl_local ix [dl_ilist {*}$obsid]
+                dl_set $trials:${base}_t [dl_choose $g:<dst>$dp $ix]
+                dl_set $trials:$base     [dl_choose $g:<ds>$dp $ix]
+            }
+        }
+        return $trials
+    }
+
+    # The call every extraction path makes. Never fails the conversion: the
+    # trials a system's extractor made are worth keeping whatever goes wrong
+    # here, and the failure is printed where df logs.
+    proc _add_recorded_streams_safely {trials g context} {
+        if {[catch { add_recorded_streams $trials $g } err]} {
+            puts "df: recorded streams not added to $context: $err"
+        }
+        return $trials
+    }
+
     #
     # Extract metadata from an obs dg (already loaded)
     #
@@ -1448,53 +1678,23 @@ namespace eval df {
         #   vals  - per obs: one DF_SHORT list per channel
         #
         method ain_samples_in_obs {varname} {
-            if {[catch {package require extio} err]} {
-                error "ain_samples_in_obs needs lib/extio-1.0.tm on the\
-                       module path: $err"
-            }
-            lassign [my ds_in_obs $varname] vcol tcol ncol
             set n_obs [dict get $meta n_obs]
+            set obs {}
+            for {set o 0} {$o < $n_obs} {incr o} { lappend obs $o }
 
             dl_local t_out [dl_llist]
             dl_local v_out [dl_llist]
 
-            for {set o 0} {$o < $n_obs} {incr o} {
-                dl_local obs_bytes [dl_unpack [dl_choose $vcol [dl_ilist $o]]]
-                set nbytes [dl_toString $obs_bytes bytes]
-                set times  [dl_tcllist [dl_unpack [dl_choose $tcol [dl_ilist $o]]]]
-                set counts [dl_tcllist [dl_unpack [dl_choose $ncol [dl_ilist $o]]]]
-
-                set pos 0
-                set sample_t {}
-                set nchan 0
-                array unset ch
-                foreach t $times n $counts {
-                    set block [string range $bytes $pos [expr {$pos + $n - 1}]]
-                    incr pos $n
-                    set d [extio::ain_decode $block]
-                    set bn [dict get $d nchan]
-                    if {$bn <= 0} { continue }
-                    if {$nchan == 0} {
-                        set nchan $bn
-                        for {set c 0} {$c < $nchan} {incr c} { set ch($c) {} }
-                    }
-                    set interval [dict get $d interval_us]
-                    set k 0
-                    foreach row [extio::ain_scans $d] {
-                        lappend sample_t [expr {$t + $k * $interval / 1000.0}]
-                        for {set c 0} {$c < $nchan} {incr c} {
-                            lappend ch($c) [lindex $row $c]
-                        }
-                        incr k
-                    }
-                }
-
+            # the decoder is df::ain_obs_decode, shared with the trials step
+            # (df::add_recorded_streams) so the two cannot disagree
+            foreach row [df::ain_obs_decode $g $varname $obs] {
+                lassign $row sample_t chans
                 dl_local ot [dl_flist {*}$sample_t]
                 dl_local ov [dl_llist]
-                for {set c 0} {$c < $nchan} {incr c} {
+                foreach samples $chans {
                     dl_local cv [dl_create short]
-                    if {[llength $ch($c)]} {
-                        dl_fromString [binary format s* $ch($c)] $cv
+                    if {[llength $samples]} {
+                        dl_fromString [binary format s* $samples] $cv
                     }
                     dl_append $ov $cv
                 }

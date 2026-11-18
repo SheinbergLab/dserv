@@ -62,6 +62,38 @@ extioconf resolves the list against the live boxes into `extio/record`;
   including names that did not resolve. So a missing photodiode can be
   read as "declared, box absent".
 
+### In the trials DG
+
+A system's extractor writes only the streams it knows by name, and no
+extractor knows about a rig's photodiode. So after the system and protocol
+extractors run, `df::add_recorded_streams` adds every stream the two
+decode keys name. It runs in all three extraction paths: `load_data`,
+`load_data_from_obs` and `make_trials`. Rows are picked by the trials'
+`obsid`.
+
+| stream | columns | each row |
+|---|---|---|
+| analog group `G` | `G_t` | ms from obs onset, one per scan (block time + k × interval) |
+| | `G_<label>` per channel (`G_ch<N>` if unlabelled) | raw counts, short |
+| rig DI line / chord group `N` | `N_t`, `N` | each edge or event inside the obs, and its value |
+
+- `G` gets a `<box>_` prefix only when two boxes' groups share a name.
+  Characters other than letters, digits and `_` become `_`.
+- A column the extractor already wrote is kept. A system that handles a
+  stream itself wins.
+- A stream the key names but the obs DG does not carry gets empty lists in
+  every row and a line on stdout. The trials stay rectangular, and the
+  column still shows that the stream was declared.
+- A failure in this step is printed, and the extractor's trials are
+  written without the extra columns.
+- Old files have no keys and come back unchanged.
+
+`G_t` is as precise as the block times: microseconds with `df
+wide_datafiles` on (the default), whole ms with it off. The decoder,
+`df::ain_obs_decode`, is shared with `df::File ain_samples_in_obs`, so the
+two cannot disagree. `tests/test_df_recorded_streams.tcl` builds a
+synthetic obs DG and covers each case.
+
 ## Wide types: `df wide_datafiles`
 
 dslog reads 64-bit datapoints narrowed to 32-bit types unless
