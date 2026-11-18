@@ -113,6 +113,28 @@ proc touchGetParam { p } { processGetParam "touch_windows" $p }
 proc touchGetIndexedParam { i p } {  processGetParam "touch_windows" $p $i }
 
 #
+# Saccade processor convenience functions (processors/saccade.c)
+#
+# emSaccadeEnable 1 turns on detection; events arrive on proc/saccade/event
+# as DSERV_DOUBLE[11]:
+#   event(1 onset, 2 landed, 3 offset, 4 abort) t_sample t_onset from_h from_v
+#   h v amp dir_deg peak_vel dur
+# Params share names with the offline em package: vel_thresh vel_thresh_low
+# coast_dur min_isi, plus run_dur vel_win max_dur max_gap holdoff_dur
+# base_dur min_onset_disp. All are seconds, deg or deg/s -- none is a sample
+# count -- so one setting holds across tracker rates (250 vs 400 Hz).
+# `emSaccadeSetParams vel_thresh 40 run_dur 0.008`.
+#
+proc emSaccadeEnable { {on 1} } { processSetParam "saccade" active $on }
+proc emSaccadeReset {} { processSetParam "saccade" reset 1 }
+proc emSaccadeSetParam { p v } { processSetParam "saccade" $p $v }
+proc emSaccadeSetParams { args } {
+    if { [llength $args] % 2 } { error "wrong number of arguments" }
+    foreach { p v } $args { processSetParam "saccade" $p $v }
+}
+proc emSaccadeGetParam { p } { processGetParam "saccade" $p }
+
+#
 # Sampler processor convenience functions
 #
 proc samplerSetParam { p v } { processSetParam "sampler" $p $v }

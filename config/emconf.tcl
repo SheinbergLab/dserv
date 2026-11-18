@@ -702,6 +702,30 @@ namespace eval em {
         list $h $v
     }
 
+    # ---- eyetracking/sample: what a velocity-based consumer needs ---------
+    #
+    # eyetracking/position is {h v} floats stamped on ARRIVAL, which is
+    # right for "where is the eye now" and for the windows processor, and
+    # it is a contract other consumers decode and log (stim2 gazewin,
+    # planko's gaze_source). A saccade detector needs two more things:
+    #
+    #   t      the sample's OWN time (camera frame time, box scan time), in
+    #          double seconds. Velocity divides by sample-to-sample time;
+    #          arrival-time jitter of 0.5 ms at 250 Hz is a 12% speed error.
+    #   valid  0 while there is no real position. The video path HOLDS the
+    #          last position through a P1/P4 loss or a blink, so the sample
+    #          after reacquisition jumps -- which reads as a saccade unless
+    #          the consumer knows the gap was there.
+    #
+    # So every source publishes this sibling, DSERV_DOUBLE {h v t valid},
+    # alongside eyetracking/position. The saccade processor
+    # (processors/saccade.c, attached in triggers.tcl) reads it. It is not
+    # logged: em/* and eyetracking/raw already let the extractors rebuild it.
+    proc publish_sample { ts h v t valid } {
+        dservSetData eyetracking/sample $ts 3 \
+            [binary format d4 [list $h $v $t $valid]]   ;# 3 = DSERV_DOUBLE
+    }
+
     proc process { dpoint data } {
         if { ![source_allows video] } return
         variable settings
@@ -751,6 +775,7 @@ namespace eval em {
         }
         
         # Only compute eye position if BOTH reflections detected
+        set valid [expr {$p1_detected > 0 && $p4_detected > 0 && !($blink > 0)}]
         dict with settings {
             if {$p1_detected > 0 && $p4_detected > 0} {
                 # Calculate raw eye position in sub-pixels (P1-P4 difference)
@@ -786,7 +811,10 @@ namespace eval em {
         set eyevals [binary format ff $h_deg $v_deg]
         source_mark video
         dservSetData eyetracking/position $cur_t 2 $eyevals ;# 2 = DSERV_FLOAT
-        
+        # frame_time, not em/time: em/time re-anchors at every obs start,
+        # which would look like a clock reset to the detector mid-session.
+        publish_sample $cur_t $h_deg $v_deg $frame_time $valid
+
         # Also send raw differences for calibration/debugging
         set rawvals [binary format ff $current_raw_h $current_raw_v]
         dservSetData eyetracking/raw $cur_t 2 $rawvals
@@ -804,6 +832,8 @@ namespace eval em {
         source_mark virtual
         set eyevals [binary format ff $h_deg $v_deg]
         dservSetData eyetracking/position 0 2 $eyevals
+        # no source clock here: arrival time is the only time there is
+        publish_sample 0 $h_deg $v_deg [expr {[now] / 1e6}] 1
 
 	# We don't have real "raw" values so just use actual
         dservSetData eyetracking/raw 0 2 $eyevals
@@ -903,6 +933,7 @@ namespace eval em {
             source_mark analog
             dservSetData eyetracking/position $t 2 [binary format ff $h_deg $v_deg]
             dservSetData eyetracking/raw      $t 2 [binary format ff $raw_h $raw_v]
+            publish_sample $t $h_deg $v_deg [expr {$t / 1e6}] 1
         }
 
         # The NEWEST scan is what "where is the eye now" means: the center-capture

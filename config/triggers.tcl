@@ -174,6 +174,19 @@ processLoad [file join \
     $path processors sampler[info sharedlibextension]] sampler
 processAttach sampler eyetracking/raw sampler
 
+# add saccade processor: online onset/offset events from eyetracking/sample
+# (DSERV_DOUBLE {h v t valid}, published by emconf next to
+# eyetracking/position). Inactive until a system turns it on with
+# emSaccadeEnable; events land on proc/saccade/event. catch: an install
+# that predates the processor must still boot.
+if { [catch {
+    processLoad [file join \
+        $path processors saccade[info sharedlibextension]] saccade
+    processAttach saccade eyetracking/sample saccade
+} err] } {
+    puts "saccade processor not loaded: $err"
+}
+
 # look for any .tcl configs in local/trigger-*.tcl (none is the norm --
 # without -nocomplain a bare glob THROWS on zero matches, which made this
 # line error into the journal on every boot of every rig)
