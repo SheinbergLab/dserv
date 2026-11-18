@@ -45,11 +45,19 @@ jobs:
           cmake -B build
           cmake --build build
 
+      # Authenticated lookup: see the note on "Install dlsh packages." in
+      # release_linux.yml (anonymous API calls hit the shared-IP rate limit).
       - name: Obtain dlsh packages for test scripts to use.
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p dlsh/
           cd dlsh/
-          DLSH_VERSION=$(curl -s https://api.github.com/repos/SheinbergLab/dlsh/releases/latest | grep '"tag_name"' | cut -d '"' -f 4)
+          DLSH_VERSION=$(gh api repos/SheinbergLab/dlsh/releases/latest --jq .tag_name)
+          if [ -z "$DLSH_VERSION" ] || [ "$DLSH_VERSION" = "null" ]; then
+            echo "::error::could not get the latest dlsh release tag from the GitHub API"
+            exit 1
+          fi
           wget https://github.com/SheinbergLab/dlsh/releases/download/${DLSH_VERSION}/dlsh-${DLSH_VERSION}.zip -O dlsh.zip
 
       - name: ctest
@@ -97,11 +105,19 @@ jobs:
           cmake -B build
           cmake --build build
 
+      # Authenticated lookup: see the note on "Install dlsh packages." in
+      # release_linux.yml (anonymous API calls hit the shared-IP rate limit).
       - name: Obtain dlsh packages for test scripts to use.
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p dlsh/
           cd dlsh/
-          DLSH_VERSION=$(curl -s https://api.github.com/repos/SheinbergLab/dlsh/releases/latest | grep '"tag_name"' | cut -d '"' -f 4)
+          DLSH_VERSION=$(gh api repos/SheinbergLab/dlsh/releases/latest --jq .tag_name)
+          if [ -z "$DLSH_VERSION" ] || [ "$DLSH_VERSION" = "null" ]; then
+            echo "::error::could not get the latest dlsh release tag from the GitHub API"
+            exit 1
+          fi
           wget https://github.com/SheinbergLab/dlsh/releases/download/${DLSH_VERSION}/dlsh-${DLSH_VERSION}.zip -O dlsh.zip
 
       - name: ctest

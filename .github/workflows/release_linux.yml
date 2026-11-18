@@ -464,17 +464,37 @@ jobs:
 
     runs-on: ${{ matrix.os }}
 
+    # Normally ~40 s. Without a cap, a runner stuck on an Ubuntu mirror sits
+    # until the 6 h default, and Publish (which waits for this workflow to
+    # succeed) leaves the release a prerelease the whole time. Failing fast
+    # means a re-run of failed jobs instead of a wait.
+    timeout-minutes: 15
+
     steps:
 
       - name: Install the dserv package we just released.
         run: |
-          sudo apt update
+          APT="-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
+          sudo apt-get $APT update
           wget ${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/dserv_${{ github.ref_name }}_$(dpkg --print-architecture).deb
-          sudo apt install --yes ./dserv_${{ github.ref_name }}_$(dpkg --print-architecture).deb
+          sudo apt-get $APT install --yes ./dserv_${{ github.ref_name }}_$(dpkg --print-architecture).deb
 
+      # The version lookup is AUTHENTICATED: anonymous api.github.com calls are
+      # limited to 60/hour per IP, hosted runners share IPs, and a limited
+      # reply has no tag_name -- which used to become an empty version and a
+      # 404 on ".../download//dlsh-.zip" (0.61.13, amd64). `gh api` uses the
+      # job token and exits non-zero on an HTTP error, and the empty check
+      # names the failure instead of leaving it to wget.
       - name: Install dlsh packages.
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          DLSH_VERSION=$(curl -s https://api.github.com/repos/SheinbergLab/dlsh/releases/latest | grep '"tag_name"' | cut -d '"' -f 4)
+          DLSH_VERSION=$(gh api repos/SheinbergLab/dlsh/releases/latest --jq .tag_name)
+          if [ -z "$DLSH_VERSION" ] || [ "$DLSH_VERSION" = "null" ]; then
+            echo "::error::could not get the latest dlsh release tag from the GitHub API"
+            exit 1
+          fi
+          echo "Using dlsh $DLSH_VERSION"
           wget https://github.com/SheinbergLab/dlsh/releases/download/${DLSH_VERSION}/dlsh-${DLSH_VERSION}.zip -O dlsh.zip
           sudo mkdir -p /usr/local/dlsh
           sudo cp dlsh.zip /usr/local/dlsh
