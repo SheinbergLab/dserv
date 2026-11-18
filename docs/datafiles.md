@@ -66,8 +66,10 @@ extioconf resolves the list against the live boxes into `extio/record`;
 
 A system's extractor writes only the streams it knows by name, and no
 extractor knows about a rig's photodiode. So after the system and protocol
-extractors run, `df::add_recorded_streams` adds every stream the two
-decode keys name. It runs in all three extraction paths: `load_data`,
+extractors run, `df::add_recorded_streams` adds every stream the decode
+keys name: the two above, and `tlock/din`, the input a Display++ trigger
+output is wired to (setting `tlock din`, logged by `::ess::file_open` when
+`tlock enabled` is on). It runs in all three extraction paths: `load_data`,
 `load_data_from_obs` and `make_trials`. Rows are picked by the trials'
 `obsid`.
 
@@ -76,6 +78,17 @@ decode keys name. It runs in all three extraction paths: `load_data`,
 | analog group `G` | `G_t` | ms from obs onset, one per scan (block time + k × interval) |
 | | `G_<label>` per channel (`G_ch<N>` if unlabelled) | raw counts, short |
 | rig DI line / chord group `N` | `N_t`, `N` | each edge or event inside the obs, and its value |
+| Display++ trigger input | `tlock_din_t`, `tlock_din` | the same, whatever the line is labelled |
+
+- `tlock_din` is left out when `extio/record` already added the same
+  line under its label. A `tlock/din` that did not resolve when the file
+  opened adds nothing.
+- Each edge marks the frame that carried a T-Lock packet reaching the
+  panel, one refresh after stim2's swap. On the Display++ measured in
+  2026-11 (session `..._2611181646`, photodiode at one screen position),
+  the first light came 3.08 ± 0.08 ms after the edge. ESS's own stim-on
+  event (for example SAMPLE ON) is logged as the swap completes, about 8
+  ms (one refresh) before the edge and 11.1 ms before the light.
 
 - `G` gets a `<box>_` prefix only when two boxes' groups share a name.
   Characters other than letters, digits and `_` become `_`.

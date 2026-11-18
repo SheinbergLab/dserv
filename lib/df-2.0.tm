@@ -540,6 +540,8 @@ namespace eval df {
     #
     #   ess/ain/recorded   analog groups, from record_streams and the rig
     #   extio/record       the rig's list; its DI lines and chord groups
+    #   tlock/din          the input a Display++ trigger output is wired to
+    #                      (setting `tlock din`)
     #
     # Columns, one row per trial, picked from the obs DG by the trials'
     # obsid (every extractor writes it):
@@ -549,6 +551,9 @@ namespace eval df {
     #                      label (ch<N> if unlabelled), raw counts (short)
     #   <name>_t <name>    DI line / chord group: each edge or group event
     #                      inside the obs, ms from obs onset, and its value
+    #   tlock_din_t        the trigger input's edges, the same way; named
+    #   tlock_din          tlock_din whatever the line's label, and left out
+    #                      when extio/record already added that line
     #
     # <group> gains a <box>_ prefix only when two boxes' groups share a
     # name. A column the extractor already wrote is left alone: a system
@@ -714,27 +719,64 @@ namespace eval df {
         }
 
         # ---- digital: the rig's DI lines and chord groups, extio/record ----
+        set added {}
         set xr [session_key $g extio/record]
         if {$xr ne "" && [dict exists $xr streams]} {
             dict for {name e} [dict get $xr streams] {
                 if {[dict get $e status] ne "ok"} continue
                 if {[dict get $e kind] ni {di group}} continue
-                set dp   [dict get $e dpoint]
-                set base [_colname $name]
-                if {"${base}_t" in $have || $base in $have} continue
-                if {![dl_exists $g:<ds>$dp]} {
-                    puts "df: $dp ($name) is in extio/record but changed in no\
-                          obs -- ${base}_t, $base are empty"
-                    dl_set $trials:${base}_t [dl_repeat [dl_llist [dl_create double]] $n_rows]
-                    dl_set $trials:$base     [dl_repeat [dl_llist [dl_create long]] $n_rows]
-                    continue
+                set dp [dict get $e dpoint]
+                if {[_add_edges $trials $g $obsid $dp [_colname $name] $have "extio/record"]} {
+                    lappend added $dp
                 }
-                dl_local ix [dl_ilist {*}$obsid]
-                dl_set $trials:${base}_t [dl_choose $g:<dst>$dp $ix]
-                dl_set $trials:$base     [dl_choose $g:<ds>$dp $ix]
+            }
+        }
+
+        # ---- the Display++ trigger input: tlock/din ----
+        # The line the monitor's trigger output is wired to (setting `tlock
+        # din`). Its edges are the frames that carried a T-Lock packet,
+        # reaching the panel. Always named tlock_din, whatever the line is
+        # labelled; skipped when extio/record already added the same line.
+        set td [session_key $g tlock/din]
+        if {$td ne "" && [dict exists $td status] && [dict get $td status] eq "ok"} {
+            set dp [dict get $td dp]
+            # a group or a path may be a match pattern (extio/*/state/group/G)
+            if {[string match {*[*?]*} $dp]} {
+                set hits {}
+                foreach c [dg_tclListnames $g] {
+                    if {[string match <ds>* $c] && [string match $dp [string range $c 4 end]]} {
+                        lappend hits [string range $c 4 end]
+                    }
+                }
+                if {[llength $hits] > 1} {
+                    puts "df: tlock/din pattern $dp matches [join [lsort $hits] {, }] --\
+                          using [lindex [lsort $hits] 0]"
+                }
+                set dp [expr {[llength $hits] ? [lindex [lsort $hits] 0] : $dp}]
+            }
+            if {$dp ni $added} {
+                _add_edges $trials $g $obsid $dp tlock_din $have "tlock/din"
             }
         }
         return $trials
+    }
+
+    # One digital stream's edges into trials as BASE_t (ms from obs onset)
+    # and BASE (the values), rows by obsid. A column already there is kept
+    # (returns 0); a stream with no data in the file gets empty rows.
+    proc _add_edges {trials g obsid dp base have key} {
+        if {"${base}_t" in $have || $base in $have} { return 0 }
+        set n_rows [llength $obsid]
+        if {![dl_exists $g:<ds>$dp]} {
+            puts "df: $dp is in $key but changed in no obs -- ${base}_t, $base are empty"
+            dl_set $trials:${base}_t [dl_repeat [dl_llist [dl_create double]] $n_rows]
+            dl_set $trials:$base     [dl_repeat [dl_llist [dl_create long]] $n_rows]
+            return 1
+        }
+        dl_local ix [dl_ilist {*}$obsid]
+        dl_set $trials:${base}_t [dl_choose $g:<dst>$dp $ix]
+        dl_set $trials:$base     [dl_choose $g:<ds>$dp $ix]
+        return 1
     }
 
     # The call every extraction path makes. Never fails the conversion: the

@@ -95,6 +95,39 @@ check "lever: no column in file -> empty rows" [list [dl_length $t:lever] [dl_le
 check "missing rig name adds nothing" [dl_exists $t:gone] 0
 check "rectangular" [df::validate_rectangular $t] 1
 
+# ---- tlock/din: the Display++ trigger input -----------------------------------
+# a separate line, by a group pattern: tlock_din columns, rows by obsid
+set grp extio/box01/state/group/dpp
+dl_set $g:<ds>$grp  [dl_llist [dl_ilist 1 0 1] [dl_ilist 1 0] [dl_ilist]]
+dl_set $g:<dst>$grp [dl_llist [dl_dlist 5.5 2013.8 2022.1] [dl_dlist 9.25 2017.6] [dl_dlist]]
+dl_set $g:<dsn>$grp [dl_llist [dl_ilist 1 1 1] [dl_ilist 1 1] [dl_ilist]]
+proc set_tlock_din {g v} {
+    if {[dl_exists $g:<session>tlock/din]} { dl_delete $g:<session>tlock/din }
+    dl_set $g:<session>tlock/din [dl_llist [dl_slist $v]]
+}
+set_tlock_din $g [dict create status ok kind group dp extio/*/state/group/dpp detail "group dpp on box01"]
+set t4 [dg_create]
+dl_set $t4:obsid [dl_ilist 1 0 2]
+df::add_recorded_streams $t4 $g
+check "tlock_din_t row0 = obs 1" [dl_tcllist [dl_get $t4:tlock_din_t 0]] {9.25 2017.6}
+check "tlock_din row1 = obs 0" [dl_tcllist [dl_get $t4:tlock_din 1]] {1 0 1}
+check "tlock_din obs with no edges: empty row" [dl_length [dl_get $t4:tlock_din_t 2]] 0
+check "rig DI still added beside it" [dl_tcllist [dl_get $t4:tlock_t 2]] 7.0
+
+# the same line extio/record already added: not added twice
+set_tlock_din $g [dict create status ok kind di dp $di detail "box01 pin 3, labelled tlock"]
+set t5 [dg_create]
+dl_set $t5:obsid [dl_ilist 0]
+df::add_recorded_streams $t5 $g
+check "same line as a rig DI: no tlock_din" [dl_exists $t5:tlock_din] 0
+
+# declared but unresolved when the file opened: nothing
+set_tlock_din $g [dict create status unresolved kind "" dp "" detail "no box"]
+set t6 [dg_create]
+dl_set $t6:obsid [dl_ilist 0]
+df::add_recorded_streams $t6 $g
+check "unresolved tlock/din: no column" [dl_exists $t6:tlock_din_t] 0
+
 # ---- a file with no keys: untouched ------------------------------------------
 set g2 [dg_create]
 set t2 [dg_create]
