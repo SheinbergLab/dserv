@@ -364,6 +364,7 @@ int main(void)
   printf("a replayed block and a gap:\n");
   {
     process_params_t *p = fresh();
+    set(p, "group", "");		/* the blocks here are named "x" */
     int16_t v[10];
     for (int k = 0; k < 10; k++) v[k] = 500;
     feed_block(p, "x", (uint64_t) T0, 100, 10, 1, v, NULL);
@@ -464,7 +465,8 @@ int main(void)
     add_process_function_info("photo", NULL, onProcess, newProcessParams,
 			      (DPOINT_PROCESS_FREEPARAM_FUNC) freeProcessParams,
 			      setProcessParams, getProcessParams);
-    CHECK(process_attach("ph", "extio/*/state/ain/photodiode", "photo") == 0,
+    /* as triggers.tcl does it: every analog group, `group` picks one */
+    CHECK(process_attach("ph", "extio/*/state/ain/*", "photo") == 0,
 	  "attached");
     ds_datapoint_t *out = NULL;
     process_set_param("ph", "active", "1", 0, 0, &out);
@@ -489,10 +491,54 @@ int main(void)
       in.varname = "extio/box07/state/ain/eye";
       if (process_dpoint(&in, &out) != DPOINT_PROCESS_IGNORE) others++;
     }
-    CHECK(hits == 1, "any box's photodiode group reaches it (%d edge)", hits);
-    CHECK(others == 0, "another group does not");
+    CHECK(hits == 1, "any box's photodiode group gives its edge (%d)", hits);
+    CHECK(others == 0, "another group gives nothing");
     char *g = process_get_param("ph", "n_blocks", 0);
-    CHECK(g && atoi(g) == 100, "100 blocks seen (%s)", g ? g : "none");
+    CHECK(g && atoi(g) == 100, "100 photodiode blocks read (%s)", g ? g : "none");
+    g = process_get_param("ph", "n_other", 0);
+    CHECK(g && atoi(g) == 100, "100 eye blocks passed over (%s)", g ? g : "none");
+    g = process_get_param("ph", "group", 0);
+    CHECK(g && !strcmp(g, "photodiode"), "group reads back (%s)", g ? g : "none");
+    ds_datapoint_t meta = { 0 };
+    meta.varname = "extio/box07/state/ain/group/photodiode/chans";
+    meta.data.type = DSERV_STRING;
+    meta.data.len = 1;
+    meta.data.buf = (unsigned char *) "0";
+    process_dpoint(&meta, &out);
+    g = process_get_param("ph", "n_bad", 0);
+    CHECK(g && atoi(g) == 0, "the group's metadata is not mistaken for it");
+  }
+
+  /* ---------------- group ---------------- */
+  printf("group:\n");
+  {
+    process_params_t *p = fresh();
+    CHECK(group_match(p, "extio/box01/state/ain/photodiode") &&
+	  group_match(p, "extio/b2/state/ain/photodiode") &&
+	  !group_match(p, "extio/box01/state/ain/eye") &&
+	  !group_match(p, "extio/box01/state/ain/label/photodiode") &&
+	  !group_match(p, "extio/box01/state/ain/photodiode2") &&
+	  !group_match(p, "other/state/ain/photodiode"),
+	  "photodiode: that group on any box, nothing else");
+    set(p, "group", " box01/photodiode ");
+    CHECK(group_match(p, "extio/box01/state/ain/photodiode") &&
+	  !group_match(p, "extio/box02/state/ain/photodiode"),
+	  "box01/photodiode: that box only (trimmed)");
+    set(p, "group", "");
+    CHECK(group_match(p, "anything/at/all"), "empty: every block");
+
+    /* changing it forgets the signal it was reading */
+    set(p, "group", "photodiode");
+    lsig_t s = { 0 };
+    s.lev0 = 500; s.tau = 2000;
+    E.n = 0;
+    run(p, &s, T0, 20000, 10000, 10, 5.0, 1, 0, &E);
+    CHECK(p->have_level, "reading");
+    set(p, "group", "photo2");
+    CHECK(!p->have_level && p->last_raw_t < 0, "a new group starts clean");
+    set(p, "defaults", "1");
+    CHECK(!strcmp(p->group, "photo2"), "defaults leave the group alone");
+    freeProcessParams(p);
   }
 
   if (fails) {

@@ -836,6 +836,76 @@ namespace eval ess {
     }
     # END stim_frame_log
 
+    # BEGIN photo
+    #
+    # The photodiode edge detector (dserv's `photo` processor,
+    # processors/photo.c, docs/photo_processor.md), set from the gear's
+    # `photo` section (essconf.tcl). The processor keeps nothing across a
+    # dserv restart; these settings do, and each is pushed to it as it
+    # changes and once at boot. The processor is attached in dserv's main
+    # interp (triggers.tcl) to every analog group; `group` picks the one it
+    # reads, so changing it never re-attaches anything.
+    #
+    # processSetParam answers -1 when there is no such processor (a dserv
+    # from before it): the settings then do nothing, and turning it on says
+    # so once.
+    variable photo_enabled 0
+    variable photo_warned 0
+    proc photo_param { p v } {
+        expr { [processSetParam photo $p $v] >= 0 }
+    }
+    proc photo_group_norm {v} {
+        set v [string trim $v]
+        if { $v ne "" &&
+             ![regexp {^[^/\s{}\\\[\]"$;*]+(/[^/\s{}\\\[\]"$;*]+)?$} $v] } {
+            error "photo group: the analog group's label (photodiode), or\
+ <box>/<label> to read one box only; empty reads every analog block"
+        }
+        return $v
+    }
+    proc photo_nonneg_norm {v} {
+        set v [string trim $v]
+        if { ![string is double -strict $v] || $v < 0 } {
+            error "a number, 0 or more"
+        }
+        return $v
+    }
+    proc set_photo_enabled {on} {
+        variable photo_enabled [expr {$on ? 1 : 0}]
+        variable photo_warned
+        if { ![photo_param active $photo_enabled] && $photo_enabled &&
+             !$photo_warned } {
+            set photo_warned 1
+            ::ess::ess_warning "photo enabled, but this dserv has no photo\
+ processor (processors/photo.c): no light edges are detected" "photo"
+        }
+    }
+    proc set_photo_group {v} { photo_param group [photo_group_norm $v] }
+    proc set_photo_strobe {on} { photo_param strobe [expr {$on ? 1 : 0}] }
+    # ms in the gear, seconds in the processor
+    proc set_photo_period_ms {v} {
+        photo_param period [expr {[photo_nonneg_norm $v] / 1000.0}]
+    }
+    proc set_photo_smooth_ms {v} {
+        photo_param smooth [expr {[photo_nonneg_norm $v] / 1000.0}]
+    }
+    proc set_photo_min_step {v} {
+        photo_param min_step [photo_nonneg_norm $v]
+    }
+
+    # The datafile match for proc/photo/edge (file_open), while the rig has
+    # it on: not obs-limited, so an edge reported after its obs ended (the
+    # block that finished it arrived later) is still kept -- its timestamp
+    # (t50) puts it in its obs; unbuffered, so each edge datapoint keeps its
+    # own timestamp and its rows stay rows. Returns 1 when added.
+    proc photo_log_match { filename } {
+        variable photo_enabled
+        if { !$photo_enabled } { return 0 }
+        dservLoggerAddMatch $filename proc/photo/edge 0 0 1
+        return 1
+    }
+    # END photo
+
     # BEGIN screen_snapshot
     #
     # The display as the data file will see it, asked of stim2 when a file
@@ -5395,6 +5465,10 @@ namespace eval ess {
         # the policy note in that block). The record is an int64 array;
         # dslog::read exposes it only under `dslog::wideTypes 1`.
         stim_frame_log_match $filename
+
+        # light edges from the rig's photodiode (the photo block), when the
+        # gear's `photo enabled` is on
+        photo_log_match $filename
 
         # stim2's datapoint bindings (the stim_bind block): the table itself,
         # unbuffered and not obs-limited (set at configure, re-emitted by the

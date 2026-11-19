@@ -136,7 +136,9 @@ proc emSaccadeGetParam { p } { processGetParam "saccade" $p }
 
 #
 # Photo processor (processors/photo.c): light edges from a photodiode on an
-# extio analog group (attached in triggers.tcl to extio/*/state/ain/photodiode).
+# extio analog group. The rig's settings are the gear's `photo` section
+# (declared below, with tlock); these helpers change the running processor
+# for this session only, and are what to use while trying values out.
 # photoEnable 1 turns it on; each edge arrives on proc/photo/edge as
 # DSERV_DOUBLE, 10 values per edge (a block that finishes two sends two rows):
 #   dir(+1 brighter, -1 darker) t50 t10 t90 old new settled seq t_arm t_done
@@ -607,6 +609,64 @@ a group holding that line. A datapoint name (anything with a slash) is
 taken as written. Empty: none. Used only while 'enabled' is on; takes
 effect at the next data file. tlock/din shows where the label resolves,
 and the light whether edges arrive when triggers are sent."
+
+# The photodiode edge detector (dserv's `photo` processor; docs/
+# photo_processor.md): its own section in the gear. Every key is pushed to
+# the processor as it changes, and once below at boot -- the processor
+# keeps nothing across a restart.
+settings::declare photo enabled -default 0 -type bool \
+    -apply ::ess::set_photo_enabled \
+    -doc "this rig has a photodiode on the screen, read through an extio
+analog group, and dserv should find the light's edges in it: one
+proc/photo/edge event per change of light, timed to the sample, saved in
+every data file. Off: nothing is detected and nothing logged. To save
+the diode's raw signal as well, name its group in extio 'record'."
+
+settings::declare photo group -default photodiode \
+    -candidates analog \
+    -validate ::ess::photo_group_norm \
+    -apply ::ess::set_photo_group \
+    -doc "the extio analog group the photodiode is on, by LABEL: that
+group on whichever box carries it. <box>/<label> reads one box only
+(when two boxes announce the same group). Empty reads every analog
+block, which is right only on a rig with one."
+
+settings::declare photo strobe -default 0 -type bool \
+    -apply ::ess::set_photo_strobe \
+    -doc "the display's backlight flashes once a refresh (a CRS Display++),
+so the diode sees a pulse every frame even over a steady patch. On: each
+flash is one value per refresh and an edge is timed to the first refresh
+that changed. Off for an ordinary LCD, whose light is continuous."
+
+settings::declare photo period_ms -default 0 -type double \
+    -validate ::ess::photo_nonneg_norm \
+    -apply ::ess::set_photo_period_ms \
+    -doc "strobe only: the refresh period in ms (8.3333 at 120 Hz). 0
+learns it from the flashes, which a patch that starts black cannot
+give, so set it on a strobed display."
+
+settings::declare photo min_step -default 100 -type double \
+    -validate ::ess::photo_nonneg_norm \
+    -apply ::ess::set_photo_min_step \
+    -doc "the smallest change of light that is an edge, in ADC counts
+(0-4095 on the analog boxes). Well above the diode's noise between
+edges (photoGetParam noise), well below the patch's step. Where a level
+is noisier than this the detector raises it for that level by itself."
+
+settings::declare photo smooth_ms -default 0 -type double \
+    -validate ::ess::photo_nonneg_norm \
+    -apply ::ess::set_photo_smooth_ms \
+    -doc "a running mean over this many ms before detection, for a
+backlight dimmed by PWM (a ripple at a few kHz): cover a few ripple
+periods. It changes the edge's shape by a constant for a given panel;
+0, the default, is right for a strobed or an undimmed display."
+
+::ess::set_photo_group      [settings::get photo group]
+::ess::set_photo_strobe     [settings::get photo strobe]
+::ess::set_photo_period_ms  [settings::get photo period_ms]
+::ess::set_photo_min_step   [settings::get photo min_step]
+::ess::set_photo_smooth_ms  [settings::get photo smooth_ms]
+::ess::set_photo_enabled    [settings::get photo enabled]   ;# last: on with its settings
 
 ::ess::set_stop_after_trial [settings::get ess stop_after_trial]
 ::ess::set_display_tlock    [settings::get tlock enabled]

@@ -93,13 +93,23 @@
  * Inactive by default: set active 1 from whatever wants edges. Inactive
  * costs an uncontended lock per block.
  *
- * ATTACHING. The block's name carries the box (extio/<box>/state/ain/
- * <group>), so triggers.tcl attaches by pattern, with a '*' for the box
- * (dpoint_process.c matches '*' in an attached name) and the group
- * `photodiode`, the name extio's `record` setting documents. A rig
- * whose group has another label attaches it again in a local/trigger-*.tcl.
- * Two live boxes announcing the same group would feed one detector two
- * interleaved streams; extio/record already reports that as ambiguous.
+ * ATTACHING AND GROUP. The block's name carries the box and the group
+ * (extio/<box>/state/ain/<group>), so triggers.tcl attaches the processor
+ * once, by pattern, to every analog group (extio/ * /state/ain/ *, without
+ * the spaces; dpoint_process.c matches '*'), and the `group` param picks
+ * the one to read:
+ *
+ *   photodiode     that group on any box (the default)
+ *   box01/photo    that group on that box only
+ *   ""             every block (a test, or a rig with one analog group)
+ *
+ * Blocks from other groups cost a name compare (n_other). So the group is
+ * a setting (`photo group`, the gear), changed live, never a re-attach --
+ * re-attaching frees the name the dispatch thread may be comparing. Two
+ * live boxes announcing the same group would feed one detector two
+ * interleaved streams; qualify it as box/group. dserv runs only the FIRST
+ * processor attached to a datapoint, so nothing else can be attached to
+ * an analog group while this is.
  *
  * THREADS. onProcess runs on whichever thread sets the block (the box's
  * transport), set/getProcessParams on an ess interp's; each instance has
@@ -151,6 +161,7 @@ typedef struct process_params_s {
   int    strobe;		/* 1: the backlight flashes once a refresh     */
   double period;		/* s: the refresh, strobe mode (0: learn it)   */
   double pulse_thresh;		/* counts above dark that make a flash         */
+  char   group[64];		/* analog group to read; "" = any block        */
 
   /* ---- smoothing ---- */
   double rx[RAW_MAX], rt[RAW_MAX];
@@ -201,6 +212,12 @@ typedef struct process_params_s {
   int n_pulses, n_missing, n_long;
   double last_t50;
 
+  /* the group as names to compare: a suffix, or a whole name (box/group) */
+  char   g_suffix[96];
+  char   g_exact[160];
+  char   g_out[64];		/* `group` as returned by getProcessParams     */
+  int    n_other;		/* blocks from other groups, ignored           */
+
   pthread_mutex_t lock;
   char  *pending_name;
 
@@ -225,6 +242,32 @@ static void defaults(process_params_t *p)
   p->strobe       = 0;
   p->period       = 0.0;
   p->pulse_thresh = 50.0;
+}
+
+/* which blocks are this detector's (see GROUP in the header) */
+static void set_group(process_params_t *p, const char *g)
+{
+  while (*g == ' ' || *g == '\t') g++;
+  snprintf(p->group, sizeof(p->group), "%s", g);
+  size_t n = strlen(p->group);
+  while (n && (p->group[n-1] == ' ' || p->group[n-1] == '\t')) p->group[--n] = 0;
+  p->g_suffix[0] = p->g_exact[0] = 0;
+  if (!p->group[0]) return;
+  char *slash = strchr(p->group, '/');
+  if (slash)
+    snprintf(p->g_exact, sizeof(p->g_exact), "extio/%.*s/state/ain/%s",
+	     (int) (slash - p->group), p->group, slash + 1);
+  else
+    snprintf(p->g_suffix, sizeof(p->g_suffix), "/state/ain/%s", p->group);
+}
+
+static int group_match(process_params_t *p, const char *name)
+{
+  if (!p->group[0]) return 1;
+  if (!name) return 0;
+  if (p->g_exact[0]) return !strcmp(name, p->g_exact);
+  size_t n = strlen(name), m = strlen(p->g_suffix);
+  return n > m && !strncmp(name, "extio/", 6) && !strcmp(name + n - m, p->g_suffix);
 }
 
 static int to_samples(double dur_s, double dt_us, int lo, int hi)
@@ -273,7 +316,7 @@ static void reset_all(process_params_t *p)
   p->n_blocks = p->n_samples = p->n_edges = p->n_rising = p->n_falling = 0;
   p->n_unsettled = p->n_gaps = p->n_bad = p->n_stale = 0;
   p->n_multi = p->n_dropped = 0;
-  p->n_pulses = p->n_missing = p->n_long = 0;
+  p->n_pulses = p->n_missing = p->n_long = p->n_other = 0;
   p->last_t50 = 0.0;
   p->dt_est = 0.0;
   p->n_pers = p->pers_head = 0;
@@ -288,6 +331,7 @@ void *newProcessParams(void)
 {
   process_params_t *p = calloc(1, sizeof(process_params_t));
   defaults(p);
+  set_group(p, "photodiode");
   reset_all(p);
   p->warned = 0;
 
@@ -361,8 +405,14 @@ static int get_param_locked(dpoint_process_param_setting_t *pinfo)
     { "n_pulses",    &p->n_pulses,    &p->dummyInt, PU_INT },
     { "n_missing",   &p->n_missing,   &p->dummyInt, PU_INT },
     { "n_long",      &p->n_long,      &p->dummyInt, PU_INT },
+    { "n_other",     &p->n_other,     &p->dummyInt, PU_INT },
     { "", NULL, NULL, PU_NULL }
   };
+  if (!strcmp(pinfo->pname, "group")) {	/* a string: not in the table */
+    snprintf(p->g_out, sizeof(p->g_out), "%s", p->group);
+    if (pinfo->pval) *pinfo->pval = p->g_out;
+    return 1;
+  }
   char *result_str = puGetParamEntry(&params[0], pinfo->pname);
   if (result_str && pinfo->pval) {
     *pinfo->pval = result_str;
@@ -409,6 +459,16 @@ static int set_param_locked(dpoint_process_param_setting_t *pinfo)
   }
   if (!strcmp(name, "reset")) {
     reset_all(p);
+    return DPOINT_PROCESS_IGNORE;
+  }
+  if (!strcmp(name, "group")) {
+    char was[64];
+    snprintf(was, sizeof(was), "%s", p->group);
+    set_group(p, vals[0] ? vals[0] : "");
+    if (strcmp(was, p->group)) {	/* another signal: forget this one */
+      reset_stream(p);
+      p->last_raw_t = -1.0;
+    }
     return DPOINT_PROCESS_IGNORE;
   }
   if (!strcmp(name, "defaults")) {
@@ -871,7 +931,11 @@ int onProcess(dpoint_process_info_t *pinfo, void *params)
     p->event_dpoint.varlen = strlen(p->event_dpoint.varname);
     p->pending_name = NULL;
   }
-  int rc = p->active ? process_block(p, pinfo) : DPOINT_PROCESS_IGNORE;
+  int rc = DPOINT_PROCESS_IGNORE;
+  if (p->active) {
+    if (group_match(p, pinfo->input_dpoint->varname)) rc = process_block(p, pinfo);
+    else p->n_other++;
+  }
   pthread_mutex_unlock(&p->lock);
   return rc;
 }
