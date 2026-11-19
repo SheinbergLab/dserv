@@ -50,6 +50,7 @@ typedef struct dpointProcessFunctionInfo_s {
 typedef struct dpointProcessInfo_s {
   char                         *name;
   char                         *varname;
+  int                           is_glob;  /* varname has a '*' */
   DPOINT_PROCESS_FUNC           process;
   DPOINT_PROCESS_FREEPARAM_FUNC free_params;
   DPOINT_PROCESS_SETPARAM_FUNC  set_param;
@@ -91,12 +92,33 @@ void add_process_function_info(char *name,
 }
 
 
+/*
+ * An attached name may hold '*' (any run of characters, '/' included), so a
+ * processor can follow a datapoint whose name carries something that is not
+ * known at boot: extio/<box>/state/ain/photodiode, attached with a '*' in
+ * place of <box>, follows whichever box carries the group. Names without
+ * a '*' are compared exactly, as before.
+ */
+static int star_match(const char *pat, const char *s)
+{
+  const char *star = NULL, *resume = NULL;
+  while (*s) {
+    if (*pat == '*') { star = pat++; resume = s; }
+    else if (*pat == *s) { pat++; s++; }
+    else if (star) { pat = star + 1; s = ++resume; }
+    else return 0;
+  }
+  while (*pat == '*') pat++;
+  return *pat == '\0';
+}
+
 int process_dpoint(ds_datapoint_t *dpoint, ds_datapoint_t **out)
 {
   dpointProcessInfo_t *p;
 
   for (p = processTable; p != NULL; p = p->hh.next) {
-    if (!strcmp(p->varname, dpoint->varname)) {
+    if (p->is_glob ? star_match(p->varname, dpoint->varname)
+	           : !strcmp(p->varname, dpoint->varname)) {
       dpoint_process_info_t pinfo;
       pinfo.input_dpoint = dpoint;
 
@@ -136,6 +158,7 @@ int process_attach(char *name,
   }
   
   p->varname = strdup(varname);
+  p->is_glob = strchr(varname, '*') != NULL;
   p->process = pfunc->pfunc;
   p->free_params = pfunc->freeparamfunc;
   p->set_param = pfunc->setparamfunc;

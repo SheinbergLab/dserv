@@ -135,6 +135,26 @@ proc emSaccadeSetParams { args } {
 proc emSaccadeGetParam { p } { processGetParam "saccade" $p }
 
 #
+# Photo processor (processors/photo.c): light edges from a photodiode on an
+# extio analog group (attached in triggers.tcl to extio/*/state/ain/photodiode).
+# photoEnable 1 turns it on; each edge arrives on proc/photo/edge as
+# DSERV_DOUBLE, 10 values per edge (a block that finishes two sends two rows):
+#   dir(+1 brighter, -1 darker) t50 t10 t90 old new settled seq t_arm t_done
+# times in dserv-clock us, the datapoint stamped at the first row's t50.
+# Levels: min_step (counts) noise_k smooth (s, for PWM ripple) channel.
+# A strobed backlight (Display++): `photoSetParams strobe 1 period [expr
+# {1.0/120}]` -- one value per refresh, edges at the first changed refresh.
+#
+proc photoEnable { {on 1} } { processSetParam "photo" active $on }
+proc photoReset {} { processSetParam "photo" reset 1 }
+proc photoSetParam { p v } { processSetParam "photo" $p $v }
+proc photoSetParams { args } {
+    if { [llength $args] % 2 } { error "wrong number of arguments" }
+    foreach { p v } $args { processSetParam "photo" $p $v }
+}
+proc photoGetParam { p } { processGetParam "photo" $p }
+
+#
 # Sampler processor convenience functions
 #
 proc samplerSetParam { p v } { processSetParam "sampler" $p $v }

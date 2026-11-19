@@ -21,6 +21,7 @@ themselves).
 | Machines with no network | `docs/OFFLINE.md` |
 | How a client finds a dserv (mDNS on-link, registry off-link) | `docs/discovery.md` |
 | .ess → obs → trials conversion, wide types, converting again | `docs/datafiles.md` (`tools/dfconvert`) |
+| Photodiode light-edge timing (the `photo` processor) | `docs/photo_processor.md` |
 
 The other files in `docs/` are design notes and plans for specific
 subsystems (input layer, extio, transports, settings). Read them when

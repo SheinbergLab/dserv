@@ -193,6 +193,25 @@ else()
 endif()
 
 #
+# processors/photo.c -- the photodiode edge detector -- on synthetic extio
+# analog blocks with analytic edges: an LCD's exponential approach, a
+# fast toggle, PWM ripple, a strobed (Display++) flash train, batched
+# blocks, and the '*' in an attached name (src/dpoint_process.c).
+#
+add_executable(test_photo test_photo.c
+    ${CMAKE_SOURCE_DIR}/processors/prmutil.c
+    ${CMAKE_SOURCE_DIR}/src/dpoint_process.c)
+target_include_directories(test_photo PRIVATE
+    ${CMAKE_SOURCE_DIR}/processors ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_photo PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
+if(NOT APPLE AND NOT WIN32)
+  target_link_libraries(test_photo PRIVATE m)
+endif()
+add_test(NAME photo_processor COMMAND test_photo)
+set_property(TEST photo_processor PROPERTY PASS_REGULAR_EXPRESSION "all checks passed")
+set_property(TEST photo_processor PROPERTY TIMEOUT 60)
+
+#
 # The rmtSend wrapper that records every stim2 command as a stim/cmd JSON
 # datapoint (lib/ess-2.0.tm, stim_cmd_log block): a real dserv interp with
 # the real rmt module loaded, against a fake stim2 (tests/fake_stim2.tcl,

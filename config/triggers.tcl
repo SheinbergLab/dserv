@@ -187,6 +187,24 @@ if { [catch {
     puts "saccade processor not loaded: $err"
 }
 
+# add photo processor: light edges from a photodiode on an extio analog
+# group (processors/photo.c). The box is part of the block's name, so it is
+# attached by pattern (a '*' for the box, matched by dpoint_process.c) to
+# the group `photodiode`, the name the `extio record` setting uses. A rig
+# whose group has another label attaches it again in local/trigger-*.tcl,
+# with the same processor name so it replaces this one:
+#   processAttach photo extio/*/state/ain/<label> photo
+# Inactive until something turns it on (photoEnable, essconf.tcl); edges
+# land on proc/photo/edge. catch: an install that predates the processor
+# must still boot.
+if { [catch {
+    processLoad [file join \
+        $path processors photo[info sharedlibextension]] photo
+    processAttach photo extio/*/state/ain/photodiode photo
+} err] } {
+    puts "photo processor not loaded: $err"
+}
+
 # look for any .tcl configs in local/trigger-*.tcl (none is the norm --
 # without -nocomplain a bare glob THROWS on zero matches, which made this
 # line error into the journal on every boot of every rig)
