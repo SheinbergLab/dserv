@@ -661,6 +661,59 @@ backlight dimmed by PWM (a ripple at a few kHz): cover a few ripple
 periods. It changes the edge's shape by a constant for a given panel;
 0, the default, is right for a strobed or an undimmed display."
 
+settings::declare photo patch -default 0 -type bool \
+    -apply ::ess::set_photo_patch \
+    -doc "stim2 draws a square in a corner of the screen for the diode to
+sit over, changing between dark and light on chosen frames (patch_mode);
+each change is recorded as stim/photopatch, to pair with its edge. Drawn
+only while 'enabled' is on too: a flashing corner distracts a subject.
+Takes effect at the next system load."
+
+settings::declare photo patch_mode -default tags -values {tags toggle manual} \
+    -apply ::ess::set_photo_patch_mode \
+    -doc "which frames change the patch. tags: a frame carrying a swap tag
+that matches patch_match (the frames ESS already times: SAMPLE ON,
+PATTERN SWAP...), with no change to a protocol. toggle: every frame, a
+check of the display pipeline. manual: only 'photopatch flip' from a
+stim script."
+
+settings::declare photo patch_corner -default tr -values {tr tl br bl} \
+    -apply ::ess::set_photo_patch_corner \
+    -doc "the corner the patch is in (top right by default, clear of a
+Display++ trigger row in the top left)."
+
+settings::declare photo patch_size -default 60 -type int \
+    -validate ::ess::photo_patch_size_norm \
+    -apply ::ess::set_photo_patch_size \
+    -doc "the patch's side in pixels: a little larger than the diode's
+aperture, so placement is not critical."
+
+settings::declare photo patch_inset -default 0 -type int \
+    -validate ::ess::photo_patch_inset_norm \
+    -apply ::ess::set_photo_patch_inset \
+    -doc "pixels in from both edges of the corner, where a bezel covers
+the edge."
+
+settings::declare photo patch_dark -default 0 \
+    -validate ::ess::photo_patch_dark_norm \
+    -apply ::ess::set_photo_patch_dark \
+    -doc "the dark level, one grey or r g b from 0 to 1 (light is white).
+On a strobed display a little above black (0.1) keeps the flashes coming,
+so the period can be learned and a missing flash is a missing frame."
+
+settings::declare photo patch_match -default * \
+    -validate ::ess::photo_patch_match_norm \
+    -apply ::ess::set_photo_patch_match \
+    -doc "tags mode: glob patterns for the swap tags that flip the patch;
+* is every tagged frame, {SAMPLE *} only the sample's."
+
+::ess::set_photo_patch        [settings::get photo patch]
+::ess::set_photo_patch_mode   [settings::get photo patch_mode]
+::ess::set_photo_patch_corner [settings::get photo patch_corner]
+::ess::set_photo_patch_size   [settings::get photo patch_size]
+::ess::set_photo_patch_inset  [settings::get photo patch_inset]
+::ess::set_photo_patch_dark   [settings::get photo patch_dark]
+::ess::set_photo_patch_match  [settings::get photo patch_match]
 ::ess::set_photo_group      [settings::get photo group]
 ::ess::set_photo_strobe     [settings::get photo strobe]
 ::ess::set_photo_period_ms  [settings::get photo period_ms]

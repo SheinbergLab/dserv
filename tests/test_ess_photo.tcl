@@ -85,6 +85,49 @@ check [::ess::photo_log_match f.ess] 0 "off: not logged"
 check [::ess::photo_log_match f.ess] 1 "on: logged"
 check $::matches {{f.ess proc/photo/edge 0 0 1}} "every edge, not obs-limited, unbuffered"
 
+puts "stim2 patch:"
+# rmtSend: the script is run in a stand-in stim2, with or without the module
+set ::rmt {}
+set ::stim [interp create]
+proc rmtSend { script } { lappend ::rmt $script ; $::stim eval $script }
+$::stim eval {
+    set calls {}
+    proc photopatch { args } { lappend ::calls $args ; expr {[lindex $args 0] eq "on" ? 1 : {}} }
+}
+set ::ess::warned {}
+::ess::set_photo_enabled 0
+::ess::set_photo_patch 1
+check [::ess::stim_photopatch_enable] 0 "photo off: the patch is not drawn"
+check $::rmt {} "  nothing sent"
+::ess::set_photo_enabled 1
+::ess::set_photo_patch 0
+check [::ess::stim_photopatch_enable] 0 "patch off: not drawn"
+::ess::set_photo_patch 1
+::ess::set_photo_patch_mode toggle
+::ess::set_photo_patch_corner bl
+::ess::set_photo_patch_size " 40 "
+::ess::set_photo_patch_inset 5
+::ess::set_photo_patch_dark {0.1 0.1 0.2}
+::ess::set_photo_patch_match {{SAMPLE *} PATTERN*}
+check [::ess::stim_photopatch_enable] 1 "both on: drawn"
+check [$::stim eval { set calls }] \
+    {{set -mode toggle -corner bl -size 40 -inset 5 -dark {0.1 0.1 0.2} -match {{SAMPLE *} PATTERN*}} on} \
+    "  its settings, then on"
+check [llength $::rmt] 1 "  one rmtSend, so the data file records it"
+check $::ess::warned {} "  no warning"
+$::stim eval { rename photopatch {} }
+check [::ess::stim_photopatch_enable] -1 "a stim2 without the module: -1"
+check [llength $::ess::warned] 1 "  and a warning"
+interp delete $::stim
+check [catch { ::ess::photo_patch_size_norm 0 }] 1 "size 0 refused"
+check [catch { ::ess::photo_patch_inset_norm -1 }] 1 "inset -1 refused"
+check [catch { ::ess::photo_patch_dark_norm "0 1" }] 1 "two values for dark refused"
+check [catch { ::ess::photo_patch_dark_norm 1.5 }] 1 "dark past 1 refused"
+check [::ess::photo_patch_dark_norm " 0.1 "] 0.1 "one grey"
+check [catch { ::ess::photo_patch_match_norm "" }] 1 "no patterns refused"
+set ::ess::photo_enabled 0
+set ::ess::photo_patch 0
+
 # ---- the declarations ----
 puts "gear section (essconf.tcl):"
 set conf [slurp [file join $root config essconf.tcl]]
@@ -109,8 +152,12 @@ eval [string range $conf $b $e]
 
 set keys {}
 dict for { k opts } $::settings::decl { lappend keys $k }
-check $keys {photo/enabled photo/group photo/strobe photo/period_ms photo/min_step photo/smooth_ms} \
-    "six keys"
+check $keys [concat photo/enabled photo/group photo/strobe photo/period_ms photo/min_step photo/smooth_ms \
+    photo/patch photo/patch_mode photo/patch_corner photo/patch_size photo/patch_inset \
+    photo/patch_dark photo/patch_match] "thirteen keys"
+check [list $::ess::photo_patch $::ess::photo_patch_opts] \
+    {0 {-mode tags -corner tr -size 60 -inset 0 -dark 0 -match *}} \
+    "boot: the patch off, its defaults as stim2's"
 dict for { k opts } $::settings::decl {
     set ap [dict get $opts -apply]
     check [llength [info commands $ap]] 1 "$k applies through $ap"

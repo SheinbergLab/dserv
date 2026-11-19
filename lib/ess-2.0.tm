@@ -594,6 +594,9 @@ namespace eval ess {
         # stim/tlock: which swap carried each CRS T-Lock trigger pulse to a
         # Display++, and the pulse (stim2 docs/tlock.md).
         dservLoggerAddMatch $filename stim/tlock 0 0 1
+        # stim/photopatch: which swap changed the photodiode's patch, and to
+        # which level (stim2 docs/photopatch.md)
+        dservLoggerAddMatch $filename stim/photopatch 0 0 1
         # ... and the input its trigger output is wired to, where declared
         stim_tlock_din_match $filename
         return 1
@@ -903,6 +906,78 @@ namespace eval ess {
         if { !$photo_enabled } { return 0 }
         dservLoggerAddMatch $filename proc/photo/edge 0 0 1
         return 1
+    }
+
+    # stim2's photopatch (stim2 docs/photopatch.md): a square in a corner
+    # of the screen that changes between dark and light on chosen frames,
+    # for the diode to sit over. Drawn only while the rig has both `photo
+    # enabled` and `photo patch` on: a flashing corner distracts a subject,
+    # so a rig without a diode over it never shows one. stim2's `postpass
+    # reset` (every script load) turns it off, so like tlock it is turned on
+    # again at each system load (configure_stim, stim_photopatch_enable),
+    # and a changed setting takes effect at the next one.
+    variable photo_patch 0
+    variable photo_patch_opts [dict create -mode tags -corner tr -size 60 \
+                                   -inset 0 -dark 0 -match *]
+    proc set_photo_patch {on} { variable photo_patch [expr {$on ? 1 : 0}] }
+    proc photo_patch_opt { opt v } {
+        variable photo_patch_opts
+        dict set photo_patch_opts $opt $v
+    }
+    proc photo_patch_int_norm { what lo v } {
+        set v [string trim $v]
+        if { ![string is integer -strict $v] || $v < $lo || $v > 4096 } {
+            error "photo $what: pixels, $lo to 4096"
+        }
+        return [expr {int($v)}]
+    }
+    proc photo_patch_size_norm {v} { photo_patch_int_norm patch_size 1 $v }
+    proc photo_patch_inset_norm {v} { photo_patch_int_norm patch_inset 0 $v }
+    # one grey, or r g b, each 0 to 1
+    proc photo_patch_dark_norm {v} {
+        set v [string trim $v]
+        if { [catch { llength $v } n] || $n ni {1 3} } {
+            error "photo patch_dark: one grey or r g b, each 0 to 1"
+        }
+        foreach c $v {
+            if { ![string is double -strict $c] || $c < 0 || $c > 1 } {
+                error "photo patch_dark: one grey or r g b, each 0 to 1"
+            }
+        }
+        return [join $v " "]
+    }
+    # glob patterns for the swap tags that flip it in tags mode
+    proc photo_patch_match_norm {v} {
+        set v [string trim $v]
+        if { [catch { llength $v } n] || $n == 0 } {
+            error "photo patch_match: swap tag patterns, e.g. * or {SAMPLE *}"
+        }
+        return $v
+    }
+    proc set_photo_patch_mode {v} { photo_patch_opt -mode $v }
+    proc set_photo_patch_corner {v} { photo_patch_opt -corner $v }
+    proc set_photo_patch_size {v} { photo_patch_opt -size [photo_patch_size_norm $v] }
+    proc set_photo_patch_inset {v} { photo_patch_opt -inset [photo_patch_inset_norm $v] }
+    proc set_photo_patch_dark {v} { photo_patch_opt -dark [photo_patch_dark_norm $v] }
+    proc set_photo_patch_match {v} { photo_patch_opt -match [photo_patch_match_norm $v] }
+
+    # Turn stim2's patch on, when the rig asks for it. Called by
+    # configure_stim right after the prelude (whose `postpass reset` turned
+    # it off). Sent with rmtSend, so the data file records it and a replay
+    # draws the same square; guarded like tlock's, so a stim2 without the
+    # module answers -1 and that is a warning. Returns 1 if it is on, 0 if
+    # the rig does not ask for it, -1 if stim2 cannot.
+    proc stim_photopatch_enable {} {
+        variable photo_enabled
+        variable photo_patch
+        variable photo_patch_opts
+        if { !$photo_enabled || !$photo_patch } { return 0 }
+        set r [rmtSend "if {\[llength \[info commands photopatch\]\]} {\
+ [list photopatch set {*}$photo_patch_opts] ; photopatch on } else { expr {-1} }"]
+        if { [string trim $r] eq "1" } { return 1 }
+        ::ess::ess_warning "photo patch is on, but stim2 did not draw it\
+ ([expr {[string trim $r] eq "-1" ? "no photopatch module" : $r}])" "photo"
+        return -1
     }
     # END photo
 
@@ -1899,6 +1974,8 @@ oo::class create System {
         # A Display++ rig: the T-Lock trigger packets, on from here (after
         # the prelude's reset, before the stim script, which arms pulses)
         ::ess::stim_tlock_enable
+        # ... and the photodiode's patch, where the rig asks for one
+        ::ess::stim_photopatch_enable
 
         # Frame-tag events: swapTag payloads arrive from dserv_tag_evt
         # (above, in the stim2 interp) on the single stim/tagevt datapoint;

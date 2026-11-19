@@ -26,6 +26,29 @@ each key is pushed to it when it changes and once at boot.
 | `min_step` | 100 | smallest change that is an edge, ADC counts |
 | `smooth_ms` | 0 | running mean before detection, for PWM ripple |
 
+The patch (stim2's `photopatch`, stim2 `docs/photopatch.md`): a square
+in a corner of the screen that changes between dark and light on chosen
+frames, for the diode to sit over. Drawn only while both `enabled` and
+`patch` are on, so a rig without a diode never flashes a corner at a
+subject. stim2 turns it off at every script load, and ESS turns it on
+again at each system load (`configure_stim`, after tlock's), so a changed
+patch key takes effect at the next system load.
+
+| key | default | |
+|---|---|---|
+| `patch` | 0 | draw the patch |
+| `patch_mode` | `tags` | `tags`: frames carrying a matching swap tag (the ones ESS already times); `toggle`: every frame; `manual`: only `photopatch flip` |
+| `patch_corner` | `tr` | `tr tl br bl`; top right is clear of tlock's row |
+| `patch_size` | 60 | side, pixels |
+| `patch_inset` | 0 | pixels in from both edges |
+| `patch_dark` | 0 | the dark level, one grey or `r g b` (light is white); 0.1 on a strobed display keeps its flashes |
+| `patch_match` | `*` | tags mode: swap tag patterns, e.g. `{SAMPLE *}` |
+
+Each change of the patch is a `stim/photopatch` record on stim2's frame
+log (swapcount, flip, level, change number, matching tags, why), logged
+with `stim/frame`: a level 1 change should come back as a rising edge, a
+level 0 one as a falling edge, in order.
+
 `enabled` logs the edges, not the diode's raw signal. To keep that too (a
 validation session, so detection can be re-run offline), name the group in
 extio's `record` setting as well.
@@ -126,6 +149,9 @@ learn from, so set it.
    or `pulse_thresh` below the dark between flashes), and `period_est`
    agreeing with the setting.
 5. Watch `proc/photo/edge` while toggling the patch: one row per change.
+   With `patch` on and the diode over its corner, `patch_mode toggle`
+   gives an edge every refresh (reload the system after changing it);
+   `rmtSend "photopatch flip"` gives one on demand.
 
 ## Counters
 
@@ -143,4 +169,6 @@ ripple, two channels, a replayed block and a gap, 24-sample blocks with
 two edges each, a strobed flash train starting black and grey, the `*`
 attach through the real dispatch, and `group`. `tests/test_ess_photo.tcl`
 (ctest `ess_photo`) checks the gear section: every key pushed, ms as
-seconds, `enabled` last at boot, the data-file match.
+seconds, `enabled` last at boot, the data-file match, and the patch
+(drawn only with both keys on, its settings sent before `on`, a warning
+from a stim2 without the module).
