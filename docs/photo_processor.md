@@ -153,6 +153,92 @@ learn from, so set it.
    gives an edge every refresh (reload the system after changing it);
    `rmtSend "photopatch flip"` gives one on demand.
 
+## Pairing edges with frames
+
+`tools/photopair/photopair.tcl` reads a session's `.ess` and pairs each
+edge with the frame or event that caused it:
+
+```bash
+dlsh tools/photopair/photopair.tcl FILE.ess
+```
+
+It prints how many paired and the latency from each mark to the light
+(t10, t50, t90; median, mean, sd, min, max, in ms), split by direction.
+`-csv FILE` writes one row per mark.
+
+**Edges** are the logged `proc/photo/edge`. When a file has none (a
+session before `photo enabled`, with the diode's group recorded raw), or
+with `-replay`, the same detector runs over the recorded blocks
+(`photo_replay`, built with dserv as `build/processors/photo_replay`),
+with `-p key=value` for its parameters. One recording can then be
+detected again with other settings.
+
+**Marks** (`-marks`):
+
+| | |
+|---|---|
+| `photopatch` | stim2's patch changes (the default when the file has them); each says which direction to expect |
+| `tlock` | the Display++ trigger's edges on the `tlock din` input: the box clock, no stim2 clock involved |
+| `di:VARNAME` | rising edges of any digital input |
+| `evt:T:S` | events, e.g. `evt:30:1` (SAMPLE ON) |
+| `cmd:GLOB` | stim2 commands (`stim/cmd`) at the flip stim2 reported, e.g. `cmd:!sample_on` |
+
+`-dir rise|fall|any` sets the expected direction for marks that don't
+carry one.
+
+stim2's flip times are on its host's wall clock. The `photo` block logs
+`ess/dserv_wall_us` (dserv's clock minus the wall clock) in each data
+file, and photopair adds it to put those flips on the edges' clock.
+Older files have none. There the offset is estimated from when stim2's
+records arrived: an upper bound, so latencies read short by the shortest
+delivery time (tens of us between hosts).
+
+The pairing:
+
+1. Each mark is matched with its own next edge of the right direction.
+   The median of those gaps is the typical latency, so one missed edge
+   doesn't shift every later pair, even when the latency is longer than
+   a refresh.
+2. Each mark then takes the unused edge nearest its time plus that
+   latency, within `-window` ms (default 4).
+
+Edges no mark explains stay unpaired: the stimulus changing the light by
+itself, or noise. A mark whose light never changed gets no edge.
+
+### At 1 kHz
+
+Both validation sessions sampled the diode at 1 kHz. Replayed and paired:
+
+| session | marks | paired | t50 latency, ms | sd, ms |
+|---|---|---|---|---|
+| Display++ 2611181646 (strobe, period 8.249 ms, min_step 60) | tlock rising | 10 | 2.457 | 0.098 |
+| | SAMPLE ON (evt:30:1) | 10 of 20 | 10.465 | 0.089 |
+| LCD 2611191206 (officepi) | `!sample_off` | 11 of 11 | 5.599 | 0.054 |
+| | `!sample_on` | 12 of 12 | 5.506 | 0.403 (two sample colours) |
+
+1 kHz works:
+
+- **Continuous LCD:** t50 is interpolated between samples, and the
+  spread is tens of us.
+- **Display++:** each flash lands on one or two samples, so where its
+  half-rise falls is known to about 0.1 ms. t10 and t50 are the first
+  changed refresh. t90 is a refresh or more later, and means little.
+- **2 kHz** doubles the samples per flash and per rise.
+- **5–10 kHz** is for tens-of-us work on a strobed display.
+
+**PWM-dimmed backlights** are the exception. Their ripple runs at a few
+kHz, and 1–2 kHz cannot resolve it: the ripple aliases into slow wander
+that `smooth` cannot remove. Sample fast enough to see the ripple, or
+avoid dimmed panels.
+
+On a Display++, set `period` from the measured refresh, not the nominal
+one: this rig ran at 8.249 ms, not 8.333. `period_est` tells you, or
+leave `period` at 0. `min_step` must be below the smallest change in
+flash height that counts. In 2611181646, half the SAMPLE ONs gave no
+rising edge at either 100 or 60: those trials' sample changed the light
+under the diode too little. A photopatch avoids that, since its step is
+the same on every trial.
+
 ## Counters
 
 `n_blocks n_other n_samples n_edges n_rising n_falling n_unsettled n_gaps n_bad

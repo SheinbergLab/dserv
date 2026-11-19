@@ -34,6 +34,11 @@ proc processSetParam { name p v } {
 }
 set ::matches {}
 proc dservLoggerAddMatch { args } { lappend ::matches $args }
+# a dserv clock 37 s off the wall clock, as on a PTP site
+set ::true_off 37000123
+proc now {} { expr {[clock microseconds] + $::true_off} }
+set ::dpset {}
+proc dservSet { name v } { set ::dpset [list $name $v] }
 namespace eval ::ess {
     variable warned {}
     proc ess_warning { msg cat } { variable warned ; lappend warned $msg }
@@ -83,7 +88,11 @@ set ::matches {}
 check [::ess::photo_log_match f.ess] 0 "off: not logged"
 ::ess::set_photo_enabled 1
 check [::ess::photo_log_match f.ess] 1 "on: logged"
-check $::matches {{f.ess proc/photo/edge 0 0 1}} "every edge, not obs-limited, unbuffered"
+check $::matches {{f.ess proc/photo/edge 0 0 1} {f.ess ess/dserv_wall_us 0 0 1}} \
+    "every edge, not obs-limited, unbuffered; and the clock offset"
+check [lindex $::dpset 0] ess/dserv_wall_us "  the offset set after its match"
+check [expr {abs([lindex $::dpset 1] - $::true_off) < 2000}] 1 \
+    "  dserv minus wall, to the bracket ([lindex $::dpset 1] vs $::true_off)"
 
 puts "stim2 patch:"
 # rmtSend: the script is run in a stand-in stim2, with or without the module

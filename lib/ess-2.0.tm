@@ -905,7 +905,29 @@ namespace eval ess {
         variable photo_enabled
         if { !$photo_enabled } { return 0 }
         dservLoggerAddMatch $filename proc/photo/edge 0 0 1
+        # the offset that puts stim2's flip times (stim/photopatch,
+        # stim/frame: CLOCK_REALTIME) on the dserv clock the edges are on
+        dservLoggerAddMatch $filename ess/dserv_wall_us 0 0 1
+        dservSet ess/dserv_wall_us [dserv_wall_offset]
         return 1
+    }
+
+    # dserv's clock minus this host's wall clock, in us: [now] and [clock
+    # microseconds] read back to back, the tightest of a few brackets.
+    # stim_evt_time maps a flip the same way, live; this is the value an
+    # offline reader needs (tools/photopair). Steady over a session: both
+    # clocks are slewed together, only a step changes it.
+    proc dserv_wall_offset {} {
+        set best {}
+        for { set i 0 } { $i < 5 } { incr i } {
+            set a [now]
+            set w [clock microseconds]
+            set b [now]
+            if { $best eq "" || $b - $a < [lindex $best 0] } {
+                set best [list [expr {$b - $a}] [expr {($a + $b) / 2 - $w}]]
+            }
+        }
+        return [lindex $best 1]
     }
 
     # stim2's photopatch (stim2 docs/photopatch.md): a square in a corner

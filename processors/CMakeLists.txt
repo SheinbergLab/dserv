@@ -68,4 +68,15 @@ if(NOT APPLE)
     target_link_libraries(${PROCESSOR} m pthread)
 endif()
 
+# photo_replay: the same detector offline, over a data file's recorded
+# blocks (tools/photopair). Not installed: run from the build tree, like
+# tools/dfconvert from the checkout.
+find_package(Threads REQUIRED)
+add_executable(photo_replay ../tools/photopair/photo_replay.c prmutil.c ../src/dpoint_process.c)
+target_include_directories(photo_replay PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+target_link_libraries(photo_replay PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
+if(NOT APPLE AND NOT WIN32)
+    target_link_libraries(photo_replay PRIVATE m)
+endif()
+
 install(TARGETS touch_windows windows in_out up_down_left_right sampler saccade photo DESTINATION dserv/processors COMPONENT dserv)
