@@ -4735,15 +4735,46 @@ namespace eval ess {
     # PATTERN SWAP.  Unknown types/subtypes surface as a warning carrying
     # evt_put's valid-names message rather than silently dropping a
     # timed marker.
+    #
+    # The vals always arrive as floats: stimess packs `swapTag {TARGET SET
+    # 1}` as the float 1.0.  An event whose params are integers (short or
+    # long: TARGET, ABORT, most of the table) refused that ("expected
+    # integer but got 1.0"), so the event was lost and only this warning
+    # said so.  Whole-number vals are therefore handed to such an event as
+    # integers.  A fractional one is not rounded: it still fails, with the
+    # warning, because a param the stim script meant as 1.5 is not 2.
     proc stim_tag_evt { dpoint data } {
         lassign [qpcs::evtUnpack $data] swap ticksF vals flipwall tag
         lassign $tag type subtype
         if { $type eq {} }    { set type PATTERN; set subtype SWAP }
         if { $subtype eq {} } { set subtype 0 }
         set t [stim_evt_time $dpoint $swap $ticksF $flipwall]
+        if { [llength $vals] } { set vals [stim_tag_params $type $vals] }
         if { [catch { evt_put $type $subtype $t {*}$vals } err] } {
             ess_warning "stim_tag_evt ($tag): $err" "stim"
         }
+    }
+
+    # vals as the event type's params take them: integers for a short/long
+    # event when every val is a whole number, otherwise unchanged
+    proc stim_tag_params { type vals } {
+        variable current
+        variable evt_datatypes
+        set ss $current(state_system)
+        if { $ss eq {} } { return $vals }
+        set ptype [dict getdef [set ${ss}::_evt_ptype_ids] $type {}]
+        if { $ptype ni [list [dict get $evt_datatypes short] \
+                            [dict get $evt_datatypes long]] } {
+            return $vals
+        }
+        set ints {}
+        foreach v $vals {
+            if { ![string is double -strict $v] || $v != floor($v) } {
+                return $vals
+            }
+            lappend ints [expr {wide($v)}]
+        }
+        return $ints
     }
 
     # ----------------------------------------------------------------------

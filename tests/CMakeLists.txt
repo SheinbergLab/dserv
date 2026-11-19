@@ -129,6 +129,20 @@ else()
 endif()
 
 #
+# Swap-tag params arrive from stim2 as floats; stim_tag_evt must hand
+# whole-number ones to an integer (short/long) event as integers, or the
+# event is refused and lost (lib/ess-2.0.tm stim_tag_params).  Needs dlsh only.
+#
+if(DLSH_EXECUTABLE)
+  add_test(
+      NAME ess_stim_tag_params
+      COMMAND ${DLSH_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tests/test_ess_stim_tag_params.tcl"
+  )
+  set_property(TEST ess_stim_tag_params PROPERTY TIMEOUT 30)
+  set_property(TEST ess_stim_tag_params PROPERTY PASS_REGULAR_EXPRESSION "all checks passed")
+endif()
+
+#
 # df::add_recorded_streams (lib/df-2.0.tm) on a synthetic obs DG: the
 # streams a file's decode keys name reach the trials DG with no extractor
 # involved. Needs dlsh for the dl_* commands, nothing else.
