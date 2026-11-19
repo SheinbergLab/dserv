@@ -31,6 +31,12 @@
 #                          elsewhere = 5 deg from the fixation spot toward the
 #                          screen center, outside every window; hold = never
 #                          leave, so the trial times out as no_response)
+#   transsacc  real main-sequence saccades from the virtual eye (see
+#            transsacc_state below): to the spot on fixon, to the target on
+#            target_on after a jittered latency, then a report (buttons or
+#            touch, whichever the protocol reads) per
+#            ts_policy (suppress | correct | wrong | random | hold | nosac).
+#            Tune with  vseye::ts_set lat_ms 200 gain 0.9 overshoot 0.1 ...
 #   pursuit  fixon_a   -> gaze to the fixation spot; the target is then
 #            followed freely (reward is for completion, so the parked gaze
 #            is enough to exercise the trial; set follow 1 to have the gaze
@@ -80,22 +86,30 @@ namespace eval vseye {
         log "GAZE $label -> [format %.2f $h] [format %.2f $v]"
     }
 
-    proc schedule { ms h v label } {
+    # run script after ms, counted on the tick
+    proc after_ms { ms script label } {
         variable pending ; variable tick_ms
-        lappend pending [list [expr {int(round($ms/double($tick_ms)))}] $h $v $label]
+        lappend pending [list [expr {int(round($ms/double($tick_ms)))}] $script]
         log "  scheduled $label in $ms ms"
+    }
+
+    proc schedule { ms h v label } {
+        after_ms $ms [list [namespace current]::gaze $h $v $label] $label
     }
 
     proc on_tick {args} {
         variable pending ; variable nticks
         dservSet vseye/ticks [incr nticks]
         if { ![llength $pending] } { return }
-        set keep {}
+        set keep {} ; set due {}
         foreach p $pending {
-            lassign $p n h v label
-            if { $n <= 0 } { gaze $h $v $label } else { lappend keep [list [expr {$n-1}] $h $v $label] }
+            lassign $p n script
+            if { $n <= 0 } { lappend due $script } else { lappend keep [list [expr {$n-1}] $script] }
         }
         set pending $keep
+        foreach script $due {
+            if { [catch $script err] } { log "  ERROR $err" }
+        }
     }
 
     # --- remap (doublestep, shapes): fixate, follow the jump, then respond ---
@@ -135,12 +149,117 @@ namespace eval vseye {
         }
     }
 
+    # --- transsacc (displace): real saccades, and a report ---------------
+    #
+    # Every eye movement here is a main-sequence saccade from the virtual
+    # eye (`saccade`), not a jump, so the saccade detector sees what it
+    # would see from a tracker.  The time is set by the eye itself
+    # (-delay), exactly, not by this process's tick.
+    #
+    # The report follows `ts_policy`, one word per trial, cycled:
+    #   suppress  a model of saccadic suppression of displacement: an intra
+    #             step goes unseen (random answer), a blank or late step is
+    #             seen (correct answer).  The data should then show the
+    #             intra/blank/late split the paradigm looks for.
+    #   correct | wrong | random   regardless of mode
+    #   hold      no report: the trial ends as no_response
+    #   nosac     never leave fixation: the trial aborts as nosaccade
+    variable ts_policy       {suppress}
+    variable ts_fix_lat_ms   150       ;# fixon -> saccade to the spot
+    variable ts_lat_ms       180       ;# target on -> saccade (mean)
+    variable ts_lat_jitter   40        ;# +/- uniform, ms
+    variable ts_gain         0.95      ;# landing gain (hypometric)
+    variable ts_scatter      0.3       ;# landing scatter sd, deg
+    variable ts_overshoot    0.0       ;# dynamic overshoot fraction
+    variable ts_resp_ms      400       ;# response window on -> report
+
+    proc ts_set { args } {
+        foreach {k v} $args {
+            variable ts_$k
+            if { ![info exists ts_$k] } { error "no setting ts_$k" }
+            set ts_$k $v
+        }
+        log "TS $args"
+    }
+
+    proc ts_action {} {
+        variable ts_policy ; variable pidx
+        if { $pidx < 0 } { return hold }
+        return [lindex $ts_policy [expr {$pidx % [llength $ts_policy]}]]
+    }
+
+    proc nrand { sd } {
+        set u [expr {max(1e-12, rand())}]
+        return [expr {$sd*sqrt(-2.0*log($u))*cos(6.283185307179586*rand())}]
+    }
+
+    proc look { delay_ms h v label {overshoot 0.0} } {
+        set t [send virtual_eye [list saccade $h $v -delay $delay_ms \
+                                     -overshoot $overshoot]]
+        dservSet vseye/gaze [list $h $v]
+        log "SACCADE $label -> [format %.2f $h] [format %.2f $v] in $delay_ms ms ($t)"
+    }
+
+    # the report on whatever the protocol reads: its buttons (press and
+    # release in one send, as virtual_subject.tcl does), else a touch pad
+    proc report { which } {
+        if { [var use_buttons] || [var use_joystick] } {
+            send ess "::ess::button_simulate $which 1; ::ess::button_simulate $which 0"
+            log "REPORT button $which"
+        } else {
+            send ess [list ::ess::touch_win_simulate $which]
+            log "REPORT window $which"
+        }
+    }
+
+    proc transsacc_state { state } {
+        variable pidx ; variable pending
+        variable ts_fix_lat_ms ; variable ts_lat_ms ; variable ts_lat_jitter
+        variable ts_gain ; variable ts_scatter ; variable ts_overshoot
+        variable ts_resp_ms
+        switch -- $state {
+            start_obs_a {
+                incr pidx ; set pending {}
+                dservSet vseye/action "obs $pidx -> [ts_action]"
+                log "TRIAL obs=$pidx action=[ts_action]"
+            }
+            fixon_a {
+                look $ts_fix_lat_ms [var fix_x] [var fix_y] fix
+            }
+            target_on_a {
+                if { [ts_action] eq "nosac" } { log "  nosac: stay on fixation" ; return }
+                set lat [expr {$ts_lat_ms + $ts_lat_jitter*(2.0*rand() - 1.0)}]
+                set fx [var fix_x] ; set fy [var fix_y]
+                set tx [var target_x] ; set ty [var target_y]
+                set h [expr {$fx + $ts_gain*($tx - $fx) + [nrand $ts_scatter]}]
+                set v [expr {$fy + $ts_gain*($ty - $fy) + [nrand $ts_scatter]}]
+                look [expr {int(round($lat))}] $h $v target $ts_overshoot
+            }
+            response_on_a {
+                set a [ts_action]
+                set want [var correct_resp]
+                if { $a eq "suppress" } {
+                    set a [expr {[var mode] eq "intra" ? "random" : "correct"}]
+                }
+                if { $want < 0 && $a in {correct wrong} } { set a random }
+                switch -- $a {
+                    correct { set w $want }
+                    wrong   { set w [expr {1 - $want}] }
+                    random  { set w [expr {int(rand()*2)}] }
+                    default { log "  $a: no report" ; return }
+                }
+                after_ms $ts_resp_ms [list [namespace current]::report $w] "report $w ($a)"
+            }
+        }
+    }
+
     proc on_state { dpoint data } {
         variable system
         if { $system eq "" } { catch { set system [dservGet ess/system] } }
         switch -- $system {
-            remap   { remap_state $data }
-            pursuit { pursuit_state $data }
+            remap     { remap_state $data }
+            pursuit   { pursuit_state $data }
+            transsacc { transsacc_state $data }
             default { }
         }
     }
