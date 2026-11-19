@@ -140,6 +140,16 @@ if(DLSH_EXECUTABLE)
   )
   set_property(TEST ess_stim_tag_params PROPERTY TIMEOUT 30)
   set_property(TEST ess_stim_tag_params PROPERTY PASS_REGULAR_EXPRESSION "all checks passed")
+
+  # stim2's flipwall is on the stim host's wall clock (UTC); mapping it with
+  # ptp/d_us (TAI) put every stim-tagged event 37 s early on a PTP site
+  # (lib/ess-2.0.tm stim_evt_time / stim_evt_wall_ok).
+  add_test(
+      NAME ess_stim_evt_time
+      COMMAND ${DLSH_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tests/test_ess_stim_evt_time.tcl"
+  )
+  set_property(TEST ess_stim_evt_time PROPERTY TIMEOUT 30)
+  set_property(TEST ess_stim_evt_time PROPERTY PASS_REGULAR_EXPRESSION "all checks passed")
 endif()
 
 #

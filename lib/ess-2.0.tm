@@ -4663,8 +4663,8 @@ namespace eval ess {
     #
     # On PTP-anchored sites the header's FlipWallUs (stim2 swapStats
     # `flipwall`: the hardware flip on the stim host's CLOCK_REALTIME)
-    # places every marker absolutely to microseconds via ptp/d_us -- the
-    # anchor below then never engages. Elsewhere the anchor path applies:
+    # places every marker absolutely to microseconds -- the anchor below
+    # then never engages. Elsewhere the anchor path applies:
     #
     # Anchor: set once per trial from the stimulus-onset marker (e.g. the
     # motion-onset TARGET ON) -- ties the stim clock origin (swap0/ticksF0) to
@@ -4692,26 +4692,77 @@ namespace eval ess {
     # best source first:
     #
     #   1. flipwall (qpcs 3.43 header): the hardware buffer-flip time on the
-    #      stim host's CLOCK_REALTIME, mapped onto the dserv clock via
-    #      ptp/d_us (D = dserv - wall, published by ptpconf on PTP-anchored
-    #      hosts).  Per-event absolute placement at PTP precision -- no
-    #      per-trial anchor involved.  Requires BOTH a plausible flipwall
-    #      (a stim host with a wrong clock fails the epoch floor, same
-    #      constant as dserv core's check) and a published D: on a non-PTP
-    #      site the stim host's wall clock is no better than the anchor, so
+    #      stim host's CLOCK_REALTIME, mapped onto the dserv clock by THIS
+    #      host's own (dserv - wall) offset, read here: [now] and
+    #      [clock microseconds] back to back.  Per-event absolute placement
+    #      at the precision the two hosts' wall clocks agree to -- no
+    #      per-trial anchor involved.  Used only where that agreement is
+    #      worth having: a plausible flipwall (a stim host with a wrong
+    #      clock fails the epoch floor, same constant as dserv core's check)
+    #      on a PTP-anchored site (ptpconf publishes ptp/d_us; the hosts'
+    #      system clocks are then disciplined together).  On a non-PTP site
+    #      the stim host's wall clock is no better than the anchor, so
     #      falling through is correct, not a shortcut.
+    #
+    #      NOT ptp/d_us itself.  That is D = dserv - PTP hardware clock, the
+    #      offset extio boxes need, and the PTP clock runs on TAI: 37 s
+    #      ahead of the UTC wall clock flipwall is on.  Adding it placed
+    #      every stim-tagged event 37 s early, before its own obs began,
+    #      where the event time wrapped (officepi -> office-stim,
+    #      2026-11-19: TARGET ON read 1271274053 ms into the trial).
+    #
+    #      And checked: the result must sit just before the tag's own
+    #      arrival (stim_evt_wall_ok).  A flip cannot follow the message
+    #      reporting it, and a tag is delivered within a few frames of its
+    #      flip, so anything outside that window is a clock that disagrees,
+    #      and the marker falls through to 2/3 with a warning rather than
+    #      being written somewhere wrong.
     #   2. the per-trial anchor: t0 + delta-StimTicksF (relative timing
     #      exact; absolute placement carries the anchor marker's transport
     #      latency).
     #   3. the datapoint's own dserv receipt time.
     #
     # StimTicksF is ms; dserv timestamps are us, hence the *1000.
+    #
+    # the window a flipwall-placed time must fall in, relative to the
+    # tag's dserv receipt: up to stim_evt_wall_early_us before it (tags
+    # are delivered after the flip is confirmed, a frame or two later),
+    # and no more than stim_evt_wall_late_us after it (slack for two
+    # disciplined wall clocks that disagree slightly)
+    variable stim_evt_wall_early_us 1000000
+    variable stim_evt_wall_late_us  20000
+    variable stim_evt_wall_warned   0
+
+    proc stim_evt_wall_ok { t name } {
+        variable stim_evt_wall_early_us
+        variable stim_evt_wall_late_us
+        variable stim_evt_wall_warned
+        if { [catch { dservTimestamp $name } recv] || $recv eq "" } {
+            return 1
+        }
+        set d [expr {wide($t) - wide($recv)}]
+        if { $d >= -$stim_evt_wall_early_us && $d <= $stim_evt_wall_late_us } {
+            return 1
+        }
+        # once a minute is enough to say the clocks disagree
+        set now_s [clock seconds]
+        if { $now_s - $stim_evt_wall_warned >= 60 } {
+            set stim_evt_wall_warned $now_s
+            ess_warning "stim_evt_time: $name flip placed\
+                [format %.1f [expr {$d/1000.0}]] ms from its arrival; the stim\
+                host's wall clock disagrees with this one. Using the anchor /\
+                receipt time instead." "stim"
+        }
+        return 0
+    }
+
     proc stim_evt_time { name swap ticksF {flipwall 0} } {
         variable stim_evt_anchor
-        if { $flipwall > 1735689600000000 } {          ;# after 2025-01-01Z
-            if { ![catch { dservGet ptp/d_us } d] && $d ne "" } {
-                return [expr {wide($flipwall) + wide($d)}]
-            }
+        # after 2025-01-01Z, on a PTP-anchored site (ptp/d_us published)
+        if { $flipwall > 1735689600000000 &&
+             ![catch { dservGet ptp/d_us } d] && $d ne "" } {
+            set t [expr {wide($flipwall) + ([now] - [clock microseconds])}]
+            if { [stim_evt_wall_ok $t $name] } { return $t }
         }
         if { [llength $stim_evt_anchor] == 0 } {
             return [dservTimestamp $name]
