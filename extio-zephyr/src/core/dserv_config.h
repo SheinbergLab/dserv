@@ -50,6 +50,7 @@
 #define DSERV_CONFIG_H
 
 #include "dserv_msg.h"
+#include "box_meta.h"   /* host-owned key/value area (meta/<key>) */
 #include <stdio.h>       /* sscanf */
 #include <stdlib.h>      /* strtol (group pin lists) */
 
@@ -339,6 +340,12 @@ typedef struct {
     uint8_t  ble_pair_n;                       /* entries in use, 0 = promiscuous */
     uint8_t  ble_pair_addr[BOX_BLE_MAX_PAIR][7];
     char     ble_pair_name[BOX_BLE_MAX_PAIR][BOX_NAME_MAX];  /* label, may be "" */
+
+    /* v30: HOST-OWNED key/value area (box_meta.h). Stored and announced, never
+     * interpreted: meta/model names the model this unit was built as,
+     * meta/cal/<sub> carries a calibration measured on THIS unit. Appended
+     * last, so an older blob loads it zero-defaulted = empty. */
+    char     meta[BOX_META_MAX];
 } box_config_t;
 
 /* Max int16 samples in one analog block: 12B header + 48B of samples, and a
@@ -452,6 +459,7 @@ typedef enum {
     CFG_PIPE_EN,
     CFG_BLE_LATENCY,
     CFG_DESC,
+    CFG_META,       /* config/meta/<key> -- host-owned key/value (box_meta.h) */
     CFG_CHANNEL,
     CFG_LABEL,
     CFG_GROUP,
@@ -962,6 +970,15 @@ static inline cfg_result_t dserv_cfg__config(box_config_t *c, const char *k,
     if (strcmp(k, "desc") == 0) {
         dserv_msg_copy_cstr(m, c->desc, sizeof c->desc); c->applied_count++; return CFG_DESC;
     }
+    /* meta/<key>: copied into a buffer LONGER than the cap so an over-long
+     * value is REFUSED by box_meta_val_valid rather than silently truncated
+     * into something the host never wrote. "off" or "" deletes the key. */
+    if (strncmp(k, "meta/", 5) == 0) {
+        char w[BOX_META_VAL_MAX + 8]; dserv_msg_copy_cstr(m, w, sizeof w);
+        if (!strcmp(w, "off")) w[0] = '\0';
+        if (box_meta_set(c->meta, (int) sizeof c->meta, k + 5, w) != 0) return CFG_UNKNOWN;
+        c->applied_count++; return CFG_META;
+    }
     /* The firmware update channel this box tracks. Console-settable since v19
      * and announced as state/channel, but with no config path until now -- so
      * it was the ONE setting box_cli_dump emits that a host could read and not
@@ -1294,6 +1311,7 @@ static inline const char *dserv_cfg_result_str(cfg_result_t r)
     case CFG_PIPE_EN:    return "pipe_en";
     case CFG_BLE_LATENCY:return "ble_latency";
     case CFG_DESC:       return "desc";
+    case CFG_META:       return "meta";
     case CFG_CHANNEL:    return "channel";
     case CFG_LABEL:      return "label";
     case CFG_GROUP:      return "group";

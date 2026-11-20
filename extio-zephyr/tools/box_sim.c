@@ -198,6 +198,9 @@ static int run_dump_roundtrip(void)
     snprintf(rt_src.ain_group_label[0], sizeof rt_src.ain_group_label[0], "eye");
     snprintf(rt_src.ain_label[0], sizeof rt_src.ain_label[0], "eye_x");
     rt_src.console_mode = CONSOLE_MODE_UART;
+    box_meta_set(rt_src.meta, (int) sizeof rt_src.meta, "model", "astick");
+    box_meta_set(rt_src.meta, (int) sizeof rt_src.meta, "cal/slider",
+                 "v1 cx2048.1 cy2038.1 sx1 sy0 ix1 iy0 t1249");
 
     printf("roundtrip: dump (datapoint form) -> codec -> compare\n");
     rt_lines = 0; rt_unknown = 0;
@@ -250,6 +253,7 @@ static int run_dump_roundtrip(void)
                           !memcmp(rt_src.ain_group_mode, rt_dst.ain_group_mode, sizeof rt_src.ain_group_mode) },
         { "ain labels",   !memcmp(rt_src.ain_label, rt_dst.ain_label, sizeof rt_src.ain_label) },
         { "console",      dserv_cfg_console_mode(&rt_src) == dserv_cfg_console_mode(&rt_dst) },
+        { "meta",         !memcmp(rt_src.meta, rt_dst.meta, sizeof rt_src.meta) },
     };
     for (unsigned i = 0; i < sizeof chk / sizeof chk[0]; i++) {
         if (!chk[i].same) { ok = 0; printf("  MISMATCH after replay: %s\n", chk[i].what); }

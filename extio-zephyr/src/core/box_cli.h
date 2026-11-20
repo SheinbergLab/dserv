@@ -204,6 +204,13 @@ static inline void box_cli_show(const box_config_t *c, char *out, int outsz)
                       c->obs_mode == OBS_MODE_LEADER ? "leader" : "mirror");
     if (c->desc[0] && k < outsz - 8)
         k += snprintf(out + k, outsz - k, "  desc=%s\r\n", c->desc);
+    {
+        char mk[BOX_META_KEY_MAX], mv[BOX_META_VAL_MAX];
+        int mp = 0;
+        while (k < outsz - 80 &&
+               box_meta_next(c->meta, (int) sizeof c->meta, &mp, mk, sizeof mk, mv, sizeof mv))
+            k += snprintf(out + k, outsz - k, "  meta %s=%s\r\n", mk, mv);
+    }
     for (int i = 0; i < BOX_NPINS && k < outsz - 64; i++)
         if (c->pin_mode[i])
             k += snprintf(out + k, outsz - k, "  pin%d=%s pulse=%uus debounce=%ums%s%s%s\r\n",
@@ -331,6 +338,12 @@ static inline void box_cli_dump(const box_config_t *c)
         if (c->pin_label[i][0])  DUMP2("label %d %s\r\n", "pin/%d/label %s\r\n", i, c->pin_label[i]);
     }
     if (c->desc[0])                       DUMP2("desc %s\r\n", "desc %s\r\n", c->desc);
+    {
+        char mk[BOX_META_KEY_MAX], mv[BOX_META_VAL_MAX];
+        int mp = 0;
+        while (box_meta_next(c->meta, (int) sizeof c->meta, &mp, mk, sizeof mk, mv, sizeof mv))
+            DUMP2("meta %s %s\r\n", "meta/%s %s\r\n", mk, mv);
+    }
     if (c->channel[0])                    DUMP2("channel %s\r\n", "channel %s\r\n", c->channel);
     for (int g = 0; g < BOX_NGROUPS; g++)
         if (c->group_pins[g]) {
@@ -676,6 +689,24 @@ static inline cli_action_t box_cli_exec(box_config_t *c, const char *line,
         c->ain_group_chans[n] = 0; c->ain_group_label[n][0] = '\0'; c->applied_count++;
         snprintf(out, outsz, "OK ain group%d off\r\n", n); return CLI_AIN;
     }
+    /* meta KEY VALUE... -- the host-owned key/value area (box_meta.h). The
+     * value is the rest of the line verbatim, like desc; `meta KEY off`
+     * deletes. Returns CLI_GROUP so the console re-announces, same as desc. */
+    if (!strncmp(line, "meta ", 5)) {
+        const char *p = line + 5, *sp = strchr(p, ' ');
+        char key[BOX_META_KEY_MAX + 8];
+        if (!sp || sp == p || (size_t)(sp - p) >= sizeof key) {
+            snprintf(out, outsz, "ERR usage: meta KEY VALUE|off\r\n"); return CLI_ERR;
+        }
+        memcpy(key, p, (size_t)(sp - p)); key[sp - p] = '\0';
+        const char *val = sp + 1;
+        if (!strcmp(val, "off")) val = "";
+        int rc = box_meta_set(c->meta, (int) sizeof c->meta, key, val);
+        if (rc == -1) { snprintf(out, outsz, "ERR meta: key 1-15 of A-Za-z0-9_./-, value 0-56 printable\r\n"); return CLI_ERR; }
+        if (rc == -2) { snprintf(out, outsz, "ERR meta: full (%d bytes)\r\n", BOX_META_MAX); return CLI_ERR; }
+        c->applied_count++;
+        snprintf(out, outsz, "OK meta %s=%s\r\n", key, val[0] ? val : "(deleted)"); return CLI_GROUP;
+    }
     /* desc: value is the rest of the line verbatim, so spaces survive. */
     if (!strncmp(line, "desc ", 5)) {
         if (!strcmp(line + 5, "off")) c->desc[0] = '\0';
@@ -863,7 +894,7 @@ static inline cli_action_t box_cli_exec(box_config_t *c, const char *line,
     if (!strcmp(line, "bootsel")) { snprintf(out, outsz, "entering USB BOOTSEL (then: picotool load <uf2>)...\r\n"); return CLI_BOOTSEL; }
     if (!strcmp(line, "help")) {
         snprintf(out, outsz,
-            "cmds: show | dump | name NAME | desc TEXT | channel NAME | console cdc|uart | " BOX_CLI_HELP_XTRA
+            "cmds: show | dump | name NAME | desc TEXT | meta KEY VAL|off | channel NAME | console cdc|uart | " BOX_CLI_HELP_XTRA
             "net mode dhcp|static | net ip A.B.C.D | net gateway A.B.C.D | net mask A.B.C.D |\r\n"
             "      wifi ssid SSID | wifi pass PASS | wifi pm 0|1 | dserv ip A.B.C.D | dserv port N |\r\n"
             "      pin N mode out|in|in_pullup|ain|off | pin N pulse US | pin N debounce MS |\r\n"

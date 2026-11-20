@@ -23,7 +23,9 @@
 #include <string.h>
 
 #define BOX_PERSIST_MAGIC    0x57494F31u   /* "WIO1" */
-#define BOX_PERSIST_VERSION  29  /* v29: ble_pair_* (which peripherals a BLE
+#define BOX_PERSIST_VERSION  30  /* v30: meta[] (host-owned key/value area,
+                                  * box_meta.h: meta/model, meta/cal/<sub>).
+                                  * v29: ble_pair_* (which peripherals a BLE
                                   * central will connect to; empty = promiscuous,
                                   * which is what keeps deployed pairs working
                                   * across the upgrade -- BLE_AFFINITY.md).

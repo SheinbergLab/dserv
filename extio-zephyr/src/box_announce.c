@@ -346,6 +346,25 @@ void box_announce_manifest(const box_config_t *c)
 
 	pub_str(c, "desc", c->desc);
 
+	/* meta/<key> + meta/keys. The key LIST is the truth, the way pins/in is:
+	 * dserv retains a deleted key's last datapoint forever, so a host reads
+	 * only the keys named here. Always published, even empty, so "this
+	 * firmware has a meta area and it is empty" is distinguishable from
+	 * "this firmware predates meta". */
+	{
+		char mk[BOX_META_KEY_MAX], mv[BOX_META_VAL_MAX], ml[24];
+		char keys[BOX_META_MAX];
+		int pos = 0;
+
+		while (box_meta_next(c->meta, (int) sizeof c->meta, &pos,
+				     mk, sizeof mk, mv, sizeof mv)) {
+			snprintf(ml, sizeof ml, "meta/%s", mk);
+			pub_str(c, ml, mv);
+		}
+		box_meta_keys_csv(c->meta, (int) sizeof c->meta, keys, sizeof keys);
+		pub_str(c, "meta/keys", keys);
+	}
+
 	/* pins/in + pins/out: exactly the ACTIVE DIO, so a UI renders the real pin
 	 * map. A pin turned off drops out of these lists even though its last
 	 * di/do datapoint lingers retained in dserv -- which would otherwise show a

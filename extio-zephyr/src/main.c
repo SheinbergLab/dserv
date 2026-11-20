@@ -2633,8 +2633,8 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 			       dserv_xmode_str(cfg.transport_mode));
 			box_announce_manifest(&cfg);
 		}
-	} else if (r == CFG_GROUP || r == CFG_LABEL || r == CFG_DESC) {
-		/* group/label/desc change: reseed the chord machines from the
+	} else if (r == CFG_GROUP || r == CFG_LABEL || r == CFG_DESC || r == CFG_META) {
+		/* group/label/desc/meta change: reseed the chord machines from the
 		 * pins' current levels, and re-announce so the edit reaches
 		 * consumers without waiting for a reconnect. */
 		if (r == CFG_GROUP) {
