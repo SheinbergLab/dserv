@@ -896,6 +896,9 @@ namespace eval ess {
     proc set_photo_smooth_ms {v} {
         photo_param smooth [expr {[photo_nonneg_norm $v] / 1000.0}]
     }
+    proc set_photo_settle_ms {v} {
+        photo_param settle_dur [expr {[photo_nonneg_norm $v] / 1000.0}]
+    }
     proc set_photo_min_step {v} {
         photo_param min_step [photo_nonneg_norm $v]
     }

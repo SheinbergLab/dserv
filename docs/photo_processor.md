@@ -25,6 +25,7 @@ each key is pushed to it when it changes and once at boot.
 | `period_ms` | 0 | strobe: the refresh (8.3333 at 120 Hz); 0 learns it |
 | `min_step` | 100 | smallest change that is an edge, ADC counts |
 | `smooth_ms` | 0 | running mean before detection, for PWM ripple |
+| `settle_ms` | 4 | how long the light must be still to finish an edge; ~10 for a slow LCD rise (below) |
 
 The patch (stim2's `photopatch`, stim2 `docs/photopatch.md`): a square
 in a corner of the screen that changes between dark and light on chosen
@@ -260,6 +261,33 @@ flash height that counts. In 2611181646, half the SAMPLE ONs gave no
 rising edge at either 100 or 60: those trials' sample changed the light
 under the diode too little. A photopatch avoids that, since its step is
 the same on every trial.
+
+### A photopatch on an LCD: settle_ms
+
+Session 2611191931 on .40 was transsacc displace/pipeline with the
+virtual eye, the patch in `tags` mode, and the diode recorded through
+the rig's `extio record`. All 120 patch flips paired. Every
+`!target_on` / `!target_off` flip is the same swap as a patch flip, so
+the `!` commands' flip stamps share these latencies. Replayed:
+
+| settle_ms | rise t50, ms (sd) | fall t50, ms (sd) |
+|---|---|---|
+| 4 (default) | 5.14 (0.72) | 3.32 (0.08) |
+| 10 | 8.08 (0.09) | 3.40 (0.05) |
+| 20 | 8.20 (0.12) | 3.42 (0.05) |
+
+This panel's black-to-white rise has a slow tail. At 4 ms the detector
+called it settled at about a third of the step (~370-800 of ~1370
+counts), so t50 came early and varied with where it stopped. At 10 ms
+each rise is one step. Two more things this session showed:
+
+- **Diode gain.** In the session before (2611191926), a high gain
+  clipped white at 4095. The long rise was then sometimes reported as
+  two rising edges: 20 extra edges, and the falls started from 4095.
+  Keep the light level well under full scale.
+- **Screen position.** The latency is the patch's corner, near the top
+  row. An LCD scans top to bottom, so a stimulus lower on the screen is
+  lit later by its fraction of the refresh.
 
 ## Counters
 

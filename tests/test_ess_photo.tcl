@@ -70,7 +70,8 @@ set ::sent {}
 ::ess::set_photo_period_ms 8.3333
 ::ess::set_photo_smooth_ms 2
 ::ess::set_photo_min_step 150
-check $::sent {{photo group box01/photodiode} {photo strobe 1} {photo period 0.0083333} {photo smooth 0.002} {photo min_step 150}} \
+::ess::set_photo_settle_ms 10
+check $::sent {{photo group box01/photodiode} {photo strobe 1} {photo period 0.0083333} {photo smooth 0.002} {photo min_step 150} {photo settle_dur 0.01}} \
     "each key, ms as seconds, group trimmed"
 
 puts "validation:"
@@ -242,8 +243,8 @@ eval [string range $conf $b $e]
 set keys {}
 dict for { k opts } $::settings::decl { lappend keys $k }
 check $keys [concat photo/enabled photo/group photo/strobe photo/period_ms photo/min_step photo/smooth_ms \
-    photo/patch photo/patch_mode photo/patch_corner photo/patch_size photo/patch_inset \
-    photo/patch_dark photo/patch_match] "thirteen keys"
+    photo/settle_ms photo/patch photo/patch_mode photo/patch_corner photo/patch_size \
+    photo/patch_inset photo/patch_dark photo/patch_match] "fourteen keys"
 check [list $::ess::photo_patch $::ess::photo_patch_opts] \
     {0 {-mode tags -corner tr -size 60 -inset 0 -dark 0 -match *}} \
     "boot: the patch off, its defaults as stim2's"

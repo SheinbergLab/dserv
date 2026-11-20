@@ -661,6 +661,16 @@ backlight dimmed by PWM (a ripple at a few kHz): cover a few ripple
 periods. It changes the edge's shape by a constant for a given panel;
 0, the default, is right for a strobed or an undimmed display."
 
+settings::declare photo settle_ms -default 4 -type double \
+    -validate ::ess::photo_nonneg_norm \
+    -apply ::ess::set_photo_settle_ms \
+    -doc "how long the light must stop moving, in ms, before an edge is
+finished. An LCD whose rise has a slow tail needs it longer than that
+tail's stalls (about 10): too short, and the edge ends a third of the way
+up, so its t50 comes early and varies. Keep it under the shortest time
+between two flips of the patch (8.3 ms when it toggles every frame at
+120 Hz)."
+
 settings::declare photo patch -default 0 -type bool \
     -apply ::ess::set_photo_patch \
     -doc "stim2 draws a square in a corner of the screen for the diode to
@@ -719,6 +729,7 @@ settings::declare photo patch_match -default * \
 ::ess::set_photo_period_ms  [settings::get photo period_ms]
 ::ess::set_photo_min_step   [settings::get photo min_step]
 ::ess::set_photo_smooth_ms  [settings::get photo smooth_ms]
+::ess::set_photo_settle_ms  [settings::get photo settle_ms]
 ::ess::set_photo_enabled    [settings::get photo enabled]   ;# last: on with its settings
 
 ::ess::set_stop_after_trial [settings::get ess stop_after_trial]
