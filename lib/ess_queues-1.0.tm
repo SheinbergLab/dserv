@@ -388,10 +388,18 @@ proc ::ess_queues::queue_update {name args} {
     
     set project [::ess::configs::project_active]
     set updates {}
-    
+
+    # the queue by its CURRENT name, before -name changes it (and before
+    # -description needs it: an unset :queue_id binds NULL and the UPDATE
+    # silently matches nothing)
+    foreach {opt val} $args {
+        if {$opt eq "-project"} { set project $val }
+    }
+    set queue_id [get_queue_id $name $project]
+
     foreach {opt val} $args {
         switch -- $opt {
-            -project { set project $val }
+            -project { }
             -description {
                 $db eval {UPDATE queues SET description = :val, updated_at = strftime('%s','now') WHERE id = :queue_id}
             }
@@ -418,7 +426,6 @@ proc ::ess_queues::queue_update {name args} {
     }
     
     if {[llength $updates] > 0} {
-        set queue_id [get_queue_id $name $project]
         set sql "UPDATE queues SET [join $updates ", "], updated_at = strftime('%s','now') WHERE id = $queue_id"
         $db eval $sql
     }
