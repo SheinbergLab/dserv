@@ -192,6 +192,7 @@ class SliderCalModal {
             this._calBox = '';
         }
         this._renderProfile();
+        if (this._overlay) this._render();   // the intro names the stick too
     }
 
     // ---- actions ---------------------------------------------------------
@@ -321,9 +322,10 @@ class SliderCalModal {
             return `
                 <div class="ess-cal-intro">
                     <p>Measures where this stick rests, which way its axes run, and how
-                       far it throws — then writes that to the calibration db. Nothing
-                       is applied until the last step, and Cancel restores what is in
-                       force now.</p>
+                       far it throws — then writes that to the calibration db${this._calBox
+                       ? `, and to the stick itself (${this._calBox}) so it travels with it`
+                       : ''}. Nothing is applied until the last step, and Cancel restores
+                       what is in force now.</p>
                     <button class="ess-modal-btn primary" data-act="begin" type="button">Begin</button>
                 </div>`;
         }
@@ -370,7 +372,8 @@ class SliderCalModal {
             <div class="ess-cal-result">
                 <div class="ess-cal-result-head">Applied and saved</div>
                 <div class="ess-cal-kvs">${rows}</div>
-                <div class="ess-cal-note">Saved to the calibration db, which from now on
+                <div class="ess-cal-note">Saved to the calibration db${this._calBox
+                    ? ` and to ${this._calBox} (meta/cal/slider)` : ''}, which from now on
                     WINS over any measured values (center, channels, invert) still written
                     in <code>local/slider.tcl</code> — those lines stay readable and stop
                     being in force. Retiring them is the point; leaving them is only

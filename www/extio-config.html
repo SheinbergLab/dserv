@@ -124,6 +124,8 @@ code { background:#141720; padding:1px 5px; border-radius:3px; font-size:12px; }
 <script src="js/clock_skew.js"></script>
 <script src="js/extio_silk.js"></script>
 <script src="js/extio_ain.js"></script>
+<script src="js/TclParser.js"></script>
+<script src="js/SliderCalModal.js"></script>
 <script>
 /* extio setup page -- fleet list + per-box configuration, over datapoints.
  *
@@ -167,6 +169,13 @@ const modelErr = new Map();       /* box -> "could not read config: ..." */
 const modelPick = new Map();      /* box -> preview JSON for a picked model */
 let modelMsg = { box: null, text: '' };
 
+/* Stick calibration. A model that says `calibrate slider` is a box whose
+ * per-unit measurement (centre, orientation, throw) the slider takes and then
+ * stores ON THE BOX as meta/cal/slider. Whether this rig can do that right now
+ * is the slider's call (slider::cal_target_why: "" = ready, else the reason),
+ * asked on select and every few seconds while the row is showing. */
+const calWhy = new Map();         /* box -> "" | reason | null (asking failed) */
+let calAsked = 0, calSource = '', calModal = null;
 const now = () => Date.now() * 1000;   /* dserv timestamps are microseconds */
 
 /* Server-clock check lives in js/clock_skew.js -- it is page-agnostic, and any
@@ -1021,6 +1030,7 @@ function renderFleet() {
 }
 function selectBox(n) {
   sel = n; dirty = new Set(); panelSig = null; renderFleet(); renderPanel(); refreshDirty(n);
+  calAsked = 0;
   /* Opening a box asks it to describe itself: retained values may predate the
    * last edit made from a console, and there is no periodic re-announce. */
   if (conn) conn.send(`extio_cfg_announce ${n}`, 'extio').catch(() => {});
@@ -1108,10 +1118,111 @@ function modelSection(b) {
     </div>
     <p class="note" style="color:var(--ink)">${said}</p>
     ${boxTable}${rigTable}${msgP}
+    ${calSection(b, st)}
     <p class="note">A <b>model</b> is a kind of box we build more than one of: its box configuration
        and the <b>rig settings</b> it needs (the ones the ⚙ gear sets). Files live in
        <code>config/models/</code> and this rig's <code>local/models/</code>. Calibration is per
-       physical stick, so it is not part of a model.</p>`;
+       physical stick, so it is not part of a model -- it is stored on the stick itself.</p>`;
+}
+
+/* ---- stick calibration ----
+ *
+ * The measurement belongs to the slider (the rig subsystem that turns any
+ * analog source into the pointer), but what the person holds is a STICK, so
+ * that is what this row is called. The stored result is meta/cal/slider on the
+ * box: `v1 x1 y0 cx2048.1 cy2038.1 ix1 iy0 t1249` (see sliderconf cal_encode). */
+const calCalibrates = st => ((st && st.calibrate) || []).includes('slider');
+
+function calDecode(s) {
+  const d = {};
+  for (const t of String(s).trim().split(/\s+/)) {
+    const m = /^([a-z]+)(-?[\d.]+)$/.exec(t);
+    if (m) d[m[1]] = m[2];
+  }
+  return d;
+}
+
+function calSection(b, st) {
+  if (!calCalibrates(st)) return '';
+  const keys = String(get(b, 'meta/keys', '')).split(',').filter(Boolean);
+  const raw = keys.includes('cal/slider') ? get(b, 'meta/cal/slider', '') : '';
+  const c = raw ? calDecode(raw) : null;
+  const stored = c && c.t
+    ? `stored on the stick: centre ${esc(c.cx)}, ${esc(c.cy)} · throw ±${esc(c.t)} counts` +
+      `${c.ix === '1' ? ' · x inverted' : ''}${c.iy === '1' ? ' · y inverted' : ''}`
+    : '<span style="color:var(--warn)">not calibrated</span> — this stick carries no calibration yet';
+  const why = calWhy.get(b);
+  const ready = why === '';
+  const label = c ? 'Recalibrate stick…' : 'Calibrate stick…';
+  const tip = ready
+    ? `Measure this stick's centre, orientation and throw, then store it on ${b} (meta/cal/slider), so it travels with the stick to any rig.`
+    : (why || 'asking the slider whether this rig can calibrate it…');
+  const using = sel === b && calSource
+    ? `<p class="note">the rig is using: ${esc(calSource)}</p>` : '';
+  return `<div style="margin-top:12px;padding-top:8px;border-top:1px solid var(--line)">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <b>stick calibration</b>
+        <span class="note" style="margin:0">${stored}</span>
+        <button onclick="calOpen('${esc(b)}')" ${ready ? '' : 'disabled'} title="${esc(tip)}">${label}</button>
+      </div>
+      ${!ready && why ? `<p class="note">${esc(why)}</p>` : ''}
+      ${using}
+    </div>`;
+}
+
+async function calAsk(b) {
+  calAsked = Date.now();
+  let why = null;
+  try {
+    const r = await conn.send(`slider::cal_target_why ${b}`, 'slider');
+    why = tclErr(r) !== null ? null : String(r ?? '');
+  } catch (e) { why = null; }
+  if (why === null) why = 'cannot reach the slider on this dserv';
+  /* subscriptions deliver changes only: seed the retained value once */
+  if (!calSource) try {
+    const s = await conn.send('dservGet slider/cal_source', 'slider');
+    if (tclErr(s) === null) calSource = String(s ?? '');
+  } catch (e) {}
+  if (calWhy.get(b) !== why) { calWhy.set(b, why); schedulePanel(); }
+}
+
+/* Called from the 1 s tick: re-ask every 4 s, only while a box whose model
+ * calibrates is selected and no wizard is open. */
+function calTick() {
+  if (!sel || (calModal && calModal._overlay)) return;
+  const st = modelPick.get(sel) || models.get(sel);
+  if (calCalibrates(st) && Date.now() - calAsked > 4000) calAsk(sel);
+}
+
+/* The wizard is ess_control's (js/SliderCalModal.js); borrow only its styles:
+ * :root and the .ess-modal / .ess-cal rules, nothing that could restyle this
+ * page. Fetched once, on first open. */
+let calCss = null;
+function calLoadCss() {
+  if (calCss) return calCss;
+  calCss = fetch('css/ess_control.css').then(r => r.text()).then(text => {
+    const all = new CSSStyleSheet();
+    all.replaceSync(text);
+    const ours = s => s.split(',').every(x => /^\s*(:root|\.ess-(modal|cal)\b)/.test(x));
+    const keep = [];
+    for (const r of all.cssRules)
+      if (r instanceof CSSStyleRule && ours(r.selectorText)) keep.push(r.cssText);
+    const sh = new CSSStyleSheet();
+    sh.replaceSync(keep.join('\n'));
+    document.adoptedStyleSheets = [...document.adoptedStyleSheets, sh];
+  }).catch(e => { calCss = null; throw e; });
+  return calCss;
+}
+
+async function calOpen(b) {
+  await calAsk(b);
+  if (calWhy.get(b) !== '') { setModelMsg(b, calWhy.get(b)); return; }
+  try { await calLoadCss(); } catch (e) { setModelMsg(b, `could not load the wizard's styles: ${e.message}`); return; }
+  if (!calModal) calModal = new SliderCalModal({
+    connection: conn, dpManager: dp,
+    log: (m, lvl) => { if (lvl === 'error') setModelMsg(sel, m); else console.log(m); },
+  });
+  calModal.open();
 }
 
 function setModelMsg(b, text) { modelMsg = { box: b, text }; schedulePanel(); }
@@ -1644,6 +1755,8 @@ function panelSignature(b) {
           models.has(b) ? models.get(b).raw : '', modelErr.get(b) || '',
           modelPick.has(b) ? modelPick.get(b).raw : '',
           modelMsg.box === b ? modelMsg.text : '', dirty.size ? 'D' : '',
+          calWhy.has(b) ? calWhy.get(b) : '?', calSource,
+          String(get(b, 'meta/keys', '')), String(get(b, 'meta/cal/slider', '')),
           get(b, 'ain/clk_ppm', null) !== null ? 'M' : '',
           lc === null ? 'ota-none' : OTA_BUSY.includes(String(lc)) ? 'ota-busy' : 'ota-idle',
           get(b, 'ota/trial') == 1 ? 'T' : '',
@@ -2308,7 +2421,7 @@ async function init() {
    * rebuild (dimming). tickAges(document) covers the fleet's spans; the
    * panel's are re-filled inside renderPanel after any rebuild. */
   setInterval(() => { tickAges(document); renderClockWarn(); renderFleet();
-                      if (sel) renderPanel(); }, 1000);
+                      if (sel) { renderPanel(); calTick(); } }, 1000);
 
   /* ?host=<host[:port]> and ?ssl=1|0 -- the standard three lines every page here
    * needs (www/CLAUDE.md). ssl matters when the page and dserv disagree on
@@ -2331,6 +2444,11 @@ async function init() {
   dp = new DatapointManager(conn, { autoGetKeys: false });
   dp.subscribe('extio/*', onExtio);
   dp.subscribe('settings/extio/record', onRecordSetting);
+  /* the slider's own word for which calibration is in force (stick / db) */
+  dp.subscribe('slider/cal_source', (m) => {
+    const v = String(m.data !== undefined ? m.data : m.value ?? '');
+    if (v !== calSource) { calSource = v; schedulePanel(); }
+  });
 
   /* SEED FROM THE RETAINED VALUES, or the page shows only what happens to be
    * published after it loads.

@@ -6,8 +6,9 @@
 # group (<group>_select) and dial stick_commit presses on.
 #
 # Box section = extio_cfg_export of a working unit (2026-11-20).
-# Rig section = what makes it the rig's joystick. Calibration is NOT here:
-# centre, orientation and throw are measured per physical stick.
+# Rig section = what makes it the rig's joystick. Calibration is measured per
+# physical stick (centre, orientation, throw), so the model only says WHO
+# measures it; the result lives on the unit itself as meta/cal/slider.
 model astick {
     desc  "Teensy 4.0 analog thumbstick with push-select"
     board teensy40
@@ -35,4 +36,5 @@ model astick {
         joystick transport stick
         dial stick_commit stick_select
     }
+    calibrate slider
 }

@@ -11,6 +11,9 @@
 #         settings module exactly as the gear would
 #   board / match   who gets OFFERED the model: board globs (state/board),
 #         and name globs that suggest it for an unconfigured box
+#   calibrate   host subsystems that MEASURE each unit (e.g. `slider`). The
+#         result is stored on the box as meta/cal/<sub>, so a unit without it
+#         is "not calibrated" -- a fact a page can show and act on.
 #
 # The point of the rig half is DISCOVERABILITY. The gear made every knob
 # settable; it did not make anyone know which four of them a thumbstick
@@ -91,16 +94,16 @@ proc ::extio_models::_model_cmd {file name body} {
         error "model name '$name': letters, digits, . _ - only"
     }
     if { [catch { dict size $body }] } {
-        error "model $name: body must be key/value pairs (desc board match box rig)"
+        error "model $name: body must be key/value pairs (desc board match box rig calibrate)"
     }
-    set m [dict create desc "" board {} match {} box {} rig {} file $file]
+    set m [dict create desc "" board {} match {} box {} rig {} calibrate {} file $file]
     dict for {k v} $body {
         switch -exact -- $k {
-            desc - board - match { dict set m $k $v }
+            desc - board - match - calibrate { dict set m $k $v }
             box  { dict set m box [parse_box $v] }
             rig  { dict set m rig [parse_rig $v] }
             default { error "model $name: unknown section '$k'\
-                             (desc board match box rig)" }
+                             (desc board match box rig calibrate)" }
         }
     }
     dict set models $name $m
@@ -382,6 +385,15 @@ proc ::extio_models::_json_status {box board st rig} {
         foreach k {sub key want have source interp} { $j string $k string [dict get $r $k] }
         $j string ok bool [dict get $r ok]
         $j map_close
+    }
+    $j array_close
+
+    # which subsystems measure each unit of this model; whether THIS unit
+    # carries the result is read live from its meta (state/meta/keys) by the
+    # page, so a calibration landing shows without a re-judge
+    $j string calibrate array_open
+    if { [dict get $st model] ne "" } {
+        foreach sub [dict get [get [dict get $st model]] calibrate] { $j string $sub }
     }
     $j array_close
 

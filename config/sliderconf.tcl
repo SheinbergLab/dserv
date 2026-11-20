@@ -814,13 +814,42 @@ namespace eval slider {
     # The box a calibration measured NOW would be stored on, or "". One rule
     # for cal_to_box and for the wizard, which says where a save will land.
     proc cal_target_box {} {
-        variable stick_box; variable stick_fed
+        variable stick_box
         if { $stick_box eq "" } { return "" }
-        if { [clock milliseconds] - $stick_fed > 3000 } { return "" }
-        set src auto; catch { set src [::settings::get slider source] }
-        if { $src ni {auto extio} } { return "" }
-        if { [box_meta_has $stick_box cal/slider] < 0 } { return "" }
+        if { [cal_target_why $stick_box] ne "" } { return "" }
         return $stick_box
+    }
+
+    # Why a calibration measured NOW would NOT be of <box>'s stick, or "" if
+    # it would. The wizard measures whatever feeds this slider, so a page
+    # offering "calibrate this box" must refuse -- with a reason a person can
+    # act on -- whenever that is some other device: a calibration of the
+    # wrong stick stored on this one is the failure this whole store exists
+    # to prevent.
+    proc cal_target_why { box } {
+        variable stick_box; variable stick_fed
+        set src auto; catch { set src [::settings::get slider source] }
+        if { $src ni {auto extio} } {
+            return "this rig's slider reads `$src`, not an extio stick --\
+                    apply the model's rig settings (slider source extio) first"
+        }
+        set g ""; catch { set g [::settings::get slider ain_group] }
+        if { ![dservExists extio/$box/state/ain/$g] } {
+            return "$box has no analog group `$g` (the slider's ain_group)"
+        }
+        if { $stick_box eq "" || [clock milliseconds] - $stick_fed > 3000 } {
+            return "no stick samples are reaching the slider -- is $box's\
+                    `$g` group streaming?"
+        }
+        if { $stick_box ne $box } {
+            return "the slider is reading the stick on $stick_box, not $box"
+        }
+        if { [box_meta_has $box cal/slider] < 0 } {
+            return "$box's firmware has no meta area to store a calibration\
+                    (needs 0.4.0+105) -- update it, or calibrate from the gear\
+                    to store it in this rig's db only"
+        }
+        return ""
     }
 
     proc cal_to_box { d } {

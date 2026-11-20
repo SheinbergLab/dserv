@@ -47,6 +47,7 @@ check "astick present" 1 [expr {"astick" in [extio_models::names]}]
 set astick [extio_models::get astick]
 check "astick box has its stick group" stick [dict get $astick box ain/group/0/label]
 check "astick box has its select group" stick_select [dict get $astick box group/0/label]
+check "astick is calibrated by the slider" slider [dict get $astick calibrate]
 
 puts "verdicts"
 set want [dict get $astick box]
