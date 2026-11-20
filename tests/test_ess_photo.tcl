@@ -37,8 +37,20 @@ proc dservLoggerAddMatch { args } { lappend ::matches $args }
 # a dserv clock 37 s off the wall clock, as on a PTP site
 set ::true_off 37000123
 proc now {} { expr {[clock microseconds] + $::true_off} }
-set ::dpset {}
-proc dservSet { name v } { set ::dpset [list $name $v] }
+set ::dp [dict create]
+proc dservSet { name v } { dict set ::dp $name $v }
+# the datapoint table photo_health reads: name -> {timestamp value}
+set ::table [dict create]
+proc dservKeys { pat } {
+    lmap k [dict keys $::table] { if { ![string match $pat $k] } continue ; set k }
+}
+proc dservTimestamp { k } { lindex [dict get $::table $k] 0 }
+proc dservGet { k } { lindex [dict get $::table $k] 1 }
+# the processor: no answer (no processor) unless ::pgp says
+set ::pgp [dict create]
+proc processGetParam { name p } {
+    expr {[dict exists $::pgp $p] ? [dict get $::pgp $p] : ""}
+}
 namespace eval ::ess {
     variable warned {}
     proc ess_warning { msg cat } { variable warned ; lappend warned $msg }
@@ -90,9 +102,9 @@ check [::ess::photo_log_match f.ess] 0 "off: not logged"
 check [::ess::photo_log_match f.ess] 1 "on: logged"
 check $::matches {{f.ess proc/photo/edge 0 0 1} {f.ess ess/dserv_wall_us 0 0 1}} \
     "every edge, not obs-limited, unbuffered; and the clock offset"
-check [lindex $::dpset 0] ess/dserv_wall_us "  the offset set after its match"
-check [expr {abs([lindex $::dpset 1] - $::true_off) < 2000}] 1 \
-    "  dserv minus wall, to the bracket ([lindex $::dpset 1] vs $::true_off)"
+check [dict exists $::dp ess/dserv_wall_us] 1 "  the offset set after its match"
+check [expr {abs([dict get $::dp ess/dserv_wall_us] - $::true_off) < 2000}] 1 \
+    "  dserv minus wall, to the bracket ([dict get $::dp ess/dserv_wall_us] vs $::true_off)"
 
 puts "stim2 patch:"
 # rmtSend: the script is run in a stand-in stim2, with or without the module
@@ -136,6 +148,74 @@ check [::ess::photo_patch_dark_norm " 0.1 "] 0.1 "one grey"
 check [catch { ::ess::photo_patch_match_norm "" }] 1 "no patterns refused"
 set ::ess::photo_enabled 0
 set ::ess::photo_patch 0
+
+puts "the green light (photo/health):"
+proc light {} { lindex [dict get $::dp photo/health] 0 }
+proc why {} { lrange [dict get $::dp photo/health] 1 end }
+set ::stim [interp create]
+$::stim eval { proc photopatch { args } { expr {[lindex $args 0] eq "on" ? 1 : {}} } }
+set ::ess::photo_patch_stim 0
+::ess::set_photo_patch 0
+::ess::set_photo_enabled 0
+check [light] off "not enabled: off"
+::ess::set_photo_enabled 1
+check [light] error "enabled, no processor: error"
+check [string match "*no photo processor*" [why]] 1 "  says so"
+dict set ::pgp n_edges 0
+dict set ::pgp group photodiode
+::ess::photo_health
+check [string match "*no block from group photodiode: is the diode's group streaming*" [why]] 1 \
+    "no analog stream at all: error, streaming? ([why])"
+set T [now]
+dict set ::table extio/box01/state/ain/eye [list $T {}]
+::ess::photo_health
+check [string match "*other analog groups stream*group name*" [why]] 1 \
+    "only other groups: the name is wrong ([why])"
+dict set ::table extio/box02/state/ain/photodiode [list [expr {$T - 6000000}] {}]
+::ess::photo_health
+check [list [light] [string match "*6 s old*stopped*" [why]]] {error 1} "a stale stream: stopped ([why])"
+dict set ::table extio/box02/state/ain/photodiode [list $T {}]
+dict set ::pgp n_edges 12
+::ess::photo_health
+check [dict get $::dp photo/health] "ok reading group photodiode, 12 edges" "streaming: ok"
+dict set ::pgp group box01/photodiode
+::ess::photo_health
+check [string match "*no block from group box01/photodiode*" [why]] 1 "box/label: only that box ([why])"
+dict set ::pgp group photodiode
+
+# the patch
+::ess::set_photo_patch 1
+check [string match "ok*not changed yet" [dict get $::dp photo/health]] 1 "patch on, no change yet: ok"
+$::stim eval { rename photopatch {} }
+::ess::stim_photopatch_enable
+check [list [light] [string match "*cannot draw the patch*" [why]]] {error 1} "stim2 cannot draw it"
+$::stim eval { proc photopatch { args } { expr {[lindex $args 0] eq "on" ? 1 : {}} } }
+::ess::stim_photopatch_enable
+check [light] ok "stim2 draws it: ok again"
+# swapcount wall level serial ntags why
+dict set ::table stim/photopatch [list $T {10 0 0 1 0 1}]
+::ess::photo_health
+check [light] ok "the patch appearing, no edge: not yet a change"
+dict set ::table stim/photopatch [list $T {11 0 1 2 1 2}]
+::ess::photo_health
+check [list [light] [string match "*no edge ever came back*" [why]]] {error 1} "changed, no edge ever: error"
+dict set ::table proc/photo/edge [list [expr {$T + 10000}] {}]
+::ess::photo_health
+check [string match "ok*answered" [dict get $::dp photo/health]] 1 "an edge after the change: ok"
+dict set ::table stim/photopatch [list [expr {$T + 3000000}] {12 0 0 3 1 2}]
+::ess::photo_health
+check [list [light] [string match "*3.0 s older than the last change*" [why]]] {error 1} \
+    "changes go on, edges stopped: error ([why])"
+dict set ::table stim/photopatch [list [expr {$T + 1000000}] {12 0 0 3 1 2}]
+::ess::photo_health
+check [light] ok "  within 2 s: ok"
+set n [llength [lsearch -all [dict keys $::dp] photo/health]]
+::ess::photo_health
+check [::ess::photo_health] [dict get $::dp photo/health] "returns what it publishes"
+interp delete $::stim
+set ::ess::photo_enabled 0
+set ::ess::photo_patch 0
+set ::ess::photo_patch_stim 0
 
 # ---- the declarations ----
 puts "gear section (essconf.tcl):"

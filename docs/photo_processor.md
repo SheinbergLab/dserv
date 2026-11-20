@@ -59,6 +59,28 @@ helpers in the ess interp (`config/essconf.tcl`):
     photoSetParams min_step 150 smooth 0.002     ;# seconds here, not ms
     photoGetParam noise
 
+## The green light
+
+The gear's `photo` section shows a dot from `photo/health`. It reports
+whether the detector is hearing the diode, which the knobs alone can't
+say:
+
+| | |
+|---|---|
+| off | `enabled` is off |
+| error | this dserv has no `photo` processor |
+| | no block from the group: with other analog groups streaming, the group name is wrong; with none, the diode's group isn't streaming |
+| | the group's last block is more than 5 s old: the stream stopped |
+| | `patch` is on and stim2 cannot draw it (no photopatch module) |
+| | the patch changed and no edge came back, or the last edge is more than 2 s older than the last change: the diode is not over the patch, or `min_step` is above the patch's step |
+| ok | blocks arriving; with the patch on, its changes answered (or none yet) |
+
+The patch's first appearance doesn't count as a change, since over a
+dark scene it gives no edge. Like tlock's light, it is worked out when a
+key changes, at a system load, at a data file's open and at each end of
+an obs. There is no subscription to the stream. So after a boot, a box
+that connects late leaves the light red until the next of those.
+
 ## Where it attaches
 
 `config/triggers.tcl` attaches the processor once at boot, by pattern, to
@@ -255,6 +277,6 @@ ripple, two channels, a replayed block and a gap, 24-sample blocks with
 two edges each, a strobed flash train starting black and grey, the `*`
 attach through the real dispatch, and `group`. `tests/test_ess_photo.tcl`
 (ctest `ess_photo`) checks the gear section: every key pushed, ms as
-seconds, `enabled` last at boot, the data-file match, and the patch
+seconds, `enabled` last at boot, the data-file match, the patch
 (drawn only with both keys on, its settings sent before `on`, a warning
-from a stim2 without the module).
+from a stim2 without the module), and every state of the light.

@@ -882,8 +882,12 @@ namespace eval ess {
             ::ess::ess_warning "photo enabled, but this dserv has no photo\
  processor (processors/photo.c): no light edges are detected" "photo"
         }
+        catch { photo_health }
     }
-    proc set_photo_group {v} { photo_param group [photo_group_norm $v] }
+    proc set_photo_group {v} {
+        photo_param group [photo_group_norm $v]
+        catch { photo_health }
+    }
     proc set_photo_strobe {on} { photo_param strobe [expr {$on ? 1 : 0}] }
     # ms in the gear, seconds in the processor
     proc set_photo_period_ms {v} {
@@ -909,6 +913,7 @@ namespace eval ess {
         # stim/frame: CLOCK_REALTIME) on the dserv clock the edges are on
         dservLoggerAddMatch $filename ess/dserv_wall_us 0 0 1
         dservSet ess/dserv_wall_us [dserv_wall_offset]
+        catch { photo_health }
         return 1
     }
 
@@ -941,7 +946,10 @@ namespace eval ess {
     variable photo_patch 0
     variable photo_patch_opts [dict create -mode tags -corner tr -size 60 \
                                    -inset 0 -dark 0 -match *]
-    proc set_photo_patch {on} { variable photo_patch [expr {$on ? 1 : 0}] }
+    proc set_photo_patch {on} {
+        variable photo_patch [expr {$on ? 1 : 0}]
+        catch { photo_health }
+    }
     proc photo_patch_opt { opt v } {
         variable photo_patch_opts
         dict set photo_patch_opts $opt $v
@@ -993,13 +1001,133 @@ namespace eval ess {
         variable photo_enabled
         variable photo_patch
         variable photo_patch_opts
-        if { !$photo_enabled || !$photo_patch } { return 0 }
+        variable photo_patch_stim
+        if { !$photo_enabled || !$photo_patch } {
+            set photo_patch_stim 0
+            catch { photo_health }      ;# a system load: look again
+            return 0
+        }
         set r [rmtSend "if {\[llength \[info commands photopatch\]\]} {\
  [list photopatch set {*}$photo_patch_opts] ; photopatch on } else { expr {-1} }"]
-        if { [string trim $r] eq "1" } { return 1 }
+        if { [string trim $r] eq "1" } {
+            set photo_patch_stim 1
+            catch { photo_health }
+            return 1
+        }
+        set photo_patch_stim -1
+        catch { photo_health }
         ::ess::ess_warning "photo patch is on, but stim2 did not draw it\
  ([expr {[string trim $r] eq "-1" ? "no photopatch module" : $r}])" "photo"
         return -1
+    }
+
+    # THE GREEN LIGHT (photo/health, the gear's dot on the photo section;
+    # see settings-1.0.tm). The knobs say a diode is there; this says
+    # whether the detector is hearing it:
+    #
+    #   off    not enabled on this rig
+    #   error  no photo processor in this dserv; no block from the group
+    #          (with other groups streaming: the group name is wrong), or
+    #          none for 5 s (the stream stopped); stim2 cannot draw the
+    #          patch; or the patch has changed and no edge came back within
+    #          2 s of the last change (the diode is not over the patch, or
+    #          min_step is above its step)
+    #   ok     blocks arriving; with the patch on, its changes answered
+    #
+    # Like tlock's: worked out when a key changes, at a system load, at a
+    # data file's open and at each end_obs, from the processor's counters
+    # and three datapoint timestamps; published only when it changes. No
+    # subscription to the stream or the edges.
+    variable photo_patch_stim 0       ;# 1 stim2 took it, -1 it cannot
+    variable photo_health_last "?"
+    variable photo_health_stale_us 5000000
+    variable photo_health_answer_us 2000000
+
+    # the newest timestamp of any datapoint matching a pattern (0: none)
+    proc photo_newest { pattern } {
+        set keys {}
+        if { [string match {*[*]*} $pattern] } {
+            catch { set keys [dservKeys $pattern] }
+        } else {
+            set keys [list $pattern]
+        }
+        set newest 0
+        foreach k $keys {
+            set t 0
+            catch { set t [dservTimestamp $k] }
+            if { [string is wideinteger -strict $t] && $t > $newest } { set newest $t }
+        }
+        return $newest
+    }
+    # the blocks the processor reads, as a datapoint pattern
+    proc photo_group_pattern { group } {
+        if { $group eq "" } { return extio/*/state/ain/* }
+        if { [string first / $group] >= 0 } {
+            lassign [split $group /] box label
+            return extio/$box/state/ain/$label
+        }
+        return extio/*/state/ain/$group
+    }
+
+    proc photo_health {} {
+        variable photo_enabled
+        variable photo_patch
+        variable photo_patch_stim
+        variable photo_health_last
+        variable photo_health_stale_us
+        variable photo_health_answer_us
+        set h ""
+        set n_edges [processGetParam photo n_edges]
+        if { !$photo_enabled } {
+            set h "off not enabled on this rig"
+        } elseif { $n_edges eq "" } {
+            set h "error this dserv has no photo processor: nothing is detected"
+        } else {
+            set group [processGetParam photo group]
+            set gname [expr {$group eq "" ? "every analog group" : "group $group"}]
+            set t_blk [photo_newest [photo_group_pattern $group]]
+            set now_us [now]
+            if { $t_blk == 0 } {
+                if { [photo_newest extio/*/state/ain/*] } {
+                    set h "error no block from $gname, though other analog\
+ groups stream: is the group name right?"
+                } else {
+                    set h "error no block from $gname: is the diode's group\
+ streaming?"
+                }
+            } elseif { $now_us - $t_blk > $photo_health_stale_us } {
+                set h "error the last block from $gname is\
+ [expr {($now_us - $t_blk) / 1000000}] s old: the stream stopped"
+            } elseif { $photo_patch && $photo_patch_stim < 0 } {
+                set h "error stim2 cannot draw the patch (no photopatch module)"
+            } elseif { $photo_patch } {
+                set t_pp [photo_newest stim/photopatch]
+                set t_edge [photo_newest proc/photo/edge]
+                # the patch appearing (why 1: swapcount wall level serial
+                # ntags why) is no change over a scene as dark as it
+                set why 0
+                catch { set why [lindex [dservGet stim/photopatch] 5] }
+                if { $t_pp == 0 || ($why == 1 && $t_edge == 0) } {
+                    set h "ok reading $gname, $n_edges edges; the patch has not changed yet"
+                } elseif { $t_edge == 0 } {
+                    set h "error the patch has changed, but no edge ever came\
+ back: is the diode over the patch? min_step above its step?"
+                } elseif { $t_pp - $t_edge > $photo_health_answer_us } {
+                    set h "error the patch changed, but the last edge is\
+ [format %.1f [expr {($t_pp - $t_edge) / 1e6}]] s older than the last\
+ change: is the diode over the patch?"
+                } else {
+                    set h "ok reading $gname, $n_edges edges; the patch's changes answered"
+                }
+            } else {
+                set h "ok reading $gname, $n_edges edges"
+            }
+        }
+        if { $h ne $photo_health_last } {
+            set photo_health_last $h
+            dservSet photo/health $h
+        }
+        return $h
     }
     # END photo
 
@@ -4558,6 +4686,9 @@ namespace eval ess {
         # the Display++ trigger's green light, once a trial (off: one test)
         variable display_tlock
         if { $display_tlock } { catch { display_tlock_health } }
+        # ... and the photodiode's
+        variable photo_enabled
+        if { $photo_enabled } { catch { photo_health } }
         trial_boundary
     }
 
