@@ -182,6 +182,15 @@ class SliderCalModal {
         } catch (e) {
             this._profile = null;
         }
+        // A stick on a box with a meta area keeps its OWN calibration
+        // (meta/cal/slider) -- say so, since that is where it will follow the
+        // stick to. Absent proc (older slider) = no such store.
+        try {
+            const b = String(await this._send('slider::cal_target_box')).trim();
+            this._calBox = b.startsWith('!TCL_ERROR') ? '' : b;
+        } catch (e) {
+            this._calBox = '';
+        }
         this._renderProfile();
     }
 
@@ -426,6 +435,14 @@ what was just saved stays in force until the new one applies">↺ Re-calibrate�
         // device's mapping is forced onto the other. Naming the target is
         // the smallest honest version of that: it cannot detect a second
         // input, but it can refuse to be silent about where this lands.
+        if (this._calBox) {
+            el.textContent = `saves to the stick (${this._calBox}) and profile: ${this._profile}`;
+            el.title = `stored on ${this._calBox} itself (meta/cal/slider), so this `
+                + 'calibration follows that stick to any rig and wins over the '
+                + `profile; profile ${this._profile} keeps a copy for this rig`;
+            el.classList.remove('warn');
+            return;
+        }
         el.textContent = `saves to profile: ${this._profile}`;
         // The profile is a DECLARATION now (`slider cal_profile`, in the
         // settings gear), not a line in local/slider.tcl — that file is

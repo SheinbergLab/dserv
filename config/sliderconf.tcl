@@ -670,6 +670,9 @@ namespace eval slider {
             dict set d full_scale [dservGet slider/full_scale]
         }
         catch { ::settingsdb::save slider $d $cal_profile }
+        dservSet slider/cal_source "db $cal_profile"
+        # ...and on the stick itself, when the stick is what was measured
+        if { [dict exists $d full_scale] } { catch { cal_to_box $d } }
     }
 
     # Sourced AFTER local/slider.tcl, so a stored calibration wins over
@@ -699,6 +702,140 @@ namespace eval slider {
                   -- these OVERRIDE local/slider.tcl; slider::forget_calibration\
                   drops back to the file"
         }
+        dservSet slider/cal_source "db $cal_profile"
+        # a stick that carries its own calibration still wins over the db
+        catch { cal_from_box }
+    }
+
+    # ---- calibration that lives ON THE STICK ------------------------------
+    #
+    # Centre, orientation and throw are facts about one physical stick on one
+    # board, not about a rig. Kept only in this rig's db under a profile name,
+    # they were one swap away from the trap the profile notes above describe:
+    # another stick plugged in under the same group label inherits a plausible
+    # centre, the wrong throw and possibly rotated angles, and nothing says so.
+    #
+    # So when the stick arrives on an extio box whose firmware has a meta area
+    # (fw >= 0.4.0+105), the calibration is ALSO kept there, as meta/cal/slider,
+    # and a stored one there WINS over the db for that stick. The db stays the
+    # store for everything else (trackpads, pots, older boxes) and the fallback.
+    #
+    # Throw is stored in COUNTS: full_scale is in output units, i.e. it already
+    # has this rig's declared scale_x folded in, and another rig may declare a
+    # different one. Encoding (the box caps a value at 56 chars):
+    #
+    #     v1 x1 y0 cx2048.1 cy2038.1 ix1 iy0 t1249
+    variable stick_dp  ""      ;# the ain datapoint feeding process_stick
+    variable stick_box ""      ;# ...and the box it belongs to
+    variable stick_fed 0       ;# ms of the last stick sample (save: was it the stick?)
+    variable box_cal_tries 0
+
+    proc cal_encode { d throw } {
+        format "v1 x%d y%d cx%.1f cy%.1f ix%d iy%d t%.0f" \
+            [dict get $d chan_x] [dict get $d chan_y] \
+            [dict get $d center_x] [dict get $d center_y] \
+            [dict get $d invert_x] [dict get $d invert_y] $throw
+    }
+
+    # -> dict chan_x chan_y center_x center_y invert_x invert_y throw, or
+    # error. Strict: a calibration half-understood is worse than none.
+    proc cal_decode { s } {
+        set map { cx center_x cy center_y ix invert_x iy invert_y x chan_x y chan_y t throw }
+        set d [dict create]
+        set toks [split [string trim $s]]
+        if { [lindex $toks 0] ne "v1" } { error "not a v1 calibration: '$s'" }
+        foreach tok [lrange $toks 1 end] {
+            if { ![regexp {^(cx|cy|ix|iy|x|y|t)(-?[0-9.]+)$} $tok -> k v] } {
+                error "bad token '$tok' in '$s'"
+            }
+            dict set d [dict get $map $k] $v
+        }
+        foreach k {chan_x chan_y center_x center_y invert_x invert_y throw} {
+            if { ![dict exists $d $k] } { error "'$s' has no $k" }
+        }
+        return $d
+    }
+
+    proc box_meta_has { box key } {
+        if { ![dservExists extio/$box/state/meta/keys] } { return -1 }   ;# no meta area
+        set ks [lindex [split [dservGet extio/$box/state/meta/keys] \x00] 0]
+        return [expr {$key in [split $ks ,]}]
+    }
+
+    # Called on every stick sample; does anything only when the FEEDING BOX
+    # changes (first sample, or a different stick plugged in).
+    proc stick_from { dpoint } {
+        variable stick_dp; variable stick_box; variable box_cal_tries
+        set stick_dp $dpoint
+        if { ![regexp {^extio/([^/]+)/state/} $dpoint -> box] } return
+        if { $box eq $stick_box } return
+        set stick_box $box
+        set box_cal_tries 0
+        cal_from_box
+    }
+
+    # Apply the stick's own calibration if it carries one. The manifest that
+    # announces it can land a moment AFTER the first samples, so a box with
+    # no meta/keys yet is asked again shortly, a few times.
+    proc cal_from_box {} {
+        variable stick_box; variable settings; variable cal_keys
+        variable box_cal_tries; variable cal_profile
+        set box $stick_box
+        if { $box eq "" } return
+        set has [box_meta_has $box cal/slider]
+        if { $has < 0 } {
+            if { [incr box_cal_tries] <= 3 } {
+                dservAfter 3000 ::slider::cal_from_box
+            } else {
+                dservSet slider/cal_source "db $cal_profile (stick on $box: firmware has no meta area)"
+            }
+            return
+        }
+        if { !$has } {
+            dservSet slider/cal_source "db $cal_profile (stick on $box carries none -- calibrate to store it there)"
+            return
+        }
+        set enc [lindex [split [dservGet extio/$box/state/meta/cal/slider] \x00] 0]
+        if { [catch { cal_decode $enc } d] } {
+            puts stderr "slider: $box meta/cal/slider unreadable ($d) -- using db"
+            dservSet slider/cal_source "db $cal_profile ($box's stored calibration is unreadable)"
+            return
+        }
+        foreach k $cal_keys { dict set settings $k [dict get $d $k] }
+        dservSet slider/full_scale [expr {[dict get $d throw] * [dict get $settings scale_x]}]
+        update_settings
+        dservSet slider/cal_source "box $box"
+        puts "slider: calibration from the stick itself ($box meta/cal/slider): $enc"
+    }
+
+    # Store a just-measured calibration on the stick's box (and save the box).
+    # Only when the stick is what was being measured: a trackpad calibration
+    # must not land on whatever box happens to have a `stick` group.
+    # The box a calibration measured NOW would be stored on, or "". One rule
+    # for cal_to_box and for the wizard, which says where a save will land.
+    proc cal_target_box {} {
+        variable stick_box; variable stick_fed
+        if { $stick_box eq "" } { return "" }
+        if { [clock milliseconds] - $stick_fed > 3000 } { return "" }
+        set src auto; catch { set src [::settings::get slider source] }
+        if { $src ni {auto extio} } { return "" }
+        if { [box_meta_has $stick_box cal/slider] < 0 } { return "" }
+        return $stick_box
+    }
+
+    proc cal_to_box { d } {
+        variable stick_box; variable settings
+        if { [cal_target_box] eq "" } { return "" }
+        set throw [expr {[dict get $d full_scale] / [dict get $settings scale_x]}]
+        set enc [cal_encode $d $throw]
+        set r [send extio [list extio_meta_set $stick_box cal/slider $enc -save]]
+        if { [string first "!TCL_ERROR" $r] == 0 } {
+            puts stderr "slider: could not store calibration on $stick_box: $r"
+            return ""
+        }
+        dservSet slider/cal_source "box $stick_box"
+        puts "slider: calibration stored on the stick ($stick_box): $enc"
+        return $stick_box
     }
 
     proc forget_calibration {} {
@@ -907,6 +1044,12 @@ namespace eval slider {
         variable swipe_last_engaged_y
 
         if { ![source_allows extio] } return
+
+        # Which box this is, so a stick's own calibration can follow it. One
+        # string compare per sample; the work happens only on a change.
+        variable stick_dp; variable stick_fed
+        if { $dpoint ne $stick_dp } { stick_from $dpoint }
+        set stick_fed [clock milliseconds]
 
         # Newest scan only. This is a POSITION, not a trajectory to log: the
         # decoder documents ain_latest as exactly what a position controller

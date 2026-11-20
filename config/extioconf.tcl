@@ -2430,6 +2430,31 @@ proc extio_ota_update {box {channel dev} {version ""}} {
     return "ota $box: lifecycle started -- watch extio/$box/state/ota/lifecycle"
 }
 
+# The same full lifecycle (stage -> verify -> arm -> trial -> confirm) from a
+# LOCAL signed image -- a dev build that is not on the shelf yet:
+#   extio_ota_update_file teensy1 .../build-teensy40-ota/extio-zephyr/zephyr/zephyr.signed.bin
+# Everything after the transfer is extio_ota_update's chain, unchanged.
+proc extio_ota_update_file {box file} {
+    if { [info exists ::extio_ota_lc($box,phase)]
+         && $::extio_ota_lc($box,phase) ni {idle done failed}
+         && [info exists ::extio_req($box,label)] } {
+        error "extio_ota_update_file: $box is in '$::extio_ota_lc($box,phase)',\
+               waiting on '$::extio_req($box,label)' -- extio_ota_abort $box to cancel"
+    }
+    if { ![file readable $file] } { error "extio_ota_update_file: cannot read $file" }
+    extio_ota_lc_pub $box staging "staging [file tail $file]"
+    extio_await $box "transfer" ota/state {in {ok fail}} 180000 \
+        extio_ota_lc_staged extio_ota_lc_fail \
+        {ota/state ota/result ota/progress ota/ack ota/flash_verify ota/hdr_ok
+         ota/staged_ver ota/arm ota/arm_rc ota/confirm ota/confirm_rc}
+    if { [catch { extio_ota_push $box $file } r] } {
+        extio_ota_lc_fail $box "push: $r"
+        return "ota $box: FAILED before transfer -- $r"
+    }
+    return "ota $box: lifecycle started from [file tail $file] --\
+            watch extio/$box/state/ota/lifecycle"
+}
+
 proc extio_ota_abort {box} {
     extio_req_clear $box
     catch { extio_ota_cancel ::extio_ota_timer $box }
@@ -2814,6 +2839,7 @@ set ::extio_cfg_writable_rx {
     {^group/[0-9]+/(pins|label|settle_ms|quiet)$}
     {^ain/group/[0-9]+/[a-z_]+$}
     {^ain/label/[0-9]+$}
+    {^meta/[A-Za-z0-9_.-][A-Za-z0-9_./-]*$}
 }
 
 proc extio_cfg_writable {leaf} {
@@ -3329,7 +3355,12 @@ proc extio_cfg_import {box path args} {
         if { $sp < 0 } { set leaf $line; set value "" } \
         else { set leaf [string range $line 0 $sp-1]
                set value [string trim [string range $line $sp+1 end]] }
-        if { !$identity && [lsearch -exact $::extio_cfg_identity_leaves $leaf] >= 0 } {
+        # meta/cal/* is a calibration measured on the EXPORTING unit's
+        # hardware: cloning it onto another box would hand that box a centre
+        # and throw it never had, and nothing would look wrong. Same class as
+        # identity -- right only for a same-box restore.
+        if { !$identity && ([lsearch -exact $::extio_cfg_identity_leaves $leaf] >= 0
+                            || [string match meta/cal/* $leaf]) } {
             lappend skipped $leaf; continue
         }
         if { [catch { extio_cfg_set $box $leaf $value } e] } {
@@ -3908,6 +3939,36 @@ proc extio_model_apply    {box model args}  { extio_models::apply $box $model {*
 proc extio_model_revert   {box model}       { extio_models::revert $box $model }
 proc extio_model_preview  {box model}       { extio_models::preview $box $model }
 proc extio_model_snapshot {box name {desc ""}} { extio_models::snapshot $box $name $desc }
+# ---- the box's host-owned key/value area (fw >= 0.4.0+105, box_meta.h) ------
+# The box stores and announces these (state/meta/<key>, state/meta/keys) and
+# never interprets them. The key LIST is the truth: dserv retains a deleted
+# key's last value forever, so read only keys named in state/meta/keys.
+proc extio_meta_supported {box} {
+    return [dservExists extio/$box/state/meta/keys]
+}
+proc extio_meta_keys {box} {
+    if { ![extio_meta_supported $box] } { return {} }
+    set k [lindex [split [dservGet extio/$box/state/meta/keys] \x00] 0]
+    return [split [string trim $k] ,]
+}
+proc extio_meta_get {box key} {
+    if { $key ni [extio_meta_keys $box] } { return "" }
+    return [lindex [split [dservGet extio/$box/state/meta/$key] \x00] 0]
+}
+# Set (or with value "" delete) one key; -save commits the box's whole
+# config to flash -- including any other unsaved edits, as any save does.
+proc extio_meta_set {box key value args} {
+    if { ![extio_meta_supported $box] } {
+        error "extio_meta_set: '$box' has no meta area (firmware older than 0.4.0+105)"
+    }
+    if { [string length $value] > 56 } {
+        error "extio_meta_set: value is [string length $value] chars; the box takes 56"
+    }
+    set r [extio_cfg_set $box meta/$key [expr {$value eq "" ? "off" : $value}]]
+    if { "-save" in $args } { append r "; " [extio_cfg_save $box] }
+    return $r
+}
+
 proc extio_model_reload   {} {
     set n [extio_models::load]
     extio_models::publish_catalog

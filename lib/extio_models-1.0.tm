@@ -433,8 +433,26 @@ proc ::extio_models::publish_catalog {} {
 
 array set ::extio_models::live {}   ;# box -> last export text
 
+array set ::extio_models::defers {}  ;# box -> consecutive deferrals
+
 proc ::extio_models::judge {box} {
+    variable defers
     if { ![dservExists extio/$box/state/build] } { return "no box '$box'" }
+    # NEVER TAKE THE SLOT FROM SOMETHING ELSE. extio_request clears whatever
+    # this box has in flight -- and a box rebooting into an OTA trial image
+    # re-appears, which is exactly when on_box fires. Judging then would cancel
+    # the confirm and strand the update in `trial`. So wait for the slot, and
+    # for the lifecycle, and give up quietly after ~2 minutes.
+    set busy [info exists ::extio_req($box,label)]
+    if { [info exists ::extio_ota_lc($box,phase)]
+         && $::extio_ota_lc($box,phase) ni {idle done failed} } { set busy 1 }
+    if { $busy } {
+        if { [incr defers($box)] <= 24 } {
+            dservAfter 5000 [list ::extio_models::judge $box]
+        }
+        return "deferred: $box is busy"
+    }
+    set defers($box) 0
     extio_request $box "model judge" dump 2 cfg/dump_dp {ne ""} 15000 \
         ::extio_models::_judge_done ::extio_models::_judge_failed {cfg/dump_dp cfg/dump_rc}
     return "judging $box"
@@ -450,9 +468,12 @@ proc ::extio_models::_judge_done {box text} {
     judge_text $box $text
 }
 
-# The model a box DECLARES (meta/model, once firmware carries it) outranks
-# any inference.
+# The model a box DECLARES (meta/model, fw >= 0.4.0+105) outranks any
+# inference. Read through the key LIST: a deleted key's datapoint lingers.
 proc ::extio_models::declared {box} {
+    if { ![dservExists extio/$box/state/meta/keys] } { return "" }
+    set keys [split [lindex [split [dservGet extio/$box/state/meta/keys] \x00] 0] ,]
+    if { "model" ni $keys } { return "" }
     set d ""
     catch { set d [dservGet extio/$box/state/meta/model] }
     return [string trim [lindex [split $d \x00] 0]]
@@ -524,6 +545,12 @@ proc ::extio_models::apply {box model args} {
                     lappend refused "$leaf ($e)"
                 } else { incr n }
             }
+        }
+        # ...and the box says what it now is, where its firmware can
+        if { [dservExists extio/$box/state/meta/keys] && [declared $box] ne $model } {
+            if { [catch { extio_cfg_set $box meta/model $model } e] } {
+                lappend refused "meta/model ($e)"
+            } else { incr n }
         }
         lappend report "box: $n leaf(s) set"
         if { [llength $refused] } { lappend report "box REFUSED: [join $refused {; }]" }
