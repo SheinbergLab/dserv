@@ -22,8 +22,9 @@
 #               cmd:!sample_on), at the flip stim2 reported for them.
 #
 # Pairing: first each mark with the next edge of its direction, which gives
-# a typical latency; then each mark with the unused edge nearest to its
-# time plus that latency, within -window ms. An edge with no mark (the
+# a typical latency for rising edges and one for falling; then each mark
+# with the unused edge nearest to its time plus that edge direction's
+# latency, within -window ms. An edge with no mark (the
 # stimulus changing the light by itself, noise) stays unpaired, and a mark
 # with no edge (light that never changed under the diode) gets none.
 #
@@ -241,10 +242,20 @@ namespace eval photopair {
         expr {([lindex $l [expr {$n / 2 - 1}]] + [lindex $l [expr {$n / 2}]]) / 2.0}
     }
 
-    # marks and edges (each sorted by time) -> {L rows}: L the typical
+    # A direction needs this many first-pass latencies for one of its own;
+    # below it (a stray edge or two of the other direction) it uses L.
+    variable min_dir_n 3
+
+    # marks and edges (each sorted by time) -> {L rows Ldir}: L the typical
     # latency in us ({} if nothing paired), a row per mark
     #   {mark edge_index lat10 lat50 lat90}   (us; edge -1 and lats {} unpaired)
+    # and Ldir {1 L_rising -1 L_falling}, what each edge direction was judged
+    # by. A display rises and falls at different speeds (an LCD here: 8.1 ms
+    # up, 3.4 down), so a mark that does not say its direction (cmd:, evt:)
+    # is paired with each candidate edge by that edge's own latency: one L
+    # between the two would put half the marks outside -window.
     proc pair { marks edges max_ms window_ms } {
+        variable min_dir_n
         set marks [lsort -real -index 0 $marks]
         set t50 [lmap e $edges { lindex $e 1 }]
         set ne [llength $edges]
@@ -252,38 +263,50 @@ namespace eval photopair {
         # 1: each mark's next edge of its direction, each on its own (not
         # in turn: one edge missed would shift every later pair by one)
         set lats {}
+        set bydir [dict create 1 {} -1 {}]
         foreach m $marks {
             lassign $m t dir
             set k [expr {[lsearch -bisect -real $t50 $t] + 1}]
             for { } { $k < $ne } { incr k } {
                 if { [lindex $t50 $k] - $t > $max_ms * 1000 } break
                 if { [lindex $t50 $k] <= $t } continue
-                if { [compatible $dir [lindex $edges $k 0]] } {
-                    lappend lats [expr {[lindex $t50 $k] - $t}]
+                set edir [expr {int([lindex $edges $k 0])}]
+                if { [compatible $dir $edir] } {
+                    set lat [expr {[lindex $t50 $k] - $t}]
+                    lappend lats $lat
+                    dict lappend bydir $edir $lat
                     break
                 }
             }
         }
         set L [median $lats]
         if { $L eq "" } {
-            return [list {} [lmap m $marks { list $m -1 {} {} {} }]]
+            return [list {} [lmap m $marks { list $m -1 {} {} {} }] {}]
         }
+        set Ldir [dict create]
+        foreach d {1 -1} {
+            set l [dict get $bydir $d]
+            dict set Ldir $d [expr {[llength $l] >= $min_dir_n ? [median $l] : $L}]
+        }
+        set lo [tcl::mathfunc::min {*}[dict values $Ldir]]
+        set hi [tcl::mathfunc::max {*}[dict values $Ldir]]
 
-        # 2: the unused edge nearest the mark plus L
+        # 2: the unused edge nearest the mark plus its direction's latency
         set w [expr {$window_ms * 1000.0}]
         set used [lrepeat $ne 0]
         set rows {}
         foreach m $marks {
             lassign $m t dir
-            set target [expr {$t + $L}]
-            set k [lsearch -bisect -real $t50 [expr {$target - $w}]]
+            set k [lsearch -bisect -real $t50 [expr {$t + $lo - $w}]]
             if { $k < 0 } { set k 0 }
             set best -1
             set bd {}
-            for { } { $k < $ne && [lindex $t50 $k] <= $target + $w } { incr k } {
-                set d [expr {abs([lindex $t50 $k] - $target)}]
-                if { $d > $w || [lindex $used $k] } continue
-                if { ![compatible $dir [lindex $edges $k 0]] } continue
+            for { } { $k < $ne && [lindex $t50 $k] <= $t + $hi + $w } { incr k } {
+                if { [lindex $used $k] } continue
+                set edir [expr {int([lindex $edges $k 0])}]
+                if { ![compatible $dir $edir] } continue
+                set d [expr {abs([lindex $t50 $k] - $t - [dict get $Ldir $edir])}]
+                if { $d > $w } continue
                 if { $best < 0 || $d < $bd } { set best $k ; set bd $d }
             }
             if { $best < 0 } {
@@ -294,7 +317,7 @@ namespace eval photopair {
             lassign [lindex $edges $best] edir e50 e10 e90
             lappend rows [list $m $best [expr {$e10 - $t}] [expr {$e50 - $t}] [expr {$e90 - $t}]]
         }
-        list $L $rows
+        list $L $rows $Ldir
     }
 
     # n median mean sd min max, ms, of a list of us
@@ -392,15 +415,19 @@ namespace eval photopair {
         }
         puts "marks: [llength $marks] $m$offnote"
 
-        lassign [pair $marks $edges $opt(max) $opt(window)] L rows
+        lassign [pair $marks $edges $opt(max) $opt(window)] L rows Ldir
         if { $L eq "" } {
             puts "nothing paired: no edge of the right direction within $opt(max) ms of any mark"
             exit 1
         }
         set paired [lmap r $rows { if { [lindex $r 1] < 0 } continue ; set r }]
-        puts [format "paired: %d of %d marks, %d edges unpaired; typical latency %.3f ms, window +-%s ms" \
+        set Lr [dict get $Ldir 1]
+        set Lf [dict get $Ldir -1]
+        set Lnote [expr {$Lr == $Lf ? "" : [format " (rising %.3f, falling %.3f)" \
+                                              [expr {$Lr / 1000.0}] [expr {$Lf / 1000.0}]]}]
+        puts [format "paired: %d of %d marks, %d edges unpaired; typical latency %.3f ms%s, window +-%s ms" \
                   [llength $paired] [llength $rows] [expr {[llength $edges] - [llength $paired]}] \
-                  [expr {$L / 1000.0}] $opt(window)]
+                  [expr {$L / 1000.0}] $Lnote $opt(window)]
         puts [format "  %-12s %5s %9s %9s %7s %9s %9s" "mark->light" n median mean sd min max]
         foreach {lab ix} {t10 2 t50 3 t90 4} {
             puts [fmt_stats $lab [lmap r $paired { lindex $r $ix }]]

@@ -221,9 +221,15 @@ The pairing:
 1. Each mark is matched with its own next edge of the right direction.
    The median of those gaps is the typical latency, so one missed edge
    doesn't shift every later pair, even when the latency is longer than
-   a refresh.
+   a refresh. Rising and falling edges each get their own median, since
+   a panel can rise and fall at different speeds. A direction with fewer
+   than 3 first-pass edges uses the overall median instead.
 2. Each mark then takes the unused edge nearest its time plus that
-   latency, within `-window` ms (default 4).
+   edge direction's latency, within `-window` ms (default 4). This is
+   what lets `cmd:` and `evt:` marks, which don't say their direction,
+   pair both ways: on the .40 LCD (rise 8.1 ms, fall 3.4) one latency
+   between the two left the `!target_on` falls outside the window, 21 of
+   36 paired; now 36 of 36.
 
 Edges no mark explains stay unpaired: the stimulus changing the light by
 itself, or noise. A mark whose light never changed gets no edge.
