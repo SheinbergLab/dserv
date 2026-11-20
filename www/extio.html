@@ -63,6 +63,12 @@
                  background: transparent; color: var(--muted); cursor: pointer;
                  white-space: nowrap; }
   .box .forget:hover { color: var(--red); border-color: var(--red); }
+  /* The live card's counterpart in the same slot: forget on a silent box,
+   * configure on a live one (the config page needs the box answering). */
+  .box .cfglink { margin-left: auto; font-size: 11px; padding: 1px 8px;
+                  border-radius: 6px; border: 1px solid var(--muted);
+                  color: var(--muted); text-decoration: none; white-space: nowrap; }
+  .box .cfglink:hover { color: #5aa9e6; border-color: #5aa9e6; }
   /* Unconfirmed trial image: the one state where any reset silently loses an
    * update, so it gets the loudest treatment a card can carry. */
   .trialbar { margin: 7px 0 2px; padding: 6px 9px; border: 1px solid #7a3a36;
@@ -586,7 +592,9 @@ function cardHtml(b) {
      * NOT offered while alive: a live box has nothing stale about it, and the
      * button would read as "remove this box" rather than "remove this record".
      */
-    const forget = alive ? ''
+    const forget = alive
+        ? `<a class="cfglink" href="${esc(cfgHref(b.name))}" target="_blank" rel="noopener"
+              title="open ${esc(b.name)} in the configurator (new tab): pins, groups, analog, model, calibration">configure</a>`
         : `<button class="forget" title="drop this box's retained datapoints. It reappears if it publishes again."
                    onclick="forgetBox('${esc(b.name)}')">forget</button>`;
 
