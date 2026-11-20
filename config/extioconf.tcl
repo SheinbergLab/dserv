@@ -648,6 +648,9 @@ proc extio_discover {} {
                 # keeps being the same: anything published once needs an
                 # explicit trigger tied to the event that invalidates it.
                 catch { extio_cfg_announce $name }
+                # ...and judge it against the box models (an offer, never
+                # an action -- see the models section near the end)
+                catch { extio_models::on_box $name }
             }
         } elseif { [info exists ::extio_known($name)] } {
             incr ::extio_stale($name)                           ;# a live box's watchdog froze this tick
@@ -3877,6 +3880,41 @@ if { [settings::source_of extio obs_autobind] eq "default" } {
 
 # surface the declared auto-bind flag (UIs + humans); "" reads as off
 dservSet extio/obs_autobind [extio_obs_autobind_get]
+
+# ---- box MODELS (lib/extio_models-1.0.tm) -----------------------------------
+# A model names a kind of box we build more than one of -- its box config AND
+# the rig settings it wants. When a box appears it is judged against the
+# models (extio/models/<box>, JSON); a blank box, or one whose name a model
+# claims, gets an OFFER the config page shows. Nothing is applied unprompted.
+#
+#   extio_model_judge    <box>                      re-read the box, re-judge
+#   extio_model_apply    <box> <model> ?-box? ?-rig? ?-keep?
+#                         default both halves as a TRY; -keep saves to flash
+#                         and persists the knobs to local/rig.tcl
+#   extio_model_revert   <box> <model>              drop the rig TRY overrides
+#   extio_model_snapshot <box> <name> ?desc?        new model in local/models/
+#   extio_model_reload                              re-read the model files
+package require extio_models
+extio_models::config -dirs [list $dspath/config/models $dspath/local/models]
+if { [catch {
+    extio_models::load
+    extio_models::publish_catalog
+} _e] } { puts "extio: models not loaded -- $_e" }
+foreach _e [extio_models::errors] { puts "extio: model file: $_e" }
+unset -nocomplain _e
+
+proc extio_model_judge    {box}             { extio_models::judge $box }
+proc extio_model_apply    {box model args}  { extio_models::apply $box $model {*}$args }
+proc extio_model_revert   {box model}       { extio_models::revert $box $model }
+proc extio_model_preview  {box model}       { extio_models::preview $box $model }
+proc extio_model_snapshot {box name {desc ""}} { extio_models::snapshot $box $name $desc }
+proc extio_model_reload   {} {
+    set n [extio_models::load]
+    extio_models::publish_catalog
+    foreach b [array names ::extio_known] { extio_models::judge $b }
+    set e [extio_models::errors]
+    return "$n model(s)[expr {[llength $e] ? "; errors: [join $e {; }]" : ""}]"
+}
 
 # rig-local config + overrides (port pinning, extra forwards) -- see
 # local/extio.tcl.EXAMPLE. A legacy extio_obs_autobind line here still works:

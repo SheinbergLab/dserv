@@ -158,6 +158,15 @@ let conn = null, dp = null;
 const boxes = new Map();          /* name -> {leaf: {v, t}} */
 let sel = null, fetched = new Set(), pendingSelect = null;
 
+/* Box MODELS (lib/extio_models-1.0.tm). The verdict is the publisher's -- this
+ * page only mirrors extio/models/<box> -- except for a model the person PICKS
+ * other than the inferred one, which is previewed (asked for, not published)
+ * and held here until the next verdict supersedes it. */
+const models = new Map();         /* box -> verdict JSON (raw kept for the signature) */
+const modelErr = new Map();       /* box -> "could not read config: ..." */
+const modelPick = new Map();      /* box -> preview JSON for a picked model */
+let modelMsg = { box: null, text: '' };
+
 const now = () => Date.now() * 1000;   /* dserv timestamps are microseconds */
 
 /* Server-clock check lives in js/clock_skew.js -- it is page-agnostic, and any
@@ -222,6 +231,21 @@ function onExtio(msg) {
       if (sel === gone) { sel = null; panelSig = null; renderFleet(); renderPanel(); }
       else { renderFleet(); }
     }
+    return;
+  }
+  /* extio/models/<box> = the model verdict (JSON), .../error = why there is
+   * none. Checked before the per-box regex: `models` is not a box. */
+  const mm = /^extio\/models\/([^/]+)(\/error)?$/.exec(msg.name);
+  if (mm) {
+    const [, box, isErr] = mm;
+    if (box === 'catalog' || box === 'errors') return;
+    const raw = String(msg.data !== undefined ? msg.data : msg.value || '');
+    if (isErr) { if (raw) modelErr.set(box, raw); else modelErr.delete(box); }
+    else {
+      try { const st = JSON.parse(raw); st.raw = raw; models.set(box, st); modelPick.delete(box); }
+      catch (e) { return; }
+    }
+    if (box === sel) schedulePanel();
     return;
   }
   const m = /^extio\/([^/]+)\/state\/(.+)$/.exec(msg.name);
@@ -1000,6 +1024,141 @@ function selectBox(n) {
   /* Opening a box asks it to describe itself: retained values may predate the
    * last edit made from a console, and there is no periodic re-announce. */
   if (conn) conn.send(`extio_cfg_announce ${n}`, 'extio').catch(() => {});
+  /* ...and re-judge it: edits made here (or anywhere) since the last verdict
+   * are exactly what a stale verdict would hide. */
+  if (conn) conn.send(`extio_model_judge ${n}`, 'extio').catch(() => {});
+}
+
+/* ---- box models ----
+ *
+ * The section answers "what IS this box, and what does it want from the rig?"
+ * The rig half is the reason it exists: the gear can set every knob, but
+ * nothing told anyone that a thumbstick needs these four. Both halves apply as
+ * a TRY first (box: live, unsaved; rig: runtime override) and only Keep makes
+ * them stick -- watch it work, then commit. */
+const tclErr = r => String(r).startsWith('!TCL_ERROR') ? String(r).slice(11).trim() : null;
+
+function modelSection(b) {
+  const verdict = models.get(b);
+  const st = modelPick.get(b) || verdict;
+  const msg = modelMsg.box === b ? modelMsg.text : '';
+  const recheck = `<button onclick="modelJudge('${esc(b)}')"
+      title="Read the box's configuration again and re-judge it against the models.">Re-check</button>`;
+  const snap = `<button onclick="modelSnapshot('${esc(b)}')"
+      title="Write this box's current configuration as a NEW model in local/models/ on this rig. You then give it a rig section (the settings it wants).">Save as model…</button>`;
+  const msgP = msg ? `<p class="note" style="white-space:pre-wrap;color:var(--ink)">${esc(msg)}</p>` : '';
+  if (!st) {
+    const why = modelErr.get(b);
+    return `<h2>model</h2><p class="note">${why ? esc(why) : 'not judged yet'} ${recheck}</p>${msgP}`;
+  }
+
+  const cands = (verdict && verdict.candidates) || [];
+  const cur = st.model || '';
+  const picker = cands.length
+    ? `<select onchange="modelPickChange('${esc(b)}', this.value)"
+          title="Models for this board. Picking one shows what applying it would change.">
+        ${cur ? '' : '<option value="" selected>— pick a model —</option>'}
+        ${cands.map(c => `<option value="${esc(c.name)}"${c.name === cur ? ' selected' : ''}>${esc(c.name)}</option>`).join('')}
+      </select>` : '';
+
+  const nBox = st.diff.missing.length + st.diff.differ.length;
+  const rigBad = st.rig.filter(r => !r.ok);
+  const rigRuntime = st.rig.some(r => r.source === 'runtime');
+  const pill = {
+    matches: '<span class="pill ok">matches</span>',
+    differs: `<span class="pill warn">${nBox + rigBad.length} to change</span>`,
+    blank:   '<span class="pill warn">blank box</span>',
+    unknown: '<span class="pill">no model</span>',
+  }[st.state] || '';
+  const said = {
+    matches: `This box is ${cur ? `<b>${esc(cur)}</b>` : 'a known model'}${st.desc ? ` — ${esc(st.desc)}` : ''}.`,
+    differs: `This looks like <b>${esc(cur)}</b>${st.desc ? ` (${esc(st.desc)})` : ''}, but is not configured as one.`,
+    blank:   cur ? `A blank box. It can be configured as <b>${esc(cur)}</b>${st.desc ? ` — ${esc(st.desc)}` : ''}.`
+                 : 'A blank box, and no model is for this board.',
+    unknown: 'Configured by hand, and no model matches it.',
+  }[st.state] || '';
+
+  let boxRows = '';
+  for (const d of st.diff.missing) boxRows += `<tr><td><code>${esc(d.leaf)}</code></td><td><b>${esc(d.value)}</b></td><td class="age">—</td></tr>`;
+  for (const d of st.diff.differ)  boxRows += `<tr><td><code>${esc(d.leaf)}</code></td><td><b>${esc(d.want)}</b></td><td>${esc(d.have)}</td></tr>`;
+  for (const d of st.diff.extra)   boxRows += `<tr><td><code>${esc(d.leaf)}</code></td><td class="age">(not in model — left alone)</td><td>${esc(d.value)}</td></tr>`;
+  const boxTable = boxRows ? `<table style="margin-top:8px"><tr><th>box setting</th><th>model</th><th>box now</th></tr>${boxRows}</table>` : '';
+
+  const rigRows = st.rig.map(r => {
+    const mark = r.ok ? '<span style="color:var(--ok)">✓</span>'
+                      : '<span style="color:var(--warn)">✗</span>';
+    const have = r.source === 'undeclared' ? '<span class="age">not on this rig</span>'
+               : `${esc(r.have) || '<span class="age">""</span>'} <span class="age">${esc(r.source)}</span>`;
+    return `<tr><td>${mark}</td><td><code>${esc(r.sub)} ${esc(r.key)}</code></td><td><b>${esc(r.want)}</b></td><td>${have}</td></tr>`;
+  }).join('');
+  const rigTable = rigRows ? `<table style="margin-top:8px"><tr><th></th><th>rig setting</th><th>model wants</th><th>rig has</th></tr>${rigRows}</table>` : '';
+
+  const differs = nBox > 0 || rigBad.length > 0;
+  const btns = [];
+  if (cur && differs) btns.push(`<button onclick="modelApply('${esc(b)}','${esc(cur)}',false)"
+      title="Apply now, persisting nothing: the box settings live (a reboot undoes them), the rig settings as runtime overrides (Undo drops them).">Try</button>`);
+  if (cur && (differs || rigRuntime || dirty.size)) btns.push(`<button onclick="modelApply('${esc(b)}','${esc(cur)}',true)"
+      title="Make it stick: the box saves its configuration to flash and the rig settings are written to local/rig.tcl.">Keep</button>`);
+  if (cur && rigRuntime) btns.push(`<button onclick="modelRevert('${esc(b)}','${esc(cur)}')"
+      title="Drop the rig settings' runtime overrides. Unsaved box changes are undone by Reboot.">Undo try</button>`);
+
+  return `<h2>model</h2>
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      ${pill} ${picker} ${btns.join(' ')} ${recheck} ${snap}
+    </div>
+    <p class="note" style="color:var(--ink)">${said}</p>
+    ${boxTable}${rigTable}${msgP}
+    <p class="note">A <b>model</b> is a kind of box we build more than one of: its box configuration
+       and the <b>rig settings</b> it needs (the ones the ⚙ gear sets). Files live in
+       <code>config/models/</code> and this rig's <code>local/models/</code>. Calibration is per
+       physical stick, so it is not part of a model.</p>`;
+}
+
+function setModelMsg(b, text) { modelMsg = { box: b, text }; schedulePanel(); }
+
+async function modelJudge(b) {
+  setModelMsg(b, '');
+  try { await conn.send(`extio_model_judge ${b}`, 'extio'); } catch (e) {}
+}
+
+async function modelPickChange(b, name) {
+  const v = models.get(b);
+  if (!name || (v && v.model === name)) { modelPick.delete(b); schedulePanel(); return; }
+  const r = await conn.send(`extio_model_preview ${b} ${name}`, 'extio');
+  const e = tclErr(r);
+  if (e) { setModelMsg(b, e); return; }
+  try { const st = JSON.parse(r); st.raw = String(r); modelPick.set(b, st); } catch (x) { return; }
+  setModelMsg(b, '');
+}
+
+async function modelApply(b, name, keep) {
+  const st = modelPick.get(b) || models.get(b);
+  if (keep) {
+    const knobs = st.rig.filter(r => !(r.ok && r.source === 'file'))
+                        .map(r => `  ${r.sub} ${r.key} ${r.want}`);
+    if (!confirm(`Keep ${name} on ${b}?\n\n`
+               + `• the box saves its configuration to flash\n`
+               + (knobs.length ? `• these rig settings are written to local/rig.tcl:\n${knobs.join('\n')}`
+                               : `• the rig settings already match and are already saved`))) return;
+  }
+  const r = await conn.send(`extio_model_apply ${b} ${name}${keep ? ' -keep' : ''}`, 'extio');
+  setModelMsg(b, tclErr(r) ? `failed: ${tclErr(r)}` : String(r));
+  refreshDirty(b);
+}
+
+async function modelRevert(b, name) {
+  const r = await conn.send(`extio_model_revert ${b} ${name}`, 'extio');
+  setModelMsg(b, tclErr(r) ? `failed: ${tclErr(r)}` : String(r) + '  (unsaved box changes: Reboot)');
+}
+
+async function modelSnapshot(b) {
+  const name = prompt(`Save ${b}'s configuration as a new model.\n\nModel name (e.g. astick, lever2):`, '');
+  if (!name) return;
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name.trim())) { alert('letters, digits, . _ - only'); return; }
+  const desc = (prompt('One-line description:', '') || '').replace(/[{}\\\[\]$]/g, '');
+  const r = await conn.send(`extio_model_snapshot ${b} ${name.trim()} {${desc}}`, 'extio');
+  setModelMsg(b, tclErr(r) ? `failed: ${tclErr(r)}`
+    : `wrote ${r}\nAdd its rig section (the settings it wants), then extio_model_reload.`);
 }
 
 async function refreshDirty(box) {
@@ -1482,6 +1641,9 @@ function panelSignature(b) {
   const lc = get(b, 'ota/lifecycle', null);
   return [b, liveness(b).cls,
           renamingTo && renamingTo.from === b ? renamingTo.to : '',
+          models.has(b) ? models.get(b).raw : '', modelErr.get(b) || '',
+          modelPick.has(b) ? modelPick.get(b).raw : '',
+          modelMsg.box === b ? modelMsg.text : '', dirty.size ? 'D' : '',
           get(b, 'ain/clk_ppm', null) !== null ? 'M' : '',
           lc === null ? 'ota-none' : OTA_BUSY.includes(String(lc)) ? 'ota-busy' : 'ota-idle',
           get(b, 'ota/trial') == 1 ? 'T' : '',
@@ -1952,6 +2114,8 @@ function buildPanel(b) {
        image manager (it is only announced under <code>CONFIG_MCUBOOT_IMG_MANAGER</code>), so it is
        not OTA-capable.</p>
 
+    ${modelSection(b)}
+
     <h2>network</h2>
     <table>
       <tr><th>ip</th><td>${vspan(b, 'ip')} ${ageSpan(b, 'ip')}</td>
@@ -2185,7 +2349,7 @@ async function init() {
    * we never asked for. */
   dp.on('keys:update', ({ keys }) => {
     for (const k of keys) {
-      if (!/^extio\/[^/]+\/state\//.test(k)) continue;
+      if (!/^extio\/[^/]+\/state\//.test(k) && !/^extio\/models\//.test(k)) continue;
       if (fetched.has(k)) continue;
       fetched.add(k); dp.sendGet(k);
     }
