@@ -8,13 +8,13 @@
 #                        `eye ain_group`. The DFRobot stick's connector puts
 #                        Y on the left of X, so Y lands on A0 and X on A1.
 #
-# SWAP IS EM'S, NOT THE BOX'S. A block's columns always come in ascending
-# channel order (the group's channels are a bit mask, so `channels 1,0` is
-# the same group as `0,1`), and em takes the first column as horizontal --
-# the labels above are documentation, em does not read them. With X on A1,
-# turn on em's swap_axes (the Eye panel's swap checkbox) BEFORE calibrating.
-# It is part of em's calibration in db/calibration.db, not a rig setting,
-# which is why this model cannot set it.
+# THE LABELS DO THE SWAP. A block's columns always come in ascending channel
+# order (the group's channels are a bit mask, so `channels 1,0` is the same
+# group as `0,1`), so the wiring order is carried by the channel labels: em
+# takes h and v from the columns labelled h|v (or x|y), see ain_axes_for in
+# config/emconf.tcl, and reports its choice on em/ain_axes. Leave em's
+# swap_axes OFF -- it applies on top of the labels, for a stick that is
+# mounted rotated.
 #
 # A0/A1 are the right ports for it: dedicated analog pads with no GPIO
 # function, so the eye costs no box pin and dodges A4's SJ8 and A5's SW2.

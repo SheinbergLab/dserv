@@ -842,11 +842,79 @@ namespace eval em {
         dservSet ess/em_pos "$h_deg $v_deg"
     }
 
+    # ---- which block column is h and which is v ----
+    #
+    # A block's columns come in ASCENDING channel order -- the group's channels
+    # are a bit mask on the box, so `channels 1,0` is the same group as `0,1`.
+    # Wiring order is therefore not something the box can express, but its
+    # channel LABELS can: a box labels ain/label/<ch> h|v (or x|y, or
+    # horizontal|vertical, whole label, any case), and em takes h and v from
+    # those columns. That keeps "this stick has Y on A0" with the box that is
+    # wired that way, instead of in a swap_axes every rig has to remember.
+    #
+    # Without exactly one h and one v label among the columns it falls back to
+    # the old rule, first column h and second v. swap_axes still applies ON
+    # TOP, as the rig's own orientation choice (a stick mounted rotated).
+    #
+    # Resolved once per (datapoint, mask) and cached; any ain label announce
+    # clears the cache. The verdict is published on em/ain_axes.
+    variable ain_axes          ;# "<dpoint>,<mask>" -> {hcol vcol}
+    array set ain_axes {}
+
+    proc ain_axis_canon { label } {
+        switch -nocase -- [lindex [split $label \x00] 0] {
+            h - x - horizontal { return h }
+            v - y - vertical   { return v }
+        }
+        return ""
+    }
+
+    proc ain_axes_for { dpoint mask } {
+        variable ain_axes
+        set key $dpoint,$mask
+        if { [info exists ain_axes($key)] } { return $ain_axes($key) }
+        set box ""
+        regexp {^extio/([^/]+)/state/ain/} $dpoint -> box
+        set hs {}; set vs {}; set labs {}
+        set col 0
+        for { set ch 0 } { $ch < 8 } { incr ch } {
+            if { !(($mask >> $ch) & 1) } continue
+            set lab ""
+            set ldp extio/$box/state/ain/label/$ch
+            if { $box ne "" && [dservExists $ldp] } {
+                set lab [lindex [split [dservGet $ldp] \x00] 0]
+            }
+            lappend labs "ch$ch=[expr {$lab eq {} ? {-} : $lab}]"
+            switch -- [ain_axis_canon $lab] {
+                h { lappend hs $col }
+                v { lappend vs $col }
+            }
+            incr col
+        }
+        if { [llength $hs] == 1 && [llength $vs] == 1 } {
+            set cols [list [lindex $hs 0] [lindex $vs 0]]
+            set why labels
+        } else {
+            set cols {0 1}
+            set why "column order (no single h and v label)"
+        }
+        set ain_axes($key) $cols
+        dservSet em/ain_axes "h col [lindex $cols 0] v col [lindex $cols 1]\
+                              by $why: $box [join $labs { }]"
+        return $cols
+    }
+
+    proc ain_labels_changed { dpoint data } {
+        variable ain_axes
+        array unset ain_axes
+    }
+
     # Process an extio MCP3204 analog eye source: an eye tracker's analog output
     # digitized by the box (state/ain/<label>). The raw ADC counts ARE the raw
     # eye position -- the same role P1-P4 sub-pixel difference plays for the
     # camera -- so they run through the SAME calibration (set-center + scale, or
-    # biquadratic). Decoded via lib/extio-1.0.tm. CH0 -> h, CH1 -> v.
+    # biquadratic). Decoded via lib/extio-1.0.tm. Which column is h and which
+    # is v comes from the box's channel labels (ain_axes_for, above).
     # TIMESTAMPS COME FROM THE BOX, NOT FROM `now`, and EVERY scan in the block
     # is emitted -- see the two notes below. Both matter for the same reason:
     # this is the path by which eye position reaches the data file, and a sample
@@ -901,6 +969,7 @@ namespace eval em {
         variable bq_on
         variable bq_src
         set swap [dict get $settings swap_axes]
+        lassign [ain_axes_for $dpoint [dict get $d mask]] hc vc
         set bq   [expr {$bq_on && ($bq_src eq "analog" || $bq_src eq "*")}]
         if { !$bq } {
             set sh [dict get $settings scale_h]
@@ -913,9 +982,9 @@ namespace eval em {
 
         for { set k 0 } { $k < $rows } { incr k } {
             set i     [expr {$k * $n}]
-            set raw_h [lindex $s $i]
-            set raw_v [lindex $s [expr {$i + 1}]]
-            # stick orientation: swap CH0<->CH1 before any calibration, so
+            set raw_h [lindex $s [expr {$i + $hc}]]
+            set raw_v [lindex $s [expr {$i + $vc}]]
+            # stick orientation: swap h<->v before any calibration, so
             # center/scale/invert and set_current_as_center all act on the
             # intended axes.
             if { $swap } { lassign [list $raw_v $raw_h] raw_h raw_v }
@@ -1021,6 +1090,10 @@ namespace eval em {
         puts "em: analog eye group = $g ($ain_dp)"
         return
     }
+
+    # A relabel (or a box reappearing) re-decides which column is h and v.
+    dservAddMatch   extio/*/state/ain/label/*
+    dpointSetScript extio/*/state/ain/label/* em::ain_labels_changed
 }
 
 ::settings::declare eye ain_group -default eye \
