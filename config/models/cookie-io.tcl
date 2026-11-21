@@ -14,10 +14,17 @@
 # Shield ports this model leaves alone, and why:
 #   D5   RESERVED on the MCXN947 -- it is ENET0_MDIO, the PHY's; the box
 #        refuses `pin 5`. That cookie port is dead on this board.
-#   D9   the board's RED LED (active-low in the pin map); the obs mirror is
-#        put here so the LED lights for each observation period. A module
-#        plugged into D9 would fight the obs output.
-#   D10  the GREEN LED. Free, but whatever is plugged in lights the LED too.
+#   D10  the board's GREEN LED; the obs mirror is put here so the LED lights
+#        for each observation period (PINMAP's intended "box is running"
+#        tell). A module plugged into D10 would fight the obs output.
+#   D9   the RED LED. Free, but whatever is plugged in lights the LED too.
+#        Both LED pads are GPIO_ACTIVE_LOW in the pin map: logical 1 = pad
+#        LOW, so a module on either reads (and drives) inverted.
+#
+# obs here is a MIRROR (the LED follows ess/in_obs as frames arrive), which
+# is all a USB box with software sync can do. A box that LEADS obs needs
+# Ethernet + a verified PTP lock and a non-LED pin (the LED pads would give
+# an inverted TTL) -- that is a different model.
 #   A5   is also SW2: pressing the board's user button shorts the A5 port to
 #        ground. Use it last.
 #   A4   reaches the header through solder jumper SJ8 (1-2 = ADC). A board with
@@ -51,7 +58,7 @@ model cookie-io {
         group/0/label response
         group/1/pins 11
         group/1/label stick_select
-        obs/pin 9
+        obs/pin 10
         ain/enable 1
         ain/rate 250
         ain/label/3 y
