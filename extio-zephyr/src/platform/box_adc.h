@@ -124,6 +124,15 @@ uint16_t    box_adc_vref_mv(void);   /* full-scale in mV, for counts -> volts */
  * been here (see "the CHANNEL MAP" in box_adc.c); it just was not reachable. */
 int         box_adc_input_of(uint8_t ch, uint8_t *differential);
 
+/* Sample (acquisition) time the board declares for ain channel `ch`, in ADC
+ * clock TICKS: the channel's `zephyr,acquisition-time` when it is given as
+ * ADC_ACQ_TIME(ADC_ACQ_TIME_TICKS, n), 3 (the converter's minimum) for
+ * ADC_ACQ_TIME_DEFAULT, and 0 for a time in ns/us or a board with no channel
+ * map -- which a caller building its own conversion commands must refuse,
+ * the same rule as a non-unity gain in box_adc_input_of. The polled path
+ * needs none of this: the Zephyr driver reads the devicetree itself. */
+uint16_t    box_adc_acq_ticks_of(uint8_t ch);
+
 /* Box pin this ain channel lives on, or -1 for a channel on a DEDICATED pad
  * (one that is not a box pin at all, so it is always analog). Declared per
  * board in zephyr,user/box-ain-pins, indexed by ain channel. */

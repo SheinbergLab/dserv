@@ -258,6 +258,73 @@ static uint8_t mask_popcount(uint8_t mask)
 	return n;
 }
 
+/* ---- SAMPLE TIME, from the devicetree --------------------------------
+ *
+ * LPADC_GetDefaultConvCommandConfig leaves sampleTimeMode at ADCK3, the
+ * converter's minimum, and this chain used to keep it -- ignoring the
+ * board's `zephyr,acquisition-time`, which only the Zephyr driver (the
+ * polled path) reads. 3 ticks is not long enough for a potentiometer's
+ * wiper resistance to recharge the sample capacitor, and that capacitor
+ * keeps the PREVIOUS conversion's charge however long the gap: every
+ * channel read a fraction of the one converted before it. Seen on
+ * cookie-io-eye 2026-11-21: chain 0,1,3,4 put the pointer stick's x (ch4)
+ * into the eye's vertical (ch0, the next scan's first conversion), and
+ * nothing else moved the eye.
+ *
+ * The LPADC offers 3,5,7,11,19,35,67,131 ticks; a request rounds UP to the
+ * next one, the same rule as adc_mcux_lpadc.c. Returns the ticks chosen, 0
+ * if the board's time cannot be represented here (not in ticks, or > 131). */
+static uint16_t sample_time_of(uint8_t ch, lpadc_sample_time_mode_t *mode)
+{
+	static const struct { uint16_t ticks; lpadc_sample_time_mode_t m; } sts[] = {
+		{   3, kLPADC_SampleTimeADCK3   }, {   5, kLPADC_SampleTimeADCK5   },
+		{   7, kLPADC_SampleTimeADCK7   }, {  11, kLPADC_SampleTimeADCK11  },
+		{  19, kLPADC_SampleTimeADCK19  }, {  35, kLPADC_SampleTimeADCK35  },
+		{  67, kLPADC_SampleTimeADCK67  }, { 131, kLPADC_SampleTimeADCK131 },
+	};
+	uint16_t want = box_adc_acq_ticks_of(ch);
+
+	if (want == 0u) {
+		return 0u;
+	}
+	for (size_t i = 0; i < ARRAY_SIZE(sts); i++) {
+		if (sts[i].ticks >= want) {
+			if (mode) {
+				*mode = sts[i].m;
+			}
+			return sts[i].ticks;
+		}
+	}
+	return 0u;
+}
+
+/* Conversion time of one pass over `mask`, in NANOSECONDS. STREAM_CONV_US is
+ * what one conversion MEASURED at the 3-tick default; a longer sample adds
+ * its extra ticks at the ADC clock. The planner charges this, so a board that
+ * lengthens its sample time gets its oversampling clamped honestly instead of
+ * a chain that overruns its trigger slot. */
+static uint32_t chain_ns_of(uint8_t mask)
+{
+	uint32_t adck = CLOCK_GetAdcClkFreq(0);
+	uint32_t ns = 0;
+
+	if (adck == 0u) {
+		adck = 48000000u;          /* FRO_HF, what board.c attaches */
+	}
+	for (uint8_t ch = 0; ch < 8; ch++) {
+		if (!(mask & (1u << ch))) {
+			continue;
+		}
+		uint16_t t = sample_time_of(ch, NULL);
+
+		ns += STREAM_CONV_US * 1000u;
+		if (t > 3u) {
+			ns += (uint32_t) (((uint64_t) (t - 3u) * 1000000000u) / adck);
+		}
+	}
+	return ns;
+}
+
 /* ---- ARM: commands, trigger, INPUTMUX, eDMA ring. Everything except the
  * metronome, so the instrument can slip its software-trigger probe in between
  * the two and bisect the pipe. ---- */
@@ -313,6 +380,12 @@ static int stream_arm(uint8_t mask, uint8_t nch, uint8_t avgs_exp,
 			}
 
 			LPADC_GetDefaultConvCommandConfig(&cc);
+			/* the board's sample time, not the default ADCK3 (see
+			 * sample_time_of); a time this cannot express is refused
+			 * like a gain it cannot, rather than run at 3 ticks */
+			if (sample_time_of((uint8_t) ch, &cc.sampleTimeMode) == 0u) {
+				return -9;
+			}
 			/* ADC_CMDL_ADCH's own mask, not a hand-written one: the
 			 * field is FIVE bits (0x1F -- channels run to 31), while
 			 * the driver's comment beside the same line says "lower
@@ -700,6 +773,9 @@ void box_adc_stream_plan(uint8_t mask, uint32_t rate, uint8_t ovs_exp,
 	uint32_t period_us = 1000000u / rate;
 	uint32_t budget_us = period_us * STREAM_DUTY_PCT / 100u;
 	uint32_t total     = 1u << (ovs_exp & 7u);
+	/* one pass over the chain at the board's sample times, rounded up to
+	 * whole microseconds; nch * STREAM_CONV_US at the 3-tick default */
+	uint32_t pass_us   = (chain_ns_of(mask) + 999u) / 1000u;
 
 	/* 1. TOTAL oversample, not the split, is what decides feasibility -- and
 	 * that is the whole argument for this pipeline. Conversion work per
@@ -709,11 +785,11 @@ void box_adc_stream_plan(uint8_t mask, uint32_t rate, uint8_t ovs_exp,
 	 * less and SAY SO. (The polled path hit this wall as a wedge instead:
 	 * 128x at 6 channels is ~1.5 ms of back-to-back conversion inside a 1 ms
 	 * period, and a cooperative sampler that never parks owns the machine.) */
-	while (total > 1u && (uint32_t) nch * total * STREAM_CONV_US > budget_us) {
+	while (total > 1u && total * pass_us > budget_us) {
 		total >>= 1;
 		p->clamped = 1;
 	}
-	if ((uint32_t) nch * total * STREAM_CONV_US > budget_us) {
+	if (total * pass_us > budget_us) {
 		p->clamped = 1;   /* even 1x is over: the RATE is the problem */
 	}
 
@@ -739,7 +815,7 @@ void box_adc_stream_plan(uint8_t mask, uint32_t rate, uint8_t ovs_exp,
 	p->avgs_exp = avgs_mode_of(avgs);
 	p->trig_hz  = rate * spacing;
 	p->slot_us  = 1000000u / p->trig_hz;
-	p->chain_us = (uint32_t) nch * avgs * STREAM_CONV_US;
+	p->chain_us = avgs * pass_us;
 
 	uint32_t bw = spacing * nch;
 
