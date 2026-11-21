@@ -1491,13 +1491,20 @@ function fmtBoot(d) {
  *
  * Chord decode, same label algebra as extio.html / extioconf.tcl
  * extio_group_decode: announced pins ascending IS the bit order. */
+
+/* nothing pressed: "center" for a d-pad (a member labelled with a bare
+ * direction, EXACT -- "button_left" is not one), "none" for anything else.
+ * Same rule as extio_group_idle in extioconf.tcl and extio.html. */
+const DPAD_WORDS = new Set(['up', 'down', 'left', 'right', 'u', 'd', 'l', 'r']);
+function idleWord(labels) {
+  return labels.some(l => DPAD_WORDS.has(String(l).toLowerCase())) ? 'center' : 'none';
+}
+
 function decodeChord(box, pins, val) {
   if (!pins.length || val === null || val === '' || isNaN(+val)) return null;
-  const on = [];
-  pins.forEach((p, i) => {
-    if ((+val >> i) & 1) on.push(get(box, `label/${p}`) || ('p' + p));
-  });
-  return on.length ? on.join('_') : 'center';
+  const labels = pins.map(p => get(box, `label/${p}`) || ('p' + p));
+  const on = labels.filter((l, i) => (+val >> i) & 1);
+  return on.length ? on.join('_') : idleWord(labels);
 }
 
 /* Free a group slot. The write is the box contract (`pins`/`off` -> mask 0);

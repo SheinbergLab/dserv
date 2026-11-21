@@ -687,12 +687,27 @@ proc extio_discover {} {
 # ---- group decode (label algebra): a box announces group membership
 # (state/group/<name>/pins, ascending = bit order) and per-pin roles
 # (state/label/<n>); each group EVENT (state/group/<name>, int bitmask) then
-# decodes to the active pins' labels joined with '_' -- "center" for 0,
-# "up_right" for a NE chord -- published to extio/<box>/decoded/<name>.
+# decodes to the active pins' labels joined with '_' -- "up_right" for a NE
+# chord -- published to extio/<box>/decoded/<name>. Nothing pressed reads
+# "center" for a d-pad and "none" for anything else (see extio_group_idle).
 # Dashboard/log sugar only: response semantics consume the raw bitmask (ess
 # joystick API), so this never sits in the response path. Device-agnostic:
 # a DIP bank or foot-switch group decodes with the same label algebra. ----
 array set ::extio_gmap {}   ;# "<box>/<gname>" -> bit->label list (manifest cache)
+
+# What a group with nothing pressed reads as. "center" only means something
+# for a d-pad, so it is used only when a member is labelled with a bare
+# direction; a response pair or a lone select button reads "none". EXACT
+# match, unlike button routing's token match: "button_left" is not a d-pad.
+# Same rule as idleWord() in www/extio.html and www/extio-config.html.
+proc extio_group_idle {labels} {
+    foreach l $labels {
+        if { [string tolower $l] in {up down left right u d l r} } {
+            return center
+        }
+    }
+    return none
+}
 
 proc extio_group_decode {dp data} {
     # events are exactly extio/<box>/state/group/<name>; anything deeper is
@@ -724,7 +739,8 @@ proc extio_group_decode {dp data} {
         if { ($data >> $i) & 1 } { lappend on $l }
         incr i
     }
-    dservSet extio/$box/decoded/$gname [expr {[llength $on] ? [join $on _] : "center"}]
+    dservSet extio/$box/decoded/$gname [expr {[llength $on] ? [join $on _]
+                                              : [extio_group_idle $::extio_gmap($key)]}]
 }
 
 # Column names for an analog group's block, in the block's own column order.

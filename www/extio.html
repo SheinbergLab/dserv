@@ -234,15 +234,23 @@ function groupModel(b, gname) {
 }
 
 /* decode a group bitmask to its labels (bit i = i-th member pin, ascending --
- * matches the box's dserv_pins_str contract), joined; "center" when none set.
- * Self-contained: uses the box's own announced pins + labels, no extioconf. */
+ * matches the box's dserv_pins_str contract), joined. Self-contained: uses
+ * the box's own announced pins + labels, no extioconf.
+ * Returns {text, active}; nothing pressed reads idleWord(). */
+/* "center" for a d-pad (a member labelled with a bare direction, EXACT --
+ * "button_left" is not one), "none" for anything else. Same rule as
+ * extio_group_idle in extioconf.tcl and extio-config.html. */
+const DPAD_WORDS = new Set(['up', 'down', 'left', 'right', 'u', 'd', 'l', 'r']);
+function idleWord(labels) {
+    return labels.some(l => DPAD_WORDS.has(String(l).toLowerCase())) ? 'center' : 'none';
+}
+
 function decodeGroup(g, labels) {
     if (!g.pins.length) return null;
-    const on = [];
-    g.pins.forEach((pin, i) => {
-        if ((g.val >> i) & 1) on.push(labels.get(pin) || ('p' + pin));
-    });
-    return on.length ? on.join('_') : 'center';
+    const names = g.pins.map(pin => labels.get(pin) || ('p' + pin));
+    const on = names.filter((n, i) => (g.val >> i) & 1);
+    return on.length ? { text: on.join('_'), active: true }
+                     : { text: idleWord(names), active: false };
 }
 
 /* extio/<name>/state/<leaf> -> update the box model.
@@ -639,9 +647,8 @@ function cardHtml(b) {
         groups = '<div class="sect"><div class="lbl">groups</div>' +
             liveGroups.map(gn => {
                 const dec = decodeGroup(b.groups.get(gn), b.labels);
-                const active = dec && dec !== 'center';
                 return `<div class="grp"><span class="gname">${esc(gn)}</span>` +
-                       `<span class="gval${active ? ' on' : ''}">${esc(dec || '—')}</span></div>`;
+                       `<span class="gval${dec && dec.active ? ' on' : ''}">${esc(dec ? dec.text : '—')}</span></div>`;
             }).join('') + '</div>';
     }
     /* analog groups: newest scan per channel from the self-describing blocks
