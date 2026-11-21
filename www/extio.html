@@ -682,7 +682,6 @@ function cardHtml(b) {
                       `${g.count > 1 ? ` ×${g.count}` : ''}${g.avg ? ' avg' : ''}`
                     : 'on-change';
                 const rows = g.chans.map((ch, i) => {
-                    const val = g.last[i];
                     /* Same precedence as a digital pin: the name the RIG gave
                      * this signal wins over the board's silkscreen, which wins
                      * over the bare channel number. The title keeps all three,
@@ -691,26 +690,32 @@ function cardHtml(b) {
                     const silk = sk && sk.ain && sk.ain(ch);
                     const cap = lbl ? esc(lbl) : (silk || 'ch ' + ch);
                     const ttl = [lbl && esc(lbl), 'ain ch ' + ch, silk].filter(Boolean).join(' · ');
-                    const pct = Math.max(0, Math.min(100, ((val + 32768) / 65535) * 100));
-                    return `<div class="ain"><span class="ch${lbl ? ' named' : ''}" title="${ttl}">${cap}</span>` +
-                           `<div class="bar"><div class="fill" style="width:${pct.toFixed(1)}%"></div></div>` +
-                           `<span class="val">${val}</span></div>`;
+                    /* NO VALUE IN THE MARKUP -- fillLive() writes it into the
+                     * standing row. A continuous group's samples change every
+                     * pass (ADC noise alone does it), so a value here made
+                     * every card's markup differ every frame, defeated the
+                     * replace-only-if-changed guard in render(), and rebuilt
+                     * the card under the pointer: the `configure` link stopped
+                     * taking clicks the day a box streamed analog. */
+                    return `<div class="ain" data-ain-g="${esc(gn)}" data-ain-i="${i}">` +
+                           `<span class="ch${lbl ? ' named' : ''}" title="${ttl}">${cap}</span>` +
+                           `<div class="bar"><div class="fill"></div></div>` +
+                           `<span class="val"></span></div>`;
                 }).join('');
                 return `<div class="grp"><span class="gname">${esc(gn)}</span>` +
                        `<span class="gval">${rate}</span>` +
-                       `<span class="gage">${fmtAge(Date.now() - g.at)}</span></div>` + rows;
+                       `<span class="gage" data-age="grp" data-age-g="${esc(gn)}"></span></div>` + rows;
             }).join('') + '</div>';
     }
     let ain = '';
     if (b.ain.size) {
         ain = '<div class="sect"><div class="lbl">analog</div>' +
             [...b.ain.keys()].sort((a, c) => a - c).map(ch => {
-                const v = b.ain.get(ch);
                 const silk = sk && sk.ain ? sk.ain(ch) : null;
-                const pct = Math.max(0, Math.min(100, ((v + 32768) / 65535) * 100));
-                return `<div class="ain"><span class="ch" title="ain ch ${ch}">${silk || 'ain ' + ch}</span>` +
-                       `<div class="bar"><div class="fill" style="width:${pct.toFixed(1)}%"></div></div>` +
-                       `<span class="val">${v}</span></div>`;
+                /* value filled in place by fillLive(), same reason as above */
+                return `<div class="ain" data-ain-ch="${ch}"><span class="ch" title="ain ch ${ch}">${silk || 'ain ' + ch}</span>` +
+                       `<div class="bar"><div class="fill"></div></div>` +
+                       `<span class="val"></span></div>`;
             }).join('') + '</div>';
     }
     /* sync: show what's meaningful (source hw/sw, transport delay, drift) --
@@ -752,7 +757,7 @@ function cardHtml(b) {
                                      + `dserv epoch offset ptpconf pushed it)`
                                      : 'software-synced (frame arrival)';
         const val = unsynced ? `<span class="unsync">${parts.join(' ')}</span>` : parts.join(' ');
-        sync = ` · <b title="${esc(stip)}">sync</b> ${val} (${fmtAge(Date.now() - b.syncAt)})`;
+        sync = ` · <b title="${esc(stip)}">sync</b> ${val} (<span data-age="sync"></span>)`;
     }
     /* THE CELL. Volts lead, percent follows in parentheses -- deliberately that
      * way round. Percent is the number everyone reads and the one least worth
@@ -786,7 +791,7 @@ function cardHtml(b) {
                   + ' — percent is a NOMINAL Li-ion curve, not a measurement';
         bat = ` · <b title="${esc(tip)}">batt</b> `
             + `<span class="${low ? 'unsync' : ''}">${v} V${pct}</span>${power}`
-            + ` (${fmtAge(Date.now() - b.battAt)})`;
+            + ` (<span data-age="batt"></span>)`;
     }
     /* host-counted uplink connects since THIS dserv started: a steady box
      * reads #1; anything higher after the first hour is reconnect churn
@@ -1061,6 +1066,42 @@ function renderDisco() {
     el.hidden = false;
 }
 
+/* LIVE VALUES go into the card's STANDING DOM, never into its markup:
+ * analog samples (the newest scan of each group, data-ain-g/-i, and legacy
+ * per-channel samples, data-ain-ch) and every "Ns ago" (data-age names
+ * WHICH age; the instant it counts from is looked up here, because putting
+ * the timestamp itself in the markup changes it with every block). Anything in cardHtml() that changes on its
+ * own -- a noisy ADC count, a seconds counter -- makes the markup differ
+ * every pass, defeats render()'s replace-only-if-changed guard, and rebuilds
+ * the card under the pointer, which is what silently ate clicks on the
+ * `configure` link. Runs every pass for a dirty card, after any replace, so
+ * a rebuilt card is filled before it paints. */
+function fillLive(el, b) {
+    const now = Date.now();
+    for (const sp of el.querySelectorAll('[data-age]')) {
+        const k = sp.dataset.age;
+        const g = k === 'grp' ? b.aingrp.get(sp.dataset.ageG) : null;
+        const at = k === 'sync' ? b.syncAt : k === 'batt' ? b.battAt : g ? g.at : null;
+        if (at == null) continue;
+        const t = fmtAge(now - at);
+        if (sp.textContent !== t) sp.textContent = t;
+    }
+    const put = (row, v) => {
+        if (v === undefined || v === null || Number.isNaN(v)) return;
+        const pct = Math.max(0, Math.min(100, ((v + 32768) / 65535) * 100)).toFixed(1) + '%';
+        const fill = row.querySelector('.fill'), val = row.querySelector('.val');
+        if (fill && fill.style.width !== pct) fill.style.width = pct;
+        if (val && val.textContent !== String(v)) val.textContent = String(v);
+    };
+    for (const row of el.querySelectorAll('.ain[data-ain-g]')) {
+        const g = b.aingrp.get(row.dataset.ainG);
+        if (g) put(row, g.last[+row.dataset.ainI]);
+    }
+    for (const row of el.querySelectorAll('.ain[data-ain-ch]')) {
+        put(row, b.ain.get(+row.dataset.ainCh));
+    }
+}
+
 function render() {
     const grid = document.getElementById('grid');
     document.getElementById('empty').style.display = boxes.size ? 'none' : '';
@@ -1094,6 +1135,7 @@ function render() {
              * build, not a layout -- and only the DOM write is skipped. */
             const html = cardHtml(b);
             if (html !== b.lastHtml) { el.innerHTML = html; b.lastHtml = html; }
+            fillLive(el, b);
         }
     }
     dirty = new Set();
