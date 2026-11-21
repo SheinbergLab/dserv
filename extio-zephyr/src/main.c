@@ -340,9 +340,24 @@ static int64_t  ota_dbg_until;
  * locks, analog starts anyway at BOOT_HOLD_MAX and the console says so, rather
  * than a box that is silently and permanently analog-dead on a LAN that happens
  * to have no master. That is the same rule as every other deadline here: the
- * failure of the thing we are waiting for must not be able to disable us. */
+ * failure of the thing we are waiting for must not be able to disable us.
+ *
+ * NO WAIT AT ALL when PTP is physically impossible. The ceiling is for "might
+ * still lock"; it is pure loss on a box that cannot. A box on USB with no
+ * Ethernet cable lost the first 60 s of analog after EVERY boot and OTA trial
+ * reboot (cookie-io-eye, +106) waiting for a lock that had no wire to arrive
+ * on. So the gate releases at once when there is no 1588 device, or when the
+ * PHY has no carrier once the link has had NOLINK_GRACE to come up (autoneg
+ * is ~1.5-3 s; the boot path reaches the loop later than that anyway).
+ *
+ * Keyed on CARRIER, not on the active uplink: gPTP runs on the Ethernet
+ * interface whichever transport carries dserv traffic, so a USB-uplink box with
+ * a cable on a PTP LAN still locks and still deserves the wait. A cable plugged
+ * in after the release changes nothing here -- the gate is one-shot, and the
+ * samples go PTP-stamped as soon as the clock is disciplined. */
 #define BOX_AIN_BOOT_HOLD_MAX_MS  60000
 #define BOX_AIN_BOOT_HOLD_STEP_MS 1500     /* re-armed each pass; > the loop period */
+#define BOX_AIN_NOLINK_GRACE_MS   6000     /* uptime before "no carrier" is believed */
 
 static uint8_t ain_boot_released;
 
@@ -374,13 +389,32 @@ static void ain_boot_gate(void)
 				   k_uptime_get());
 		return;
 	}
+	if (!box_ptp_ready()) {
+		ain_boot_released = 1;
+		box_console_printf("analog: released at %lld ms WITHOUT PTP -- no 1588 "
+				   "clock device (uplink=%s); samples are stamped on a "
+				   "free-running clock\n",
+				   k_uptime_get(), box_uplink_active_name());
+		return;
+	}
+#if defined(CONFIG_NETWORKING)
+	if (!box_net_eth_link() && k_uptime_get() >= BOX_AIN_NOLINK_GRACE_MS) {
+		ain_boot_released = 1;
+		box_console_printf("analog: released at %lld ms WITHOUT PTP -- no "
+				   "Ethernet carrier (uplink=%s), PTP cannot lock; "
+				   "samples are stamped on a free-running clock\n",
+				   k_uptime_get(), box_uplink_active_name());
+		return;
+	}
+#endif
 	if (k_uptime_get() < BOX_AIN_BOOT_HOLD_MAX_MS) {
 		box_ain_hold(BOX_AIN_BOOT_HOLD_STEP_MS);
 		return;
 	}
 	ain_boot_released = 1;
-	box_console_printf("analog: released at %d ms WITHOUT PTP -- samples are "
-			   "stamped on a free-running clock\n",
+	box_console_printf("analog: released at %d ms WITHOUT PTP -- carrier up "
+			   "but no lock (no grandmaster?); samples are stamped on "
+			   "a free-running clock\n",
 			   BOX_AIN_BOOT_HOLD_MAX_MS);
 #else
 	ain_boot_released = 1;      /* no 1588 on this board; nothing to wait for */
