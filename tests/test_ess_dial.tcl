@@ -180,6 +180,18 @@ puts "\na new response window starts unengaged:"
 feed 700 300 3
 check "lock cleared by dial_arm" [lindex [split [pointer] ,] 3] 0
 
+puts "\na commit latched before the window is not its first response:"
+# The d-pad / astick latch dial_pending when the cursor reaches the ring. One
+# that lands after the last answer was taken (ESS stopped mid-trial, or a
+# protocol that scored by touch and never called dial_response) must not
+# survive dial_arm. It did: dial_arm cleared a LOCAL, and the first trial
+# after a restart responded the instant it polled.
+::ess::dial_disarm
+set ::ess::dial_pending [list 1.2 sectors]
+::ess::dial_arm
+check "dial_arm clears a stale commit" [set ::ess::dial_pending] ""
+check "and dial_response has nothing to report" [::ess::dial_response] -1
+
 puts "\ndisarm clears the dot:"
 ::ess::dial_arm
 feed 511 50 3

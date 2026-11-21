@@ -1393,6 +1393,13 @@ namespace eval ess {
         variable dial_report_angle
         variable dial_report_time
         variable dial_report_source
+        # DECLARED, or the clear below sets a LOCAL and the namespace latch
+        # survives the new window. A commit latched after the last answer
+        # was taken -- the d-pad or astick reaching the ring while ESS was
+        # stopped, or while a protocol scored by touch and never called
+        # dial_response -- was then the first trial's "response", the instant
+        # it polled. dial_rearm always declared it; this did not.
+        variable dial_pending
 
         set dial_armed_time    [now]
         set dial_cursor_shown  0
