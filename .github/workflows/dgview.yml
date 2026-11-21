@@ -335,8 +335,24 @@ jobs:
           ninja -C build install
           
       - name: Build and install FLTK
+        shell: pwsh
         run: |
           cd deps/fltk
+          # MSVC 14.52 (VS 2026, runner image 20261116) treats copysign as an
+          # intrinsic, so FL/math.h's Windows fallback no longer compiles:
+          #   FL/math.h(46): error C2169: 'copysign': intrinsic function, cannot be defined
+          # FLTK fixed it upstream (master afdb764467, branch-1.4 a4b9c2975a) by
+          # skipping the fallback on MSVC >= 2013, whose CRT has rint/copysign.
+          # Apply that guard to the pinned 1.4.2 until the submodule moves past it.
+          # The patched header is what gets installed, so dgview builds with it too.
+          $h = 'FL/math.h'
+          $t = Get-Content -Raw $h
+          if ($t -notmatch '_MSC_VER < 1800') {
+            $pat = '(?m)^(#\s*if \(defined\(_WIN32\) \|\| defined\(CRAY\)\) && !defined\(__MINGW32__\))[ \t]*(?=\r?$)'
+            if ($t -notmatch $pat) { throw "FL/math.h: Windows rint/copysign guard not found; re-check the FLTK fix" }
+            Set-Content -NoNewline -Path $h -Value ($t -replace $pat, '$1 && (!defined(_MSC_VER) || _MSC_VER < 1800)')
+            Write-Host "Patched FL/math.h:"; Select-String -Path $h -Pattern '_MSC_VER < 1800'
+          }
           cmake -G Ninja -B build "-DCMAKE_POLICY_VERSION_MINIMUM=3.5" -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=C:/deps -DFLTK_BUILD_TEST=OFF -DFLTK_USE_SYSTEM_ZLIB=OFF
           ninja -C build
           ninja -C build install
