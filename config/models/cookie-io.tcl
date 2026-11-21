@@ -35,10 +35,14 @@
 # names are exact, hence `response`. Stick axis labels are cosmetic -- the
 # slider picks columns by index and calibration decides which is which, then
 # stores the result on the unit as meta/cal/slider.
+#
+# `match` is NOT cookie-io*: that would also claim cookie-io-eye
+# (cookie-io-eye.tcl), and a blank box of that name would then be offered
+# this model, because fewer missing leaves wins a tie between named models.
 model cookie-io {
     desc  "FRDM-MCXN947 + DFRobot cookie I/O: analog stick and left/right buttons"
     board frdm_mcxn947
-    match cookie-io*
+    match {cookie-io cookie-io[0-9]* cookie-io-[0-9]*}
     box {
         pin/3/mode in
         pin/3/debounce_ms 20
