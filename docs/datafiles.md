@@ -107,6 +107,37 @@ wide_datafiles` on (the default), whole ms with it off. The decoder,
 two cannot disagree. `tests/test_df_recorded_streams.tcl` builds a
 synthetic obs DG and covers each case.
 
+### Display times: `<event>_flip`, `<event>_light`, `display_ok`
+
+An event a system puts in an action after a `!` command (`my sample_on`,
+then `evt_put SAMPLE ON [now]`) is linked to that command by ESS: an
+`ess/evt_display` record in its obs carries the command's swap and the
+flip stim2 reported. With the rig's photodiode patch on, `photo/pair` says
+when that swap's light came (`docs/photo_processor.md`). In the same step,
+`df::add_display_times` adds for each linked event name `N`
+(`type_subtype` in lower case: `sample_on`):
+
+| column | each row |
+|---|---|
+| `N_flip` | ms from obs onset: the flip of the frame that showed it. Meaningful when stim2's host shares dserv's clock (the same host, or PTP); NaN where stim2 has no flip time (glfinish on a Mac) |
+| `N_light` | ms from obs onset: the light's 50% point under the photodiode. NaN when the frame never lit or no patch was drawn |
+| `display_ok` | 1 every linked event in the trial was lit; 0 one was dark or on a swap with no patch change; -1 nothing to judge (no linked event, or no photodiode in the file) |
+
+- One float per trial: the event's first occurrence in the obs (a line
+  on stdout says when there were more), NaN where it did not occur.
+- The event's own time (the extractor's `sample_on`) is unchanged. It is
+  when ESS put the event, just after the `!` reply, so `N_flip` is a
+  little before it and `N_light` after.
+- Every event after the command in the action is linked, so an action
+  that ends a trial after a `!` command (`CHOICES OFF`, then `ENDTRIAL
+  ABORT`) gives both columns. An event before the action's first `!`
+  command, in a transition or in a callback is not linked;
+  `::ess::evt_put_shown` links one to the last `!` command sent anywhere.
+- The light is joined by swap from wherever its record is in the file:
+  it is judged 300 ms after its flip, often after ENDOBS.
+- A column the extractor already wrote is kept.
+  `tests/test_df_display_times.tcl` covers each case.
+
 ## Wide types: `df wide_datafiles`
 
 dslog reads 64-bit datapoints narrowed to 32-bit types unless

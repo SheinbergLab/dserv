@@ -112,7 +112,7 @@ Two records go into the data file:
 | `serial` `swap` `level` `why` `nacks` | from `stim/photopatch` |
 | `seqs` | the `!` commands on its swap (`stim/cmd` seq) |
 | `status` | `lit`; `dark`, no light came; `appear`, the patch's first frame (never dark: a scene as bright as the patch shows no edge) |
-| `edge` `lat10` `lat50` | when lit: the edge's seq, and us from the flip to its 10% and 50% |
+| `edge` `lat10` `lat50` `light` | when lit: the edge's seq, us from the flip to its 10% and 50%, and its 50% point on the dserv clock |
 
 **`photo/verify`**, the running verdict, at each end of obs and when the
 file closes (JSON): `verdict`, `changes lit dark appear extra pending`,
@@ -132,6 +132,19 @@ Not judged: the latency spread. `rise`/`fall` report it, and an
 unreliable display (latency that wanders by frames) shows there. The
 latency includes any constant offset between stim2's host clock and
 dserv's; on a rig without PTP between them, read only its spread.
+
+A `photo/pair` is written 300 ms after its flip, so it is often after
+its obs's ENDOBS in the file. Join it by swap, not by the obs it is in.
+
+## Events at their light
+
+The events a system puts right after a `!` command are linked to that
+command's frame (`ess/evt_display`, ESS's evt_display block). Conversion
+joins each to its `photo/pair` and adds `<event>_flip`, `<event>_light`
+and `display_ok` to the trials (`docs/datafiles.md`, "Display times"). An
+analysis that leans on the light uses `sample_on_light` where the system
+logged `sample_on`. A trial whose frame never lit has NaN there and
+`display_ok` 0, never the commanded time instead.
 
 ## Where it attaches
 
@@ -173,8 +186,11 @@ eye's.
 
 The times come from the box's own sample times (block stamp + k x
 interval), the clock the obs boundaries and eye samples are on. The
-datapoint's timestamp is `t50`, so an edge is logged in the obs it belongs
-to however late it arrived.
+datapoint's timestamp is `t50`. That doesn't decide which obs it is in:
+`readESS` puts each record in the obs it was written between, so an edge
+the last block of a trial finished after ENDOBS is in the next obs (or
+between obs). Read edges by their time, as photopair does, or join by
+swap through `photo/pair`, as conversion does.
 
 **Batched blocks** change none of that: they only delay when an edge is
 published (after the block that finishes it). dserv takes one output per
@@ -373,3 +389,6 @@ missed frames, a frame an LCD never showed between two others (the first
 change is not given the third's light), an extra edge, the patch
 appearing, `!` commands with no change in marked and manual mode, two on
 one swap, and a new data file's counts.
+`tests/test_ess_evt_display.tcl` (ctest `ess_evt_display`) checks which
+events are linked to which command, and `tests/test_df_display_times.tcl`
+(ctest `df_display_times`) the columns conversion makes from them.

@@ -208,10 +208,11 @@ namespace eval ess {
     variable stim_cmd_seq
     if { ![info exists stim_cmd_seq] } { set stim_cmd_seq 0 }
     variable stim_cmd_maxlen 4096
-    # a command prefix called as `{*}$hook seq cmd swap t_ret` after each
-    # command that came back with a swap number; "" for none
+    # command prefixes, each called as `{*}$hook seq cmd swap t_ret flip`
+    # after every command that came back with a swap number (flip: stim2's
+    # wall-clock us, or null); a hook's error is ignored
     variable stim_cmd_hook
-    if { ![info exists stim_cmd_hook] } { set stim_cmd_hook "" }
+    if { ![info exists stim_cmd_hook] } { set stim_cmd_hook {} }
 
     # JSON string escaping WITHOUT any Tcl evaluation of the text. The
     # output is pure printable ASCII: besides being what JSON requires for
@@ -349,11 +350,13 @@ namespace eval ess {
         } err] } {
             catch { ess_warning "stim/cmd record $seq not written: $err" "stim" }
         }
-        # a listener for the swap each command landed on (the photo_verify
-        # block pairs '!' commands with the photodiode patch's changes)
+        # listeners for the swap each command landed on (photo_verify pairs
+        # '!' commands with the patch's changes; evt_display links events)
         variable stim_cmd_hook
-        if { $stim_cmd_hook ne "" && $swap ne "null" } {
-            catch { {*}$stim_cmd_hook $seq $cmd $swap $t_ret }
+        if { $swap ne "null" } {
+            foreach h $stim_cmd_hook {
+                catch { {*}$h $seq $cmd $swap $t_ret $flip }
+            }
         }
         return $reply
     }
@@ -1162,11 +1165,11 @@ namespace eval ess {
         dpointSetScript stim/photopatch ::ess::pv_change_dp
         dservAddExactMatch proc/photo/edge
         dpointSetScript proc/photo/edge ::ess::pv_edge_dp
-        set stim_cmd_hook ::ess::pv_cmd
+        if { "::ess::pv_cmd" ni $stim_cmd_hook } { lappend stim_cmd_hook ::ess::pv_cmd }
     }
     proc photo_verify_stop {} {
         variable stim_cmd_hook
-        if { $stim_cmd_hook eq "::ess::pv_cmd" } { set stim_cmd_hook "" }
+        set stim_cmd_hook [lsearch -all -inline -not -exact $stim_cmd_hook ::ess::pv_cmd]
         pv_stop
     }
     proc photo_obs_end {} {
@@ -1220,7 +1223,9 @@ namespace eval ess {
     #                  appear (the patch's first frame: over a scene as
     #                  bright as the patch it gives no edge, so it is never
     #                  dark); and when an edge took it, edge (its seq), lat10
-    #                  and lat50 (us from the flip)
+    #                  and lat50 (us from the flip), and light (its t50 on
+    #                  the dserv clock: the light's own time, whatever the
+    #                  flip's clock)
     #   photo/verify   the verdict (JSON, at each end_obs and file close):
     #                  verdict pass | fail | none; changes lit dark appear
     #                  extra pending; cmds cmds_lit cmds_dark unmarked (a '!'
@@ -1229,6 +1234,10 @@ namespace eval ess {
     #                  of lat50. pass: every change lit, no extra edge, no
     #                  unmarked command. Counts restart with each data file
     #                  (pv_new_count); the typical latencies carry over.
+    #
+    # A change is judged after its obs may have ended, so its photo/pair can
+    # land in the next obs or between obs in the file: a reader joins it by
+    # swap (df::add_display_times), never by the obs it is in.
     #
     # Self-contained: tests/test_ess_photo_verify.tcl evaluates the text
     # between these markers in `namespace eval ess`, with now and
@@ -1327,7 +1336,7 @@ namespace eval ess {
         }
     }
     # the stim_cmd_log hook: every command that came back with a swap
-    proc pv_cmd { seq cmd swap t_ret } {
+    proc pv_cmd { seq cmd swap t_ret args } {
         variable pv_on
         variable pv_cmds
         if { !$pv_on || [string index $cmd 0] ne "!" } return
@@ -1449,7 +1458,8 @@ namespace eval ess {
             set status [expr {$why == 1 ? "appear" : "lit"}]
             if { $why != 1 } { dict lappend pv_lat50 $edir $lat50 }
             append json ",\"status\":\"$status\",\"edge\":$eseq"
-            append json ",\"lat10\":$lat10,\"lat50\":$lat50\}"
+            append json ",\"lat10\":$lat10,\"lat50\":$lat50"
+            append json ",\"light\":[expr {wide(round($e50))}]\}"
         } else {
             set status [expr {$why == 1 ? "appear" : "dark"}]
             append json ",\"status\":\"$status\"\}"
@@ -1513,6 +1523,102 @@ namespace eval ess {
         return $s
     }
     # END photo_verify
+
+    # BEGIN evt_display
+    #
+    # Which frame showed an event. A system changes the display with a '!'
+    # command and puts the event that names it in the same action:
+    #
+    #     $sys add_action sample_on {
+    #         my sample_on                    ;# rmtSend "!sample_on"
+    #         ::ess::evt_put SAMPLE ON [now]
+    #     }
+    #
+    # so an event put in an action after a '!' command is linked to the
+    # action's last one. The event itself is unchanged (its time is still
+    # when it was put); beside it goes
+    #
+    #   ess/evt_display   JSON, stamped at the event's time, so it is in the
+    #                     event's obs: type subtype (as evt_put was given
+    #                     them), t (the event's time), and the command's seq
+    #                     (stim/cmd), swap, and flip (stim2's flip on the dserv
+    #                     clock, us; null where stim2 has no flip time). The
+    #                     light is not here: it comes 300 ms later as the
+    #                     swap's photo/pair, and df::add_display_times joins
+    #                     the two by swap.
+    #
+    # Events put before the action's first '!' command, in a transition or
+    # in a callback outside an action are not linked. evt_put_shown links
+    # one to the last '!' command sent anywhere, for a system that changes
+    # the display from a callback. Only a stim2 with the ACK1 header reports
+    # swaps (stim_cmd_log); with an older one nothing is linked.
+    #
+    # A flip from stim2's host is on its wall clock: ed_off (dserv clock
+    # minus this host's wall clock) puts it on dserv's, which is right when
+    # stim2 runs here or the two hosts share PTP. The light, from the
+    # photodiode, is on dserv's clock either way.
+    #
+    # Self-contained: tests/test_ess_evt_display.tcl evaluates it.
+    #
+    variable ed_action 0        ;# 1 while a state's action runs
+    variable ed_cmd {}          ;# the action's last '!' command {seq swap flip}
+    variable ed_last {}         ;# the last '!' command anywhere
+    variable ed_force 0         ;# evt_put_shown: link to ed_last
+    variable ed_off {}          ;# dserv clock - wall clock, us ("" unknown)
+
+    # System do_action sets ed_action 1 (and ed_cmd {}) around each action,
+    # inline; evt_put calls ed_after_put only when ed_cmd or ed_force is set
+    # the stim_cmd_log hook
+    proc ed_cmd_heard { seq cmd swap t_ret flip } {
+        if { [string index $cmd 0] ne "!" } return
+        variable ed_action
+        variable ed_last [list $seq $swap $flip]
+        if { $ed_action } { variable ed_cmd $ed_last }
+    }
+    # a data file opened: the clock offset again (both clocks are slewed
+    # together; only a step changes it)
+    proc ed_new_file { off } { variable ed_off $off }
+
+    # evt_put calls this after each event
+    proc ed_after_put { type subtype t } {
+        variable ed_cmd
+        variable ed_force
+        variable ed_last
+        if { $ed_cmd ne "" } {
+            set link $ed_cmd
+        } elseif { $ed_force && $ed_last ne "" } {
+            set link $ed_last
+        } else {
+            return
+        }
+        variable ed_off
+        lassign $link seq swap flip
+        if { $flip eq "null" || $flip eq "" || $ed_off eq "" } {
+            set f null
+        } else {
+            set f [expr {wide($flip) + $ed_off}]
+        }
+        set q [list \" {} \\ {}]
+        catch {
+            dservSetData ess/evt_display [expr {wide($t)}] 11 \
+                "\{\"type\":\"[string map $q $type]\",\"subtype\":\"[string map $q $subtype]\",\"t\":[expr {wide($t)}],\"seq\":$seq,\"swap\":$swap,\"flip\":$f\}"
+        }
+    }
+
+    # evt_put, linked to the last '!' command wherever it was sent
+    proc evt_put_shown { type subtype time args } {
+        variable ed_force 1
+        try {
+            evt_put $type $subtype $time {*}$args
+        } finally {
+            set ed_force 0
+        }
+    }
+
+    variable stim_cmd_hook
+    if { ![info exists stim_cmd_hook] } { set stim_cmd_hook {} }
+    if { "::ess::ed_cmd_heard" ni $stim_cmd_hook } { lappend stim_cmd_hook ::ess::ed_cmd_heard }
+    # END evt_display
 
     # BEGIN screen_snapshot
     #
@@ -2780,7 +2886,16 @@ oo::class create System {
 	}
 	dservSet ess/action_state ${state_name}_a
 	set state_time [now]
-	my ${state_name}_a
+	# events put after a '!' command in the action are linked to it (the
+	# evt_display block). Plain variable sets, no proc call: this is the
+	# state machine's hot path. An action that throws leaves ed_action
+	# set only until the next action clears it.
+	set ::ess::ed_cmd {}
+	set ::ess::ed_action 1
+	set r [my ${state_name}_a]
+	set ::ess::ed_action 0
+	set ::ess::ed_cmd {}
+	return $r
     }
     
     method do_transition {} {
@@ -5331,6 +5446,11 @@ namespace eval ess {
         }
         set ptype [dict get [set ${ss}::_evt_ptype_ids] $type]
         evtPut $type_id $subtype_id $time $ptype {*}$args
+        # the frame that showed it, when an action's '!' command did (the
+        # evt_display block); otherwise two variable reads
+        if { $::ess::ed_cmd ne "" || $::ess::ed_force } {
+            ed_after_put $type $subtype $time
+        }
     }
 
     # ----------------------------------------------------------------------
@@ -6082,6 +6202,11 @@ namespace eval ess {
         # light edges from the rig's photodiode (the photo block), when the
         # gear's `photo enabled` is on
         photo_log_match $filename
+
+        # the frame that showed each event put after a '!' command (the
+        # evt_display block): in the event's obs, every record, unbuffered
+        dservLoggerAddMatch $filename ess/evt_display 0 0 1
+        ed_new_file [dserv_wall_offset]
 
         # stim2's datapoint bindings (the stim_bind block): the table itself,
         # unbuffered and not obs-limited (set at configure, re-emitted by the

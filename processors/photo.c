@@ -79,8 +79,9 @@
  *                the turn
  *
  * The datapoint's TIMESTAMP is the first row's t50, rounded: an edge is
- * logged at the moment the light changed, so it lands in the obs it
- * belongs to however late the block carrying it arrived.
+ * stamped at the moment the light changed. Which obs it is in is another
+ * matter: readESS puts a record in the obs it was WRITTEN between, so an
+ * edge finished after ENDOBS lands in the next obs or between obs.
  *
  * BATCHED BLOCKS. A box sends `batch` scans a block to save traffic. The
  * times above do not depend on it -- every sample carries its own time --

@@ -163,6 +163,13 @@ if(DLSH_EXECUTABLE)
       COMMAND ${DLSH_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tests/test_df_recorded_streams.tcl"
   )
   set_property(TEST df_recorded_streams PROPERTY PASS_REGULAR_EXPRESSION "all checks passed")
+  # df::add_display_times: events' flip and light columns (the evt_display
+  # and photo_verify records, joined by swap)
+  add_test(
+      NAME df_display_times
+      COMMAND ${DLSH_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tests/test_df_display_times.tcl"
+  )
+  set_property(TEST df_display_times PROPERTY PASS_REGULAR_EXPRESSION "all checks passed")
 else()
   message(STATUS "dlsh not found -- skipping df_recorded_streams")
 endif()
@@ -181,7 +188,7 @@ endif()
 #
 find_program(TCLSH_EXECUTABLE NAMES tclsh tclsh9.0 tclsh8.6)
 if(TCLSH_EXECUTABLE)
-  foreach(t ess_dial ess_dial_dpad ess_dial_sectors ess_dial_threshold ess_roam ess_sling ess_binds ess_camera ess_resolve ess_live_params ess_boundary_stop ess_queue_hold ess_participant ess_transports ess_joystick_labels ess_workgroup_pair ess_sync_libs_gone ess_photo ess_photo_verify photopair extio_record extio_models settings rig_settings)
+  foreach(t ess_dial ess_dial_dpad ess_dial_sectors ess_dial_threshold ess_roam ess_sling ess_binds ess_camera ess_resolve ess_live_params ess_boundary_stop ess_queue_hold ess_participant ess_transports ess_joystick_labels ess_workgroup_pair ess_sync_libs_gone ess_photo ess_photo_verify ess_evt_display photopair extio_record extio_models settings rig_settings)
     add_test(
         NAME ${t}
         COMMAND ${TCLSH_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tests/test_${t}.tcl"

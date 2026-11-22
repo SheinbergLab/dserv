@@ -786,6 +786,158 @@ namespace eval df {
         if {[catch { add_recorded_streams $trials $g } err]} {
             puts "df: recorded streams not added to $context: $err"
         }
+        if {[catch { add_display_times $trials $g } err]} {
+            puts "df: display times not added to $context: $err"
+        }
+        return $trials
+    }
+
+    ########################################################################
+    # DISPLAY TIMES -> TRIALS
+    #
+    # When a system changes the display with a '!' command and puts an event
+    # in the same action, ESS logs which frame showed it (ess/evt_display,
+    # lib/ess-2.0.tm's evt_display block): the command's swap and flip. With
+    # the rig's photodiode patch on, photo/pair says when that swap's light
+    # came (photo_verify block). This step adds, for each event name N
+    # (type_subtype, lower case: sample_on) that was linked in the file:
+    #
+    #   N_flip     ms from obs onset: the flip of the frame that showed it,
+    #              as stim2 reported it (meaningful when stim2's host shares
+    #              dserv's clock: the same host, or PTP); NaN where stim2
+    #              has no flip time
+    #   N_light    ms from obs onset: when the light changed under the
+    #              photodiode (its 50% point); NaN when it never did, or no
+    #              patch was drawn
+    #
+    # one float per trial, the event's first occurrence in the obs (NaN where
+    # it did not occur), and
+    #
+    #   display_ok 1 every linked event in the trial was lit; 0 one was not
+    #              (dark: the frame never reached the panel; unmarked: no
+    #              patch change on its swap); -1 nothing to judge (no linked
+    #              event, or no photodiode in this file)
+    #
+    # The light is joined by swap from photo/pair wherever in the file it
+    # is: it is judged 300 ms after its flip, so it may have been logged
+    # after its obs ended. A column the extractor already wrote is kept.
+
+    # a flat JSON record's field ("" when absent)
+    proc _jfield {j k} {
+        if {[regexp "\"$k\":(-?\[0-9.eE+-\]+|null|\"\[^\"\]*\")" $j -> v]} {
+            return [string trim $v \"]
+        }
+        return ""
+    }
+
+    # every record of a string datapoint in the file, inside obs or not
+    proc _all_records {g name} {
+        set out {}
+        if {[dl_exists $g:<ds>$name]} {
+            foreach obs [dl_tcllist $g:<ds>$name] {
+                foreach r $obs { lappend out [string trimright $r \x00] }
+            }
+        }
+        if {[dl_exists $g:<session>$name]} {
+            set col $g:<session>$name
+            if {[dl_datatype $col] eq "list"} {
+                set recs [dl_tcllist [dl_unpack $col]]
+            } else {
+                set recs [dl_tcllist $col]
+            }
+            foreach r $recs { lappend out [string trimright $r \x00] }
+        }
+        return $out
+    }
+
+    proc _float_col {vals} {
+        dl_local c [dl_create float]
+        if {[llength $vals]} { dl_fromString [binary format f* $vals] $c }
+        return [dl_return $c]
+    }
+
+    proc add_display_times {trials g} {
+        if {![dl_exists $trials:obsid]} { return $trials }
+        if {![dl_exists $g:<ds>ess/evt_display]} { return $trials }
+        set obsid [dl_tcllist $trials:obsid]
+        set have [dg_tclListnames $trials]
+
+        # the lights, by swap
+        set pairs [dict create]
+        foreach j [_all_records $g photo/pair] {
+            set sw [_jfield $j swap]
+            if {$sw eq ""} continue
+            dict set pairs $sw [list [_jfield $j status] [_jfield $j light]]
+        }
+        set photo [expr {[dict size $pairs] ||
+                         [llength [_all_records $g photo/verify]]}]
+
+        set vals [dl_tcllist $g:<ds>ess/evt_display]
+        set tims [dl_tcllist $g:<dst>ess/evt_display]
+        set names {}
+        set repeated {}
+        set rows {}
+        foreach o $obsid {
+            set row [dict create]
+            set ok [expr {$photo ? 1 : -1}]
+            set any 0
+            foreach j [lindex $vals $o] dst [lindex $tims $o] {
+                set j [string trimright $j \x00]
+                set n [string tolower "[_jfield $j type]_[_jfield $j subtype]"]
+                set n [_colname $n]
+                if {[string match {[0-9]*} $n]} { set n evt_$n }
+                if {$n ni $names} { lappend names $n }
+                set any 1
+                set t [_jfield $j t]
+                set flip [_jfield $j flip]
+                set f_ms NaN
+                if {$flip ne "" && $flip ne "null"} {
+                    set f_ms [expr {$dst + ($flip - $t) / 1000.0}]
+                }
+                set l_ms NaN
+                set sw [_jfield $j swap]
+                if {[dict exists $pairs $sw]} {
+                    lassign [dict get $pairs $sw] status light
+                    if {$light ne "" && $light ne "null"} {
+                        set l_ms [expr {$dst + ($light - $t) / 1000.0}]
+                    }
+                    if {$status eq "dark"} { set ok 0 }
+                } elseif {$photo} {
+                    set ok 0                ;# unmarked: no change on its swap
+                }
+                if {[dict exists $row $n]} {
+                    if {$n ni $repeated} { lappend repeated $n }
+                    continue
+                }
+                dict set row $n [list $f_ms $l_ms]
+            }
+            if {!$any} { set ok -1 }
+            lappend rows [list $row $ok]
+        }
+        if {[llength $repeated]} {
+            puts "df: [join $repeated {, }] linked more than once in a trial:\
+                  the display columns hold the first"
+        }
+        foreach n $names {
+            set fl {}
+            set li {}
+            foreach r $rows {
+                set row [lindex $r 0]
+                if {[dict exists $row $n]} {
+                    lassign [dict get $row $n] f l
+                } else {
+                    set f NaN
+                    set l NaN
+                }
+                lappend fl $f
+                lappend li $l
+            }
+            if {"${n}_flip" ni $have} { dl_set $trials:${n}_flip [_float_col $fl] }
+            if {"${n}_light" ni $have} { dl_set $trials:${n}_light [_float_col $li] }
+        }
+        if {"display_ok" ni $have} {
+            dl_set $trials:display_ok [dl_ilist {*}[lmap r $rows { lindex $r 1 }]]
+        }
         return $trials
     }
 

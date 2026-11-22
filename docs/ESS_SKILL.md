@@ -655,6 +655,24 @@ Events are logged via `::ess::evt_put`:
 ::ess::evt_put REWARD MICROLITERS [now] [expr {int($juice_ml*1000)}]
 ```
 
+**Display events.** Change the display with a `!` command (`rmtSend
+"!sample_on"`, which returns after the swap that showed it) and put the
+event that names it after it, in the same action:
+
+```tcl
+$sys add_action sample_on {
+    my sample_on                        ;# rmtSend "!sample_on"
+    ::ess::evt_put SAMPLE ON [now]
+}
+```
+
+ESS then links the event to that frame (`ess/evt_display`), and
+conversion adds `sample_on_flip` and, with the rig's photodiode,
+`sample_on_light` and `display_ok` (`docs/datafiles.md`). Events put
+before the action's first `!` command, in a transition or in a callback
+are not linked; from a callback use `::ess::evt_put_shown`, which links
+to the last `!` command sent.
+
 Event lookup tables are published to dserv datapoints for use by vizconf
 and web clients:
 - `ess/evt_type_ids` — Tcl dict mapping type names to IDs
