@@ -1091,7 +1091,12 @@ function modelSection(b) {
   let boxRows = '';
   for (const d of st.diff.missing) boxRows += `<tr><td><code>${esc(d.leaf)}</code></td><td><b>${esc(d.value)}</b></td><td class="age">—</td></tr>`;
   for (const d of st.diff.differ)  boxRows += `<tr><td><code>${esc(d.leaf)}</code></td><td><b>${esc(d.want)}</b></td><td>${esc(d.have)}</td></tr>`;
-  for (const d of st.diff.extra)   boxRows += `<tr><td><code>${esc(d.leaf)}</code></td><td class="age">(not in model — left alone)</td><td>${esc(d.value)}</td></tr>`;
+  /* A model PICKED over the box's own is a candidate for Switch, which clears
+   * the extras; Try/Keep leave them alone. Say both, since both buttons show. */
+  const picked = modelPick.has(b);
+  const extraNote = picked ? '(not in model — left alone by Try/Keep, cleared by Switch)'
+                           : '(not in model — left alone)';
+  for (const d of st.diff.extra)   boxRows += `<tr><td><code>${esc(d.leaf)}</code></td><td class="age">${extraNote}</td><td>${esc(d.value)}</td></tr>`;
   const boxTable = boxRows ? `<table style="margin-top:8px"><tr><th>box setting</th><th>model</th><th>box now</th></tr>${boxRows}</table>` : '';
 
   const rigRows = st.rig.map(r => {
@@ -1109,6 +1114,8 @@ function modelSection(b) {
       title="Apply now, persisting nothing: the box settings live (a reboot undoes them), the rig settings as runtime overrides (Undo drops them).">Try</button>`);
   if (cur && (differs || rigRuntime || dirty.size)) btns.push(`<button onclick="modelApply('${esc(b)}','${esc(cur)}',true)"
       title="Make it stick: the box saves its configuration to flash and the rig settings are written to local/rig.tcl.">Keep</button>`);
+  if (cur && picked) btns.push(`<button onclick="modelSwitch('${esc(b)}','${esc(cur)}')"
+      title="Make this box EXACTLY ${esc(cur)}: its settings that are not in the model are cleared, the old model's rig settings are cleared, and all of it is saved. Calibration and the box's name are kept. Undo by switching back.">Switch</button>`);
   if (cur && rigRuntime) btns.push(`<button onclick="modelRevert('${esc(b)}','${esc(cur)}')"
       title="Drop the rig settings' runtime overrides. Unsaved box changes are undone by Reboot.">Undo try</button>`);
 
@@ -1253,6 +1260,22 @@ async function modelApply(b, name, keep) {
                                : `• the rig settings already match and are already saved`))) return;
   }
   const r = await conn.send(`extio_model_apply ${b} ${name}${keep ? ' -keep' : ''}`, 'extio');
+  setModelMsg(b, tclErr(r) ? `failed: ${tclErr(r)}` : String(r));
+  refreshDirty(b);
+}
+
+async function modelSwitch(b, name) {
+  const st = modelPick.get(b);
+  const was = (models.get(b) || {}).model || 'its current setup';
+  const n = st ? st.diff.extra.length : 0;
+  if (!confirm(`Switch ${b} from ${was} to ${name}?\n\n`
+             + `• the box becomes exactly ${name}`
+             + (n ? ` (${n} setting(s) not in ${name} are cleared)` : '') + ` and saves to flash\n`
+             + `• ${name}'s rig settings are written to local/rig.tcl\n`
+             + `• rig settings ${was} set, and ${name} does not, go back to their defaults\n\n`
+             + `Stick calibration and the box's name are kept. Undo: switch back.`)) return;
+  const r = await conn.send(`extio_model_switch ${b} ${name}`, 'extio');
+  modelPick.delete(b);
   setModelMsg(b, tclErr(r) ? `failed: ${tclErr(r)}` : String(r));
   refreshDirty(b);
 }

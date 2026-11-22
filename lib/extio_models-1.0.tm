@@ -153,6 +153,9 @@ proc ::extio_models::errors {} { variable errors; return $errors }
 
 proc ::extio_models::shape_leaf {leaf} {
     variable shape_rx
+    # ain/clk_ppm is a MEASUREMENT of this unit's crystal, like meta/cal/*:
+    # no model describes it, and a switch must never clear it.
+    if { $leaf eq "ain/clk_ppm" } { return 0 }
     return [regexp $shape_rx $leaf]
 }
 
@@ -285,6 +288,128 @@ model $name {
 "
 }
 
+# ---------------------------------------------------------------- switching
+#
+# SWITCH makes a box's shape EXACTLY a model: everything apply sets, plus every
+# shape leaf the model does not list put back to its default. apply never
+# removes (a hand-configured extra is a person's judgment); switch is the verb
+# for "this unit is now a different kind of box", where the old model's pins
+# would be floating inputs on whatever shield is plugged in now.
+#
+# The box has no "unset" for a leaf, only values its export omits as
+# defaults, so each extra is written to that default. Two can never get back
+# to the export's zero: decimate and batch clamp to >= 1. They only appear
+# while their group has channels, so they matter only when the new model
+# reuses that group index without listing them -- it then shows a `batch 1`.
+#
+# ORDER IS THE BOX'S BUDGET. Every rate-moving write is checked against the
+# box's 2000 blocks/s and sweep limits and REFUSED (silently, on the wire) if
+# it breaks them -- so raising ain/rate while the old groups still exist, or
+# turning a group continuous before its batch is set, is dropped. Hence:
+#   1. every existing analog group off (and its other fields to default)
+#   2. the other extras to default
+#   3. the model's non-group leaves that differ (ain/rate now has no groups)
+#   4. the model's analog groups, ALL leaves re-sent (step 1 cleared them):
+#      channels first (batch is capped by channel count), mode LAST
+#      (on-change costs at most 200 blocks/s; continuous costs rate/batch)
+#
+# Returns {writes {{leaf value} ...} kept {leaf ...}}: kept = extras with no
+# default to write (left as they are, and reported).
+
+set ::extio_models::reset_rules {
+    {^pin/[0-9]+/(mode|label)$}                    off
+    {^pin/[0-9]+/(debounce_ms|active_low|pulse_us)$} 0
+    {^group/[0-9]+/(pins|label)$}                  off
+    {^group/[0-9]+/(settle_ms|quiet)$}             0
+    {^ain/label/[0-9]+$}                           off
+    {^obs/pin$}                                    off
+    {^obs/mode$}                                   mirror
+    {^sync/pin$}                                   off
+    {^ain/enable$}                                 0
+    {^ain/oversample$}                             1
+    {^ain/pace$}                                   auto
+}
+
+proc ::extio_models::_reset_value {leaf} {
+    variable reset_rules
+    foreach {rx v} $reset_rules { if { [regexp $rx $leaf] } { return [list 1 $v] } }
+    return [list 0 ""]
+}
+
+proc ::extio_models::switch_plan {want have} {
+    set writes {}; set kept {}
+    set grp_rx {^ain/group/([0-9]+)/([a-z_]+)$}
+
+    # 1. every analog group the box has now: off, then its fields to default
+    set groups {}
+    dict for {leaf v} $have {
+        if { [regexp $grp_rx $leaf -> g f] && $g ni $groups } { lappend groups $g }
+    }
+    foreach g [lsort -integer $groups] {
+        lappend writes [list ain/group/$g/off 1]
+        foreach {f def} {mode onchange deadband 0 average 0 decimate 1 batch 1} {
+            if { [dict exists $have ain/group/$g/$f] } {
+                lappend writes [list ain/group/$g/$f $def]
+            }
+        }
+    }
+
+    # 2. other extras: groups before pins, so no group names a pin mid-reset
+    set extras {}
+    dict for {leaf v} $have {
+        if { [regexp $grp_rx $leaf] || ![shape_leaf $leaf] } continue
+        if { [dict exists $want $leaf] } continue
+        lappend extras $leaf
+    }
+    set ordered [concat [lsearch -all -inline -regexp $extras {^group/}] \
+                        [lsearch -all -inline -regexp -not $extras {^group/}]]
+    foreach leaf $ordered {
+        lassign [_reset_value $leaf] known v
+        if { $known } { lappend writes [list $leaf $v] } else { lappend kept $leaf }
+    }
+
+    # 3. the model's own non-group leaves, where the box differs
+    set gwant [dict create]
+    dict for {leaf w} $want {
+        if { [regexp $grp_rx $leaf -> g f] } { dict set gwant $g $f $w; continue }
+        if { [dict exists $have $leaf]
+             && [string trim [dict get $have $leaf]] eq [string trim $w] } continue
+        lappend writes [list $leaf $w]
+    }
+
+    # 4. the model's analog groups, in full: channels, the rest, mode last
+    foreach g [lsort -integer [dict keys $gwant]] {
+        set fl [dict get $gwant $g]
+        if { [dict exists $fl channels] } {
+            lappend writes [list ain/group/$g/channels [dict get $fl channels]]
+        }
+        dict for {f w} $fl {
+            if { $f in {channels mode} } continue
+            lappend writes [list ain/group/$g/$f $w]
+        }
+        if { [dict exists $fl mode] } {
+            lappend writes [list ain/group/$g/mode [dict get $fl mode]]
+        }
+    }
+    return [dict create writes $writes kept $kept]
+}
+
+# The rig half of a switch: knobs the OLD model set that the new one does not
+# mention, and that still hold the old model's value (a knob someone has since
+# changed by hand is theirs, not the model's). Pure: takes rig_diff rows of the
+# old model's knobs. Returns those rows.
+proc ::extio_models::rig_to_clear {old_rig new_rig old_rows} {
+    set keep {}
+    foreach item $new_rig { lappend keep [lrange $item 0 1] }
+    set out {}
+    foreach r $old_rows {
+        if { [list [dict get $r sub] [dict get $r key]] in $keep } continue
+        if { ![dict get $r ok] } continue
+        lappend out $r
+    }
+    return $out
+}
+
 # ====================================================== dserv side (extio interp)
 
 # The rig half reads the SHARED settings tree -- every interp's knobs are
@@ -331,8 +456,8 @@ proc ::extio_models::rig_put {sub key value interp persist} {
     return $r
 }
 
-proc ::extio_models::rig_clear {sub key interp} {
-    set cmd [list settings::clear $sub $key]
+proc ::extio_models::rig_clear {sub key interp args} {
+    set cmd [list settings::clear $sub $key {*}$args]
     if { $interp eq "" || $interp eq "dserv" } { return }
     if { $interp eq [_self] } { return [uplevel #0 $cmd] }
     set r [send $interp $cmd]
@@ -603,6 +728,85 @@ proc ::extio_models::revert {box model} {
     }
     dservAfter 1500 [list ::extio_models::judge $box]
     return "rig: $n runtime override(s) cleared"
+}
+
+# SWITCH <box> to <model>, and make it stick: the box's shape becomes exactly
+# the model (switch_plan), the box says what it now is (meta/model) and saves;
+# the new model's rig knobs persist to rig.tcl; the knobs the OLD model set
+# and the new one does not are cleared from runtime AND rig.tcl, so they fall
+# back to the rig's defaults (cookie-io-eye's `eye source analog` must not
+# outlive the stick it read). Calibrations stored on the box (meta/cal/*) and
+# its identity (name, network, dserv target) are untouched, so switching back
+# later finds the stick still calibrated.
+#
+# No TRY form on purpose: half a switch is a box with neither identity. The
+# undo is switching back.
+proc ::extio_models::switch_to {box model} {
+    variable live
+    set m [get $model]
+    if { ![info exists live($box)] } {
+        error "no config read from '$box' yet -- run extio_model_judge $box first"
+    }
+    set board ""
+    catch { set board [lindex [split [dservGet extio/$box/state/board] \x00] 0] }
+    set boards [dict get $m board]
+    if { [llength $boards] && ![_glob_any $boards $board] } {
+        error "model '$model' is for board $boards, not '$board'"
+    }
+    set have [parse_box $live($box)]
+
+    # what the box was: what it declares, else what it was judged to be
+    set from [declared $box]
+    if { $from eq "" } {
+        set st [verdict $box $board $have]
+        if { [dict get $st state] in {matches differs} } { set from [dict get $st model] }
+    }
+    if { $from ne "" && [catch { get $from }] } { set from "" }
+
+    set report {}
+    set plan [switch_plan [dict get $m box] $have]
+    set n 0; set refused {}
+    foreach w [dict get $plan writes] {
+        lassign $w leaf v
+        if { [catch { extio_cfg_set $box $leaf $v } e] } {
+            lappend refused "$leaf ($e)"
+        } else { incr n }
+    }
+    if { [dservExists extio/$box/state/meta/keys] } {
+        if { [catch { extio_cfg_set $box meta/model $model } e] } {
+            lappend refused "meta/model ($e)"
+        } else { incr n }
+    }
+    lappend report "box: $n write(s)[expr {$from ne {} ? " ($from -> $model)" : ""}]"
+    if { [llength [dict get $plan kept]] } {
+        lappend report "box KEPT (no default to write): [join [dict get $plan kept] {, }]"
+    }
+    if { [llength $refused] } { lappend report "box REFUSED: [join $refused {; }]" }
+    lappend report [extio_cfg_save $box]
+
+    set n 0; set refused {}
+    if { $from ne "" && $from ne $model } {
+        set old_rig [dict get [get $from] rig]
+        foreach r [rig_to_clear $old_rig [dict get $m rig] [rig_diff $old_rig]] {
+            if { [catch { rig_clear [dict get $r sub] [dict get $r key] \
+                              [dict get $r interp] -all } e] } {
+                lappend refused "clear [dict get $r sub] [dict get $r key] ($e)"
+            } else { incr n }
+        }
+    }
+    set cleared $n; set n 0
+    foreach r [rig_diff [dict get $m rig]] {
+        if { [dict get $r ok] && [dict get $r source] eq "file" } continue
+        if { [catch { rig_put [dict get $r sub] [dict get $r key] \
+                          [dict get $r want] [dict get $r interp] 1 } e] } {
+            lappend refused "[dict get $r sub] [dict get $r key] ($e)"
+        } else { incr n }
+    }
+    lappend report "rig: $n setting(s) persisted, $cleared of [expr {$from ne {} ? $from : {the old model}}]'s cleared"
+    if { [llength $refused] } { lappend report "rig REFUSED: [join $refused {; }]" }
+
+    dservAfter 4000 [list ::extio_models::judge $box]
+    return [join $report \n]
 }
 
 # Write a new model from a live box into the rig's local/models/.

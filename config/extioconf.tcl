@@ -3939,6 +3939,9 @@ dservSet extio/obs_autobind [extio_obs_autobind_get]
 #                         default both halves as a TRY; -keep saves to flash
 #                         and persists the knobs to local/rig.tcl
 #   extio_model_revert   <box> <model>              drop the rig TRY overrides
+#   extio_model_switch   <box> <model>              make the box EXACTLY <model>
+#                         (old model's pins/groups cleared, its rig knobs
+#                         cleared), saved and persisted; undo = switch back
 #   extio_model_snapshot <box> <name> ?desc?        new model in local/models/
 #   extio_model_reload                              re-read the model files
 package require extio_models
@@ -3953,6 +3956,7 @@ unset -nocomplain _e
 proc extio_model_judge    {box}             { extio_models::judge $box }
 proc extio_model_apply    {box model args}  { extio_models::apply $box $model {*}$args }
 proc extio_model_revert   {box model}       { extio_models::revert $box $model }
+proc extio_model_switch   {box model}       { extio_models::switch_to $box $model }
 proc extio_model_preview  {box model}       { extio_models::preview $box $model }
 proc extio_model_snapshot {box name {desc ""}} { extio_models::snapshot $box $name $desc }
 # ---- the box's host-owned key/value area (fw >= 0.4.0+105, box_meta.h) ------
