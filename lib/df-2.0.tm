@@ -814,9 +814,11 @@ namespace eval df {
     # it did not occur), and
     #
     #   display_ok 1 every linked event in the trial was lit; 0 one was not
-    #              (dark: the frame never reached the panel; unmarked: no
-    #              patch change on its swap); -1 nothing to judge (no linked
-    #              event, or no photodiode in this file)
+    #              (dark: the frame never reached the panel; late: it did,
+    #              at another latency than the session's, its _light still
+    #              filled; unmarked: no patch change on its swap); -1
+    #              nothing to judge (no linked event, or no photodiode in
+    #              this file)
     #
     # The light is joined by swap from photo/pair wherever in the file it
     # is: it is judged 300 ms after its flip, so it may have been logged
@@ -901,7 +903,7 @@ namespace eval df {
                     if {$light ne "" && $light ne "null"} {
                         set l_ms [expr {$dst + ($light - $t) / 1000.0}]
                     }
-                    if {$status eq "dark"} { set ok 0 }
+                    if {$status in {dark late}} { set ok 0 }
                 } elseif {$photo} {
                     set ok 0                ;# unmarked: no change on its swap
                 }

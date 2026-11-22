@@ -72,6 +72,19 @@ check "choices_on_light: joined from the next obs; unmarked is NaN" [col $t choi
 check "display_ok: obs 1 had a dark and an unmarked frame" [col $t display_ok] {1 1 0}
 dg_delete $t
 
+puts "a late light:"
+set g [make_obs]
+dl_set $g:<ds>photo/pair [dl_llist \
+    [dl_slist [pair 10 late 5026000]] \
+    [dl_slist [pair 20 lit 5405500]] \
+    [dl_slist [pair 50 lit 9008000] [pair 31 lit 8358000]]]
+set t [df::add_display_times [trials] $g]
+check "its light kept" [col $t sample_on_light] {28.0 126.0 NaN}
+check "  display_ok 0 for its trial" [col $t display_ok] {1 0 0}
+dg_delete $t
+dg_delete $g
+set g [make_obs]
+
 puts "a column the extractor wrote:"
 set t [trials]
 dl_set $t:sample_on_light [dl_flist 1 2 3]

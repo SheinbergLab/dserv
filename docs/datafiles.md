@@ -120,8 +120,8 @@ when that swap's light came (`docs/photo_processor.md`). In the same step,
 | column | each row |
 |---|---|
 | `N_flip` | ms from obs onset: the flip of the frame that showed it. Meaningful when stim2's host shares dserv's clock (the same host, or PTP); NaN where stim2 has no flip time (glfinish on a Mac) |
-| `N_light` | ms from obs onset: the light's 50% point under the photodiode. NaN when the frame never lit or no patch was drawn |
-| `display_ok` | 1 every linked event in the trial was lit; 0 one was dark or on a swap with no patch change; -1 nothing to judge (no linked event, or no photodiode in the file) |
+| `N_light` | ms from obs onset: the light's 50% point under the photodiode, late lights included. NaN when the frame never lit or no patch was drawn |
+| `display_ok` | 1 every linked event in the trial was lit; 0 one was dark, late (lit, its `N_light` filled, at another latency than the session's) or on a swap with no patch change; -1 nothing to judge (no linked event, or no photodiode in the file) |
 
 - One float per trial: the event's first occurrence in the obs (a line
   on stdout says when there were more), NaN where it did not occur.

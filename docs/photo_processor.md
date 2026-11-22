@@ -98,8 +98,14 @@ turn the two keys on, load it, run it.
 Each change is joined to its edge the way photopair does it (below):
 the median of the last 50 next-edge latencies of each direction is the
 typical latency, and a change takes the unused edge nearest its flip
-plus that, within ±4 ms. Each `!` command is joined to its change
-exactly, by swap number. A change is judged 300 ms after its flip,
+plus that, within ±4 ms. A change no edge matched there, with an unused
+edge of its direction within 100 ms (and before the next change of that
+direction could light), is `late`: the frame lit, at another latency.
+Three late in a row in a direction start that direction's typical
+latency again from those three, so a display that changes how it draws
+mid-session (a Mac's compositor stepping up 20 ms, 2026-11-22) costs
+three late changes, not every change after it. Each `!` command is
+joined to its change exactly, by swap number. A change is judged 300 ms after its flip,
 when nothing more can arrive for it (at the next record, end of obs or
 file close); an edge no change took by then is extra.
 
@@ -111,25 +117,27 @@ Two records go into the data file:
 |---|---|
 | `serial` `swap` `level` `why` `nacks` | from `stim/photopatch` |
 | `seqs` | the `!` commands on its swap (`stim/cmd` seq) |
-| `status` | `lit`; `dark`, no light came; `appear`, the patch's first frame (never dark: a scene as bright as the patch shows no edge) |
-| `edge` `lat10` `lat50` `light` | when lit: the edge's seq, us from the flip to its 10% and 50%, and its 50% point on the dserv clock |
+| `status` | `lit`; `late`, lit at another latency than the session's; `dark`, no light came; `appear`, the patch's first frame (never dark: a scene as bright as the patch shows no edge) |
+| `edge` `lat10` `lat50` `light` | when lit or late: the edge's seq, us from the flip to its 10% and 50%, and its 50% point on the dserv clock |
+| `expect` | when late: the typical lat50 it missed, us |
 
 **`photo/verify`**, the running verdict, at each end of obs and when the
-file closes (JSON): `verdict`, `changes lit dark appear extra pending`,
-`cmds cmds_lit cmds_dark unmarked`, and `rise` and `fall`, each `{n
-median sd min max}` of lat50 in ms. Counts restart with each data file.
+file closes (JSON): `verdict`, `changes lit late dark appear extra
+pending`, `cmds cmds_lit cmds_late cmds_dark unmarked`, and `rise` and
+`fall`, each `{n median sd min max}` of lat50 in ms, late ones included. Counts restart with each data file.
 The closing verdict also goes to the ESS log as one line.
 
 | verdict | |
 |---|---|
-| `pass` | every change lit, no extra edge, every `!` command on a change |
-| `fail` | a change gave no light (a frame stim2 acknowledged that the panel never showed, or two changes on adjacent frames that an LCD merged); an edge nothing asked for (a frame nobody commanded, or `settle_ms` too short for the panel's rise); or an `unmarked` `!` command, one whose swap changed no patch (marked mode only; also a `!` command that drew nothing, which stim2 logs) |
+| `pass` | every change lit, none late, no extra edge, every `!` command on a change |
+| `fail` | a change lit late (the display's latency moved by more than 4 ms); a change gave no light (a frame stim2 acknowledged that the panel never showed, or two changes on adjacent frames that an LCD merged); an edge nothing asked for (a frame nobody commanded, or `settle_ms` too short for the panel's rise); or an `unmarked` `!` command, one whose swap changed no patch (marked mode only; also a `!` command that drew nothing, which stim2 logs) |
 | `none` | no change judged yet |
 
 Read it live with `essctrl -s ess -c 'dservGet photo/verify'`.
 
-Not judged: the latency spread. `rise`/`fall` report it, and an
-unreliable display (latency that wanders by frames) shows there. The
+The latency spread is judged only through `late`: a light more than 4
+ms off the typical latency. `rise`/`fall` report the spread itself, and
+an unreliable display (latency that wanders by frames) shows there. The
 latency includes any constant offset between stim2's host clock and
 dserv's; on a rig without PTP between them, read only its spread.
 
@@ -413,7 +421,9 @@ pairing records on a clock it sets: a clean session (every change lit,
 both directions' latencies, each command's seq), a change judged only
 after the hold, an edge that arrives late or before its change's record,
 missed frames, a frame an LCD never showed between two others (the first
-change is not given the third's light), an extra edge, the patch
+change is not given the third's light), a light 20 ms off its latency
+(late), a latency that steps up 20 ms mid-session (three late each way,
+then lit, none dark or extra), an extra edge, the patch
 appearing, `!` commands with no change in marked and manual mode, two on
 one swap, and a new data file's counts.
 `tests/test_ess_obs_hold.tcl` (ctest `ess_obs_hold`) checks when ENDOBS

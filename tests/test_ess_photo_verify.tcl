@@ -153,6 +153,43 @@ set ::clk [expr {$t + $::off + 2000000}]
 check [statuses] {dark dark lit} "the first rise is not given the third's light"
 check [dict get $::ess::pv_n extra] 0 "  and no edge is left over"
 
+puts "a light at another latency: late"
+::ess::pv_start marked $::off
+set ::out {}
+run 10                                         ;# learn 8 / 3.4 ms
+set ::clk [expr {$::clk + 1000000}]
+::ess::pv_resolve $::clk
+set ::out {}
+set t 4000000
+change 600 $t 1
+::ess::pv_cmd 6000 "!late" 600 [expr {$t + $::off + 1200}]
+edge 1 [expr {$t + $::off + 28000}]              ;# 20 ms later than its 8
+set ::clk [expr {$t + $::off + 1000000}]
+::ess::pv_resolve $::clk
+set j [lindex [pairs] 0]
+check [list [jget $j status] [jget $j lat50] [jget $j expect] [jget $j light]] \
+    [list late 28000 8000 [expr {$t + $::off + 28000}]] "late: its light, its latency and the expected one"
+check [list [dict get $::ess::pv_n late] [dict get $::ess::pv_n extra] [dict get $::ess::pv_n cmds_late]] {1 0 1} \
+    "  counted late, the edge not extra, its command late"
+check [::ess::pv_verdict] fail "  verdict fail"
+check [string match "fail: 10 of 11 changes lit, 1 late;*" [::ess::pv_summary]] 1 "  said so"
+
+puts "the latency steps up 20 ms mid-session:"
+::ess::pv_start marked $::off
+set ::out {}
+run 20                                         ;# learn 8 / 3.4 ms
+set ::rise_us 28000
+set ::fall_us 23400
+run 12 {} 4000000 400
+set ::clk [expr {$::clk + 1000000}]
+::ess::pv_resolve $::clk
+set ::rise_us 8000
+set ::fall_us 3400
+check [lrange [statuses] 20 end] {late late late late late late lit lit lit lit lit lit} \
+    "three late in each direction, then lit at the new latency"
+check [list [dict get $::ess::pv_n lit] [dict get $::ess::pv_n late] [dict get $::ess::pv_n dark] [dict get $::ess::pv_n extra]] \
+    {26 6 0 0} "  none dark, no edge extra"
+
 puts "an edge no change explains:"
 ::ess::pv_start marked $::off
 set ::out {}

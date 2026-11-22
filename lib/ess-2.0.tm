@@ -1204,7 +1204,13 @@ namespace eval ess {
     #                     is its typical latency (the overall median while a
     #                     direction has fewer than 3); (2) the change takes
     #                     the unused edge nearest its flip plus that
-    #                     latency, within +-4 ms
+    #                     latency, within +-4 ms; (3) failing that, its first
+    #                     unused edge of its direction within 100 ms, before
+    #                     the next change of that direction could light: the
+    #                     light came, at another latency (late). Three late
+    #                     in a row in a direction: its typical latency starts
+    #                     again from those three (a display that changed how
+    #                     it draws mid-session)
     #   '!' command -> change    exactly, by swap: a '!' reply names the swap
     #                     that first showed the command, the swap
     #                     stim/photopatch names
@@ -1219,20 +1225,21 @@ namespace eval ess {
     # Out:
     #   photo/pair     one per change, at its flip (JSON, in the data file):
     #                  serial swap level why nacks; seqs, the '!' commands
-    #                  (stim/cmd seq) on its swap; status lit | dark |
-    #                  appear (the patch's first frame: over a scene as
+    #                  (stim/cmd seq) on its swap; status lit | late | dark
+    #                  | appear (the patch's first frame: over a scene as
     #                  bright as the patch it gives no edge, so it is never
     #                  dark); and when an edge took it, edge (its seq), lat10
     #                  and lat50 (us from the flip), and light (its t50 on
     #                  the dserv clock: the light's own time, whatever the
-    #                  flip's clock)
+    #                  flip's clock); late adds expect, the typical lat50
     #   photo/verify   the verdict (JSON, at each end_obs and file close):
-    #                  verdict pass | fail | none; changes lit dark appear
-    #                  extra pending; cmds cmds_lit cmds_dark unmarked (a '!'
-    #                  command on a swap with no change: counted in marked
-    #                  mode only); rise and fall {n median sd min max}, ms
-    #                  of lat50. pass: every change lit, no extra edge, no
-    #                  unmarked command. Counts restart with each data file
+    #                  verdict pass | fail | none; changes lit late dark
+    #                  appear extra pending; cmds cmds_lit cmds_late
+    #                  cmds_dark unmarked (a '!' command on a swap with no
+    #                  change: counted in marked mode only); rise and fall
+    #                  {n median sd min max}, ms of lat50, late ones
+    #                  included. pass: every change lit, none late or dark,
+    #                  no extra edge, no unmarked command. Counts restart with each data file
     #                  (pv_new_count); the typical latencies carry over.
     #
     # A change is judged after its obs may have ended, so its photo/pair can
@@ -1257,12 +1264,14 @@ namespace eval ess {
     variable pv_cmds {}                ;# {t_ret swap seq}
     variable pv_swaps [dict create]    ;# swap -> {status t}, judged changes
     variable pv_lats [dict create 1 {} -1 {}]   ;# first-pass latencies, us
+    variable pv_late_run [dict create 1 0 -1 0] ;# late in a row, by direction
     variable pv_lat50 [dict create 1 {} -1 {}]  ;# paired lat50s this file, us
     variable pv_n [dict create]
 
     proc pv_counts_zero {} {
-        variable pv_n [dict create changes 0 lit 0 dark 0 appear 0 extra 0 \
-                           cmds 0 cmds_lit 0 cmds_dark 0 unmarked 0]
+        variable pv_n [dict create changes 0 lit 0 late 0 dark 0 appear 0 \
+                           extra 0 cmds 0 cmds_lit 0 cmds_late 0 cmds_dark 0 \
+                           unmarked 0]
         variable pv_lat50 [dict create 1 {} -1 {}]
     }
     pv_counts_zero
@@ -1278,6 +1287,7 @@ namespace eval ess {
         variable pv_cmds {}
         variable pv_swaps [dict create]
         variable pv_lats [dict create 1 {} -1 {}]
+        variable pv_late_run [dict create 1 0 -1 0]
         pv_counts_zero
     }
     proc pv_stop {} {
@@ -1385,10 +1395,10 @@ namespace eval ess {
             if { $t >= $chz } { lappend keep $c ; continue }
             dict incr pv_n cmds
             if { [dict exists $pv_swaps $swap] } {
-                if { [lindex [dict get $pv_swaps $swap] 0] eq "dark" } {
-                    dict incr pv_n cmds_dark
-                } else {
-                    dict incr pv_n cmds_lit
+                switch -- [lindex [dict get $pv_swaps $swap] 0] {
+                    dark { dict incr pv_n cmds_dark }
+                    late { dict incr pv_n cmds_late }
+                    default { dict incr pv_n cmds_lit }
                 }
             } elseif { $pv_mode eq "marked" } {
                 dict incr pv_n unmarked
@@ -1411,6 +1421,8 @@ namespace eval ess {
         variable pv_n
         variable pv_swaps
         variable pv_cmds
+        variable pv_changes
+        variable pv_late_run
         lassign $c t dir serial swap why nacks level
         set ne [llength $pv_edges]
         # 1: its next edge of its direction, used or not: the latency
@@ -1444,6 +1456,27 @@ namespace eval ess {
                 if { $best < 0 || $d < $bd } { set best $k ; set bd $d }
             }
         }
+        # 3: lit, but not at its latency: its first unused edge, before the
+        # next change of its direction could have lit
+        set late 0
+        if { $best < 0 && $dir != 0 && [llength $all] } {
+            set lim [expr {$t + $pv_max_us}]
+            foreach n $pv_changes {
+                if { [lindex $n 1] == $dir } {
+                    set lim [expr {min($lim, [lindex $n 0] + $Ld($dir) - $pv_window_us)}]
+                    break
+                }
+            }
+            for { set k 0 } { $k < $ne } { incr k } {
+                lassign [lindex $pv_edges $k] e50 edir - - used
+                if { $e50 <= $t } continue
+                if { $e50 > $lim } break
+                if { $used || $edir != $dir } continue
+                set best $k
+                set late 1
+                break
+            }
+        }
         set seqs [lmap x $pv_cmds {
             if { [lindex $x 1] != $swap } continue
             lindex $x 2
@@ -1455,11 +1488,22 @@ namespace eval ess {
             lassign [lindex $pv_edges $best] e50 edir e10 eseq
             set lat50 [expr {round($e50 - $t)}]
             set lat10 [expr {round($e10 - $t)}]
-            set status [expr {$why == 1 ? "appear" : "lit"}]
+            set status [expr {$why == 1 ? "appear" : ($late ? "late" : "lit")}]
             if { $why != 1 } { dict lappend pv_lat50 $edir $lat50 }
             append json ",\"status\":\"$status\",\"edge\":$eseq"
             append json ",\"lat10\":$lat10,\"lat50\":$lat50"
+            if { $late } { append json ",\"expect\":[expr {round($Ld($edir))}]" }
             append json ",\"light\":[expr {wide(round($e50))}]\}"
+            if { $why != 1 } {
+                if { !$late } {
+                    dict set pv_late_run $edir 0
+                } elseif { [dict get [dict incr pv_late_run $edir] $edir] >= $pv_min_dir_n } {
+                    # the latency moved: start again from the late ones
+                    dict set pv_lats $edir [lrange [dict get $pv_lats $edir] \
+                                                end-[expr {$pv_min_dir_n - 1}] end]
+                    dict set pv_late_run $edir 0
+                }
+            }
         } else {
             set status [expr {$why == 1 ? "appear" : "dark"}]
             append json ",\"status\":\"$status\"\}"
@@ -1487,8 +1531,8 @@ namespace eval ess {
     proc pv_verdict {} {
         variable pv_n
         dict with pv_n {}
-        if { $lit + $dark == 0 } { return none }
-        expr {$dark || $extra || $unmarked ? "fail" : "pass"}
+        if { $lit + $late + $dark == 0 } { return none }
+        expr {$dark || $late || $extra || $unmarked ? "fail" : "pass"}
     }
     proc pv_json {} {
         variable pv_n
@@ -1511,8 +1555,9 @@ namespace eval ess {
         variable pv_n
         variable pv_lat50
         dict with pv_n {}
-        if { $lit + $dark == 0 } { return "" }
-        set s "[pv_verdict]: $lit of [expr {$lit + $dark}] changes lit"
+        if { $lit + $late + $dark == 0 } { return "" }
+        set s "[pv_verdict]: $lit of [expr {$lit + $late + $dark}] changes lit"
+        if { $late } { append s ", $late late" }
         if { $dark } { append s ", $dark dark" }
         if { $extra } { append s ", $extra extra edge[expr {$extra == 1 ? {} : {s}}]" }
         if { $unmarked } { append s ", $unmarked '!' commands not marked" }
