@@ -98,7 +98,8 @@ proc close_and_check { name data } {
         }
     }
     puts "Private logger test done."
-    exit
+    flush stdout
+    shutdown      ;# `exit` is refused in dserv's main interp
 }
 
 puts "End private logger test."

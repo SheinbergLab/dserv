@@ -145,7 +145,7 @@ func (s *server) handleAssign(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := assignTarget(req.IP, req.Name, req.NewName, req.DservIP, req.DservPort); err != nil {
-		httpErr(w, 502, err.Error())
+		httpErr(w, 502, "%s", err.Error())
 		return
 	}
 	writeJSON(w, map[string]any{"ok": true, "assigned": req.DservIP + ":" + strconv.Itoa(req.DservPort)})

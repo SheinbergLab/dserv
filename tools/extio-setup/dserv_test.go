@@ -58,7 +58,7 @@ func TestParseDservGet(t *testing.T) {
 
 /* ---- 128-byte frame building (mirrors dserv_msg.h / dpoint_to_binary) ---- */
 
-func buildFrame(t *testing.T, name string, ts uint64, dtype uint32, data []byte) []byte {
+func testFrame(t *testing.T, name string, ts uint64, dtype uint32, data []byte) []byte {
 	t.Helper()
 	if 2+len(name)+8+4+4+len(data) > frameLen-1 {
 		t.Fatalf("frame too big: %s", name)
@@ -82,12 +82,12 @@ func le32(v int32) []byte {
 }
 
 func TestParseFrameRoundTrip(t *testing.T) {
-	f := buildFrame(t, "extio/pico/state/di/13", 42, dtInt, le32(1))
+	f := testFrame(t, "extio/pico/state/di/13", 42, dtInt, le32(1))
 	ev, ok := parseFrame(f)
 	if !ok || ev.Name != "extio/pico/state/di/13" || ev.TS != 42 || ev.Val != int32(1) {
 		t.Fatalf("round trip failed: %+v ok=%v", ev, ok)
 	}
-	fs := buildFrame(t, "extio/pico/state/fw", 7, dtString, []byte("0.47.12"))
+	fs := testFrame(t, "extio/pico/state/fw", 7, dtString, []byte("0.47.12"))
 	ev, ok = parseFrame(fs)
 	if !ok || ev.Val != "0.47.12" {
 		t.Fatalf("string frame failed: %+v ok=%v", ev, ok)
@@ -156,8 +156,8 @@ func TestPushPipeline(t *testing.T) {
 		t.Fatalf("fresh link should have an empty snapshot, got %d", len(snap))
 	}
 
-	f1 := buildFrame(t, "extio/pico/state/di/13", 100, dtInt, le32(1))
-	f2 := buildFrame(t, "extio/pico/state/watchdog", 101, dtInt, le32(9))
+	f1 := testFrame(t, "extio/pico/state/di/13", 100, dtInt, le32(1))
+	f2 := testFrame(t, "extio/pico/state/watchdog", 101, dtInt, le32(9))
 	// split across writes mid-frame: TCP offers no message boundaries
 	c := pushFrames(t, d.lport, f1[:50], f1[50:], f2)
 	defer c.Close()
@@ -183,7 +183,7 @@ func TestPushResync(t *testing.T) {
 	ch, _ := d.Subscribe()
 	defer d.Unsubscribe(ch)
 
-	f := buildFrame(t, "extio/pico/state/di/2", 5, dtInt, le32(1))
+	f := testFrame(t, "extio/pico/state/di/2", 5, dtInt, le32(1))
 	c := pushFrames(t, d.lport, []byte("garbage-before-sync"), f)
 	defer c.Close()
 

@@ -13,6 +13,7 @@
 #include <fstream>
 #include <dirent.h>
 #include <unistd.h>
+#include <signal.h>
 #include <sys/stat.h>
 #include <poll.h>
 
@@ -2518,6 +2519,29 @@ static int getsubprocesses_command(ClientData clientData, Tcl_Interp *interp,
 }
 
 
+// `shutdown`: the main dserv interp's way out (its `exit` is refused).
+// Takes the same path as SIGTERM -- dserv.cpp's signal handler sets the
+// flag main() polls, and main() runs graceful_shutdown() in its own thread
+// -- so nothing is torn down from inside this interp's worker. Refused in a
+// subprocess, which has `exit`.
+static int dserv_shutdown_cmd(ClientData clientData, Tcl_Interp *interp,
+			      int objc, Tcl_Obj *const objv[])
+{
+  TclServer *tserv = (TclServer *) clientData;
+  if (tserv->name != "dserv" && tserv->name != "") {
+    Tcl_SetResult(interp,
+		  (char *)"shutdown stops the whole dserv: use exit to end this subprocess",
+		  TCL_STATIC);
+    return TCL_ERROR;
+  }
+  if (objc != 1) {
+    Tcl_WrongNumArgs(interp, 1, objv, "");
+    return TCL_ERROR;
+  }
+  kill(getpid(), SIGTERM);
+  return TCL_OK;
+}
+
 // Custom exit command for subprocess control
 static int subprocess_exit_cmd(ClientData clientData, Tcl_Interp *interp,
 			       int objc, Tcl_Obj *const objv[])
@@ -4114,6 +4138,8 @@ static int process_requests(TclServer *tserv)
 
   // Override the default exit command with our subprocess-aware version
   Tcl_CreateObjCommand(interp, "exit", subprocess_exit_cmd, 
+		       (ClientData)tserv, NULL);
+  Tcl_CreateObjCommand(interp, "shutdown", dserv_shutdown_cmd,
 		       (ClientData)tserv, NULL);
   
   /* process until receive a message saying we are done */

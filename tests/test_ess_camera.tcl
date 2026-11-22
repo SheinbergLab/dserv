@@ -71,7 +71,10 @@ set ::log {}
     {{"req_id":1,"frame_id":42,"timestamp_us":1700000000123456,"ok":1}}
 check "contract resolved"          {[::ess::camera_grab_done]}
 check "resolution ok"              {[::ess::camera_grab_ok]}
-check "DONE event stamped"         {[list evt CAMERA DONE 1] in $::log}
+# DONE carries the request id and the capture time, ms after the request
+# (a1737e96): here the frame's timestamp_us against the stubbed [now]
+set ::done_rel [expr {round((1700000000123456 - 123456789) / 1000.0)}]
+check "DONE event stamped"         {[list evt CAMERA DONE [list 1 $::done_rel]] in $::log}
 check "state machine woken"        {"do_update" in $::log}
 
 # ---- failure path ----

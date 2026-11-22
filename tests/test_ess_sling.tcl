@@ -297,14 +297,17 @@ approx "committed dx" $dx -2.5 1e-6
 check  "launches up-right" [expr {$vx > 0 && $vy > 0}] 1
 check  "release datapoint names touch" [lindex [split $::DP(ess/sling/release) ,] 5] touch
 
-puts "\n... the touch source switches the stim's drag bridge on, and deinit off:"
+puts "\n... the touch source switches the stim's drag bridge on; deinit clears the down flag:"
 set ::RMT {}
 ::ess::sling_init -sources touch -anchor {0 0}
 check "init asks the bridge for drags" [expr {[lsearch -glob $::RMT {*mouse_bridge_drag 1*}] >= 0}] 1
 set ::RMT {}
 ::ess::sling_deinit
-check "deinit switches drags off and clears the down flag" \
-    [expr {[lsearch -glob $::RMT {*mouse_bridge_drag 0*mouse_bridge_down 0*}] >= 0}] 1
+check "deinit clears the down flag" \
+    [expr {[lsearch -glob $::RMT {*mouse_bridge_down 0*}] >= 0}] 1
+# drags stay on: ESS logs them (TOUCH MOVE) for every system, not only the
+# sling (edad3560)
+check "  and leaves drags on" [lsearch -glob $::RMT {*mouse_bridge_drag 0*}] -1
 set ::RMT {}
 ::ess::sling_init -sources mouse
 check "a mouse-only sling never asks the bridge for drags" [lsearch -glob $::RMT {*mouse_bridge_drag 1*}] -1

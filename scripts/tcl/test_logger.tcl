@@ -11,13 +11,19 @@
 #
 #
 
-# add dlsh.zip to library path, so packages can be loaded into dserv
+# add dlsh.zip to library path, so packages can be loaded into dserv: the
+# one beside an installed dserv (/usr/local/dserv/dserv ->
+# /usr/local/dlsh/dlsh.zip), else the installed one (a build-tree dserv,
+# as ctest runs it)
 set dspath [file dir [info nameofexecutable]]
-set dlshlib [file join [file dirname $dspath] dlsh dlsh.zip]
-if [file exists $dlshlib] {
-    set base [file join [zipfs root] dlsh]
-    zipfs mount $dlshlib $base
-    set auto_path [linsert $auto_path [set auto_path 0] $base/lib]
+foreach dlshlib [list [file join [file dirname $dspath] dlsh dlsh.zip] \
+                     /usr/local/dlsh/dlsh.zip] {
+    if { [file exists $dlshlib] } {
+        set base [file join [zipfs root] dlsh]
+        zipfs mount $dlshlib $base
+        set auto_path [linsert $auto_path 0 $base/lib]
+        break
+    }
 }
 
 # the dslog::read function is found in the dslog package
@@ -97,8 +103,12 @@ proc close_and_process { name val } {
         }
     }
     puts "Checked $vals_count vals."
+    flush stdout
 
-    exit
+    # `exit` is refused in dserv's main interp; shutdown takes SIGTERM's
+    # clean path (without it the test ran until a live dserv's listeners
+    # gave up their ports, 30 s)
+    shutdown
 }
 
 do_test

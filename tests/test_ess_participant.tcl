@@ -316,5 +316,5 @@ set ::ess_queues::state(status) idle
 check "status"         $::ess_queues::state(status) idle
 
 if { $FAIL } { puts "FAILED"; exit 1 }
-puts "all participant tests passed"
+puts "all checks passed"
 exit 0
