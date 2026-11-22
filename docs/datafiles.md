@@ -133,8 +133,10 @@ when that swap's light came (`docs/photo_processor.md`). In the same step,
   ABORT`) gives both columns. An event before the action's first `!`
   command, in a transition or in a callback is not linked;
   `::ess::evt_put_shown` links one to the last `!` command sent anywhere.
-- The light is joined by swap from wherever its record is in the file:
-  it is judged 300 ms after its flip, often after ENDOBS.
+- The light is joined by swap from wherever its record is in the file.
+  ESS holds ENDOBS so a trial's lights are normally inside it
+  (`docs/photo_processor.md`, "The ENDOBS hold"), but a hold cut short
+  by an event leaves the last one outside.
 - A column the extractor already wrote is kept.
   `tests/test_df_display_times.tcl` covers each case.
 

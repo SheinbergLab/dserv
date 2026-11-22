@@ -75,8 +75,16 @@ foreach {name arglist} {
     juice_low {} juice_check {} arm_boundary_stop {reason}
     clear_boundary_stop {} set_hold {msg} clear_hold {}
     set_stop_after_trial {on} set_juice_gate {on} end_obs {{status 1}}
+    obs_end_checks {}
 } {
     proc ::ess::$name $arglist [pull_body proc $name]
+}
+# end_obs's ENDOBS hold (the obs_end_hold block) and the per-obs checks it
+# reads: no photodiode patch here, so never a hold, and no green lights
+proc ::ess::obs_end_hold_ms { t } { return 0 }
+namespace eval ess {
+    variable display_tlock 0
+    variable photo_enabled 0
 }
 # the namespace variables the section declares
 namespace eval ess {

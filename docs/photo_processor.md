@@ -133,8 +133,35 @@ unreliable display (latency that wanders by frames) shows there. The
 latency includes any constant offset between stim2's host clock and
 dserv's; on a rig without PTP between them, read only its spread.
 
-A `photo/pair` is written 300 ms after its flip, so it is often after
-its obs's ENDOBS in the file. Join it by swap, not by the obs it is in.
+### The ENDOBS hold
+
+A change is judged 300 ms after its flip, and its edge arrives after the
+frame. `readESS` puts a record in the obs it was written between, so a
+trial's last edge and `photo/pair` would land in the next obs. With the
+patch drawn, `end_obs` therefore holds the logged ENDOBS until the
+trial's last `!` command or patch change can be judged (300 ms after it,
+at most 400 ms), on a `dservAfter` timer. Everything else happens at
+once: the obs line, `ess/in_obs`, the trial boundary, the next state.
+Nothing in the state machine waits.
+
+- ENDOBS keeps `end_obs`'s time, so the obs is as long as it was.
+- Any event put during the hold writes ENDOBS first (BEGINOBS, a quit
+  callback's `SYSTEM_STATE STOPPED`, a file's `TIME CLOSE`), so ENDOBS is
+  still the obs's last event. Unloading the system writes it too. Either
+  way the timer is cancelled.
+- At the flush the pairing is brought up to date first, so the trial's
+  `photo/pair` records are in it, then ENDOBS, then `photo/verify` and the
+  green lights.
+- Data logged during the hold is in the obs with times after ENDOBS: an
+  obs-limited stream such as eye samples gains up to the hold's length
+  past the end, and a command sent between trials (`nexttrial`) is in
+  the trial before.
+- Without the patch, or with nothing left to judge, `end_obs` writes
+  ENDOBS at once, as it always has.
+
+A hold cut short by an event can still leave the last light outside its
+obs. Conversion joins `photo/pair` by swap, so it doesn't depend on
+where the record is.
 
 ## Events at their light
 
@@ -188,9 +215,9 @@ The times come from the box's own sample times (block stamp + k x
 interval), the clock the obs boundaries and eye samples are on. The
 datapoint's timestamp is `t50`. That doesn't decide which obs it is in:
 `readESS` puts each record in the obs it was written between, so an edge
-the last block of a trial finished after ENDOBS is in the next obs (or
-between obs). Read edges by their time, as photopair does, or join by
-swap through `photo/pair`, as conversion does.
+finished after ENDOBS is in the next obs (or between obs). With the patch
+drawn, ESS holds ENDOBS until the trial's light is in (see "The ENDOBS
+hold"); otherwise read edges by their time, as photopair does.
 
 **Batched blocks** change none of that: they only delay when an edge is
 published (after the block that finishes it). dserv takes one output per
@@ -389,6 +416,10 @@ missed frames, a frame an LCD never showed between two others (the first
 change is not given the third's light), an extra edge, the patch
 appearing, `!` commands with no change in marked and manual mode, two on
 one swap, and a new data file's counts.
+`tests/test_ess_obs_hold.tcl` (ctest `ess_obs_hold`) checks when ENDOBS
+is held, that the timer writes the trial's `photo/pair` before it, that an
+event meanwhile writes it first and cancels the timer, and that a stale
+timer does nothing.
 `tests/test_ess_evt_display.tcl` (ctest `ess_evt_display`) checks which
 events are linked to which command, and `tests/test_df_display_times.tcl`
 (ctest `df_display_times`) the columns conversion makes from them.

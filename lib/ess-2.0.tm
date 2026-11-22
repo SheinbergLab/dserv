@@ -3643,6 +3643,8 @@ namespace eval ess {
     proc unload_system {} {
         variable current
         set sname $current(system)
+        # a held ENDOBS, while the system that names it is still here
+        catch { obs_end_flush }
 
         if {$current(open_system)} {
             set s [find_system $sname]
@@ -5153,6 +5155,95 @@ namespace eval ess {
         incr current(trialid)
     }
 
+    # BEGIN obs_end_hold
+    #
+    # Holding the logged ENDOBS until the trial's light has been judged. The
+    # photodiode pairing (photo_verify) judges a patch change 300 ms after
+    # its flip, and the light's edge itself arrives after the frame. readESS
+    # places a record in the obs it was WRITTEN between, so without a hold
+    # a trial's last edge and photo/pair are in the next obs (or between
+    # obs). So end_obs, on a rig with the patch drawn and a '!' command or
+    # patch change still to be judged, does everything at once (the obs
+    # line, in_obs, ess/in_obs, the trial boundary) except the ENDOBS
+    # event, which it holds:
+    #
+    #   for as long as the newest pending change or '!' command needs
+    #   (pv_hold_us after it, +5 ms), at most obs_end_hold_cap_ms, by a
+    #   dservAfter timer: nothing in the state machine waits;
+    #   stamped at end_obs's time, so the obs is as long as it was;
+    #   written early, before it, by any evt_put meanwhile (BEGINOBS, a quit
+    #   callback's SYSTEM_STATE STOPPED, file_close's TIME CLOSE), so ENDOBS
+    #   is still the obs's last event; and by unload_system.
+    #
+    # At the flush: the pairing judged as of now (its photo/pair records go
+    # in before ENDOBS), then ENDOBS, then the per-obs checks (photo/verify,
+    # the green lights). Data logged during the hold lands in the obs with
+    # times after ENDOBS: an obs-limited stream (eye samples) gains up to
+    # the hold's length past the end. With no patch, or nothing pending,
+    # end_obs is exactly as before.
+    #
+    # Self-contained apart from the photo_verify block's variables:
+    # tests/test_ess_obs_hold.tcl evaluates both.
+    #
+    variable obs_end_held {}            ;# {status t_end token after_id}
+    variable obs_end_token 0
+    variable obs_end_hold_cap_ms 400
+
+    # how long to hold an ENDOBS at t_end, ms; 0: write it now
+    proc obs_end_hold_ms { t_end } {
+        variable pv_on
+        if { !$pv_on } { return 0 }
+        variable pv_changes
+        variable pv_cmds
+        variable pv_hold_us
+        variable obs_end_hold_cap_ms
+        set last 0
+        foreach c [concat $pv_changes $pv_cmds] {
+            set t [lindex $c 0]
+            if { $t <= $t_end && $t > $last } { set last $t }
+        }
+        if { !$last } { return 0 }
+        set ms [expr {int(ceil(($last + $pv_hold_us - [now]) / 1000.0)) + 5}]
+        if { $ms <= 5 } { return 0 }
+        expr {min($ms, $obs_end_hold_cap_ms)}
+    }
+
+    # hold it; obs_end_flush writes it
+    proc obs_end_hold { status t_end ms } {
+        variable obs_end_token
+        set tok [incr obs_end_token]
+        set id ""
+        catch { set id [dservAfter $ms [list ::ess::obs_end_flush $tok]] }
+        variable obs_end_held [list $status $t_end $tok $id]
+        if { $id eq "" } { obs_end_flush }      ;# no timer here: at once
+    }
+
+    # write the held ENDOBS: from its timer (with its token), or early from
+    # evt_put / unload_system (no token: whatever is held)
+    proc obs_end_flush { {token ""} } {
+        variable obs_end_held
+        if { $obs_end_held eq "" } return
+        lassign $obs_end_held status t_end tok id
+        if { $token ne "" && $token != $tok } return
+        set obs_end_held {}
+        if { $token eq "" && $id ne "" } { catch { dservAfterCancel $id } }
+        variable pv_on
+        if { $pv_on } { catch { pv_resolve [now] } }
+        ::ess::evt_put ENDOBS $status $t_end
+        obs_end_checks
+    }
+    # END obs_end_hold
+
+    # once a trial, after its ENDOBS
+    proc obs_end_checks {} {
+        # the Display++ trigger's green light (off: one test)
+        variable display_tlock
+        if { $display_tlock } { catch { display_tlock_health } }
+        # ... and the photodiode's, with this trial's verdict
+        variable photo_enabled
+        if { $photo_enabled } { catch { photo_obs_end } }
+    }
+
     proc end_obs {{status 1}} {
         variable in_obs
         variable obs_pin
@@ -5178,15 +5269,19 @@ namespace eval ess {
             catch {dservSet $io_class/$obs_sched_box/cmd/do/$obs_sched_pin 0}
         }
 
-        ::ess::evt_put ENDOBS $status [now]
+        # ENDOBS now, or held until the trial's light is judged (the
+        # obs_end_hold block): everything else happens now either way
+        set t_end [now]
+        set hold_ms 0
+        catch { set hold_ms [obs_end_hold_ms $t_end] }
+        if { $hold_ms > 0 } {
+            obs_end_hold $status $t_end $hold_ms
+        } else {
+            ::ess::evt_put ENDOBS $status $t_end
+        }
         set in_obs 0
         dservSet ess/in_obs 0
-        # the Display++ trigger's green light, once a trial (off: one test)
-        variable display_tlock
-        if { $display_tlock } { catch { display_tlock_health } }
-        # ... and the photodiode's
-        variable photo_enabled
-        if { $photo_enabled } { catch { photo_obs_end } }
+        if { $hold_ms <= 0 } { obs_end_checks }
         trial_boundary
     }
 
@@ -5445,6 +5540,9 @@ namespace eval ess {
             }
         }
         set ptype [dict get [set ${ss}::_evt_ptype_ids] $type]
+        # a held ENDOBS goes first: it stays the obs's last event (the
+        # obs_end_hold block)
+        if { $::ess::obs_end_held ne "" } { obs_end_flush }
         evtPut $type_id $subtype_id $time $ptype {*}$args
         # the frame that showed it, when an action's '!' command did (the
         # evt_display block); otherwise two variable reads
