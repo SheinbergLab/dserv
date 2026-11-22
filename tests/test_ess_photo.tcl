@@ -62,6 +62,14 @@ set b [string first "    # BEGIN photo\n" $src]
 set e [string first "    # END photo\n" $src]
 if { $b < 0 || $e < 0 } { error "no photo block in ess-2.0.tm" }
 namespace eval ::ess [string range $src $b $e]
+# ... and the pairing it starts (test_ess_photo_verify.tcl tests it)
+set b [string first "    # BEGIN photo_verify\n" $src]
+set e [string first "    # END photo_verify\n" $src]
+namespace eval ::ess [string range $src $b $e]
+proc dservSetData { args } {}
+proc dservAddExactMatch { name } { lappend ::subs $name }
+proc dpointSetScript { name script } { lappend ::subs $script }
+set ::ess::stim_cmd_hook ""
 
 puts "pushes:"
 set ::sent {}
@@ -101,8 +109,8 @@ set ::matches {}
 check [::ess::photo_log_match f.ess] 0 "off: not logged"
 ::ess::set_photo_enabled 1
 check [::ess::photo_log_match f.ess] 1 "on: logged"
-check $::matches {{f.ess proc/photo/edge 0 0 1} {f.ess ess/dserv_wall_us 0 0 1}} \
-    "every edge, not obs-limited, unbuffered; and the clock offset"
+check $::matches {{f.ess proc/photo/edge 0 0 1} {f.ess ess/dserv_wall_us 0 0 1} {f.ess photo/pair 0 0 1} {f.ess photo/verify 0 0 1}} \
+    "every edge, not obs-limited, unbuffered; the clock offset; the pairs and verdict"
 check [dict exists $::dp ess/dserv_wall_us] 1 "  the offset set after its match"
 check [expr {abs([dict get $::dp ess/dserv_wall_us] - $::true_off) < 2000}] 1 \
     "  dserv minus wall, to the bracket ([dict get $::dp ess/dserv_wall_us] vs $::true_off)"
@@ -136,8 +144,13 @@ check [$::stim eval { set calls }] \
     "  its settings, then on"
 check [llength $::rmt] 1 "  one rmtSend, so the data file records it"
 check $::ess::warned {} "  no warning"
+check [list $::ess::pv_on $::ess::pv_mode $::ess::stim_cmd_hook] {1 toggle ::ess::pv_cmd} \
+    "  its changes paired with edges, in its mode, '!' commands heard"
+check $::subs {stim/photopatch ::ess::pv_change_dp proc/photo/edge ::ess::pv_edge_dp} \
+    "  stim/photopatch and proc/photo/edge subscribed"
 $::stim eval { rename photopatch {} }
 check [::ess::stim_photopatch_enable] -1 "a stim2 without the module: -1"
+check [list $::ess::pv_on $::ess::stim_cmd_hook] {0 {}} "  pairing stopped"
 check [llength $::ess::warned] 1 "  and a warning"
 interp delete $::stim
 check [catch { ::ess::photo_patch_size_norm 0 }] 1 "size 0 refused"

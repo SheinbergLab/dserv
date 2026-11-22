@@ -208,6 +208,10 @@ namespace eval ess {
     variable stim_cmd_seq
     if { ![info exists stim_cmd_seq] } { set stim_cmd_seq 0 }
     variable stim_cmd_maxlen 4096
+    # a command prefix called as `{*}$hook seq cmd swap t_ret` after each
+    # command that came back with a swap number; "" for none
+    variable stim_cmd_hook
+    if { ![info exists stim_cmd_hook] } { set stim_cmd_hook "" }
 
     # JSON string escaping WITHOUT any Tcl evaluation of the text. The
     # output is pure printable ASCII: besides being what JSON requires for
@@ -344,6 +348,12 @@ namespace eval ess {
                 [stim_cmd_json $seq $cmd $t_send $t_ret $dq $done $swap $flip $status]
         } err] } {
             catch { ess_warning "stim/cmd record $seq not written: $err" "stim" }
+        }
+        # a listener for the swap each command landed on (the photo_verify
+        # block pairs '!' commands with the photodiode patch's changes)
+        variable stim_cmd_hook
+        if { $stim_cmd_hook ne "" && $swap ne "null" } {
+            catch { {*}$stim_cmd_hook $seq $cmd $swap $t_ret }
         }
         return $reply
     }
@@ -915,7 +925,14 @@ namespace eval ess {
         # the offset that puts stim2's flip times (stim/photopatch,
         # stim/frame: CLOCK_REALTIME) on the dserv clock the edges are on
         dservLoggerAddMatch $filename ess/dserv_wall_us 0 0 1
-        dservSet ess/dserv_wall_us [dserv_wall_offset]
+        set off [dserv_wall_offset]
+        dservSet ess/dserv_wall_us $off
+        # each patch change paired with its light, and the verdict
+        # (photo_verify): counted afresh for each file
+        dservLoggerAddMatch $filename photo/pair 0 0 1
+        dservLoggerAddMatch $filename photo/verify 0 0 1
+        variable pv_on
+        if { $pv_on } { pv_new_count $off }
         catch { photo_health }
         return 1
     }
@@ -998,6 +1015,7 @@ namespace eval ess {
         variable photo_patch_stim
         if { !$photo_enabled || !$photo_patch } {
             set photo_patch_stim 0
+            photo_verify_stop
             catch { photo_health }      ;# a system load: look again
             return 0
         }
@@ -1005,9 +1023,14 @@ namespace eval ess {
  [list photopatch set {*}$photo_patch_opts] ; photopatch on } else { expr {-1} }"]
         if { [string trim $r] eq "1" } {
             set photo_patch_stim 1
+            # every change of it paired with its light (photo_verify)
+            if { [catch { photo_verify_start } err] } {
+                ::ess::ess_warning "photo: changes not paired with edges: $err" "photo"
+            }
             catch { photo_health }
             return 1
         }
+        photo_verify_stop
         set photo_patch_stim -1
         catch { photo_health }
         ::ess::ess_warning "photo patch is on, but stim2 did not draw it\
@@ -1112,6 +1135,10 @@ namespace eval ess {
  change: is the diode over the patch?"
                 } else {
                     set h "ok reading $gname, $n_edges edges; the patch's changes answered"
+                    # and how well, this file (photo_verify)
+                    set s ""
+                    catch { set s [pv_summary] }
+                    if { $s ne "" } { set h "ok reading $gname; $s" }
                 }
             } else {
                 set h "ok reading $gname, $n_edges edges"
@@ -1123,7 +1150,369 @@ namespace eval ess {
         }
         return $h
     }
+
+    # The photo_verify block's three moments (below), with the processor's
+    # settings: a system load drew the patch (stim_photopatch_enable), a
+    # data file opened (photo_log_match), an obs ended, the file closes.
+    proc photo_verify_start {} {
+        variable photo_patch_opts
+        variable stim_cmd_hook
+        pv_start [dict get $photo_patch_opts -mode] [dserv_wall_offset]
+        dservAddExactMatch stim/photopatch
+        dpointSetScript stim/photopatch ::ess::pv_change_dp
+        dservAddExactMatch proc/photo/edge
+        dpointSetScript proc/photo/edge ::ess::pv_edge_dp
+        set stim_cmd_hook ::ess::pv_cmd
+    }
+    proc photo_verify_stop {} {
+        variable stim_cmd_hook
+        if { $stim_cmd_hook eq "::ess::pv_cmd" } { set stim_cmd_hook "" }
+        pv_stop
+    }
+    proc photo_obs_end {} {
+        variable pv_on
+        if { $pv_on } { pv_resolve [now] ; pv_publish }
+        photo_health
+    }
+    # before the logger closes: the file's verdict goes in it, and the log
+    proc photo_file_close {} {
+        variable pv_on
+        if { !$pv_on } return
+        pv_resolve [now]
+        pv_publish
+        set s [pv_summary]
+        if { $s ne "" } { ess_info "photo: $s" "photo" }
+    }
     # END photo
+
+    # BEGIN photo_verify
+    #
+    # Each change of the photodiode's patch paired with its light, as the
+    # session runs: the online half of tools/photopair (docs/
+    # photo_processor.md, "Checking a system"). stim2 changes the patch on
+    # every frame a '!' command (or a swap tag) lands on (marked mode) and
+    # reports it as stim/photopatch {swap flip_wall level serial ntags why
+    # nacks}; the photo processor reports each light edge as
+    # proc/photo/edge (rows of ten: dir t50 t10 ...). Here:
+    #
+    #   change -> edge    as photopair pairs them: (1) each change's next
+    #                     edge of its direction, within 100 ms, gives a
+    #                     latency; the median of the last 50 of a direction
+    #                     is its typical latency (the overall median while a
+    #                     direction has fewer than 3); (2) the change takes
+    #                     the unused edge nearest its flip plus that
+    #                     latency, within +-4 ms
+    #   '!' command -> change    exactly, by swap: a '!' reply names the swap
+    #                     that first showed the command, the swap
+    #                     stim/photopatch names
+    #
+    # A change is judged once nothing more can arrive for it, 300 ms after
+    # its flip (pv_hold_us), at the next record, end_obs or file close; an
+    # edge no change took by then is extra. A flip is put on the dserv clock
+    # with the offset taken at the start (pv_off); where stim2 has no flip
+    # time (glfinish on a Mac) the record's arrival is used. A constant
+    # error in either only moves the typical latency.
+    #
+    # Out:
+    #   photo/pair     one per change, at its flip (JSON, in the data file):
+    #                  serial swap level why nacks; seqs, the '!' commands
+    #                  (stim/cmd seq) on its swap; status lit | dark |
+    #                  appear (the patch's first frame: over a scene as
+    #                  bright as the patch it gives no edge, so it is never
+    #                  dark); and when an edge took it, edge (its seq), lat10
+    #                  and lat50 (us from the flip)
+    #   photo/verify   the verdict (JSON, at each end_obs and file close):
+    #                  verdict pass | fail | none; changes lit dark appear
+    #                  extra pending; cmds cmds_lit cmds_dark unmarked (a '!'
+    #                  command on a swap with no change: counted in marked
+    #                  mode only); rise and fall {n median sd min max}, ms
+    #                  of lat50. pass: every change lit, no extra edge, no
+    #                  unmarked command. Counts restart with each data file
+    #                  (pv_new_count); the typical latencies carry over.
+    #
+    # Self-contained: tests/test_ess_photo_verify.tcl evaluates the text
+    # between these markers in `namespace eval ess`, with now and
+    # dservSetData stood in, and feeds it records.
+    #
+    variable pv_on 0
+    variable pv_mode marked
+    variable pv_off 0
+    variable pv_hold_us 300000
+    variable pv_cmd_hold_us 400000     ;# a change is judged before its commands
+    variable pv_max_us 100000
+    variable pv_window_us 4000
+    variable pv_keep 50
+    variable pv_min_dir_n 3
+    variable pv_changes {}             ;# {t dir serial swap why nacks level}
+    variable pv_edges {}               ;# {t50 dir t10 seq used}
+    variable pv_cmds {}                ;# {t_ret swap seq}
+    variable pv_swaps [dict create]    ;# swap -> {status t}, judged changes
+    variable pv_lats [dict create 1 {} -1 {}]   ;# first-pass latencies, us
+    variable pv_lat50 [dict create 1 {} -1 {}]  ;# paired lat50s this file, us
+    variable pv_n [dict create]
+
+    proc pv_counts_zero {} {
+        variable pv_n [dict create changes 0 lit 0 dark 0 appear 0 extra 0 \
+                           cmds 0 cmds_lit 0 cmds_dark 0 unmarked 0]
+        variable pv_lat50 [dict create 1 {} -1 {}]
+    }
+    pv_counts_zero
+
+    # start pairing afresh: the patch's mode, and dserv's clock minus the
+    # stim2 host's wall clock (us)
+    proc pv_start { mode off } {
+        variable pv_on 1
+        variable pv_mode $mode
+        variable pv_off $off
+        variable pv_changes {}
+        variable pv_edges {}
+        variable pv_cmds {}
+        variable pv_swaps [dict create]
+        variable pv_lats [dict create 1 {} -1 {}]
+        pv_counts_zero
+    }
+    proc pv_stop {} {
+        variable pv_on 0
+        variable pv_changes {}
+        variable pv_edges {}
+        variable pv_cmds {}
+        variable pv_swaps [dict create]
+    }
+    # a new data file: its own counts, a fresh clock offset
+    proc pv_new_count { off } {
+        variable pv_off $off
+        pv_counts_zero
+    }
+
+    # ---- input ----
+    proc pv_change_dp { dpoint data } {
+        variable pv_on
+        if { !$pv_on } return
+        set t_recv [now]
+        catch { set t_recv [dservTimestamp $dpoint] }
+        pv_change $data $t_recv
+        pv_resolve [now]
+    }
+    proc pv_edge_dp { dpoint data } {
+        variable pv_on
+        if { !$pv_on } return
+        pv_edge $data
+        pv_resolve [now]
+    }
+    # stim/photopatch's values, and when the record arrived
+    proc pv_change { rec t_recv } {
+        variable pv_changes
+        variable pv_off
+        lassign $rec swap wall level serial ntags why nacks
+        if { $nacks eq "" } { set nacks 0 }
+        set t [expr {$wall > 0 ? wide($wall) + $pv_off : wide($t_recv)}]
+        set dir [expr {$why == 1 ? 0 : ($level ? 1 : -1)}]
+        lappend pv_changes [list $t $dir $serial $swap $why $nacks $level]
+        if { [llength $pv_changes] > 1 && $t < [lindex $pv_changes end-1 0] } {
+            set pv_changes [lsort -integer -index 0 $pv_changes]
+        }
+    }
+    # proc/photo/edge's values: rows of ten
+    proc pv_edge { vals } {
+        variable pv_edges
+        set n [llength $pv_edges]
+        for { set i 0 } { $i + 10 <= [llength $vals] } { incr i 10 } {
+            lassign [lrange $vals $i [expr {$i + 2}]] dir t50 t10
+            lappend pv_edges [list $t50 [expr {$dir > 0 ? 1 : -1}] $t10 \
+                                  [expr {int([lindex $vals [expr {$i + 7}]])}] 0]
+        }
+        if { $n && [llength $pv_edges] > $n &&
+             [lindex $pv_edges $n 0] < [lindex $pv_edges $n-1 0] } {
+            set pv_edges [lsort -real -index 0 $pv_edges]
+        }
+    }
+    # the stim_cmd_log hook: every command that came back with a swap
+    proc pv_cmd { seq cmd swap t_ret } {
+        variable pv_on
+        variable pv_cmds
+        if { !$pv_on || [string index $cmd 0] ne "!" } return
+        lappend pv_cmds [list $t_ret $swap $seq]
+    }
+
+    # ---- judging ----
+    proc pv_median { l } {
+        set l [lsort -real $l]
+        set n [llength $l]
+        if { !$n } { return {} }
+        if { $n % 2 } { return [lindex $l [expr {$n / 2}]] }
+        expr {([lindex $l [expr {$n / 2 - 1}]] + [lindex $l [expr {$n / 2}]]) / 2.0}
+    }
+
+    # everything that can no longer change, as of `now` (dserv us)
+    proc pv_resolve { now } {
+        variable pv_changes
+        variable pv_edges
+        variable pv_cmds
+        variable pv_swaps
+        variable pv_hold_us
+        variable pv_cmd_hold_us
+        variable pv_window_us
+        variable pv_mode
+        variable pv_n
+        set horizon [expr {$now - $pv_hold_us}]
+        while { [llength $pv_changes] && [lindex $pv_changes 0 0] < $horizon } {
+            set c [lindex $pv_changes 0]
+            set pv_changes [lrange $pv_changes 1 end]
+            pv_judge $c
+        }
+        # edges older than any change still to be judged could take
+        set ehz [expr {$horizon - $pv_window_us}]
+        set keep {}
+        foreach e $pv_edges {
+            if { [lindex $e 0] >= $ehz } { lappend keep $e ; continue }
+            if { ![lindex $e 4] } { dict incr pv_n extra }
+        }
+        set pv_edges $keep
+        # '!' commands, once the change on their swap has been judged
+        set chz [expr {$now - $pv_cmd_hold_us}]
+        set keep {}
+        foreach c $pv_cmds {
+            lassign $c t swap seq
+            if { $t >= $chz } { lappend keep $c ; continue }
+            dict incr pv_n cmds
+            if { [dict exists $pv_swaps $swap] } {
+                if { [lindex [dict get $pv_swaps $swap] 0] eq "dark" } {
+                    dict incr pv_n cmds_dark
+                } else {
+                    dict incr pv_n cmds_lit
+                }
+            } elseif { $pv_mode eq "marked" } {
+                dict incr pv_n unmarked
+            }
+        }
+        set pv_cmds $keep
+        dict for { s v } $pv_swaps {
+            if { [lindex $v 1] < $horizon - 10000000 } { dict unset pv_swaps $s }
+        }
+    }
+
+    proc pv_judge { c } {
+        variable pv_edges
+        variable pv_lats
+        variable pv_lat50
+        variable pv_keep
+        variable pv_max_us
+        variable pv_window_us
+        variable pv_min_dir_n
+        variable pv_n
+        variable pv_swaps
+        variable pv_cmds
+        lassign $c t dir serial swap why nacks level
+        set ne [llength $pv_edges]
+        # 1: its next edge of its direction, used or not: the latency
+        for { set k 0 } { $k < $ne } { incr k } {
+            lassign [lindex $pv_edges $k] e50 edir
+            if { $e50 <= $t } continue
+            if { $e50 - $t > $pv_max_us } break
+            if { $dir == 0 || $dir == $edir } {
+                set l [dict get $pv_lats $edir]
+                lappend l [expr {$e50 - $t}]
+                if { [llength $l] > $pv_keep } { set l [lrange $l end-[expr {$pv_keep - 1}] end] }
+                dict set pv_lats $edir $l
+                break
+            }
+        }
+        # 2: the unused edge nearest its flip plus its direction's latency
+        set best -1
+        set all [concat [dict get $pv_lats 1] [dict get $pv_lats -1]]
+        if { [llength $all] } {
+            set L [pv_median $all]
+            foreach d {1 -1} {
+                set l [dict get $pv_lats $d]
+                set Ld($d) [expr {[llength $l] >= $pv_min_dir_n ? [pv_median $l] : $L}]
+            }
+            set bd {}
+            for { set k 0 } { $k < $ne } { incr k } {
+                lassign [lindex $pv_edges $k] e50 edir - - used
+                if { $used || ($dir != 0 && $dir != $edir) } continue
+                set d [expr {abs($e50 - $t - $Ld($edir))}]
+                if { $d > $pv_window_us } continue
+                if { $best < 0 || $d < $bd } { set best $k ; set bd $d }
+            }
+        }
+        set seqs [lmap x $pv_cmds {
+            if { [lindex $x 1] != $swap } continue
+            lindex $x 2
+        }]
+        set json "\{\"serial\":$serial,\"swap\":$swap,\"level\":$level,\"why\":$why"
+        append json ",\"nacks\":$nacks,\"seqs\":\[[join $seqs ,]\]"
+        if { $best >= 0 } {
+            lset pv_edges $best 4 1
+            lassign [lindex $pv_edges $best] e50 edir e10 eseq
+            set lat50 [expr {round($e50 - $t)}]
+            set lat10 [expr {round($e10 - $t)}]
+            set status [expr {$why == 1 ? "appear" : "lit"}]
+            if { $why != 1 } { dict lappend pv_lat50 $edir $lat50 }
+            append json ",\"status\":\"$status\",\"edge\":$eseq"
+            append json ",\"lat10\":$lat10,\"lat50\":$lat50\}"
+        } else {
+            set status [expr {$why == 1 ? "appear" : "dark"}]
+            append json ",\"status\":\"$status\"\}"
+        }
+        if { $status ne "appear" } { dict incr pv_n changes }
+        dict incr pv_n $status
+        dict set pv_swaps $swap [list $status $t]
+        catch { dservSetData photo/pair [expr {wide($t)}] 11 $json }
+        return $status
+    }
+
+    # ---- out ----
+    # {n median sd min max} in ms of a list of us
+    proc pv_stats { l } {
+        set n [llength $l]
+        if { !$n } { return [list 0 null null null null] }
+        set ms [lmap x $l { expr {$x / 1000.0} }]
+        set mean [expr {[tcl::mathop::+ {*}$ms] / $n}]
+        set ss 0.0
+        foreach x $ms { set ss [expr {$ss + ($x - $mean) ** 2}] }
+        set sd [expr {$n > 1 ? sqrt($ss / ($n - 1)) : 0.0}]
+        list $n [format %.3f [pv_median $ms]] [format %.3f $sd] \
+            [format %.3f [tcl::mathfunc::min {*}$ms]] [format %.3f [tcl::mathfunc::max {*}$ms]]
+    }
+    proc pv_verdict {} {
+        variable pv_n
+        dict with pv_n {}
+        if { $lit + $dark == 0 } { return none }
+        expr {$dark || $extra || $unmarked ? "fail" : "pass"}
+    }
+    proc pv_json {} {
+        variable pv_n
+        variable pv_lat50
+        variable pv_changes
+        set json "\{\"verdict\":\"[pv_verdict]\""
+        dict for { k v } $pv_n { append json ",\"$k\":$v" }
+        append json ",\"pending\":[llength $pv_changes]"
+        foreach { name d } { rise 1 fall -1 } {
+            lassign [pv_stats [dict get $pv_lat50 $d]] n med sd lo hi
+            append json ",\"$name\":\{\"n\":$n,\"median\":$med,\"sd\":$sd,\"min\":$lo,\"max\":$hi\}"
+        }
+        append json "\}"
+    }
+    proc pv_publish {} {
+        catch { dservSetData photo/verify [now] 11 [pv_json] }
+    }
+    # one line for the log and the green light; "" before any change
+    proc pv_summary {} {
+        variable pv_n
+        variable pv_lat50
+        dict with pv_n {}
+        if { $lit + $dark == 0 } { return "" }
+        set s "[pv_verdict]: $lit of [expr {$lit + $dark}] changes lit"
+        if { $dark } { append s ", $dark dark" }
+        if { $extra } { append s ", $extra extra edge[expr {$extra == 1 ? {} : {s}}]" }
+        if { $unmarked } { append s ", $unmarked '!' commands not marked" }
+        foreach { name d } { rise 1 fall -1 } {
+            lassign [pv_stats [dict get $pv_lat50 $d]] n med sd lo hi
+            if { $n } { append s "; $name $med ms (sd $sd, max $hi)" }
+        }
+        return $s
+    }
+    # END photo_verify
 
     # BEGIN screen_snapshot
     #
@@ -4682,7 +5071,7 @@ namespace eval ess {
         if { $display_tlock } { catch { display_tlock_health } }
         # ... and the photodiode's
         variable photo_enabled
-        if { $photo_enabled } { catch { photo_health } }
+        if { $photo_enabled } { catch { photo_obs_end } }
         trial_boundary
     }
 
@@ -5921,7 +6310,10 @@ namespace eval ess {
 	
 	set filename $open_datafile
 	set open_datafile {}
-	
+
+	# the photodiode's verdict for this file, into it (photo_verify)
+	catch { photo_file_close }
+
 	catch {dservLoggerClose $filename}
 	
 	set lastfile [file tail [file root $filename]]

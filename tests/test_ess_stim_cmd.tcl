@@ -369,6 +369,16 @@ assert {$r eq "!flip_now"} "swap-acked command: echo intact"
 assert {[field [rec] cmd] eq "\"!flip_now\""} "swap-acked command recorded as sent"
 assert {[field [rec] seq] == 2} "seq advances"
 
+# the hook (photo_verify listens on it): every command with a swap
+set ::hooked {}
+proc hook_seen { args } { lappend ::hooked $args }
+set ::ess::stim_cmd_hook hook_seen
+rmtSend "!flip_hooked"
+set ::ess::stim_cmd_hook ""
+assert {[lrange [lindex $::hooked 0] 0 2] eq [list [field [rec] seq] "!flip_hooked" 42]} \
+    "stim_cmd_hook gets seq, cmd and swap ([lindex $::hooked 0])"
+assert {[lindex $::hooked 0 3] == [field [rec] t_ret]} "  and t_ret"
+
 # flip: -1 (a swapsync strategy without a hardware flip time) is not a
 # timestamp either; a positive value is stored as given
 rmtSend "fake_flip -1"

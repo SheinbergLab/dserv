@@ -81,6 +81,58 @@ key changes, at a system load, at a data file's open and at each end of
 an obs. There is no subscription to the stream. So after a boot, a box
 that connects late leaves the light red until the next of those.
 
+With the patch on, an `ok` light also carries the current file's verdict
+(next section), e.g. `ok reading group photodiode; pass: 412 of 412
+changes lit; rise 8.112 ms (sd 0.041, max 8.230); fall 3.402 ms ...`.
+The dot stays green on a `fail`: it says the diode is heard, and the
+verdict says how well the display kept up.
+
+## Checking a system: photo/verify
+
+With `enabled` and `patch` on, ESS pairs every change of the patch with
+its light as the session runs (the `photo_verify` block of
+`lib/ess-2.0.tm`). In `marked` mode that means every frame the system
+changed with a `!` command, so any system can be checked as it is:
+turn the two keys on, load it, run it.
+
+Each change is joined to its edge the way photopair does it (below):
+the median of the last 50 next-edge latencies of each direction is the
+typical latency, and a change takes the unused edge nearest its flip
+plus that, within ±4 ms. Each `!` command is joined to its change
+exactly, by swap number. A change is judged 300 ms after its flip,
+when nothing more can arrive for it (at the next record, end of obs or
+file close); an edge no change took by then is extra.
+
+Two records go into the data file:
+
+**`photo/pair`**, one per change, stamped at its flip (JSON):
+
+| | |
+|---|---|
+| `serial` `swap` `level` `why` `nacks` | from `stim/photopatch` |
+| `seqs` | the `!` commands on its swap (`stim/cmd` seq) |
+| `status` | `lit`; `dark`, no light came; `appear`, the patch's first frame (never dark: a scene as bright as the patch shows no edge) |
+| `edge` `lat10` `lat50` | when lit: the edge's seq, and us from the flip to its 10% and 50% |
+
+**`photo/verify`**, the running verdict, at each end of obs and when the
+file closes (JSON): `verdict`, `changes lit dark appear extra pending`,
+`cmds cmds_lit cmds_dark unmarked`, and `rise` and `fall`, each `{n
+median sd min max}` of lat50 in ms. Counts restart with each data file.
+The closing verdict also goes to the ESS log as one line.
+
+| verdict | |
+|---|---|
+| `pass` | every change lit, no extra edge, every `!` command on a change |
+| `fail` | a change gave no light (a frame stim2 acknowledged that the panel never showed, or two changes on adjacent frames that an LCD merged); an edge nothing asked for (a frame nobody commanded, or `settle_ms` too short for the panel's rise); or an `unmarked` `!` command, one whose swap changed no patch (marked mode only; also a `!` command that drew nothing, which stim2 logs) |
+| `none` | no change judged yet |
+
+Read it live with `essctrl -s ess -c 'dservGet photo/verify'`.
+
+Not judged: the latency spread. `rise`/`fall` report it, and an
+unreliable display (latency that wanders by frames) shows there. The
+latency includes any constant offset between stim2's host clock and
+dserv's; on a rig without PTP between them, read only its spread.
+
 ## Where it attaches
 
 `config/triggers.tcl` attaches the processor once at boot, by pattern, to
@@ -313,3 +365,11 @@ attach through the real dispatch, and `group`. `tests/test_ess_photo.tcl`
 seconds, `enabled` last at boot, the data-file match, the patch
 (drawn only with both keys on, its settings sent before `on`, a warning
 from a stim2 without the module), and every state of the light.
+`tests/test_ess_photo_verify.tcl` (ctest `ess_photo_verify`) feeds the
+pairing records on a clock it sets: a clean session (every change lit,
+both directions' latencies, each command's seq), a change judged only
+after the hold, an edge that arrives late or before its change's record,
+missed frames, a frame an LCD never showed between two others (the first
+change is not given the third's light), an extra edge, the patch
+appearing, `!` commands with no change in marked and manual mode, two on
+one swap, and a new data file's counts.
