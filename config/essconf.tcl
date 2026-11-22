@@ -679,13 +679,13 @@ each change is recorded as stim/photopatch, to pair with its edge. Drawn
 only while 'enabled' is on too: a flashing corner distracts a subject.
 Takes effect at the next system load."
 
-settings::declare photo patch_mode -default tags -values {tags toggle manual} \
+settings::declare photo patch_mode -default marked -values {marked toggle manual} \
     -apply ::ess::set_photo_patch_mode \
-    -doc "which frames change the patch. tags: a frame carrying a swap tag
-that matches patch_match (the frames ESS already times: SAMPLE ON,
-PATTERN SWAP...), with no change to a protocol. toggle: every frame, a
-check of the display pipeline. manual: only 'photopatch flip' from a
-stim script."
+    -doc "which frames change the patch. marked: every frame a system
+changes the display with a '!' command (rmtSend \"!sample_on\"), or a
+stim script tags (swapTag): the frames ESS times, with no change to a
+system. toggle: every frame, a check of the display pipeline. manual:
+only 'photopatch flip' from a stim script."
 
 settings::declare photo patch_corner -default tr -values {tr tl br bl} \
     -apply ::ess::set_photo_patch_corner \
@@ -711,19 +711,12 @@ settings::declare photo patch_dark -default 0 \
 On a strobed display a little above black (0.1) keeps the flashes coming,
 so the period can be learned and a missing flash is a missing frame."
 
-settings::declare photo patch_match -default * \
-    -validate ::ess::photo_patch_match_norm \
-    -apply ::ess::set_photo_patch_match \
-    -doc "tags mode: glob patterns for the swap tags that flip the patch;
-* is every tagged frame, {SAMPLE *} only the sample's."
-
 ::ess::set_photo_patch        [settings::get photo patch]
 ::ess::set_photo_patch_mode   [settings::get photo patch_mode]
 ::ess::set_photo_patch_corner [settings::get photo patch_corner]
 ::ess::set_photo_patch_size   [settings::get photo patch_size]
 ::ess::set_photo_patch_inset  [settings::get photo patch_inset]
 ::ess::set_photo_patch_dark   [settings::get photo patch_dark]
-::ess::set_photo_patch_match  [settings::get photo patch_match]
 ::ess::set_photo_group      [settings::get photo group]
 ::ess::set_photo_strobe     [settings::get photo strobe]
 ::ess::set_photo_period_ms  [settings::get photo period_ms]

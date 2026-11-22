@@ -947,8 +947,8 @@ namespace eval ess {
     # again at each system load (configure_stim, stim_photopatch_enable),
     # and a changed setting takes effect at the next one.
     variable photo_patch 0
-    variable photo_patch_opts [dict create -mode tags -corner tr -size 60 \
-                                   -inset 0 -dark 0 -match *]
+    variable photo_patch_opts [dict create -mode marked -corner tr -size 60 \
+                                   -inset 0 -dark 0]
     proc set_photo_patch {on} {
         variable photo_patch [expr {$on ? 1 : 0}]
         catch { photo_health }
@@ -979,20 +979,11 @@ namespace eval ess {
         }
         return [join $v " "]
     }
-    # glob patterns for the swap tags that flip it in tags mode
-    proc photo_patch_match_norm {v} {
-        set v [string trim $v]
-        if { [catch { llength $v } n] || $n == 0 } {
-            error "photo patch_match: swap tag patterns, e.g. * or {SAMPLE *}"
-        }
-        return $v
-    }
     proc set_photo_patch_mode {v} { photo_patch_opt -mode $v }
     proc set_photo_patch_corner {v} { photo_patch_opt -corner $v }
     proc set_photo_patch_size {v} { photo_patch_opt -size [photo_patch_size_norm $v] }
     proc set_photo_patch_inset {v} { photo_patch_opt -inset [photo_patch_inset_norm $v] }
     proc set_photo_patch_dark {v} { photo_patch_opt -dark [photo_patch_dark_norm $v] }
-    proc set_photo_patch_match {v} { photo_patch_opt -match [photo_patch_match_norm $v] }
 
     # Turn stim2's patch on, when the rig asks for it. Called by
     # configure_stim right after the prelude (whose `postpass reset` turned

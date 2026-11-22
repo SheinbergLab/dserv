@@ -130,10 +130,9 @@ check [::ess::stim_photopatch_enable] 0 "patch off: not drawn"
 ::ess::set_photo_patch_size " 40 "
 ::ess::set_photo_patch_inset 5
 ::ess::set_photo_patch_dark {0.1 0.1 0.2}
-::ess::set_photo_patch_match {{SAMPLE *} PATTERN*}
 check [::ess::stim_photopatch_enable] 1 "both on: drawn"
 check [$::stim eval { set calls }] \
-    {{set -mode toggle -corner bl -size 40 -inset 5 -dark {0.1 0.1 0.2} -match {{SAMPLE *} PATTERN*}} on} \
+    {{set -mode toggle -corner bl -size 40 -inset 5 -dark {0.1 0.1 0.2}} on} \
     "  its settings, then on"
 check [llength $::rmt] 1 "  one rmtSend, so the data file records it"
 check $::ess::warned {} "  no warning"
@@ -146,7 +145,6 @@ check [catch { ::ess::photo_patch_inset_norm -1 }] 1 "inset -1 refused"
 check [catch { ::ess::photo_patch_dark_norm "0 1" }] 1 "two values for dark refused"
 check [catch { ::ess::photo_patch_dark_norm 1.5 }] 1 "dark past 1 refused"
 check [::ess::photo_patch_dark_norm " 0.1 "] 0.1 "one grey"
-check [catch { ::ess::photo_patch_match_norm "" }] 1 "no patterns refused"
 set ::ess::photo_enabled 0
 set ::ess::photo_patch 0
 
@@ -244,9 +242,9 @@ set keys {}
 dict for { k opts } $::settings::decl { lappend keys $k }
 check $keys [concat photo/enabled photo/group photo/strobe photo/period_ms photo/min_step photo/smooth_ms \
     photo/settle_ms photo/patch photo/patch_mode photo/patch_corner photo/patch_size \
-    photo/patch_inset photo/patch_dark photo/patch_match] "fourteen keys"
+    photo/patch_inset photo/patch_dark] "thirteen keys"
 check [list $::ess::photo_patch $::ess::photo_patch_opts] \
-    {0 {-mode tags -corner tr -size 60 -inset 0 -dark 0 -match *}} \
+    {0 {-mode marked -corner tr -size 60 -inset 0 -dark 0}} \
     "boot: the patch off, its defaults as stim2's"
 dict for { k opts } $::settings::decl {
     set ap [dict get $opts -apply]

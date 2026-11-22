@@ -38,15 +38,14 @@ patch key takes effect at the next system load.
 | key | default | |
 |---|---|---|
 | `patch` | 0 | draw the patch |
-| `patch_mode` | `tags` | `tags`: frames carrying a matching swap tag (the ones ESS already times); `toggle`: every frame; `manual`: only `photopatch flip` |
+| `patch_mode` | `marked` | `marked`: every frame a system changes with a `!` command (`rmtSend "!sample_on"`) or a stim script tags (`swapTag`), so any system drives it unchanged; `toggle`: every frame; `manual`: only `photopatch flip` |
 | `patch_corner` | `tr` | `tr tl br bl`; top right is clear of tlock's row |
 | `patch_size` | 60 | side, pixels |
 | `patch_inset` | 0 | pixels in from both edges |
 | `patch_dark` | 0 | the dark level, one grey or `r g b` (light is white); 0.1 on a strobed display keeps its flashes |
-| `patch_match` | `*` | tags mode: swap tag patterns, e.g. `{SAMPLE *}` |
 
 Each change of the patch is a `stim/photopatch` record on stim2's frame
-log (swapcount, flip, level, change number, matching tags, why), logged
+log (swapcount, flip, level, change number, swap tags, why, `!` replies), logged
 with `stim/frame`: a level 1 change should come back as a rising edge, a
 level 0 one as a falling edge, in order.
 
