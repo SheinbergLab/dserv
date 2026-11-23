@@ -698,11 +698,13 @@ settings::declare photo patch_size -default 60 -type int \
     -doc "the patch's side in pixels: a little larger than the diode's
 aperture, so placement is not critical."
 
-settings::declare photo patch_inset -default 0 -type int \
+settings::declare photo patch_inset -default 0 \
     -validate ::ess::photo_patch_inset_norm \
     -apply ::ess::set_photo_patch_inset \
     -doc "pixels in from both edges of the corner, where a bezel covers
-the edge."
+the edge; or x y: x in from the side edge, y from the top or bottom
+(20 60 at the top right: 20 in from the right, 60 down). Two numbers
+need stim2 0.30.7 or later."
 
 settings::declare photo patch_dark -default 0 \
     -validate ::ess::photo_patch_dark_norm \

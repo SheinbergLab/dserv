@@ -985,7 +985,20 @@ namespace eval ess {
         return [expr {int($v)}]
     }
     proc photo_patch_size_norm {v} { photo_patch_int_norm patch_size 1 $v }
-    proc photo_patch_inset_norm {v} { photo_patch_int_norm patch_inset 0 $v }
+    # px from both edges, or "x y": x from the corner's side edge, y from
+    # its top or bottom (stim2 0.30.7 or later for two). One number when
+    # they agree, so an older stim2 still takes it
+    proc photo_patch_inset_norm {v} {
+        set v [string trim $v]
+        if { [catch { llength $v } n] || $n ni {1 2} } {
+            error "photo patch_inset: pixels, or x y, each 0 to 4096"
+        }
+        set out [lmap c $v { photo_patch_int_norm patch_inset 0 $c }]
+        if { [llength $out] == 2 && [lindex $out 0] == [lindex $out 1] } {
+            set out [lindex $out 0]
+        }
+        return [join $out " "]
+    }
     # one grey, or r g b, each 0 to 1
     proc photo_patch_dark_norm {v} {
         set v [string trim $v]

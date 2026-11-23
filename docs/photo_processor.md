@@ -41,7 +41,7 @@ patch key takes effect at the next system load.
 | `patch_mode` | `marked` | `marked`: every frame a system changes with a `!` command (`rmtSend "!sample_on"`) or a stim script tags (`swapTag`), so any system drives it unchanged; `toggle`: every frame; `manual`: only `photopatch flip` |
 | `patch_corner` | `tr` | `tr tl br bl`; top right is clear of tlock's row |
 | `patch_size` | 60 | side, pixels |
-| `patch_inset` | 0 | pixels in from both edges |
+| `patch_inset` | 0 | pixels in from both edges; or `x y`, x from the side edge and y from the top or bottom (`20 60` at `tr`: 20 in from the right, 60 down; stim2 0.30.7 or later) |
 | `patch_dark` | 0 | the dark level, one grey or `r g b` (light is white); 0.1 on a strobed display keeps its flashes |
 
 Each change of the patch is a `stim/photopatch` record on stim2's frame
