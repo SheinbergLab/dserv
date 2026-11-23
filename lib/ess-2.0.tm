@@ -1569,6 +1569,453 @@ namespace eval ess {
     }
     # END photo_verify
 
+    # BEGIN photo_test
+    #
+    # Is the diode over the patch? (the gear's photo section, "Test
+    # placement"; docs/photo_processor.md, "Placing the diode"). Flips the
+    # patch between dark and light, a gap apart, and after each flip reads
+    # what came back: the edges the detector reported, and the detector's
+    # idle level. The level follows the light whether or not the step was
+    # big enough to be an edge (an EMA with a 20 ms time constant, settled
+    # long before the gap ends), so a step below min_step is still
+    # measured, and "not over the patch" is told apart from "over it, but
+    # min_step is above its step".
+    #
+    #   photo_test ?run? ?n? ?gap_ms?   n flips (10), gap_ms apart (250)
+    #   photo_test aim ?s?              flip until stopped, at most s seconds
+    #                                   (60): slide the diode until the step
+    #                                   peaks
+    #   photo_test stop
+    #
+    # Only between sessions: refused while ESS runs or a data file is open
+    # (the flips would be in it), and stopped if either starts. With the
+    # gear's `patch` off it draws the patch for the test and takes it away
+    # after. The patch is in manual mode for the test (toggle would change
+    # it every frame) and back in its own mode after.
+    #
+    # Out: photo/test (JSON), after each flip and at the end: id mode state
+    # (running | done | stopped | error) n flipped answered reversed
+    # verdict (aligned | small | partial | reversed | below_min_step |
+    # no_edges | none | error; "" while running) summary; dark light step
+    # best noise
+    # min_step (ADC counts; step = light - dark, best the largest one
+    # flip's); rise and fall {n median sd min max}, ms from the flip to the
+    # light's 50%, when stim2 has flip times; flips, the last 50 as
+    # {level edges step lat_ms} (level shown, edges back, the change in
+    # counts toward that level, lat_ms null without an edge or flip time).
+    #
+    # Self-contained: tests/test_ess_photo_test.tcl evaluates this block
+    # and photo_verify's (pv_median, pv_stats), with the pt_* hooks below
+    # stood in.
+    #
+    variable pt_on 0
+    variable pt_id 0
+    variable pt_timer ""
+    variable pt_mode run
+    variable pt_n 10
+    variable pt_gap 250
+    variable pt_k 0
+    variable pt_flips {}          ;# {target flipped edges step lat_us dir}
+    variable pt_levels {}         ;# {target level} after each flip
+    variable pt_restore {}        ;# stim2 commands that undo the test
+    variable pt_noise 0
+    variable pt_min_step 0
+    variable pt_off 0
+    variable pt_base {}           ;# before the flip: changes edges level target
+    variable pt_corner ""
+    variable pt_last ""           ;# the last photo/test published
+    variable pt_aim_w 2           ;# aim: levels from each level's last 2 flips
+
+    # ---- hooks: everything outside this block ----
+    proc pt_param { p } { processGetParam photo $p }
+    proc pt_stim { cmd } {
+        if { [info commands ::ess::rmtSend_raw] ne "" } {
+            return [::ess::rmtSend_raw $cmd]
+        }
+        rmtSend $cmd
+    }
+    proc pt_get { dp } { dservGet $dp }
+    proc pt_enabled {} { variable photo_enabled ; set photo_enabled }
+    proc pt_patch_opts {} { variable photo_patch_opts ; set photo_patch_opts }
+    proc pt_wall_off {} { dserv_wall_offset }
+    # us since the diode's group last sent a block, -1 never
+    proc pt_stream_age {} {
+        set t [photo_newest [photo_group_pattern [processGetParam photo group]]]
+        expr {$t ? [now] - $t : -1}
+    }
+    # why the test must not flash the corner now, or ""
+    proc pt_busy {} {
+        variable current
+        variable open_datafile
+        set sys ""
+        catch { set sys $current(state_system) }
+        if { $sys ne "" && ![catch { $sys status } st] && $st eq "running" } {
+            return "ESS is running"
+        }
+        if { [info exists open_datafile] && $open_datafile ne "" } {
+            return "a data file is open"
+        }
+        return ""
+    }
+    proc pt_done_hook {} { catch { photo_health } }
+
+    proc photo_test { {what run} args } {
+        switch -- $what {
+            run  { lassign $args n gap
+                   if { $n eq "" } { set n 10 }
+                   if { $gap eq "" } { set gap 250 }
+                   return [pt_start run $n $gap] }
+            aim  { lassign $args s
+                   if { $s eq "" } { set s 60 }
+                   if { ![string is double -strict $s] || $s <= 0 } {
+                       error "photo_test aim: seconds, more than 0"
+                   }
+                   return [pt_start aim [expr {int(ceil($s * 1000.0 / 300))}] 300] }
+            stop { return [pt_finish stopped "stopped"] }
+            default { error "photo_test ?run ?n? ?gap_ms?? | aim ?s? | stop" }
+        }
+    }
+
+    proc pt_start { mode n gap } {
+        variable pt_on
+        variable pt_id
+        variable pt_timer
+        variable pt_mode
+        variable pt_n
+        variable pt_gap
+        variable pt_k
+        variable pt_flips
+        variable pt_levels
+        variable pt_restore
+        variable pt_off
+        variable pt_base
+        variable pt_corner
+        if { $pt_on } { error "photo_test: a test is already running (photo_test stop)" }
+        if { ![string is integer -strict $n] || $n < 1 || $n > 1000 } {
+            error "photo_test: flips, 1 to 1000"
+        }
+        if { ![string is integer -strict $gap] || $gap < 100 || $gap > 5000 } {
+            error "photo_test: gap_ms, 100 to 5000"
+        }
+        incr pt_id
+        set pt_mode $mode
+        set pt_n $n
+        set pt_gap $gap
+        set pt_k 0
+        set pt_flips {}
+        set pt_levels {}
+        set pt_restore {}
+        set pt_base {}
+
+        set why ""
+        set busy [pt_busy]
+        if { $busy ne "" } {
+            set why "not now: $busy (the flips would be in it)"
+        } elseif { ![pt_enabled] } {
+            set why "photo is not enabled on this rig (gear: photo enabled)"
+        } elseif { [pt_param n_edges] eq "" } {
+            set why "this dserv has no photo processor"
+        } else {
+            set age [pt_stream_age]
+            if { $age < 0 || $age > 2000000 } {
+                set why "no blocks from the diode's group\
+ [expr {$age < 0 ? {} : "for [expr {$age / 1000000}] s"}]: is it streaming?"
+            }
+        }
+        if { $why eq "" } {
+            set st ""
+            catch { set st [pt_stim "photopatch status"] }
+            if { [string trim $st] eq "" } {
+                set why "stim2 did not answer: is it connected?"
+            } elseif { [string match "!TCL_ERROR*" $st] || [catch { dict get $st on } on] } {
+                set why "stim2 has no photopatch module"
+            }
+        }
+        if { $why ne "" } {
+            pt_publish error error $why
+            error "photo_test: $why"
+        }
+
+        # draw the patch for the test, in manual mode; undo it after
+        set opts [pt_patch_opts]
+        set pt_corner "[dict get $opts -corner], [dict get $opts -size] px"
+        set settle 0
+        if { !$on } {
+            set r [pt_stim [list photopatch set {*}$opts]]
+            set r2 [pt_stim "photopatch on manual"]
+            if { [string match "!TCL_ERROR*" $r] || [string match "!TCL_ERROR*" $r2] } {
+                catch { pt_stim "photopatch off" }
+                set why "stim2 would not draw the patch: [string trim $r$r2]"
+                pt_publish error error $why
+                error "photo_test: $why"
+            }
+            set pt_restore [list "photopatch off" \
+                                "photopatch set -mode [dict get $opts -mode]"]
+            set settle 1
+        } elseif { [dict get $st mode] ne "manual" } {
+            pt_stim "photopatch set -mode manual"
+            set pt_restore [list "photopatch set -mode [dict get $st mode]"]
+        }
+        set pt_off [pt_wall_off]
+        set pt_on 1
+        pt_publish running "" "starting"
+        # a patch just drawn first settles (its first frame is a change)
+        set pt_timer [dservAfter [expr {$settle ? max($gap, 400) : 50}] \
+                          [list ::ess::pt_tick $pt_id]]
+        return $pt_id
+    }
+
+    # end of a gap: judge the flip before it, then flip again or finish
+    proc pt_tick { id } {
+        variable pt_on
+        variable pt_id
+        variable pt_timer
+        variable pt_n
+        variable pt_gap
+        variable pt_k
+        variable pt_flips
+        variable pt_levels
+        variable pt_noise
+        variable pt_min_step
+        variable pt_off
+        variable pt_base
+        if { !$pt_on || $id != $pt_id } return
+        set pt_timer ""
+        set busy [pt_busy]
+        if { $busy ne "" } { pt_finish stopped "stopped: $busy" ; return }
+
+        set st [pt_stim "photopatch status"]
+        if { [catch { dict get $st on } on] || !$on } {
+            pt_finish error "the patch went away during the test (a system load?)"
+            return
+        }
+        set changes [dict get $st changes]
+        set level_now [pt_param level]
+        set edges_now [pt_param n_edges]
+
+        if { $pt_k == 0 } {
+            set pt_noise [pt_param noise]
+            set pt_min_step [pt_param min_step]
+            lappend pt_levels [list [dict get $st level] $level_now]
+        } else {
+            lassign $pt_base changes0 edges0 level0 target
+            set flipped [expr {$changes > $changes0}]
+            set dk [expr {$edges_now - $edges0}]
+            set expdir [expr {$target ? 1 : -1}]
+            set dir 0
+            set lat null
+            if { $dk > 0 } {
+                set rec {}
+                catch { set rec [pt_get proc/photo/edge] }
+                if { [llength $rec] >= 10 } {
+                    lassign [lrange $rec end-9 end] dir t50
+                    set dir [expr {int($dir)}]
+                    set wall -1
+                    catch { set wall [dict get $st last_change_flip_wall_us] }
+                    if { $dir == $expdir && $wall > 0 } {
+                        set l [expr {$t50 - ($wall + $pt_off)}]
+                        if { $l > 0 && $l < 200000 } { set lat $l }
+                    }
+                }
+            }
+            set step [expr {($level_now - $level0) * $expdir}]
+            lappend pt_flips [list $target $flipped $dk $step $lat $dir]
+            lappend pt_levels [list $target $level_now]
+        }
+
+        if { $pt_k >= $pt_n } { pt_finish done "" ; return }
+
+        set target [expr {[dict get $st level] ? 0 : 1}]
+        set r [pt_stim "photopatch flip $target"]
+        if { [string match "!TCL_ERROR*" $r] } {
+            pt_finish error "stim2 refused the flip: [string trim $r]"
+            return
+        }
+        set pt_base [list $changes $edges_now $level_now $target]
+        incr pt_k
+        pt_publish running "" ""
+        set pt_timer [dservAfter $pt_gap [list ::ess::pt_tick $id]]
+    }
+
+    proc pt_finish { state why } {
+        variable pt_on
+        variable pt_timer
+        variable pt_restore
+        if { !$pt_on } {
+            if { $state eq "stopped" } { return "no test running" }
+            return ""
+        }
+        if { $pt_timer ne "" } { catch { dservAfterCancel $pt_timer } }
+        set pt_timer ""
+        foreach c $pt_restore { catch { pt_stim $c } }
+        set pt_restore {}
+        set pt_on 0
+        if { $state eq "error" } {
+            set s [pt_publish error error $why]
+        } else {
+            lassign [pt_verdict] verdict s
+            if { $state eq "stopped" && $why ne "" } { set s "$why; $s" }
+            set s [pt_publish $state $verdict $s]
+        }
+        pt_done_hook
+        return $s
+    }
+
+    # dark and light: the median settled level after flips to each (aim:
+    # each one's last few, so it follows the diode as it moves)
+    proc pt_dark_light {} {
+        variable pt_levels
+        variable pt_mode
+        variable pt_aim_w
+        set out {}
+        foreach lv { 0 1 } {
+            set l {}
+            foreach p $pt_levels {
+                if { [lindex $p 0] == $lv } { lappend l [lindex $p 1] }
+            }
+            if { $pt_mode eq "aim" } { set l [lrange $l end-[expr {$pt_aim_w - 1}] end] }
+            lappend out [pv_median $l]
+        }
+        return $out
+    }
+
+    proc pt_counts {} {
+        variable pt_flips
+        set f 0 ; set a 0 ; set r 0
+        foreach x $pt_flips {
+            lassign $x target flipped dk step lat dir
+            if { !$flipped } continue
+            incr f
+            set expdir [expr {$target ? 1 : -1}]
+            if { $dk > 0 && $dir == $expdir } { incr a } elseif { $dk > 0 && $dir == -$expdir } { incr r }
+        }
+        list $f $a $r
+    }
+
+    proc pt_verdict {} {
+        variable pt_noise
+        variable pt_min_step
+        variable pt_corner
+        variable pt_flips
+        lassign [pt_counts] f a r
+        lassign [pt_dark_light] dark light
+        if { !$f } {
+            if { ![llength $pt_flips] } { return [list none "no flips"] }
+            return [list error "stim2 never changed the patch"]
+        }
+        set step [expr {$dark eq "" || $light eq "" ? 0.0 : $light - $dark}]
+        set S [format %.0f $step]
+        set M [format %.0f $pt_min_step]
+        set N [format %.1f $pt_noise]
+        set lv "step $S counts (dark [format %.0f $dark], light [format %.0f $light])"
+        set seen [expr {abs($step) >= max(5.0 * $pt_noise, 3.0)}]
+        if { $a == $f } {
+            if { $step >= 2.0 * $pt_min_step } {
+                set s "aligned: $a of $f changes answered; $lv, min_step $M"
+                foreach { name d } { rise 1 fall -1 } {
+                    lassign [pv_stats [pt_lats $d]] n med sd
+                    if { $n } { append s "; $name $med ms (sd $sd)" }
+                }
+                return [list aligned $s]
+            }
+            return [list small "small: every change answered, but the $lv is under\
+ 2x min_step ($M): centre the diode on the patch or raise the brightness"]
+        }
+        if { $r > $a && 2 * $r >= $f } {
+            return [list reversed "reversed: the reading falls when the patch\
+ lights ($lv): is the amplifier's output inverted?"]
+        }
+        if { $a > 0 } {
+            return [list partial "partial: $a of $f changes answered; $lv against\
+ min_step $M: centre the diode, raise the brightness, or lower min_step"]
+        }
+        if { $seen && $step < 0 } {
+            return [list reversed "reversed: the reading falls when the patch\
+ lights ($lv): is the amplifier's output inverted?"]
+        }
+        # a min_step to suggest: a third of the step (the detector needs
+        # the change to outrun its idle level; see no_edges), above noise
+        set sug [format %.0f [expr {max($step / 3.0, ceil(5.0 * $pt_noise))}]]
+        if { $seen && $step < $pt_min_step } {
+            return [list below_min_step "below min_step: the diode sees the patch\
+ ($lv, noise $N) but min_step $M is above it: centre the diode, raise the\
+ brightness, or set min_step near $sug"]
+        }
+        if { $seen } {
+            # Pi 5 rig, 2026-11-22: step 146, min_step 100, a ~10 ms LCD
+            # rise. The idle level (an EMA, 20 ms) follows a change that
+            # slow, so the difference from it never reaches min_step
+            return [list no_edges "no edges: the diode sees the patch ($lv,\
+ noise $N), above min_step $M, but no edge came: a change this slow is\
+ followed by the detector's level before it is min_step away. Raise the\
+ brightness, or set min_step near $sug"]
+        }
+        return [list none "none: no change under the diode ($lv, noise $N): it is\
+ not over the patch ($pt_corner)"]
+    }
+
+    # lat50s of the answered flips to a direction, us
+    proc pt_lats { d } {
+        variable pt_flips
+        set l {}
+        foreach x $pt_flips {
+            lassign $x target flipped dk step lat dir
+            if { $lat ne "null" && $dir == $d } { lappend l $lat }
+        }
+        return $l
+    }
+
+    proc pt_js { s } { string map [list \\ \\\\ \" \\\" \n " "] $s }
+    # (an if, not expr's ?: -- expr would turn "12.000" back into 12.0)
+    proc pt_num { x {fmt %.1f} } {
+        if { [string is double -strict $x] } { return [format $fmt $x] }
+        return null
+    }
+
+    proc pt_publish { state verdict summary } {
+        variable pt_id
+        variable pt_mode
+        variable pt_n
+        variable pt_k
+        variable pt_flips
+        variable pt_noise
+        variable pt_min_step
+        variable pt_last
+        lassign [pt_counts] f a r
+        lassign [pt_dark_light] dark light
+        set step [expr {$dark eq "" || $light eq "" ? "" : $light - $dark}]
+        set best ""
+        foreach x $pt_flips {
+            set s [lindex $x 3]
+            if { $best eq "" || $s > $best } { set best $s }
+        }
+        if { $summary eq "" && $state eq "running" } {
+            set summary "flip $pt_k of $pt_n"
+            if { $step ne "" } { append summary ": step [format %.0f $step] counts" }
+            if { $best ne "" } { append summary " (best one flip [format %.0f $best])" }
+        }
+        set json "\{\"id\":$pt_id,\"mode\":\"$pt_mode\",\"state\":\"$state\""
+        append json ",\"n\":$pt_n,\"flipped\":$f,\"answered\":$a,\"reversed\":$r"
+        append json ",\"verdict\":\"$verdict\",\"summary\":\"[pt_js $summary]\""
+        append json ",\"dark\":[pt_num $dark],\"light\":[pt_num $light]"
+        append json ",\"step\":[pt_num $step],\"best\":[pt_num $best]"
+        append json ",\"noise\":[pt_num $pt_noise %.2f],\"min_step\":[pt_num $pt_min_step]"
+        foreach { name d } { rise 1 fall -1 } {
+            lassign [pv_stats [pt_lats $d]] n med sd lo hi
+            append json ",\"$name\":\{\"n\":$n,\"median\":$med,\"sd\":$sd,\"min\":$lo,\"max\":$hi\}"
+        }
+        set fl {}
+        foreach x [lrange $pt_flips end-49 end] {
+            lassign $x target flipped dk step1 lat
+            lappend fl "\[$target,$dk,[pt_num $step1],[pt_num [expr {$lat eq "null" ? "" : $lat / 1000.0}] %.3f]\]"
+        }
+        append json ",\"flips\":\[[join $fl ,]\]\}"
+        set pt_last $json
+        catch { dservSetData photo/test [now] 11 $json }
+        return $summary
+    }
+    # END photo_test
+
     # BEGIN evt_display
     #
     # Which frame showed an event. A system changes the display with a '!'

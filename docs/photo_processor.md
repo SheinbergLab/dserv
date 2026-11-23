@@ -278,6 +278,56 @@ learn from, so set it.
    gives an edge every refresh (reload the system after changing it);
    `rmtSend "photopatch flip"` gives one on demand.
 
+## Placing the diode
+
+The gear's photo section has **◐ Test placement…**. It is
+`::ess::photo_test` in the ess interp (the `photo_test` block of
+`lib/ess-2.0.tm`), which can also be run by hand:
+
+```bash
+dservctl -c 'send ess {::ess::photo_test}'
+```
+
+```bash
+dservctl get photo/test
+```
+
+It flips the patch between dark and light (10 times, 250 ms apart) and
+after each flip reads two things: the edges the detector reported, and its
+idle `level`. The level follows the light whether or not the change was an
+edge, so the step (light minus dark, in ADC counts) is measured even when
+it is too small to detect. It runs only between sessions: it refuses
+while ESS runs or a data file is open, and stops if either starts. With
+`patch` off it draws the patch for the test and removes it afterwards.
+The patch is in manual mode for the test and goes back to its own mode
+afterwards.
+
+| verdict | means | do |
+|---|---|---|
+| `aligned` | every change answered, step at least 2 × `min_step` | nothing |
+| `small` | every change answered, step under 2 × `min_step` | centre the diode or raise the brightness: little margin |
+| `partial` | some changes answered | centre, brighten, or lower `min_step` |
+| `no_edges` | the step is above `min_step`, but no edge came | brighten, or lower `min_step` to about a third of the step (below) |
+| `below_min_step` | the diode sees the patch, step under `min_step` | the same |
+| `reversed` | the reading falls when the patch lights | the amplifier's output is inverted |
+| `none` | no change under the diode | it is not over the patch (the summary names the corner and size) |
+
+`photo_test aim ?s?` keeps flipping (every 300 ms, at most `s` seconds,
+60 from the gear) and reports the step from the last flips: slide the diode
+until the step peaks. `photo_test stop` ends either one, and closing the
+gear's window stops a test it started. `photo/test` (JSON) carries the
+counts, `dark`, `light`, `step`, `best`, `noise`, `min_step`, rise and fall
+latencies when stim2 has flip times, and the last 50 flips.
+
+**A step only a little above `min_step` can give no edges.** The detector
+fires when a sample is `min_step` away from its idle level, and that level
+is a 20 ms running average (`level_tau`). A change that takes ~10 ms
+drags the level along with it, so the gap may never reach `min_step`. On
+the Pi 5 rig (2026-11-22) the step was 146 counts against `min_step` 100,
+the rise took about 10 ms to get most of the way, and none of the flips gave
+an edge. Hence the suggestion of a third of the step, kept above 5 ×
+`noise`.
+
 ## Pairing edges with frames
 
 `tools/photopair/photopair.tcl` reads a session's `.ess` and pairs each
@@ -430,6 +480,11 @@ one swap, and a new data file's counts.
 is held, that the timer writes the trial's `photo/pair` before it, that an
 event meanwhile writes it first and cancels the timer, and that a stale
 timer does nothing.
+`tests/test_ess_photo_test.tcl` (ctest `ess_photo_test`) runs the
+placement test against a pretend patch and diode: each verdict, the patch
+drawn for the test and taken away, its mode put back, refusal while a data
+file is open, stopping when ESS starts, `stop`, `aim`, and a patch that
+disappears mid-test.
 `tests/test_ess_evt_display.tcl` (ctest `ess_evt_display`) checks which
 events are linked to which command, and `tests/test_df_display_times.tcl`
 (ctest `df_display_times`) the columns conversion makes from them.

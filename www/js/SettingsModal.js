@@ -551,6 +551,11 @@ class SettingsModal {
                 title: 'play a few notes and show which output actually opened',
                 run: (self) => self._showSoundTest()
             }],
+            photo: [{
+                label: '◐ Test placement…',
+                title: 'flip the patch and check the diode sees each change (between sessions only)',
+                run: (self) => self._showPhotoTest()
+            }],
             joystick: [{
                 label: '⟲ Calibrate stick…',
                 title: 'measure this stick — rest, axes, throw — into the calibration db',
@@ -1218,6 +1223,144 @@ class SettingsModal {
 
         document.body.appendChild(sheet);
         render();
+    }
+
+    /*
+     * Is the photodiode over the patch? The test is ::ess::photo_test in
+     * the ess interp (lib/ess-2.0.tm, the photo_test block); this window
+     * only starts or stops it and mirrors photo/test, which it publishes
+     * after every flip. Run: 10 flips and a verdict. Aim: flips until
+     * stopped (60 s at most), for sliding the diode until the step peaks.
+     * Closing the window stops a test it started, so the corner is not
+     * left flashing.
+     */
+    _showPhotoTest() {
+        const sheet = document.createElement('div');
+        sheet.className = 'ess-modal-overlay ess-pick-overlay';
+        sheet.innerHTML = `
+            <div class="ess-modal ess-pick-modal">
+                <div class="ess-modal-header">
+                    <span class="ess-modal-title">Test photodiode placement</span>
+                    <button class="ess-modal-close" type="button">×</button>
+                </div>
+                <div class="ess-modal-body ess-pick-body">
+                    <div class="ess-pt-verdict" id="ess-pt-verdict">not run yet</div>
+                    <div class="ess-pt-meter" id="ess-pt-meter"
+                         title="the step (light - dark); dashed: min_step; line: the best single flip">
+                        <div class="ess-pt-meter-bar"></div>
+                        <div class="ess-pt-meter-min"></div>
+                        <div class="ess-pt-meter-best"></div>
+                    </div>
+                    <div class="ess-cal-kvs" id="ess-pt-kv"></div>
+                    <div class="ess-pt-flips" id="ess-pt-flips"></div>
+                    <div class="ess-settings-note" id="ess-pt-note"></div>
+                    <div class="ess-settings-err" id="ess-pt-err" hidden></div>
+                </div>
+                <div class="ess-modal-footer">
+                    <span class="ess-settings-note">flashes the patch corner — between sessions only</span>
+                    <button class="ess-modal-btn primary" id="ess-pt-run" type="button"
+                            title="10 flips, then a verdict">Run</button>
+                    <button class="ess-modal-btn" id="ess-pt-aim" type="button"
+                            title="keep flipping (up to 60 s) while you move the diode">Aim</button>
+                    <button class="ess-modal-btn" id="ess-pt-stop" type="button">Stop</button>
+                    <button class="ess-modal-btn cancel" type="button">Close</button>
+                </div>
+            </div>`;
+
+        let last = null;
+        let mine = null;          // the id of a test this window started
+        const $ = (s) => sheet.querySelector(s);
+        const num = (x, d = 0) => (typeof x === 'number' && isFinite(x)) ? x.toFixed(d) : '—';
+        const lat = (o) => (o && o.n > 0) ? `${o.median} ms (sd ${o.sd})` : '—';
+        const CLASS = { aligned: 'ok', small: 'warn', partial: 'warn',
+                        below_min_step: 'warn', no_edges: 'warn', reversed: 'bad', none: 'bad', error: 'bad' };
+
+        const render = () => {
+            const t = last;
+            const running = !!(t && t.state === 'running');
+            $('#ess-pt-run').disabled = running;
+            $('#ess-pt-aim').disabled = running;
+            $('#ess-pt-stop').disabled = !running;
+            if (!t) return;
+            const v = $('#ess-pt-verdict');
+            v.className = 'ess-pt-verdict ' + (running ? '' : (CLASS[t.verdict] || ''));
+            v.textContent = running
+                ? (t.mode === 'aim' ? 'aiming — move the diode until the step peaks' : 'testing…')
+                : `${t.verdict || t.state}${t.state === 'stopped' ? ' (stopped)' : ''}`;
+            $('#ess-pt-note').textContent = t.summary || '';
+
+            // the meter: scale to whichever is largest of step, best, 2x min_step
+            const step = Math.max(0, t.step || 0), best = Math.max(0, t.best || 0);
+            const min = Math.max(0, t.min_step || 0);
+            const full = Math.max(step, best, 2 * min, 1);
+            const pct = (x) => `${Math.min(100, 100 * x / full)}%`;
+            $('.ess-pt-meter-bar').style.width = pct(step);
+            $('.ess-pt-meter-min').style.left = pct(min);
+            $('.ess-pt-meter-best').style.left = pct(best);
+            $('.ess-pt-meter-best').hidden = !(t.best > 0);
+
+            const rows = [
+                ['step', num(t.step)], ['best flip', num(t.best)],
+                ['dark', num(t.dark)], ['light', num(t.light)],
+                ['noise', num(t.noise, 2)], ['min_step', num(t.min_step)],
+                ['answered', `${t.answered ?? 0} of ${t.flipped ?? 0}`],
+                ['reversed', String(t.reversed ?? 0)],
+                ['rise', lat(t.rise)], ['fall', lat(t.fall)]
+            ];
+            $('#ess-pt-kv').innerHTML = rows.map(([k, x]) =>
+                `<div class="ess-cal-kv"><span>${k}</span><b>${this._esc(x)}</b></div>`).join('');
+            // one cell per flip: an edge back (green) or not (red), its step in the title
+            $('#ess-pt-flips').innerHTML = (t.flips || []).map(([lv, edges, s, l]) =>
+                `<div class="ess-pt-flip ${edges > 0 ? 'ok' : 'bad'}"
+                      title="${lv ? 'to light' : 'to dark'}: ${edges} edge${edges === 1 ? '' : 's'}, step ${s ?? '—'}${l != null ? `, ${l} ms` : ''}"></div>`).join('');
+        };
+
+        const parse = (d) => {
+            let v = d?.data ?? d?.value ?? d;
+            if (typeof v === 'string') { try { v = JSON.parse(v); } catch (e) { return null; } }
+            return (v && typeof v === 'object') ? v : null;
+        };
+        const unsub = this.dpManager
+            ? this.dpManager.subscribe('photo/test', (d) => {
+                const v = parse(d);
+                if (v) { last = v; render(); }
+            })
+            : () => {};
+
+        const send = async (cmd) => {
+            const err = $('#ess-pt-err');
+            err.hidden = true;
+            try {
+                // returns at once: the test runs on dservAfter in the ess interp
+                const r = (await this.connection.evalAsync(`send ess {::ess::photo_test ${cmd}}`)).trim();
+                // a refused test publishes its reason too; `send` hands
+                // errors back as "!TCL_ERROR ..." strings, not rejections
+                if (r.startsWith('!TCL_ERROR')) throw new Error(r.replace(/^!TCL_ERROR\s*/, ''));
+                if (cmd !== 'stop' && /^\d+$/.test(r)) mine = parseInt(r);
+            } catch (e) {
+                err.textContent = e.message;
+                err.hidden = false;
+            }
+        };
+        $('#ess-pt-run').addEventListener('click', () => send('run'));
+        $('#ess-pt-aim').addEventListener('click', () => send('aim 60'));
+        $('#ess-pt-stop').addEventListener('click', () => send('stop'));
+
+        const close = () => {
+            if (last && last.state === 'running' && last.id === mine) send('stop');
+            unsub();
+            sheet.remove();
+        };
+        $('.ess-modal-close').addEventListener('click', close);
+        $('.ess-modal-btn.cancel').addEventListener('click', close);
+        sheet.addEventListener('click', (e) => { if (e.target === sheet) close(); });
+
+        document.body.appendChild(sheet);
+        render();
+        // the last result, if there is one (subscriptions fire on change only)
+        this.connection.evalAsync('if {[dservExists photo/test]} { dservGet photo/test }')
+            .then(r => { const v = parse(r); if (v && !last) { last = v; render(); } })
+            .catch(() => {});
     }
 
     _pickStatusTitle(c) {
