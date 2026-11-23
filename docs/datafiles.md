@@ -133,6 +133,13 @@ when that swap's light came (`docs/photo_processor.md`). In the same step,
   ABORT`) gives both columns. An event before the action's first `!`
   command, in a transition or in a callback is not linked;
   `::ess::evt_put_shown` links one to the last `!` command sent anywhere.
+- A link record is placed in its trial by its own time, from the obs
+  DG's `file_t0_us`, `obs_start_us` and `e_times`, not by the obs it was
+  written in. An event put in the action that starts a trial can have its
+  record written before the logger opens the obs. On a box-synced rig,
+  match_to_sample's `SAMPLE ON` (about 18 ms after BEGINOBS) lands between
+  obs every trial. A DG without those columns falls back to the obs each
+  record is in.
 - The light is joined by swap from wherever its record is in the file.
   ESS holds ENDOBS so a trial's lights are normally inside it
   (`docs/photo_processor.md`, "The ENDOBS hold"), but a hold cut short

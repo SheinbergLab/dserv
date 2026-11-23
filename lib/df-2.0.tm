@@ -858,9 +858,54 @@ namespace eval df {
         return [dl_return $c]
     }
 
+    # The link records of each obs, as {record dst} in time order. Where
+    # the obs DG says when each obs began (file_t0_us + obs_start_us, the
+    # onset its <dst> counts from) and ended (its last e_times), a record
+    # is placed by its own time `t`: an event put in the action that
+    # starts a trial can have its record written before the logger opens
+    # the obs, and then it is between obs, in <session> (match_to_sample's
+    # SAMPLE ON on a box-synced rig, 2026-11-22: ~18 ms after BEGINOBS,
+    # every trial). Without those columns, by where it was written.
+    proc _evt_display_by_obs {g} {
+        set name ess/evt_display
+        if {[dl_exists $g:obs_start_us] && [dl_exists $g:file_t0_us] &&
+            [dl_exists $g:e_times]} {
+            set t0 [lindex [dl_tcllist $g:file_t0_us] 0]
+            set wins {}
+            foreach s [dl_tcllist $g:obs_start_us] et [dl_tcllist $g:e_times] {
+                set end 0
+                foreach x $et { if {$x > $end} { set end $x } }
+                lappend wins [list [expr {$t0 + $s}] [expr {$t0 + $s + $end * 1000.0}]]
+            }
+            set out [lrepeat [llength $wins] {}]
+            foreach j [_all_records $g $name] {
+                set t [_jfield $j t]
+                if {![string is double -strict $t]} continue
+                set k 0
+                foreach w $wins {
+                    lassign $w a b
+                    if {$t >= $a && $t <= $b} {
+                        lset out $k [linsert [lindex $out $k] end \
+                                         [list $j [expr {($t - $a) / 1000.0}]]]
+                        break
+                    }
+                    incr k
+                }
+            }
+            return [lmap o $out { lsort -real -index 1 $o }]
+        }
+        set out {}
+        if {![dl_exists $g:<ds>$name]} { return $out }
+        foreach vs [dl_tcllist $g:<ds>$name] ts [dl_tcllist $g:<dst>$name] {
+            lappend out [lmap j $vs dst $ts { list [string trimright $j \x00] $dst }]
+        }
+        return $out
+    }
+
     proc add_display_times {trials g} {
         if {![dl_exists $trials:obsid]} { return $trials }
-        if {![dl_exists $g:<ds>ess/evt_display]} { return $trials }
+        if {![dl_exists $g:<ds>ess/evt_display] &&
+            ![dl_exists $g:<session>ess/evt_display]} { return $trials }
         set obsid [dl_tcllist $trials:obsid]
         set have [dg_tclListnames $trials]
 
@@ -874,8 +919,7 @@ namespace eval df {
         set photo [expr {[dict size $pairs] ||
                          [llength [_all_records $g photo/verify]]}]
 
-        set vals [dl_tcllist $g:<ds>ess/evt_display]
-        set tims [dl_tcllist $g:<dst>ess/evt_display]
+        set byobs [_evt_display_by_obs $g]
         set names {}
         set repeated {}
         set rows {}
@@ -883,8 +927,8 @@ namespace eval df {
             set row [dict create]
             set ok [expr {$photo ? 1 : -1}]
             set any 0
-            foreach j [lindex $vals $o] dst [lindex $tims $o] {
-                set j [string trimright $j \x00]
+            foreach rec [lindex $byobs $o] {
+                lassign $rec j dst
                 set n [string tolower "[_jfield $j type]_[_jfield $j subtype]"]
                 set n [_colname $n]
                 if {[string match {[0-9]*} $n]} { set n evt_$n }

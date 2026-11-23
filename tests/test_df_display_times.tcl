@@ -109,6 +109,34 @@ dl_set $g:<ds>photo/pair [dl_llist [dl_slist [pair 10 lit 5006000]]]
 set t [df::add_display_times [trials] $g]
 check "untouched" [dg_tclListnames $t] obsid
 
+puts "a record written before its obs opened (between obs), placed by time:"
+# match_to_sample on the Pi 5 rig, 2026-11-22: SAMPLE ON put ~18 ms after
+# BEGINOBS, its link record written before the logger opened the obs. The
+# DG's own clock columns place it: obs k began at file_t0_us +
+# obs_start_us(k) and ended at its last e_times
+set g [make_obs]
+dl_set $g:file_t0_us [dl_llist [dl_ilist 4000000]]
+dl_set $g:obs_start_us [dl_ilist 900000 3950000 4980000]
+dl_set $g:e_times [dl_llist [dl_ilist 0 600] [dl_ilist 0 450] [dl_ilist 0 100]]
+dl_set $g:<ds>ess/evt_display [dl_llist \
+    [dl_slist [ev CHOICES ON 5400000 2 20 5398500]] \
+    [dl_slist [ev SAMPLE ON 8000000 3 30 7999000] [ev CHOICES ON 8250000 4 40 8249000] \
+              [ev SAMPLE ON 8350000 5 31 8349000]] \
+    [dl_slist [ev SAMPLE ON 9000000 6 50 null]]]
+dl_set $g:<dst>ess/evt_display [dl_llist \
+    [dl_dlist 500.0] [dl_dlist 50.0 300.0 400.0] [dl_dlist 20.0]]
+dl_set $g:<session>ess/evt_display [dl_llist [dl_slist \
+    [ev SAMPLE ON 5000000 1 10 4998000] [ev EXTRA ON 7000000 9 60 6999000]]]
+set t [df::add_display_times [trials] $g]
+check "obs 0's SAMPLE ON found between obs" [col $t sample_on_flip] {NaN 98.0 49.0}
+check "  its light" [col $t sample_on_light] {28.0 106.0 NaN}
+check "  ms from its obs's onset, the rest unchanged" [col $t choices_on_flip] {NaN 498.5 299.0}
+check "  a record in no obs's time is in no trial" \
+    [expr {"extra_on_flip" in [dg_tclListnames $t]}] 0
+check "  display_ok as before" [col $t display_ok] {1 1 0}
+dg_delete $t
+dg_delete $g
+
 puts "through the step every extraction path calls:"
 set g [make_obs]
 set t [df::_add_recorded_streams_safely [trials] $g test]
