@@ -543,9 +543,20 @@ const App = {
     if (fileUrl) this.loadURL(fileUrl);
 
     // The dserv host's sessions: offered when its catalog answers, and
-    // shown at once when no file was named
+    // shown at once when no file was named.  ?session=NAME (data_manager's
+    // "Open in Viewer") opens that one of them, extracting its trials
+    // first if df has none
+    const session = fileUrl ? null : params.get('session');
     document.getElementById('btnSessions').addEventListener('click', () => SessionBrowser.show());
-    SessionBrowser.init(this).then(ok => { if (ok && !fileUrl) SessionBrowser.show(); });
+    SessionBrowser.init(this).then(async ok => {
+      if (!ok) {
+        if (session) document.getElementById('fileInfo').textContent =
+          `Session ${session}: no dserv answered at ${SessionBrowser.host}`;
+        return;
+      }
+      if (session) { await SessionBrowser.show(); await SessionBrowser.open(session); }
+      else if (!fileUrl) SessionBrowser.show();
+    });
   },
 
   _findDGFile(files) {

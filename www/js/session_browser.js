@@ -167,6 +167,10 @@ const SessionBrowser = {
     const url = this.dataUrl(name);
     const foot = this.el.querySelector('#spFoot');
     const s = this.sessions.find(x => x.name === name);
+    if (!s && this.sessions.length) {
+      foot.textContent = `${name}: not among this host's sessions (no obs or trials file in df's work directory)`;
+      return;
+    }
     if (s && !s.has_trials) {
       foot.textContent = `extracting ${name}'s trials…`;
       const err = await this._extract(name);
@@ -181,6 +185,7 @@ const SessionBrowser = {
     // the address names the session: reload or share it
     const p = new URLSearchParams(window.location.search);
     p.set('file', url);
+    p.delete('session');
     history.replaceState(null, '', `${location.pathname}?${p.toString().replace(/%2F/g, '/').replace(/%3A/g, ':')}`);
     this.el.classList.remove('open');
   },

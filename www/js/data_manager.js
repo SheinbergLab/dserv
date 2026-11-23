@@ -52,8 +52,13 @@ let errorCount = 0;
 async function init() {
     log('Initializing Data Manager...', 'info');
     
+    // ?host=HOST:PORT (and ?ssl=1|0) points the page at another dserv,
+    // as for dserv's other pages
+    const params = new URLSearchParams(window.location.search);
     connection = new DservConnection({
         subprocess: 'df',
+        dservHost: params.get('host') || undefined,
+        forceSecure: params.has('ssl') ? params.get('ssl') === '1' : undefined,
         autoReconnect: true,
         connectTimeout: 10000,
         onStatus: handleConnectionStatus,
@@ -716,21 +721,18 @@ async function contextAction(action, filename) {
             previewFile(filename);
             break;
 
-        case 'openViewer':
-            try {
-                const result = await sendCommand(`json_open_datafile {${filename}}`);
-                const response = JSON.parse(result);
-                if (response.status === 'ok') {
-                    log(`Opened ${filename} in viewer`, 'info');
-                } else {
-                    showStatus(`Open failed: ${response.error}`, 'error');
-                    log(`Open failed: ${response.error}`, 'error');
-                }
-            } catch (e) {
-                showStatus(`Open failed: ${e.message}`, 'error');
-                log(`Open failed: ${e.message}`, 'error');
-            }
+        case 'openViewer': {
+            // dg_viewer in a new tab, on this page's dserv: it opens the
+            // session's trials file, asking df to extract it first when
+            // there is none (df deletes it once exported)
+            const p = new URLSearchParams(window.location.search);
+            const q = new URLSearchParams();
+            q.set('session', filename.split('/').pop().replace(/\.ess$/, ''));
+            for (const k of ['host', 'ssl']) if (p.has(k)) q.set(k, p.get(k));
+            window.open(`dg_viewer.html?${q.toString()}`, '_blank');
+            log(`Opened ${filename} in dg_viewer`, 'info');
             break;
+        }
 
         case 'reprocess':
             showStatus(`Reprocessing ${filename}...`, 'working');
