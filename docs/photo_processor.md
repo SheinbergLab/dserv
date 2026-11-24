@@ -22,6 +22,7 @@ each key is pushed to it when it changes and once at boot.
 | `enabled` | 0 | detect, and log `proc/photo/edge` in every data file |
 | `group` | `photodiode` | the analog group's label; `<box>/<label>` for one box; empty for every block |
 | `strobe` | 0 | 1 for a strobed backlight (Display++) |
+| `invert` | 0 | 1 when more light gives FEWER counts (an LM393 module's analog out) |
 | `period_ms` | 0 | strobe: the refresh (8.3333 at 120 Hz); 0 learns it |
 | `min_step` | 100 | smallest change that is an edge, ADC counts |
 | `smooth_ms` | 0 | running mean before detection, for PWM ripple |
@@ -309,7 +310,7 @@ afterwards.
 | `partial` | some changes answered | centre, brighten, or lower `min_step` |
 | `no_edges` | the step is above `min_step`, but no edge came | brighten, or lower `min_step` to about a third of the step (below) |
 | `below_min_step` | the diode sees the patch, step under `min_step` | the same |
-| `reversed` | the reading falls when the patch lights | the amplifier's output is inverted |
+| `reversed` | the reading falls when the patch lights (or rises, with `invert` on) | flip `invert` in the gear |
 | `none` | no change under the diode | it is not over the patch (the summary names the corner and size) |
 
 `photo_test aim ?s?` keeps flipping (every 300 ms, at most `s` seconds,

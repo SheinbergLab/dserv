@@ -902,6 +902,7 @@ namespace eval ess {
         catch { photo_health }
     }
     proc set_photo_strobe {on} { photo_param strobe [expr {$on ? 1 : 0}] }
+    proc set_photo_invert {on} { photo_param invert [expr {$on ? 1 : 0}] }
     # ms in the gear, seconds in the processor
     proc set_photo_period_ms {v} {
         photo_param period [expr {[photo_nonneg_norm $v] / 1000.0}]
@@ -1633,6 +1634,7 @@ namespace eval ess {
     variable pt_restore {}        ;# stim2 commands that undo the test
     variable pt_noise 0
     variable pt_min_step 0
+    variable pt_sign 1            ;# -1 when the detector is inverted
     variable pt_off 0
     variable pt_base {}           ;# before the flip: changes edges level target
     variable pt_corner ""
@@ -1790,6 +1792,7 @@ namespace eval ess {
         variable pt_levels
         variable pt_noise
         variable pt_min_step
+        variable pt_sign
         variable pt_off
         variable pt_base
         if { !$pt_on || $id != $pt_id } return
@@ -1809,6 +1812,10 @@ namespace eval ess {
         if { $pt_k == 0 } {
             set pt_noise [pt_param noise]
             set pt_min_step [pt_param min_step]
+            # `level` is in the box's counts; with invert, light is lower
+            set inv 0
+            catch { set inv [pt_param invert] }
+            set pt_sign [expr {[string is true -strict $inv] ? -1 : 1}]
             lappend pt_levels [list [dict get $st level] $level_now]
         } else {
             lassign $pt_base changes0 edges0 level0 target
@@ -1831,7 +1838,7 @@ namespace eval ess {
                     }
                 }
             }
-            set step [expr {($level_now - $level0) * $expdir}]
+            set step [expr {($level_now - $level0) * $expdir * $pt_sign}]
             lappend pt_flips [list $target $flipped $dk $step $lat $dir]
             lappend pt_levels [list $target $level_now]
         }
@@ -1892,6 +1899,18 @@ namespace eval ess {
         return $out
     }
 
+    # the detector answers each change the wrong way round: which way the
+    # gear's `photo invert` should go
+    proc pt_reversed_msg { lv } {
+        variable pt_sign
+        if { $pt_sign < 0 } {
+            return "reversed: the reading rises when the patch lights ($lv),\
+ but photo invert is on: turn it off"
+        }
+        return "reversed: the reading falls when the patch lights ($lv):\
+ an inverted detector (an LM393 module's analog out): turn on photo invert"
+    }
+
     proc pt_counts {} {
         variable pt_flips
         set f 0 ; set a 0 ; set r 0
@@ -1908,6 +1927,7 @@ namespace eval ess {
     proc pt_verdict {} {
         variable pt_noise
         variable pt_min_step
+        variable pt_sign
         variable pt_corner
         variable pt_flips
         lassign [pt_counts] f a r
@@ -1916,7 +1936,7 @@ namespace eval ess {
             if { ![llength $pt_flips] } { return [list none "no flips"] }
             return [list error "stim2 never changed the patch"]
         }
-        set step [expr {$dark eq "" || $light eq "" ? 0.0 : $light - $dark}]
+        set step [expr {$dark eq "" || $light eq "" ? 0.0 : ($light - $dark) * $pt_sign}]
         set S [format %.0f $step]
         set M [format %.0f $pt_min_step]
         set N [format %.1f $pt_noise]
@@ -1935,16 +1955,14 @@ namespace eval ess {
  2x min_step ($M): centre the diode on the patch or raise the brightness"]
         }
         if { $r > $a && 2 * $r >= $f } {
-            return [list reversed "reversed: the reading falls when the patch\
- lights ($lv): is the amplifier's output inverted?"]
+            return [list reversed [pt_reversed_msg $lv]]
         }
         if { $a > 0 } {
             return [list partial "partial: $a of $f changes answered; $lv against\
  min_step $M: centre the diode, raise the brightness, or lower min_step"]
         }
         if { $seen && $step < 0 } {
-            return [list reversed "reversed: the reading falls when the patch\
- lights ($lv): is the amplifier's output inverted?"]
+            return [list reversed [pt_reversed_msg $lv]]
         }
         # a min_step to suggest: a third of the step (the detector needs
         # the change to outrun its idle level; see no_edges), above noise

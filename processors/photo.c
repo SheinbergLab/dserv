@@ -64,14 +64,16 @@
  * 10 values per edge -- one row for each edge the block finished, almost
  * always one:
  *
- *   [0] dir      +1 brighter, -1 darker (in ADC counts; a diode wired
- *                inverted reports the opposite)
+ *   [0] dir      +1 brighter, -1 darker. Brighter is more ADC counts,
+ *                unless `invert` is set (below)
  *   [1] t50      crossing of 50%, dserv clock, us (fractional)
  *   [2] t10      crossing of 10%
  *   [3] t90      crossing of 90%
- *   [4] old      level before the edge (counts)
- *   [5] new      level after it (counts): the settled mean, or the extreme
- *                reached when the edge reversed or timed out
+ *   [4] old      level before the edge (counts, as the box sent them;
+ *                in strobe mode the flash height above the dark between
+ *                flashes)
+ *   [5] new      level after it, the same way: the settled mean, or the
+ *                extreme reached when the edge reversed or timed out
  *   [6] settled  1 settled, 0 reversed or timed out
  *   [7] seq      edges since the last reset, from 1
  *   [8] t_arm    the sample at which the edge was detected (us)
@@ -90,6 +92,13 @@
  * input, so a block that finishes more than one edge sends them all in
  * that one datapoint, a row each (n_multi counts those blocks); none is
  * held back or lost however long the blocks are.
+ *
+ * INVERT. Some detectors give FEWER counts for more light: a photodiode
+ * pulling a resistor divider down, as the cheap LM393 comparator modules'
+ * analog out does. `invert 1` negates every sample before detection, so
+ * dir +1 is still "brighter", and pairing and verify (which expect a
+ * light patch to rise) work unchanged. The reported old/new stay in the
+ * box's counts; `level` and `base` too.
  *
  * Inactive by default: set active 1 from whatever wants edges. Inactive
  * costs an uncontended lock per block.
@@ -160,6 +169,7 @@ typedef struct process_params_s {
   double level_tau;		/* s: EMA of the level and noise when idle    */
   double max_gap;		/* s: a larger step between samples resets    */
   int    strobe;		/* 1: the backlight flashes once a refresh     */
+  int    invert;		/* 1: fewer counts = more light; negate them  */
   double period;		/* s: the refresh, strobe mode (0: learn it)   */
   double pulse_thresh;		/* counts above dark that make a flash         */
   char   group[64];		/* analog group to read; "" = any block        */
@@ -241,6 +251,7 @@ static void defaults(process_params_t *p)
   p->level_tau   = 0.020;
   p->max_gap     = 0.050;
   p->strobe       = 0;
+  p->invert       = 0;
   p->period       = 0.0;
   p->pulse_thresh = 50.0;
 }
@@ -370,6 +381,7 @@ void freeProcessParams(void *pstruct)
   { "level_tau",   &p->level_tau,   &p->dummyInt, PU_DOUBLE },		\
   { "max_gap",     &p->max_gap,     &p->dummyInt, PU_DOUBLE },		\
   { "strobe",      &p->strobe,      &p->dummyInt, PU_INT },		\
+  { "invert",      &p->invert,      &p->dummyInt, PU_INT },		\
   { "period",      &p->period,      &p->dummyInt, PU_DOUBLE },		\
   { "pulse_thresh", &p->pulse_thresh, &p->dummyInt, PU_DOUBLE }
 
@@ -378,7 +390,10 @@ static int get_param_locked(dpoint_process_param_setting_t *pinfo)
   process_params_t *p = (process_params_t *) pinfo->params;
   /* read-only views computed on demand */
   double noise = sqrt(p->nvar);
-  double level = p->have_level ? p->level : 0.0;
+  /* back in the box's counts (strobe mode's level is a flash height) */
+  double level = p->have_level ? (p->invert && !p->strobe ? -p->level
+				  : p->level) : 0.0;
+  double base = p->invert ? -p->base : p->base;
   PARAM_ENTRY params[] = {
     PARAM_TABLE(p),
     { "state",       &p->state,       &p->dummyInt, PU_INT },
@@ -400,7 +415,7 @@ static int get_param_locked(dpoint_process_param_setting_t *pinfo)
     { "n_multi",     &p->n_multi,     &p->dummyInt, PU_INT },
     { "n_dropped",   &p->n_dropped,   &p->dummyInt, PU_INT },
     { "last_t50",    &p->last_t50,    &p->dummyInt, PU_DOUBLE },
-    { "base",        &p->base,        &p->dummyInt, PU_DOUBLE },
+    { "base",        &base,           &p->dummyInt, PU_DOUBLE },
     { "period_est",  &p->period_est,  &p->dummyInt, PU_DOUBLE },
     { "item_dt",     &p->item_dt,     &p->dummyInt, PU_DOUBLE },
     { "n_pulses",    &p->n_pulses,    &p->dummyInt, PU_INT },
@@ -442,6 +457,7 @@ static void clamp_params(process_params_t *p)
   if (p->period < 0.0) p->period = 0.0;
   if (p->pulse_thresh < 1.0) p->pulse_thresh = 1.0;
   p->strobe = p->strobe ? 1 : 0;
+  p->invert = p->invert ? 1 : 0;
   update_counts(p);
 }
 
@@ -484,13 +500,15 @@ static int set_param_locked(dpoint_process_param_setting_t *pinfo)
   int was_channel = p->channel;
   int was_smooth = p->n_smooth;
   int was_strobe = p->strobe;
+  int was_invert = p->invert;
   PARAM_ENTRY params[] = { PARAM_TABLE(p), { "", NULL, NULL, PU_NULL } };
   puSetParamEntry(&params[0], name, 1, vals);
   clamp_params(p);
 
   /* a new start, a new signal, or a new filter: what is held is stale */
   if ((!was_active && p->active) || p->channel != was_channel ||
-      p->n_smooth != was_smooth || p->strobe != was_strobe) {
+      p->n_smooth != was_smooth || p->strobe != was_strobe ||
+      p->invert != was_invert) {
     reset_stream(p);
     p->last_raw_t = -1.0;
   }
@@ -538,8 +556,10 @@ static void finish(process_params_t *p, int64_t i_end, double nw,
   e.v[1] = crossing(p, i0, i_end, p->dir, p->old + 0.5 * d);
   e.v[2] = crossing(p, i0, i_end, p->dir, p->old + 0.1 * d);
   e.v[3] = crossing(p, i0, i_end, p->dir, p->old + 0.9 * d);
-  e.v[4] = p->old;
-  e.v[5] = nw;
+  /* old/new in the box's counts; strobe mode's are flash heights */
+  double sg = p->invert && !p->strobe ? -1.0 : 1.0;
+  e.v[4] = sg * p->old;
+  e.v[5] = sg * nw;
   e.v[6] = settled;
   e.v[7] = ++p->n_edges;
   e.v[8] = p->t_arm;
@@ -906,7 +926,7 @@ static int process_block(process_params_t *p, dpoint_process_info_t *pinfo)
   for (int k = 0; k < count; k++) {
     int16_t v;
     memcpy(&v, b + HDR_LEN + 2 * (k * nchan + p->channel), 2);
-    sample(p, t0 + (double) k * ivl, (double) v);
+    sample(p, t0 + (double) k * ivl, p->invert ? -(double) v : (double) v);
   }
 
  out:

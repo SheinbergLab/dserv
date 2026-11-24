@@ -541,6 +541,49 @@ int main(void)
     freeProcessParams(p);
   }
 
+  /* ---------------- invert: fewer counts = more light ---------------- */
+  printf("invert (an LM393 module's analog out: light pulls it down):\n");
+  {
+    lsig_t s = { 0 };
+    s.lev0 = 2200; s.tau = 2000;	/* dark */
+    s.n = 2;
+    s.t[0] = T0 + 100000.3; s.lev[0] = 1550;	/* lit: counts fall */
+    s.t[1] = T0 + 200000.7; s.lev[1] = 2200;	/* dark again       */
+    process_params_t *p = fresh();
+    E.n = 0;
+    run(p, &s, T0, 300000, 5000, 20, 5.0, 1, 0, &E);
+    CHECK(E.n == 2 && E.e[0][0] == -1 && E.e[1][0] == 1,
+	  "without it: darker, then brighter -- backwards (got %d edges)", E.n);
+    freeProcessParams(p);
+
+    p = fresh();
+    set(p, "invert", "1");
+    E.n = 0;
+    run(p, &s, T0, 300000, 5000, 20, 5.0, 1, 0, &E);
+    CHECK(E.n == 2, "two edges (got %d)", E.n);
+    if (E.n == 2) {
+      CHECK(E.e[0][0] == 1 && E.e[1][0] == -1, "brighter when lit, then darker");
+      CHECK(fabs(E.e[0][4] - 2200) < 10 && fabs(E.e[0][5] - 1550) < 0.03 * 650,
+	    "old/new in the box's counts (%.0f -> %.0f)", E.e[0][4], E.e[0][5]);
+      double old = E.e[0][4], nw = E.e[0][5];
+      double w50 = true_cross(&s, s.t[0], s.t[0] + 60000, -1, old + 0.5 * (nw - old));
+      CHECK(fabs(E.e[0][1] - w50) <= 60, "lit: t50 %+.1f us from truth", E.e[0][1] - w50);
+      old = E.e[1][4]; nw = E.e[1][5];
+      w50 = true_cross(&s, s.t[1], s.t[1] + 60000, 1, old + 0.5 * (nw - old));
+      CHECK(fabs(E.e[1][1] - w50) <= 60, "dark: t50 %+.1f us from truth", E.e[1][1] - w50);
+    }
+    char *lv = NULL;
+    dpoint_process_param_setting_t ps = { 0 };
+    ps.pname = "level"; ps.pval = &lv; ps.params = p;
+    getProcessParams(&ps);
+    CHECK(lv && fabs(atof(lv) - 2200) < 20, "level reads in the box's counts (%s)",
+	  lv ? lv : "none");
+    CHECK(p->have_level, "reading");
+    set(p, "invert", "0");
+    CHECK(!p->have_level && p->last_raw_t < 0, "changing invert starts clean");
+    freeProcessParams(p);
+  }
+
   if (fails) {
     printf("%d FAILURE(S)\n", fails);
     return 1;

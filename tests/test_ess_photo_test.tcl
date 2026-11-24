@@ -80,6 +80,7 @@ proc ::ess::pt_param { p } {
         n_edges  { return $::edges }
         noise    { return $::sc(noise) }
         min_step { return $::sc(min_step) }
+        invert   { return [expr {[info exists ::sc(invert)] ? $::sc(invert) : 0}] }
     }
 }
 proc ::ess::pt_enabled {} { return $::sc(enabled) }
@@ -127,6 +128,8 @@ proc ::ess::pt_stim { cmd } {
             set new [reading]
             set step [expr {$new - $old}]
             set dir [expr {$step > 0 ? 1 : -1}]
+            # the processor negates an inverted detector: dir is "brighter"
+            if { [info exists ::sc(invert)] && $::sc(invert) } { set dir [expr {-$dir}] }
             if { abs($step) >= $::sc(min_step) && $dir != $::sc(lose) && !$::sc(slow) } {
                 incr ::edges
                 set lat [expr {$lv ? $::sc(rise_us) : $::sc(fall_us)}]
@@ -210,6 +213,21 @@ rig dark 900 light 30
 ::ess::photo_test
 run
 check [list [jget verdict] [jget reversed] [jget answered]] {reversed 10 0} "reversed"
+check [string match "*turn on photo invert" [jget summary]] 1 "  says to turn on invert"
+
+puts "an inverted detector, invert on:"
+rig dark 900 light 30 invert 1
+::ess::photo_test
+run
+check [list [jget verdict] [jget answered] [jget reversed]] {aligned 10 0} "aligned"
+check [string match "*step 870 counts (dark 900, light 30)*" [jget summary]] 1 "  a positive step, the box's counts"
+
+puts "invert on, but the detector is not inverted:"
+rig invert 1
+::ess::photo_test
+run
+check [jget verdict] reversed "reversed"
+check [string match "*turn it off" [jget summary]] 1 "  says to turn invert off"
 
 puts "only the rises come back:"
 rig lose -1

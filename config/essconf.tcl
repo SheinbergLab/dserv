@@ -638,6 +638,13 @@ so the diode sees a pulse every frame even over a steady patch. On: each
 flash is one value per refresh and an edge is timed to the first refresh
 that changed. Off for an ordinary LCD, whose light is continuous."
 
+settings::declare photo invert -default 0 -type bool \
+    -apply ::ess::set_photo_invert \
+    -doc "the detector gives FEWER counts for more light (the analog out of
+the cheap LM393 comparator modules does): on, the processor negates the
+samples, so a lit patch is still a rising edge and pairing and verify work.
+Check it from the raw trace: is the lit patch the lower level?"
+
 settings::declare photo period_ms -default 0 -type double \
     -validate ::ess::photo_nonneg_norm \
     -apply ::ess::set_photo_period_ms \
@@ -721,6 +728,7 @@ so the period can be learned and a missing flash is a missing frame."
 ::ess::set_photo_patch_dark   [settings::get photo patch_dark]
 ::ess::set_photo_group      [settings::get photo group]
 ::ess::set_photo_strobe     [settings::get photo strobe]
+::ess::set_photo_invert     [settings::get photo invert]
 ::ess::set_photo_period_ms  [settings::get photo period_ms]
 ::ess::set_photo_min_step   [settings::get photo min_step]
 ::ess::set_photo_smooth_ms  [settings::get photo smooth_ms]
