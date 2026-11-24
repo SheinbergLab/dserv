@@ -20,7 +20,7 @@ the placement test read the line. See "A comparator module" below.
 
 The rig's settings are the `photo` section of dserv's settings gear
 (declared in `config/essconf.tcl`, applied by the `photo` block of
-`lib/ess-2.0.tm`). The processor keeps nothing across a dserv restart:
+`lib/ess_photo-1.0.tm`). The processor keeps nothing across a dserv restart:
 each key is pushed to it when it changes and once at boot.
 
 | key | default | |
@@ -99,7 +99,7 @@ verdict says how well the display kept up.
 
 With `enabled` and `patch` on, ESS pairs every change of the patch with
 its light as the session runs (the `photo_verify` block of
-`lib/ess-2.0.tm`). In `marked` mode that means every frame the system
+`lib/ess_photo-1.0.tm`). In `marked` mode that means every frame the system
 changed with a `!` command, so any system can be checked as it is:
 turn the two keys on, load it, run it.
 
@@ -345,7 +345,7 @@ learn from, so set it.
 
 The gear's photo section has **◐ Test placement…**. It is
 `::ess::photo_test` in the ess interp (the `photo_test` block of
-`lib/ess-2.0.tm`), which can also be run by hand:
+`lib/ess_photo-1.0.tm`), which can also be run by hand:
 
 ```bash
 dservctl -c 'send ess {::ess::photo_test}'

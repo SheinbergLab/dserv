@@ -1,4 +1,4 @@
-# test_ess_photo_test.tcl -- the photodiode placement test (lib/ess-2.0.tm,
+# test_ess_photo_test.tcl -- the photodiode placement test (lib/ess_photo-1.0.tm,
 # the photo_test block, with photo_verify's pv_median/pv_stats).
 #
 #   tclsh tests/test_ess_photo_test.tcl
@@ -46,11 +46,11 @@ proc run { {limit 2000} } {
     }
 }
 
-set src [slurp [file join $root lib ess-2.0.tm]]
+set src [slurp [file join $root lib ess_photo-1.0.tm]]
 foreach blk {photo_verify photo_test} {
     set b [string first "    # BEGIN $blk\n" $src]
     set e [string first "    # END $blk\n" $src]
-    if { $b < 0 || $e < 0 } { error "no $blk block in ess-2.0.tm" }
+    if { $b < 0 || $e < 0 } { error "no $blk block in lib" }
     namespace eval ::ess [string range $src $b $e]
 }
 

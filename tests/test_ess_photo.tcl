@@ -1,6 +1,6 @@
 # test_ess_photo.tcl -- the gear's `photo` section reaches the processor.
 #
-# config/essconf.tcl declares the section; lib/ess-2.0.tm (BEGIN photo)
+# config/essconf.tcl declares the section; lib/ess_photo-1.0.tm (BEGIN photo)
 # pushes each key to dserv's `photo` processor (processors/photo.c) and
 # logs proc/photo/edge in each data file while the rig has it on. The
 # processor keeps nothing across a restart, so these pushes are the only
@@ -57,10 +57,11 @@ namespace eval ::ess {
 }
 
 # ---- the ess block ----
-set src [slurp [file join $root lib ess-2.0.tm]]
+# the photo blocks (ess_photo-1.0.tm), and ess-2.0.tm for din_resolve
+set src "[slurp [file join $root lib ess_photo-1.0.tm]][slurp [file join $root lib ess-2.0.tm]]"
 set b [string first "    # BEGIN photo\n" $src]
 set e [string first "    # END photo\n" $src]
-if { $b < 0 || $e < 0 } { error "no photo block in ess-2.0.tm" }
+if { $b < 0 || $e < 0 } { error "no photo block in ess_photo-1.0.tm" }
 namespace eval ::ess [string range $src $b $e]
 # ... and the pairing it starts (test_ess_photo_verify.tcl tests it)
 set b [string first "    # BEGIN photo_verify\n" $src]

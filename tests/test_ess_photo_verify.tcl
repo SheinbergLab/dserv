@@ -1,10 +1,10 @@
 # test_ess_photo_verify.tcl -- each photodiode patch change paired with
-# its light, online (lib/ess-2.0.tm, the photo_verify block; docs/
+# its light, online (lib/ess_photo-1.0.tm, the photo_verify block; docs/
 # photo_processor.md, "Checking a system").
 #
 #   /usr/local/bin/dlsh tests/test_ess_photo_verify.tcl
 #
-# The block is read out of ess-2.0.tm and fed records the way stim2
+# The block is read out of ess_photo-1.0.tm and fed records the way stim2
 # (stim/photopatch), the photo processor (proc/photo/edge) and the
 # stim_cmd_log hook would, on a clock the test sets. dservSetData is a
 # stand-in that keeps what was published.
@@ -26,10 +26,10 @@ proc now {} { return $::clk }
 set ::out {}
 proc dservSetData { name ts type data } { lappend ::out [list $name $ts $data] }
 
-set src [slurp [file join $root lib ess-2.0.tm]]
+set src [slurp [file join $root lib ess_photo-1.0.tm]]
 set b [string first "    # BEGIN photo_verify\n" $src]
 set e [string first "    # END photo_verify\n" $src]
-if { $b < 0 || $e < 0 } { error "no photo_verify block in ess-2.0.tm" }
+if { $b < 0 || $e < 0 } { error "no photo_verify block in ess_photo-1.0.tm" }
 namespace eval ::ess [string range $src $b $e]
 
 # a JSON field, enough for these flat records

@@ -42,11 +42,12 @@ proc fire { id } {
     uplevel #0 $s
 }
 
-set src [slurp [file join $root lib ess-2.0.tm]]
+# photo_verify is in ess_photo-1.0.tm, obs_end_hold in ess-2.0.tm
+set src "[slurp [file join $root lib ess_photo-1.0.tm]][slurp [file join $root lib ess-2.0.tm]]"
 foreach blk {photo_verify obs_end_hold} {
     set b [string first "    # BEGIN $blk\n" $src]
     set e [string first "    # END $blk\n" $src]
-    if { $b < 0 || $e < 0 } { error "no $blk block in ess-2.0.tm" }
+    if { $b < 0 || $e < 0 } { error "no $blk block in lib" }
     namespace eval ::ess [string range $src $b $e]
 }
 # evt_put's line that matters here, and the per-obs checks
