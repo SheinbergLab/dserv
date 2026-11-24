@@ -695,13 +695,23 @@ namespace eval ess {
         catch { display_tlock_health }
     }
 
-    # Where the declared line is right now: a dict of status (none | ok |
-    # unresolved), kind (di | group | path), dp (the datapoint or match
-    # pattern; "" unless ok) and detail. Resolved when asked, never cached:
-    # boxes come and go.
     proc display_tlock_din_resolve {} {
         variable display_tlock_din
-        set v $display_tlock_din
+        din_resolve $display_tlock_din
+    }
+
+    # A digital input line, by label, resolved where it is right now: a
+    # dict of status (none | ok | unresolved), kind (di | group | path), dp
+    # (the datapoint or match pattern; "" unless ok) and detail. Resolved
+    # when asked, never cached: boxes come and go. Shared by `tlock din` and
+    # `photo din` (photo_din_resolve).
+    #
+    #   label       the DI line labelled so, on whichever box announces it
+    #               (<io>/<dev>/state/di/<pin>); else the chord group of
+    #               that name (<io>/*/state/group/<label>)
+    #   a/b...      a datapoint name, taken as written
+    #   ""          none
+    proc din_resolve { v } {
         if { $v eq "" } {
             return [dict create status none kind "" dp "" detail "no input declared"]
         }
@@ -889,8 +899,10 @@ namespace eval ess {
     proc set_photo_enabled {on} {
         variable photo_enabled [expr {$on ? 1 : 0}]
         variable photo_warned
+        variable photo_din
+        catch { photo_din_attach }
         if { ![photo_param active $photo_enabled] && $photo_enabled &&
-             !$photo_warned } {
+             $photo_din eq "" && !$photo_warned } {
             set photo_warned 1
             ::ess::ess_warning "photo enabled, but this dserv has no photo\
  processor (processors/photo.c): no light edges are detected" "photo"
@@ -917,6 +929,116 @@ namespace eval ess {
         photo_param min_step [photo_nonneg_norm $v]
     }
 
+
+
+    # THE LIGHT FROM A DIGITAL LINE (setting `photo din`). A comparator
+    # module -- a photodiode, a pot for the threshold, a digital out: the
+    # LM393 boards -- on an extio DI line, labelled. Each edge on the line
+    # IS a light edge, stamped by the box when the line changed (the first
+    # edge of a debounce window, so a debounce delays the report, never the
+    # time). 1 is light: set the line active-low on the box where the
+    # module pulls low in light, as the LM393 boards do.
+    #
+    # With it set, the pairing (photo_verify), the health light and
+    # photo_test read the line, not the processor. The processor still runs
+    # on its analog group if one streams, and proc/photo/edge is still
+    # logged: a validation session can check the comparator against the
+    # analog signal. The line's edges, the box's clock records and where
+    # the label resolved (photo/din) go in every data file.
+    #
+    # Comparator edges are a fixed threshold on the light: steady to
+    # ~0.05 ms while the light levels are, but a change of room light moves
+    # the threshold's place on the transition, and the edge with it (0.5 ms
+    # on an LCD, 2026-11-24). Shield the detector.
+    variable photo_din ""
+    variable photo_din_dp ""          ;# the datapoint subscribed to; "" none
+    variable photo_din_n 0            ;# edges since dserv started
+    variable photo_din_seq 0
+    variable photo_din_last {}        ;# {value t} of the newest edge
+    proc set_photo_din {v} {
+        variable photo_din [string trim $v]
+        photo_din_attach
+        catch { photo_health }
+    }
+    # A chord group is no light line: the box settles its members into one
+    # event, and edges a frame apart may merge
+    proc photo_din_resolve {} {
+        variable photo_din
+        set r [din_resolve $photo_din]
+        if { [dict get $r status] eq "ok" && [dict get $r kind] eq "group" } {
+            return [dict create status unresolved kind group dp "" \
+                        detail "$photo_din is a chord group, not a line:\
+ label the comparator's DI pin itself"]
+        }
+        return $r
+    }
+    # Subscribe to the line while photo is enabled and it resolves.
+    # Idempotent; called at each setting, system load and data file open,
+    # as boxes come and go. Returns the datapoint, "" none.
+    proc photo_din_attach {} {
+        variable photo_enabled
+        variable photo_din
+        variable photo_din_dp
+        set dp ""
+        if { $photo_enabled && $photo_din ne "" } {
+            set r [photo_din_resolve]
+            if { [dict get $r status] eq "ok" } { set dp [dict get $r dp] }
+        }
+        if { $dp eq $photo_din_dp } { return $dp }
+        if { $photo_din_dp ne "" } { catch { dservRemoveMatch $photo_din_dp } }
+        set photo_din_dp $dp
+        if { $dp ne "" } {
+            dservAddExactMatch $dp
+            dpointSetScript $dp ::ess::photo_din_edge
+        }
+        return $dp
+    }
+    proc photo_din_edge { dpoint data } {
+        variable photo_din_n
+        variable photo_din_last
+        variable pv_on
+        set t [now]
+        catch { set t [dservTimestamp $dpoint] }
+        incr photo_din_n
+        set photo_din_last [list $data $t]
+        if { $pv_on } {
+            pv_edge [photo_din_row $data $t]
+            pv_resolve [now]
+        }
+    }
+    # a line's edge as a proc/photo/edge row: dir t50 t10 t90 old new
+    # settled seq t_arm t_done -- one time, the box's stamp, for all three
+    proc photo_din_row { v t } {
+        variable photo_din_seq
+        set v [expr {$v ? 1 : 0}]
+        list [expr {$v ? 1 : -1}] $t $t $t [expr {1 - $v}] $v 1 \
+            [incr photo_din_seq] $t $t
+    }
+    # photo/din, and the datafile matches: the line's edges, every one,
+    # unbuffered, the box clock's records (see stim_tlock_din_match), and
+    # the resolution (re-emitted once the logger runs: open_datafile's
+    # dservTouch). Returns 1 when the edges were matched.
+    proc photo_din_log_match { filename } {
+        variable photo_din
+        if { $photo_din eq "" } { return 0 }
+        set r [photo_din_resolve]
+        dservSet photo/din $r
+        dservLoggerAddMatch $filename photo/din 0 0 1
+        if { [dict get $r status] ne "ok" } {
+            ::ess::ess_warning "photo din: [dict get $r detail] -- no light\
+ edges in this data file" "photo"
+            return 0
+        }
+        photo_din_attach
+        set dp [dict get $r dp]
+        dservLoggerAddMatch $filename $dp 0 0 1
+        if { [regexp {^(.+/state)/di/[^/]+$} $dp -> base] } {
+            dservLoggerAddMatch $filename $base/sync/* 0 0 1
+            dservLoggerAddMatch $filename $base/in_obs 0 0 1
+        }
+        return 1
+    }
+
     # The datafile match for proc/photo/edge (file_open), while the rig has
     # it on: not obs-limited, so an edge reported after its obs ended (the
     # block that finished it arrived later) is still kept -- its timestamp
@@ -935,6 +1057,8 @@ namespace eval ess {
         # (photo_verify): counted afresh for each file
         dservLoggerAddMatch $filename photo/pair 0 0 1
         dservLoggerAddMatch $filename photo/verify 0 0 1
+        # the comparator's line, where the light comes from one
+        photo_din_log_match $filename
         variable pv_on
         if { $pv_on } { pv_new_count $off }
         catch { photo_health }
@@ -1030,6 +1154,7 @@ namespace eval ess {
         variable photo_patch
         variable photo_patch_opts
         variable photo_patch_stim
+        catch { photo_din_attach }
         if { !$photo_enabled || !$photo_patch } {
             set photo_patch_stim 0
             photo_verify_stop
@@ -1103,62 +1228,87 @@ namespace eval ess {
         return extio/*/state/ain/$group
     }
 
-    proc photo_health {} {
-        variable photo_enabled
+    # The patch half of the light, for either source: src names it, n its
+    # edges so far, t_edge its newest edge's time (0 none), hint what to
+    # check when the changes go unanswered.
+    proc photo_patch_health { src n t_edge hint } {
         variable photo_patch
         variable photo_patch_stim
+        variable photo_health_answer_us
+        if { $photo_patch && $photo_patch_stim < 0 } {
+            return "error stim2 cannot draw the patch (no photopatch module)"
+        }
+        if { !$photo_patch } { return "ok reading $src, $n edges" }
+        set t_pp [photo_newest stim/photopatch]
+        # the patch appearing (why 1: swapcount wall level serial ntags
+        # why) is no change over a scene as dark as it
+        set why 0
+        catch { set why [lindex [dservGet stim/photopatch] 5] }
+        if { $t_pp == 0 || ($why == 1 && $t_edge == 0) } {
+            return "ok reading $src, $n edges; the patch has not changed yet"
+        }
+        if { $t_edge == 0 } {
+            return "error the patch has changed, but no edge ever came back: $hint"
+        }
+        if { $t_pp - $t_edge > $photo_health_answer_us } {
+            return "error the patch changed, but the last edge is\
+ [format %.1f [expr {($t_pp - $t_edge) / 1e6}]] s older than the last\
+ change: [lindex [split $hint ?] 0]?"
+        }
+        # and how well, this file (photo_verify)
+        set s ""
+        catch { set s [pv_summary] }
+        if { $s ne "" } { return "ok reading $src; $s" }
+        return "ok reading $src, $n edges; the patch's changes answered"
+    }
+
+    proc photo_health {} {
+        variable photo_enabled
         variable photo_health_last
         variable photo_health_stale_us
-        variable photo_health_answer_us
+        variable photo_din
+        variable photo_din_n
         set h ""
-        set n_edges [processGetParam photo n_edges]
         if { !$photo_enabled } {
             set h "off not enabled on this rig"
-        } elseif { $n_edges eq "" } {
-            set h "error this dserv has no photo processor: nothing is detected"
-        } else {
-            set group [processGetParam photo group]
-            set gname [expr {$group eq "" ? "every analog group" : "group $group"}]
-            set t_blk [photo_newest [photo_group_pattern $group]]
-            set now_us [now]
-            if { $t_blk == 0 } {
-                if { [photo_newest extio/*/state/ain/*] } {
-                    set h "error no block from $gname, though other analog\
- groups stream: is the group name right?"
-                } else {
-                    set h "error no block from $gname: is the diode's group\
- streaming?"
-                }
-            } elseif { $now_us - $t_blk > $photo_health_stale_us } {
-                set h "error the last block from $gname is\
- [expr {($now_us - $t_blk) / 1000000}] s old: the stream stopped"
-            } elseif { $photo_patch && $photo_patch_stim < 0 } {
-                set h "error stim2 cannot draw the patch (no photopatch module)"
-            } elseif { $photo_patch } {
-                set t_pp [photo_newest stim/photopatch]
-                set t_edge [photo_newest proc/photo/edge]
-                # the patch appearing (why 1: swapcount wall level serial
-                # ntags why) is no change over a scene as dark as it
-                set why 0
-                catch { set why [lindex [dservGet stim/photopatch] 5] }
-                if { $t_pp == 0 || ($why == 1 && $t_edge == 0) } {
-                    set h "ok reading $gname, $n_edges edges; the patch has not changed yet"
-                } elseif { $t_edge == 0 } {
-                    set h "error the patch has changed, but no edge ever came\
- back: is the diode over the patch? min_step above its step?"
-                } elseif { $t_pp - $t_edge > $photo_health_answer_us } {
-                    set h "error the patch changed, but the last edge is\
- [format %.1f [expr {($t_pp - $t_edge) / 1e6}]] s older than the last\
- change: is the diode over the patch?"
-                } else {
-                    set h "ok reading $gname, $n_edges edges; the patch's changes answered"
-                    # and how well, this file (photo_verify)
-                    set s ""
-                    catch { set s [pv_summary] }
-                    if { $s ne "" } { set h "ok reading $gname; $s" }
-                }
+        } elseif { $photo_din ne "" } {
+            # the light from a comparator's line: no stream to watch, only
+            # whether its edges answer the patch
+            set r [photo_din_resolve]
+            if { [dict get $r status] ne "ok" } {
+                set h "error photo din: [dict get $r detail]"
             } else {
-                set h "ok reading $gname, $n_edges edges"
+                photo_din_attach
+                set h [photo_patch_health "line $photo_din" $photo_din_n \
+                           [photo_newest [dict get $r dp]] \
+                           "is the detector over the patch, its pot between\
+ the patch's dark and light?"]
+            }
+        } else {
+            set n_edges [processGetParam photo n_edges]
+            if { $n_edges eq "" } {
+                set h "error this dserv has no photo processor: nothing is detected"
+            } else {
+                set group [processGetParam photo group]
+                set gname [expr {$group eq "" ? "every analog group" : "group $group"}]
+                set t_blk [photo_newest [photo_group_pattern $group]]
+                set now_us [now]
+                if { $t_blk == 0 } {
+                    if { [photo_newest extio/*/state/ain/*] } {
+                        set h "error no block from $gname, though other analog\
+ groups stream: is the group name right?"
+                    } else {
+                        set h "error no block from $gname: is the diode's group\
+ streaming?"
+                    }
+                } elseif { $now_us - $t_blk > $photo_health_stale_us } {
+                    set h "error the last block from $gname is\
+ [expr {($now_us - $t_blk) / 1000000}] s old: the stream stopped"
+                } else {
+                    set h [photo_patch_health $gname $n_edges \
+                               [photo_newest proc/photo/edge] \
+                               "is the diode over the patch? min_step above its step?"]
+                }
             }
         }
         if { $h ne $photo_health_last } {
@@ -1328,7 +1478,9 @@ namespace eval ess {
     }
     proc pv_edge_dp { dpoint data } {
         variable pv_on
-        if { !$pv_on } return
+        variable photo_din
+        # with a light line (photo din), its edges are the light
+        if { !$pv_on || ([info exists photo_din] && $photo_din ne "") } return
         pv_edge $data
         pv_resolve [now]
     }
@@ -1635,6 +1787,7 @@ namespace eval ess {
     variable pt_noise 0
     variable pt_min_step 0
     variable pt_sign 1            ;# -1 when the detector is inverted
+    variable pt_din ""            ;# the light line's label (photo din); "" analog
     variable pt_off 0
     variable pt_base {}           ;# before the flip: changes edges level target
     variable pt_corner ""
@@ -1673,6 +1826,17 @@ namespace eval ess {
         return ""
     }
     proc pt_done_hook {} { catch { photo_health } }
+    # the light line (photo din): its label ("" reads the processor), why
+    # it cannot be read ("" it can), its edge count and newest {value t}
+    proc pt_din_line {} { variable photo_din ; set photo_din }
+    proc pt_din_check {} {
+        set r [photo_din_resolve]
+        if { [dict get $r status] ne "ok" } { return "photo din: [dict get $r detail]" }
+        photo_din_attach
+        return ""
+    }
+    proc pt_din_count {} { variable photo_din_n ; set photo_din_n }
+    proc pt_din_last {} { variable photo_din_last ; set photo_din_last }
 
     proc photo_test { {what run} args } {
         switch -- $what {
@@ -1705,6 +1869,7 @@ namespace eval ess {
         variable pt_off
         variable pt_base
         variable pt_corner
+        variable pt_din
         if { $pt_on } { error "photo_test: a test is already running (photo_test stop)" }
         if { ![string is integer -strict $n] || $n < 1 || $n > 1000 } {
             error "photo_test: flips, 1 to 1000"
@@ -1728,6 +1893,8 @@ namespace eval ess {
             set why "not now: $busy (the flips would be in it)"
         } elseif { ![pt_enabled] } {
             set why "photo is not enabled on this rig (gear: photo enabled)"
+        } elseif { [set pt_din [pt_din_line]] ne "" } {
+            set why [pt_din_check]
         } elseif { [pt_param n_edges] eq "" } {
             set why "this dserv has no photo processor"
         } else {
@@ -1795,6 +1962,7 @@ namespace eval ess {
         variable pt_sign
         variable pt_off
         variable pt_base
+        variable pt_din
         if { !$pt_on || $id != $pt_id } return
         set pt_timer ""
         set busy [pt_busy]
@@ -1806,16 +1974,29 @@ namespace eval ess {
             return
         }
         set changes [dict get $st changes]
-        set level_now [pt_param level]
-        set edges_now [pt_param n_edges]
+        if { $pt_din ne "" } {
+            # the line's value is the level: 1 light, 0 dark
+            set level_now [lindex [pt_din_last] 0]
+            if { $level_now eq "" } { set level_now 0 }
+            set edges_now [pt_din_count]
+        } else {
+            set level_now [pt_param level]
+            set edges_now [pt_param n_edges]
+        }
 
         if { $pt_k == 0 } {
-            set pt_noise [pt_param noise]
-            set pt_min_step [pt_param min_step]
-            # `level` is in the box's counts; with invert, light is lower
-            set inv 0
-            catch { set inv [pt_param invert] }
-            set pt_sign [expr {[string is true -strict $inv] ? -1 : 1}]
+            if { $pt_din ne "" } {
+                set pt_noise 0
+                set pt_min_step 0
+                set pt_sign 1
+            } else {
+                set pt_noise [pt_param noise]
+                set pt_min_step [pt_param min_step]
+                # `level` is in the box's counts; with invert, light is lower
+                set inv 0
+                catch { set inv [pt_param invert] }
+                set pt_sign [expr {[string is true -strict $inv] ? -1 : 1}]
+            }
             lappend pt_levels [list [dict get $st level] $level_now]
         } else {
             lassign $pt_base changes0 edges0 level0 target
@@ -1826,7 +2007,15 @@ namespace eval ess {
             set lat null
             if { $dk > 0 } {
                 set rec {}
-                catch { set rec [pt_get proc/photo/edge] }
+                if { $pt_din ne "" } {
+                    lassign [pt_din_last] v t
+                    if { $t ne "" } {
+                        set d [expr {$v ? 1 : -1}]
+                        set rec [list $d $t $t $t 0 0 1 0 $t $t]
+                    }
+                } else {
+                    catch { set rec [pt_get proc/photo/edge] }
+                }
                 if { [llength $rec] >= 10 } {
                     lassign [lrange $rec end-9 end] dir t50
                     set dir [expr {int($dir)}]
@@ -1930,12 +2119,14 @@ namespace eval ess {
         variable pt_sign
         variable pt_corner
         variable pt_flips
+        variable pt_din
         lassign [pt_counts] f a r
         lassign [pt_dark_light] dark light
         if { !$f } {
             if { ![llength $pt_flips] } { return [list none "no flips"] }
             return [list error "stim2 never changed the patch"]
         }
+        if { $pt_din ne "" } { return [pt_din_verdict $f $a $r] }
         set step [expr {$dark eq "" || $light eq "" ? 0.0 : ($light - $dark) * $pt_sign}]
         set S [format %.0f $step]
         set M [format %.0f $pt_min_step]
@@ -1985,6 +2176,36 @@ namespace eval ess {
  not over the patch ($pt_corner)"]
     }
 
+    # A light line has no level to measure: only whether each flip came
+    # back, and which way. The pot sets the threshold; the module's LED
+    # shows where it is while the patch flips (photo_test aim).
+    proc pt_din_verdict { f a r } {
+        variable pt_din
+        variable pt_corner
+        set lt "line $pt_din"
+        if { $a == $f } {
+            set s "aligned: $a of $f changes answered on $lt"
+            foreach { name d } { rise 1 fall -1 } {
+                lassign [pv_stats [pt_lats $d]] n med sd
+                if { $n } { append s "; $name $med ms (sd $sd)" }
+            }
+            return [list aligned $s]
+        }
+        if { $r > $a && 2 * $r >= $f } {
+            return [list reversed "reversed: $lt goes to 1 when the patch\
+ darkens: set the line active-low on the box (the LM393 boards pull low in\
+ light), or off if it is set"]
+        }
+        if { $a > 0 } {
+            return [list partial "partial: $a of $f changes answered on $lt:\
+ the threshold is near one of the patch's levels. Turn the pot toward the\
+ middle, or centre the detector"]
+        }
+        return [list none "none: no edge on $lt: is the detector over the patch\
+ ($pt_corner), and its pot between the patch's dark and light? (its LED\
+ should follow the patch)"]
+    }
+
     # lat50s of the answered flips to a direction, us
     proc pt_lats { d } {
         variable pt_flips
@@ -2012,6 +2233,7 @@ namespace eval ess {
         variable pt_noise
         variable pt_min_step
         variable pt_last
+        variable pt_din
         lassign [pt_counts] f a r
         lassign [pt_dark_light] dark light
         set step [expr {$dark eq "" || $light eq "" ? "" : $light - $dark}]
@@ -2020,6 +2242,8 @@ namespace eval ess {
             set s [lindex $x 3]
             if { $best eq "" || $s > $best } { set best $s }
         }
+        # a line is 0 or 1: no levels to report
+        if { $pt_din ne "" } { lassign {} dark light step best }
         if { $summary eq "" && $state eq "running" } {
             set summary "flip $pt_k of $pt_n"
             if { $step ne "" } { append summary ": step [format %.0f $step] counts" }
@@ -2027,6 +2251,7 @@ namespace eval ess {
         }
         set json "\{\"id\":$pt_id,\"mode\":\"$pt_mode\",\"state\":\"$state\""
         append json ",\"n\":$pt_n,\"flipped\":$f,\"answered\":$a,\"reversed\":$r"
+        append json ",\"source\":\"[expr {$pt_din ne "" ? "din" : "analog"}]\""
         append json ",\"verdict\":\"$verdict\",\"summary\":\"[pt_js $summary]\""
         append json ",\"dark\":[pt_num $dark],\"light\":[pt_num $light]"
         append json ",\"step\":[pt_num $step],\"best\":[pt_num $best]"
@@ -7021,6 +7246,9 @@ namespace eval ess {
         # which datapoint the Display++ trigger input is (stim_tlock_din_match)
         variable display_tlock
         if { $display_tlock && [dservExists tlock/din] } { dservTouch tlock/din }
+        # ... and the photodiode's light line (photo_din_log_match)
+        variable photo_din
+        if { $photo_din ne "" && [dservExists photo/din] } { dservTouch photo/din }
         variable stim_lib_names
         foreach _lib $stim_lib_names {
             if {[dservExists stim/lib/$_lib]} { dservTouch stim/lib/$_lib }

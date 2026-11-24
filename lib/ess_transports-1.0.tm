@@ -1441,7 +1441,7 @@ namespace eval ess {
                                          a declaration, not a failure" \
                                  durable 1 status ok address ""]
             }
-            tlock_din {
+            tlock_din - photo_din {
                 # For `tlock din`: the input a Display++'s
                 # trigger output is wired to, named by LABEL (the resolver
                 # is ::ess::display_tlock_din_resolve, ess-2.0.tm).
@@ -1453,6 +1453,11 @@ namespace eval ess {
                 # event, and edges a refresh apart may not survive that.
                 # An unlabelled pin is not offered -- label it on the box
                 # first, so the setting survives a box swap.
+                #
+                # For `photo din` (::ess::photo_din_resolve): the line a
+                # light comparator's output is wired to. Lines only, those
+                # labelled photo* first: a chord group would merge edges.
+                set pref [expr {$kind eq "photo_din" ? "*photo*" : "*tlock*"}]
                 set lines {}
                 set groups {}
                 foreach dev [input_boxes] {
@@ -1488,20 +1493,27 @@ namespace eval ess {
                     }
                 }
                 foreach c $lines {
-                    if { [string match -nocase *tlock* [dict get $c route]] } { lappend out $c }
+                    if { [string match -nocase $pref [dict get $c route]] } { lappend out $c }
                 }
                 foreach c $lines {
-                    if { ![string match -nocase *tlock* [dict get $c route]] } { lappend out $c }
+                    if { ![string match -nocase $pref [dict get $c route]] } { lappend out $c }
                 }
-                lappend out {*}$groups
-                lappend out [dict create route "" label none \
-                                 detail "no input wired to the trigger: its\
-                                         edges are not logged" \
-                                 durable 1 selectable 1 status ok address ""]
+                if { $kind eq "photo_din" } {
+                    lappend out [dict create route "" label none \
+                                     detail "no light line: the analog photodiode\
+                                             and the photo processor" \
+                                     durable 1 selectable 1 status ok address ""]
+                } else {
+                    lappend out {*}$groups
+                    lappend out [dict create route "" label none \
+                                     detail "no input wired to the trigger: its\
+                                             edges are not logged" \
+                                     durable 1 selectable 1 status ok address ""]
+                }
             }
             default {
                 error "input_candidates: unknown kind '$kind'\
-                       (want button | group | press_group | tlock_din | out)"
+                       (want button | group | press_group | tlock_din | photo_din | out)"
             }
         }
         return $out

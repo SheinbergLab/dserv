@@ -67,6 +67,11 @@ set b [string first "    # BEGIN photo_verify\n" $src]
 set e [string first "    # END photo_verify\n" $src]
 namespace eval ::ess [string range $src $b $e]
 proc dservSetData { args } {}
+# ... and the line resolver it shares with tlock (beside tlock's code)
+set b [string first "    proc din_resolve \{ v \} \{\n" $src]
+set e [string first "\n    \}\n" $src $b]
+if { $b < 0 } { error "no din_resolve in ess-2.0.tm" }
+namespace eval ::ess [string range $src $b $e+6]
 proc dservAddExactMatch { name } { lappend ::subs $name }
 proc dpointSetScript { name script } { lappend ::subs $script }
 set ::ess::stim_cmd_hook ""
@@ -234,6 +239,75 @@ set ::ess::photo_enabled 0
 set ::ess::photo_patch 0
 set ::ess::photo_patch_stim 0
 
+puts "the light line (photo din):"
+set ::removed {}
+proc dservRemoveMatch { name } { lappend ::removed $name }
+set ::subs {}
+set PDI extio/photo-sync/state/di/0
+::ess::set_photo_din " photopatch "
+check $::subs {} "photo off: nothing subscribed"
+::ess::set_photo_enabled 1
+check [dict get [::ess::photo_din_resolve] status] unresolved "no box announces it: unresolved"
+check [list [light] [string match "*no box announces*photopatch*" [why]]] {error 1} \
+    "  the light says so ([why])"
+dict set ::table extio/photo-sync/state/label/0 [list $T photopatch]
+check [::ess::photo_din_attach] $PDI "a box labels a line so: resolved"
+check $::subs [list $PDI ::ess::photo_din_edge] "  the line subscribed"
+::ess::photo_din_attach
+check [llength $::subs] 2 "  once"
+dict set ::table extio/box01/state/group/lever/pins [list $T 1,2]
+::ess::set_photo_din lever
+check [list [dict get [::ess::photo_din_resolve] status] $::removed] [list unresolved $PDI] \
+    "a chord group refused, the old line let go"
+::ess::set_photo_din photopatch
+set ::ess::warned {}
+set ::psp -1
+set ::ess::photo_warned 0
+::ess::set_photo_enabled 1
+check $::ess::warned {} "no processor, but a line: no warning"
+set ::psp 0
+
+# its edges pair with the patch's changes; the processor's are ignored
+::ess::pv_start marked 0
+set T0 [expr {$T + 20000000}]
+::ess::pv_change [list 50 $T0 1 7 1 2 0] $T0
+dict set ::table $PDI [list [expr {$T0 + 13100}] 1]
+::ess::photo_din_edge $PDI 1
+::ess::pv_edge_dp proc/photo/edge [list 1 [expr {$T0 + 12000}] 0 0 0 0 1 9 0 0]
+check [llength $::ess::pv_edges] 1 "one edge: the line's, not the processor's"
+check [lrange [lindex $::ess::pv_edges 0] 0 2] [list [expr {$T0 + 13100}] 1 [expr {$T0 + 13100}]] \
+    "  at the box's stamp, brighter"
+::ess::pv_resolve [expr {$T0 + 400000}]
+check [list [dict get $::ess::pv_n changes] [dict get $::ess::pv_n lit]] {1 1} "  the change lit"
+check [::ess::photo_din_row 0 5] {-1 5 5 5 1 0 1 2 5 5} "a 0 is darker, a row of ten"
+::ess::pv_stop
+
+# the light, from the line
+set ::ess::photo_patch 1
+set ::ess::photo_patch_stim 1
+dict set ::table stim/photopatch [list [expr {$T0 + 30000}] {60 0 0 8 1 2}]
+dict set ::table $PDI [list [expr {$T0 + 42000}] 0]
+::ess::photo_health
+check [string match "ok reading line photopatch; pass: 1 of 1*" [dict get $::dp photo/health]] 1 \
+    "edges answer the patch: ok ([why])"
+dict set ::table stim/photopatch [list [expr {$T0 + 3000000}] {61 0 1 9 1 2}]
+::ess::photo_health
+check [list [light] [string match "*3.0 s older*detector over the patch*" [why]]] {error 1} \
+    "the line stopped answering: error ([why])"
+
+# the data file
+set ::matches {}
+::ess::photo_log_match g.ess
+check [lrange $::matches 4 end] [list {g.ess photo/din 0 0 1} [list g.ess $PDI 0 0 1] \
+    {g.ess extio/photo-sync/state/sync/* 0 0 1} {g.ess extio/photo-sync/state/in_obs 0 0 1}] \
+    "the resolution, the line's edges, the box clock's records"
+check [dict get $::dp photo/din dp] $PDI "  photo/din says which datapoint"
+::ess::set_photo_din ""
+check [lindex $::removed end] $PDI "cleared: the line let go"
+set ::ess::photo_enabled 0
+set ::ess::photo_patch 0
+set ::ess::photo_patch_stim 0
+
 # ---- the declarations ----
 puts "gear section (essconf.tcl):"
 set conf [slurp [file join $root config essconf.tcl]]
@@ -258,9 +332,9 @@ eval [string range $conf $b $e]
 
 set keys {}
 dict for { k opts } $::settings::decl { lappend keys $k }
-check $keys [concat photo/enabled photo/group photo/strobe photo/invert photo/period_ms photo/min_step photo/smooth_ms \
+check $keys [concat photo/enabled photo/group photo/din photo/strobe photo/invert photo/period_ms photo/min_step photo/smooth_ms \
     photo/settle_ms photo/patch photo/patch_mode photo/patch_corner photo/patch_size \
-    photo/patch_inset photo/patch_dark] "fourteen keys"
+    photo/patch_inset photo/patch_dark] "fifteen keys"
 check [list $::ess::photo_patch $::ess::photo_patch_opts] \
     {0 {-mode marked -corner tr -size 60 -inset 0 -dark 0}} \
     "boot: the patch off, its defaults as stim2's"

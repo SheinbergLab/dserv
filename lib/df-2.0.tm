@@ -542,6 +542,8 @@ namespace eval df {
     #   extio/record       the rig's list; its DI lines and chord groups
     #   tlock/din          the input a Display++ trigger output is wired to
     #                      (setting `tlock din`)
+    #   photo/din          the line a light comparator is wired to (setting
+    #                      `photo din`)
     #
     # Columns, one row per trial, picked from the obs DG by the trials'
     # obsid (every extractor writes it):
@@ -554,6 +556,8 @@ namespace eval df {
     #   tlock_din_t        the trigger input's edges, the same way; named
     #   tlock_din          tlock_din whatever the line's label, and left out
     #                      when extio/record already added that line
+    #   photo_din_t        the light line's edges (1 light), the same way
+    #   photo_din
     #
     # <group> gains a <box>_ prefix only when two boxes' groups share a
     # name. A column the extractor already wrote is left alone: a system
@@ -732,13 +736,17 @@ namespace eval df {
             }
         }
 
-        # ---- the Display++ trigger input: tlock/din ----
-        # The line the monitor's trigger output is wired to (setting `tlock
-        # din`). Its edges are the frames that carried a T-Lock packet,
-        # reaching the panel. Always named tlock_din, whatever the line is
+        # ---- the Display++ trigger input (tlock/din) and the light line
+        # (photo/din) ----
+        # tlock: the line the monitor's trigger output is wired to (setting
+        # `tlock din`); its edges are the frames that carried a T-Lock
+        # packet, reaching the panel. photo: the line a light comparator is
+        # wired to (setting `photo din`); its edges are the light changing.
+        # Always named tlock_din / photo_din, whatever the line is
         # labelled; skipped when extio/record already added the same line.
-        set td [session_key $g tlock/din]
-        if {$td ne "" && [dict exists $td status] && [dict get $td status] eq "ok"} {
+        foreach {key base} {tlock/din tlock_din photo/din photo_din} {
+            set td [session_key $g $key]
+            if {$td eq "" || ![dict exists $td status] || [dict get $td status] ne "ok"} continue
             set dp [dict get $td dp]
             # a group or a path may be a match pattern (extio/*/state/group/G)
             if {[string match {*[*?]*} $dp]} {
@@ -749,13 +757,14 @@ namespace eval df {
                     }
                 }
                 if {[llength $hits] > 1} {
-                    puts "df: tlock/din pattern $dp matches [join [lsort $hits] {, }] --\
+                    puts "df: $key pattern $dp matches [join [lsort $hits] {, }] --\
                           using [lindex [lsort $hits] 0]"
                 }
                 set dp [expr {[llength $hits] ? [lindex [lsort $hits] 0] : $dp}]
             }
             if {$dp ni $added} {
-                _add_edges $trials $g $obsid $dp tlock_din $have "tlock/din"
+                _add_edges $trials $g $obsid $dp $base $have $key
+                lappend added $dp
             }
         }
         return $trials

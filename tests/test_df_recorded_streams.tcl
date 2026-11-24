@@ -128,6 +128,21 @@ dl_set $t6:obsid [dl_ilist 0]
 df::add_recorded_streams $t6 $g
 check "unresolved tlock/din: no column" [dl_exists $t6:tlock_din_t] 0
 
+# ---- photo/din: the light comparator's line ----------------------------------
+set pdi extio/photo-sync/state/di/0
+dl_set $g:<ds>$pdi  [dl_llist [dl_ilist 1 0] [dl_ilist 0 1 0 1] [dl_ilist]]
+dl_set $g:<dst>$pdi [dl_llist [dl_dlist 22.5 2033.8] [dl_dlist 20.4 2031.8 2034.8 2748.4] [dl_dlist]]
+dl_set $g:<dsn>$pdi [dl_llist [dl_ilist 1 1] [dl_ilist 1 1 1 1] [dl_ilist]]
+dl_set $g:<session>photo/din [dl_llist [dl_slist \
+    [dict create status ok kind di dp $pdi detail "photo-sync pin 0, labelled photopatch"]]]
+set t7 [dg_create]
+dl_set $t7:obsid [dl_ilist 1 0 2]
+df::add_recorded_streams $t7 $g
+check "photo_din_t row0 = obs 1" [dl_tcllist [dl_get $t7:photo_din_t 0]] {20.4 2031.8 2034.8 2748.4}
+check "photo_din row1 = obs 0" [dl_tcllist [dl_get $t7:photo_din 1]] {1 0}
+check "photo_din beside tlock/din's line" [dl_exists $t7:tlock_din] 0
+dl_delete $g:<session>photo/din
+
 # ---- a file with no keys: untouched ------------------------------------------
 set g2 [dg_create]
 set t2 [dg_create]

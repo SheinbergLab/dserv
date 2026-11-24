@@ -67,6 +67,7 @@ proc rig { args } {
     if { [info exists ::sc(on)] } { dict set ::pp on $::sc(on) }
     set ::edges 0
     set ::edge {}
+    set ::din_last {}
     set ::sent {}
     set ::pub {}
     set ::timers [dict create]
@@ -91,6 +92,12 @@ proc ::ess::pt_patch_opts {} {
 proc ::ess::pt_wall_off {} { return 0 }
 proc ::ess::pt_busy {} { return $::busy }
 proc ::ess::pt_get { dp } { return $::edge }
+# a light line (photo din): sc(din) its label, sc(din_bad) why it cannot be
+# read, sc(din_rev) the line wired the wrong way round
+proc ::ess::pt_din_line {} { expr {[info exists ::sc(din)] ? $::sc(din) : ""} }
+proc ::ess::pt_din_check {} { expr {[info exists ::sc(din_bad)] ? $::sc(din_bad) : ""} }
+proc ::ess::pt_din_count {} { set ::edges }
+proc ::ess::pt_din_last {} { set ::din_last }
 set ::done_hooks 0
 proc ::ess::pt_done_hook {} { incr ::done_hooks }
 proc ::ess::pt_stim { cmd } {
@@ -134,6 +141,8 @@ proc ::ess::pt_stim { cmd } {
                 incr ::edges
                 set lat [expr {$lv ? $::sc(rise_us) : $::sc(fall_us)}]
                 set ::edge [list $dir [expr {$wall + $lat}] 0 0 $old $new 1 $::edges 0 0]
+                set ::din_last [list [expr {($dir > 0) ^ [info exists ::sc(din_rev)]}] \
+                                    [expr {$wall + $lat}]]
             }
             return $lv
         }
@@ -228,6 +237,33 @@ rig invert 1
 run
 check [jget verdict] reversed "reversed"
 check [string match "*turn it off" [jget summary]] 1 "  says to turn invert off"
+
+puts "a light line (photo din), over the patch:"
+rig din photopatch
+::ess::photo_test
+run
+check [list [jget verdict] [jget answered] [jget reversed] [jget source]] {aligned 10 0 din} "aligned"
+check [string match "aligned: 10 of 10 changes answered on line photopatch; rise *" [jget summary]] 1 "  names the line, with latencies"
+check [list [jget dark] [jget step]] {null null} "  no levels for a line"
+
+puts "a light line wired the wrong way round:"
+rig din photopatch din_rev 1
+::ess::photo_test
+run
+check [jget verdict] reversed "reversed"
+check [string match "*active-low*" [jget summary]] 1 "  says active-low"
+
+puts "a light line, not over the patch:"
+rig din photopatch light 31
+::ess::photo_test
+run
+check [jget verdict] none "none"
+check [string match "*pot between the patch's dark and light*" [jget summary]] 1 "  says the pot"
+
+puts "a light line that does not resolve:"
+rig din photopatch din_bad "photo din: no box announces a line or a group labelled photopatch"
+check [catch { ::ess::photo_test } err] 1 "refused"
+check [string match "*no box announces*" $err] 1 "  says why"
 
 puts "only the rises come back:"
 rig lose -1

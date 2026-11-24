@@ -631,6 +631,17 @@ group on whichever box carries it. <box>/<label> reads one box only
 (when two boxes announce the same group). Empty reads every analog
 block, which is right only on a rig with one."
 
+settings::declare photo din -default "" \
+    -candidates photo_din \
+    -apply ::ess::set_photo_din \
+    -doc "a digital input carrying the light, for a comparator module (an
+LM393 board: photodiode, threshold pot, digital out) wired to an extio DI
+line: the line's label. Each edge on it is the light changing, timed by
+the box. 1 must be light: set the line active-low on the box if the module
+pulls low in light, as the LM393 boards do. With it set, pairing, verify,
+the light and the placement test read the line; the analog keys below
+matter only for an analog diode. Empty: the analog processor."
+
 settings::declare photo strobe -default 0 -type bool \
     -apply ::ess::set_photo_strobe \
     -doc "the display's backlight flashes once a refresh (a CRS Display++),
@@ -727,6 +738,7 @@ so the period can be learned and a missing flash is a missing frame."
 ::ess::set_photo_patch_inset  [settings::get photo patch_inset]
 ::ess::set_photo_patch_dark   [settings::get photo patch_dark]
 ::ess::set_photo_group      [settings::get photo group]
+::ess::set_photo_din        [settings::get photo din]
 ::ess::set_photo_strobe     [settings::get photo strobe]
 ::ess::set_photo_invert     [settings::get photo invert]
 ::ess::set_photo_period_ms  [settings::get photo period_ms]

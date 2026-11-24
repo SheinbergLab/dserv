@@ -10,6 +10,12 @@ pairing an edge with the frame that caused it becomes an in-order match.
 The full contract (input, output, every parameter) is the header of
 `processors/photo.c`. This page is how to bring it up on a rig.
 
+The light can also come from a **comparator module** instead (an LM393
+board: photodiode, threshold pot, digital out) on an extio DI line, named
+by the gear's `photo din`. Then no analog processing is involved: each
+edge on the line is the light changing, and pairing, verify, the light and
+the placement test read the line. See "A comparator module" below.
+
 ## Setting it up: the gear
 
 The rig's settings are the `photo` section of dserv's settings gear
@@ -21,6 +27,7 @@ each key is pushed to it when it changes and once at boot.
 |---|---|---|
 | `enabled` | 0 | detect, and log `proc/photo/edge` in every data file |
 | `group` | `photodiode` | the analog group's label; `<box>/<label>` for one box; empty for every block |
+| `din` | (empty) | the DI line's label for a comparator module: the light from that line, not the processor (below) |
 | `strobe` | 0 | 1 for a strobed backlight (Display++) |
 | `invert` | 0 | 1 when more light gives FEWER counts (an LM393 module's analog out) |
 | `period_ms` | 0 | strobe: the refresh (8.3333 at 120 Hz); 0 learns it |
@@ -232,6 +239,61 @@ hold"); otherwise read edges by their time, as photopair does.
 published (after the block that finishes it). dserv takes one output per
 input block, so a block that finishes two edges sends both in one
 datapoint, a row each. Read the payload as rows of ten.
+
+With `din` set, the stream checks give way to the line's: `error
+photo din: ...` when no box announces a line with that label (or it names
+a chord group), and the patch's changes are checked against the line's
+edges, e.g. `ok reading line photopatch; pass: ...`.
+
+## A comparator module
+
+An LM393 light board (about $1) has a clear photodiode, a comparator, a
+pot that sets its threshold, and a digital out. On an extio DI line it is
+a light detector with no analog processing at all: the box stamps each
+edge in hardware, as it does any input. The box model `photo-lm393`
+(`config/models/photo-lm393.tcl`) sets one up on an FRDM-MCXN947 and the
+rig keys with it:
+
+| | |
+|---|---|
+| D0 | DO, label `photopatch`, active-low (the board pulls low in light, so 1 = light), debounce 2 ms |
+| A2 | AO, group `photodiode`: the analog behind the comparator, for checking it (`photo invert 1`: AO falls with light) |
+| rig | `photo enabled 1`, `photo din photopatch`, `photo group photodiode`, `photo invert 1` |
+
+Power it from 3.3 V, not 5 V: DO is pulled up to VCC.
+
+**The threshold.** Run the placement test (`photo_test aim`) and turn the
+pot until the board's DO LED follows the patch, then to the middle of the
+range where it does. With a line there are no levels to report; the test
+says `aligned` when every flip came back the right way, `reversed` when
+the line reads 1 in the dark (set the pin active-low), `partial` when the
+threshold sits near one of the patch's levels, and `none` when nothing
+came back.
+
+**Debounce.** The LM393 has no hysteresis, so a slow LCD transition
+chatters through the threshold. 2 ms of debounce gives one clean edge per
+change, and costs no accuracy: the box stamps the FIRST edge of a debounce
+window (`extio-zephyr/src/platform/box_gpio.c`), so the debounce delays
+the report, never the time.
+
+**What its times mean.** The edge is where the light crossed the pot's
+threshold, so its latency includes where on the panel's transition the
+threshold sits: set at mid-range, it lands on the analog `t50`. Against
+the analog signal on a 120 Hz LCD (2026-11-24, patch bottom right): the
+edges matched `t50` to sd 0.05 ms while the room's light was steady, but
+when both levels shifted by ~6% of the step the edges moved 0.5 ms (rise
+and fall in opposite directions) while `t50`, measured against each
+flip's own levels, did not move. Shield the detector, and keep the analog
+group logged (`extio record`) in a validation session to see it.
+
+A comparator cannot follow a strobed backlight: it would pulse with every
+flash. Use an analog diode and `strobe` on a Display++.
+
+In the data file, the line's edges are logged with the box's clock records
+and `photo/din` (where the label resolved). The trials get them as
+`photo_din_t` / `photo_din` (ms from obs onset, 1 = light; left out when
+`extio record` already adds the line under its own label), and the
+pairing's `N_light` and `display_ok` as with an analog diode.
 
 ## Two kinds of display
 
@@ -466,7 +528,11 @@ attach through the real dispatch, and `group`. `tests/test_ess_photo.tcl`
 (ctest `ess_photo`) checks the gear section: every key pushed, ms as
 seconds, `enabled` last at boot, the data-file match, the patch
 (drawn only with both keys on, its settings sent before `on`, a warning
-from a stim2 without the module), and every state of the light.
+from a stim2 without the module), every state of the light, and the
+comparator line (`din`: resolving, a chord group refused, its edges paired
+in place of the processor's, its light and its data-file matches).
+`tests/test_ess_photo_test.tcl` covers the placement test for both
+sources, and `tests/test_df_recorded_streams.tcl` the `photo_din` columns.
 `tests/test_ess_photo_verify.tcl` (ctest `ess_photo_verify`) feeds the
 pairing records on a clock it sets: a clean session (every change lit,
 both directions' latencies, each command's seq), a change judged only
