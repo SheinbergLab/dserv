@@ -217,6 +217,46 @@ set ::clk [expr {$::off + 1000000}]
 ::ess::pv_resolve $::clk
 check [list [statuses] [dict get $::ess::pv_n extra]] {appear 0} "with one: appear, the edge taken"
 
+puts "a file's first changes (session _2611241917):"
+# the patch appears over a scene whose own edge comes 3.7 ms later: it is
+# taken, but is no latency; the LCD then lights 13.3 ms after a rise
+::ess::pv_start marked $::off
+set ::out {}
+change 1 1 0 1
+edge -1 [expr {$::off + 3700}]
+set ::clk [expr {$::off + 1000000}]
+::ess::pv_resolve $::clk
+check [list [statuses] [dict get $::ess::pv_n extra] [dict get $::ess::pv_lats -1]] {appear 0 {}} \
+    "appearing takes the scene's edge, keeps no latency"
+::ess::pv_new_count $::off
+set ::out {}
+set t 3000000
+change 2 $t 1
+edge 1 [expr {$t + $::off + 13300}]
+change 3 [expr {$t + 2000000}] 0
+edge -1 [expr {$t + 2000000 + $::off + 11500}]
+set ::clk [expr {$t + $::off + 4000000}]
+::ess::pv_resolve $::clk
+check [statuses] {lit lit} "  the first rise and fall lit"
+# a stray latency of the other direction (from wherever): the first rise
+# is judged by its own, not by the median of 3.7 and 13.3
+::ess::pv_start marked $::off
+set ::ess::pv_lats [dict create 1 {} -1 {3700}]
+set ::out {}
+change 4 $t 1
+edge 1 [expr {$t + $::off + 13300}]
+set ::clk [expr {$t + $::off + 1000000}]
+::ess::pv_resolve $::clk
+check [list [statuses] [::ess::pv_verdict]] {lit pass} "  beside a stray of the other direction: lit"
+::ess::pv_start marked $::off
+set ::ess::pv_lats [dict create 1 {3700} -1 {}]
+set ::out {}
+change 5 $t 1
+edge 1 [expr {$t + $::off + 13300}]
+set ::clk [expr {$t + $::off + 1000000}]
+::ess::pv_resolve $::clk
+check [statuses] lit "  beside a stray of its own direction: lit"
+
 puts "'!' commands:"
 ::ess::pv_start marked $::off
 set ::out {}

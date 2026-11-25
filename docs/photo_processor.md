@@ -105,7 +105,11 @@ turn the two keys on, load it, run it.
 
 Each change is joined to its edge the way photopair does it (below):
 the median of the last 50 next-edge latencies of each direction is the
-typical latency, and a change takes the unused edge nearest its flip
+typical latency (until a direction has 3, its newest one: a file's
+first change is judged by its own light, not by a median that a stray
+latency of the other direction can pull 5 ms off, as one did on .40,
+2026-11-24; the patch appearing over a scene adds none, its next edge
+may be the scene's), and a change takes the unused edge nearest its flip
 plus that, within ±4 ms. A change no edge matched there, with an unused
 edge of its direction within 100 ms (and before the next change of that
 direction could light), is `late`: the frame lit, at another latency.

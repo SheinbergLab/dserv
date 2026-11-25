@@ -528,8 +528,10 @@ namespace eval ess {
     #   change -> edge    as photopair pairs them: (1) each change's next
     #                     edge of its direction, within 100 ms, gives a
     #                     latency; the median of the last 50 of a direction
-    #                     is its typical latency (the overall median while a
-    #                     direction has fewer than 3); (2) the change takes
+    #                     is its typical latency (until a direction has
+    #                     3, its newest; with none, the other's; the
+    #                     patch appearing gives none, its next edge may be
+    #                     the scene's); (2) the change takes
     #                     the unused edge nearest its flip plus that
     #                     latency, within +-4 ms; (3) failing that, its first
     #                     unused edge of its direction within 100 ms, before
@@ -754,14 +756,21 @@ namespace eval ess {
         variable pv_late_run
         lassign $c t dir serial swap why nacks level
         set ne [llength $pv_edges]
-        # 1: its next edge of its direction, used or not: the latency
+        # 1: its next edge of its direction, used or not: the latency. The
+        # patch appearing (dir 0) keeps none: over a scene its next edge,
+        # of either direction, can be the scene's, and one such stray
+        # (3.7 ms, on an LCD that lights at 12) was a direction's typical
+        # latency. It still pairs by its own when there is no other.
+        set own {}
         for { set k 0 } { $k < $ne } { incr k } {
             lassign [lindex $pv_edges $k] e50 edir
             if { $e50 <= $t } continue
             if { $e50 - $t > $pv_max_us } break
             if { $dir == 0 || $dir == $edir } {
+                set own [expr {$e50 - $t}]
+                if { $why == 1 } break
                 set l [dict get $pv_lats $edir]
-                lappend l [expr {$e50 - $t}]
+                lappend l $own
                 if { [llength $l] > $pv_keep } { set l [lrange $l end-[expr {$pv_keep - 1}] end] }
                 dict set pv_lats $edir $l
                 break
@@ -770,11 +779,18 @@ namespace eval ess {
         # 2: the unused edge nearest its flip plus its direction's latency
         set best -1
         set all [concat [dict get $pv_lats 1] [dict get $pv_lats -1]]
+        if { ![llength $all] } { set all $own }
         if { [llength $all] } {
             set L [pv_median $all]
+            # a direction's median once it has a few; before that its
+            # newest (this change's own, from 1), not a median of one or
+            # two: a stray beside it moves that -- a first change at 13.3
+            # ms beside a stray 3.7 was judged by 8.5 and called late, as
+            # it was by the overall median. L only for a direction with none
             foreach d {1 -1} {
                 set l [dict get $pv_lats $d]
-                set Ld($d) [expr {[llength $l] >= $pv_min_dir_n ? [pv_median $l] : $L}]
+                set n [llength $l]
+                set Ld($d) [expr {$n >= $pv_min_dir_n ? [pv_median $l] : ($n ? [lindex $l end] : $L)}]
             }
             set bd {}
             for { set k 0 } { $k < $ne } { incr k } {
