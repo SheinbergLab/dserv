@@ -12,10 +12,11 @@
 # Extracted from ess-2.0.tm (2026-11-24), the ess_transports way: the same
 # `namespace eval ess`, so every cross-reference resolves at call time;
 # ess-2.0.tm requires this module at load, and this module never requires
-# ess back. ess-2.0.tm calls in at five points: stim_photopatch_enable
+# ess back. ess-2.0.tm calls in at four points: stim_photopatch_enable
 # (configure_stim), photo_log_match (file open), photo_obs_end (end_obs),
-# photo_file_close (file close), and stim/photopatch in stim_frame_log_match.
-# The line resolver din_resolve stays in ess-2.0.tm, beside tlock's.
+# photo_file_close (file close); ess_stim-1.0.tm's stim_frame_log_match
+# logs stim/photopatch.
+# The line resolver din_resolve is in ess_stim-1.0.tm, beside tlock's.
 #
 # The three blocks keep their BEGIN/END markers: the tests evaluate them
 # by text, with everything outside stood in (tests/test_ess_photo*.tcl,

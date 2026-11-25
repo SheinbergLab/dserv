@@ -1444,7 +1444,7 @@ namespace eval ess {
             tlock_din - photo_din {
                 # For `tlock din`: the input a Display++'s
                 # trigger output is wired to, named by LABEL (the resolver
-                # is ::ess::display_tlock_din_resolve, ess-2.0.tm).
+                # is ::ess::display_tlock_din_resolve, ess_stim-1.0.tm).
                 #
                 # Labelled input LINES first, and of those any whose label
                 # says tlock at the top: a line's edges are stamped one by

@@ -1,11 +1,11 @@
 # test_ess_evt_display.tcl -- events linked to the frame that showed them
-# (lib/ess-2.0.tm, the evt_display block).
+# (lib/ess_stim-1.0.tm, the evt_display block).
 #
 #   tclsh tests/test_ess_evt_display.tcl
 #
-# The block is read out of ess-2.0.tm; evt_put, do_action and the
+# The block is read out of ess_stim-1.0.tm; evt_put, do_action and the
 # stim_cmd_log hook are imitated by the few lines of each that touch it,
-# and those lines are checked to be in the source. dservSetData keeps what
+# and those lines are checked to be in ess-2.0.tm. dservSetData keeps what
 # was published. Also times the state machine's paths (printed, not
 # judged): an action and an event with nothing to link should cost two
 # variable sets and two reads.
@@ -25,7 +25,8 @@ proc slurp { f } { set fd [open $f] ; set s [read $fd] ; close $fd ; return $s }
 set ::out {}
 proc dservSetData { name ts type data } { lappend ::out [list $name $ts $data] }
 
-set src [slurp [file join $root lib ess-2.0.tm]]
+# the block (ess_stim-1.0.tm), and ess-2.0.tm for the lines that call it
+set src "[slurp [file join $root lib ess_stim-1.0.tm]][slurp [file join $root lib ess-2.0.tm]]"
 set b [string first "    # BEGIN evt_display\n" $src]
 set e [string first "    # END evt_display\n" $src]
 if { $b < 0 || $e < 0 } { error "no evt_display block in ess-2.0.tm" }

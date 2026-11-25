@@ -1,5 +1,5 @@
 # test_ess_stim_cmd.tcl -- the rmtSend wrapper that records every command
-# sent to stim2 as a stim/cmd JSON datapoint (lib/ess-2.0.tm, the block
+# sent to stim2 as a stim/cmd JSON datapoint (lib/ess_stim-1.0.tm, the block
 # between "# BEGIN stim_cmd_log" and "# END stim_cmd_log"), and the stim2
 # binding table it publishes as stim/bind (the "# BEGIN stim_bind" block:
 # stim_bind_publish, the query-and-publish step configure_stim calls), and
@@ -79,12 +79,18 @@ if { [catch { load $module } err] } {
 assert {[info commands ::rmtSend] ne ""} "rmt module provides rmtSend"
 
 # --- the wrapper block, straight from the source -------------------------
-set f [open [file join $repo lib ess-2.0.tm]]
-set src [read $f]
-close $f
+# the blocks (ess_stim-1.0.tm) ahead of ess-2.0.tm, whose configure_stim,
+# unload_system and open_datafile call them: the call-site checks below
+# compare positions, and every call site comes after every block
+set src {}
+foreach _m {ess_stim-1.0.tm ess-2.0.tm} {
+    set f [open [file join $repo lib $_m]]
+    append src [read $f]
+    close $f
+}
 set b [string first "# BEGIN stim_cmd_log" $src]
 set e [string first "# END stim_cmd_log" $src]
-assert {$b >= 0 && $e > $b} "found the stim_cmd_log block in lib/ess-2.0.tm"
+assert {$b >= 0 && $e > $b} "found the stim_cmd_log block in lib/ess_stim-1.0.tm"
 namespace eval ess {
     proc ess_warning { msg {cat system} } { puts "  (ess_warning: $msg)" }
 }
@@ -113,7 +119,7 @@ if { [file exists $dlshzip] && ![info exists ::env(ESS_TEST_NO_DLSH)] } {
 }
 set bb [string first "# BEGIN stim_bind" $src]
 set be [string first "# END stim_bind" $src]
-assert {$bb > $e && $be > $bb} "found the stim_bind block in lib/ess-2.0.tm"
+assert {$bb > $e && $be > $bb} "found the stim_bind block in lib/ess_stim-1.0.tm"
 namespace eval ess [string range $src $bb [expr {$be - 1}]]
 assert {[info procs ::ess::stim_bind_publish] ne ""} "stim_bind_publish defined"
 assert {$::ess::stim_bound_names eq {}} "stim_bound_names starts empty"
@@ -156,7 +162,7 @@ assert {[string first "dservTouch stim/bind" $src] > [string first "dservLoggerR
 # --- the stim_frame_log block, same way --------------------------------
 set fb [string first "# BEGIN stim_frame_log" $src]
 set fe [string first "# END stim_frame_log" $src]
-assert {$fb > $be && $fe > $fb} "found the stim_frame_log block in lib/ess-2.0.tm"
+assert {$fb > $be && $fe > $fb} "found the stim_frame_log block in lib/ess_stim-1.0.tm"
 namespace eval ess [string range $src $fb [expr {$fe - 1}]]
 assert {[info procs ::ess::stim_frame_enable] ne "" && [info procs ::ess::stim_frame_disable] ne "" &&
         [info procs ::ess::stim_frame_log_match] ne ""} "stim_frame_{enable,disable,log_match} defined"
@@ -192,7 +198,7 @@ assert {[regexp {(?s)proc stim_frame_log_match \{ filename \} \{.*?dservLoggerAd
 # --- the screen_snapshot block, same way --------------------------------
 set sb [string first "# BEGIN screen_snapshot" $src]
 set se [string first "# END screen_snapshot" $src]
-assert {$sb > $fe && $se > $sb} "found the screen_snapshot block in lib/ess-2.0.tm"
+assert {$sb > $fe && $se > $sb} "found the screen_snapshot block in lib/ess_stim-1.0.tm"
 namespace eval ess [string range $src $sb [expr {$se - 1}]]
 assert {[info procs ::ess::screen_snapshot] ne ""} "screen_snapshot defined"
 # the call sites outside the block: file_open asks just before the logger
@@ -222,7 +228,7 @@ assert {[string first "dservTouch ess/\$_sp" $src] < 0 && [string first "dservTo
 # --- the stim_script block, same way ------------------------------------
 set sb [string first "# BEGIN stim_script" $src]
 set se [string first "# END stim_script" $src]
-assert {$sb > $fe && $se > $sb} "found the stim_script block in lib/ess-2.0.tm"
+assert {$sb > $fe && $se > $sb} "found the stim_script block in lib/ess_stim-1.0.tm"
 namespace eval ess [string range $src $sb [expr {$se - 1}]]
 assert {[info procs ::ess::stim_script_version] ne "" && [info procs ::ess::stim_script_json] ne "" &&
         [info procs ::ess::stim_script_publish] ne "" && [info procs ::ess::stim_script_stimess] ne "" &&
@@ -277,7 +283,7 @@ assert {[string first "if {\[dservExists stim/script\]} { dservTouch stim/script
 # --- the stim_lib block, same way ----------------------------------------
 set lb [string first "# BEGIN stim_lib" $src]
 set le [string first "# END stim_lib" $src]
-assert {$lb > $se && $le > $lb} "found the stim_lib block in lib/ess-2.0.tm"
+assert {$lb > $se && $le > $lb} "found the stim_lib block in lib/ess_stim-1.0.tm"
 namespace eval ess [string range $src $lb [expr {$le - 1}]]
 assert {[info procs ::ess::stim_lib_version] ne "" && [info procs ::ess::stim_lib_json] ne "" &&
         [info procs ::ess::stim_lib_publish] ne ""} "stim_lib_{version,json,publish} defined"

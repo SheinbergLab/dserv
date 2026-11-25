@@ -57,8 +57,8 @@ namespace eval ::ess {
 }
 
 # ---- the ess block ----
-# the photo blocks (ess_photo-1.0.tm), and ess-2.0.tm for din_resolve
-set src "[slurp [file join $root lib ess_photo-1.0.tm]][slurp [file join $root lib ess-2.0.tm]]"
+# the photo blocks (ess_photo-1.0.tm), and ess_stim-1.0.tm for din_resolve
+set src "[slurp [file join $root lib ess_photo-1.0.tm]][slurp [file join $root lib ess_stim-1.0.tm]]"
 set b [string first "    # BEGIN photo\n" $src]
 set e [string first "    # END photo\n" $src]
 if { $b < 0 || $e < 0 } { error "no photo block in ess_photo-1.0.tm" }
@@ -71,7 +71,7 @@ proc dservSetData { args } {}
 # ... and the line resolver it shares with tlock (beside tlock's code)
 set b [string first "    proc din_resolve \{ v \} \{\n" $src]
 set e [string first "\n    \}\n" $src $b]
-if { $b < 0 } { error "no din_resolve in ess-2.0.tm" }
+if { $b < 0 } { error "no din_resolve in ess_stim-1.0.tm" }
 namespace eval ::ess [string range $src $b $e+6]
 proc dservAddExactMatch { name } { lappend ::subs $name }
 proc dpointSetScript { name script } { lappend ::subs $script }
