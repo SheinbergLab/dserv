@@ -62,7 +62,7 @@ set v [extio_models::verdict astick7 teensy40 {}]
 check "blank box -> blank" blank [dict get $v state]
 check "blank box -> offered" astick [dict get $v offer]
 
-set v [extio_models::verdict box1 teensy41 {}]
+set v [extio_models::verdict box1 xiao_ble_nrf52840 {}]
 check "wrong board -> nothing to offer" "" [dict get $v offer]
 
 # the astick as it was this morning: no button configured

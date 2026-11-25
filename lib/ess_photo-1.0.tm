@@ -149,8 +149,15 @@ namespace eval ess {
             set r [photo_din_resolve]
             if { [dict get $r status] eq "ok" } { set dp [dict get $r dp] }
         }
-        if { $dp eq $photo_din_dp } { return $dp }
-        if { $photo_din_dp ne "" } { catch { dservRemoveMatch $photo_din_dp } }
+        # the same line, and dserv still runs our script for it: done. A
+        # system load wipes the script but not photo_din_dp (din_subscribed),
+        # and trusting the variable then left photo deaf to every edge for the
+        # rest of the session (2026-11-25: 0 of 534 changes lit, edges arriving).
+        if { $dp eq $photo_din_dp &&
+             ($dp eq "" || [din_subscribed $dp ::ess::photo_din_edge]) } { return $dp }
+        if { $photo_din_dp ne "" && $photo_din_dp ne $dp } {
+            catch { dservRemoveMatch $photo_din_dp }
+        }
         set photo_din_dp $dp
         if { $dp ne "" } {
             dservAddExactMatch $dp

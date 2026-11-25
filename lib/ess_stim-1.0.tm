@@ -692,11 +692,21 @@ namespace eval ess {
     variable din_boxes_watched 0
     proc din_watch_boxes {} {
         variable din_boxes_watched
-        if { $din_boxes_watched } return
-        set din_boxes_watched 1
         set dp [din_io]/boxes
+        if { $din_boxes_watched && [din_subscribed $dp ::ess::din_boxes_changed] } return
+        set din_boxes_watched 1
         dservAddExactMatch $dp
         dpointSetScript $dp ::ess::din_boxes_changed
+    }
+    # Is `script` still what dserv runs for `dp`? A system load wipes every
+    # match and script in this interp (ess::init: dservRemoveAllMatches,
+    # dpointRemoveAllScripts), while the variables that remember a
+    # subscription survive it. So "already subscribed" must be asked of
+    # dserv, not of a variable -- the camera_grab "self-healing" rule. Where
+    # dpointGetScript is missing (a stand-in), the variable is believed.
+    proc din_subscribed { dp script } {
+        if { [catch { dpointGetScript $dp } s] } { return 1 }
+        expr { $s eq $script }
     }
     proc din_boxes_changed { dpoint data } {
         variable photo_enabled

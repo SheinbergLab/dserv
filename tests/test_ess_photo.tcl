@@ -287,6 +287,24 @@ check [list [light] $::ess::photo_din_dp] [list ok $PDI] \
 dict unset ::table extio/box/state/label/15
 dict unset ::table extio/boxes
 rename dservExists ""
+# a system load wipes this interp's matches and scripts (ess::init:
+# dservRemoveAllMatches, dpointRemoveAllScripts) while the variables that
+# remember them survive: the next attach must ask dserv, and re-subscribe
+set ::scripts [dict create]
+proc dpointGetScript { name } {
+    expr {[dict exists $::scripts $name] ? [dict get $::scripts $name] : ""}
+}
+rename dpointSetScript _dpss_plain
+proc dpointSetScript { name script } { lappend ::subs $script ; dict set ::scripts $name $script }
+check [::ess::photo_din_attach] $PDI "a system load wiped the scripts: attach still answers the line"
+check [list [dict get $::scripts $PDI] [dict get $::scripts extio/boxes]] \
+    {::ess::photo_din_edge ::ess::din_boxes_changed} "  and re-subscribed it, and the roster watch"
+set n [llength $::subs]
+::ess::photo_din_attach
+check [llength $::subs] $n "  then idempotent again"
+rename dpointGetScript ""
+rename dpointSetScript ""
+rename _dpss_plain dpointSetScript
 set ::subs [lrange $::subs 0 3]
 set ::removed {}
 dict set ::table extio/box01/state/group/lever/pins [list $T 1,2]
