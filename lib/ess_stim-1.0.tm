@@ -581,6 +581,7 @@ namespace eval ess {
     variable display_tlock_din ""
     proc set_display_tlock_din {v} {
         variable display_tlock_din [string trim $v]
+        if { $display_tlock_din ne "" } { catch { din_watch_boxes } }
         catch { display_tlock_din_publish }
         catch { display_tlock_health }
     }
@@ -590,16 +591,17 @@ namespace eval ess {
         din_resolve $display_tlock_din
     }
 
+    # BEGIN din_resolve
     # A digital input line, by label, resolved where it is right now: a
     # dict of status (none | ok | unresolved), kind (di | group | path), dp
     # (the datapoint or match pattern; "" unless ok) and detail. Resolved
     # when asked, never cached: boxes come and go. Shared by `tlock din` and
     # `photo din` (photo_din_resolve).
     #
-    #   label       the DI line labelled so, on whichever box announces it
-    #               (<io>/<dev>/state/di/<pin>); unresolved if more than one
-    #               line carries it; else the chord group of that name
-    #               (<io>/*/state/group/<label>)
+    #   label       the DI line labelled so, on whichever CONNECTED box
+    #               announces it (<io>/<dev>/state/di/<pin>); unresolved if
+    #               more than one line carries it; else the chord group of
+    #               that name (<io>/*/state/group/<label>)
     #   a/b...      a datapoint name, taken as written
     #   ""          none
     proc din_resolve { v } {
@@ -609,18 +611,28 @@ namespace eval ess {
         if { [string match */* $v] } {
             return [dict create status ok kind path dp $v detail "datapoint $v"]
         }
-        set io extio
-        if { [info exists ::ess::io_class] && $::ess::io_class ne "" } { set io $::ess::io_class }
-        # a DI line labelled so: label datapoints are <io>/<dev>/state/label/<pin>
+        set io [din_io]
+        # a DI line labelled so: label datapoints are <io>/<dev>/state/label/<pin>.
+        # Only on a connected box: one that goes away leaves its whole
+        # state/ tree in dserv, labels too (nothing pushes deletions), and
+        # its line would resolve -- or count as a duplicate -- with nothing
+        # behind it.
+        set live [din_live_boxes $io]
         set keys {}
         catch { set keys [dservKeys $io/*/state/label/*] }
         set lines {}
+        set gone {}
         foreach k [lsort $keys] {
             set lab ""
             catch { set lab [string trim [lindex [split [dservGet $k] \x00] 0]] }
             if { $lab ne $v } continue
             set parts [split $k /]
-            lappend lines [list [lindex $parts 1] [lindex $parts end]]
+            set l [list [lindex $parts 1] [lindex $parts end]]
+            if { $live ne "*" && [lindex $l 0] ni $live } {
+                lappend gone $l
+            } else {
+                lappend lines $l
+            }
         }
         # Two lines with one label (two boxes, or two pins) is not a choice
         # to make by sort order: the first name would win silently, and it
@@ -647,9 +659,58 @@ namespace eval ess {
             return [dict create status ok kind group dp $io/*/state/group/$v \
                         detail "group $v on $dev"]
         }
+        if { [llength $gone] } {
+            set where {}
+            foreach l $gone { lassign $l dev pin ; lappend where "$dev pin $pin" }
+            set which [expr {[llength $gone] > 1 ? "none of those boxes is" : "that box is not"}]
+            return [dict create status unresolved kind di dp "" \
+                        detail "$v is [join $where {, }], but $which connected"]
+        }
         return [dict create status unresolved kind "" dp "" \
                     detail "no box announces a line or a group labelled $v"]
     }
+
+    proc din_io {} {
+        if { [info exists ::ess::io_class] && $::ess::io_class ne "" } { return $::ess::io_class }
+        return extio
+    }
+    # The connected boxes, by device name: the roster extioconf keeps from
+    # announces (<io>/boxes; input_boxes reads it the same way). "*" when
+    # there is no roster at all -- an extioconf too old to publish one --
+    # and every box counts.
+    proc din_live_boxes { io } {
+        if { [catch { dservExists $io/boxes } have] || !$have } { return * }
+        set r {}
+        catch { set r [dservGet $io/boxes] }
+        return $r
+    }
+    # A line in use (photo din, tlock din) follows the boxes: when the
+    # roster changes, resolve again and refresh the green lights, so
+    # unplugging a box -- or the second box with the same label -- shows at
+    # once instead of at the next setting change or obs end. One script on
+    # the roster datapoint, shared by both.
+    variable din_boxes_watched 0
+    proc din_watch_boxes {} {
+        variable din_boxes_watched
+        if { $din_boxes_watched } return
+        set din_boxes_watched 1
+        set dp [din_io]/boxes
+        dservAddExactMatch $dp
+        dpointSetScript $dp ::ess::din_boxes_changed
+    }
+    proc din_boxes_changed { dpoint data } {
+        variable photo_enabled
+        variable display_tlock
+        if { [info exists photo_enabled] && $photo_enabled } {
+            catch { photo_din_attach }
+            catch { photo_health }
+        }
+        if { [info exists display_tlock] && $display_tlock } {
+            catch { display_tlock_din_publish }
+            catch { display_tlock_health }
+        }
+    }
+    # END din_resolve
 
     # tlock/din: the resolution, for a page and for the data
     # file (which stream the trigger edges are)

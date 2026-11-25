@@ -145,6 +145,7 @@ namespace eval ess {
         variable photo_din_dp
         set dp ""
         if { $photo_enabled && $photo_din ne "" } {
+            catch { din_watch_boxes }
             set r [photo_din_resolve]
             if { [dict get $r status] eq "ok" } { set dp [dict get $r dp] }
         }

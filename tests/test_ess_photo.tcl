@@ -69,10 +69,10 @@ set e [string first "    # END photo_verify\n" $src]
 namespace eval ::ess [string range $src $b $e]
 proc dservSetData { args } {}
 # ... and the line resolver it shares with tlock (beside tlock's code)
-set b [string first "    proc din_resolve \{ v \} \{\n" $src]
-set e [string first "\n    \}\n" $src $b]
-if { $b < 0 } { error "no din_resolve in ess_stim-1.0.tm" }
-namespace eval ::ess [string range $src $b $e+6]
+set b [string first "    # BEGIN din_resolve\n" $src]
+set e [string first "    # END din_resolve\n" $src]
+if { $b < 0 || $e < 0 } { error "no din_resolve block in ess_stim-1.0.tm" }
+namespace eval ::ess [string range $src $b $e]
 proc dservAddExactMatch { name } { lappend ::subs $name }
 proc dpointSetScript { name script } { lappend ::subs $script }
 set ::ess::stim_cmd_hook ""
@@ -253,9 +253,10 @@ check [list [light] [string match "*no box announces*photopatch*" [why]]] {error
     "  the light says so ([why])"
 dict set ::table extio/photo-sync/state/label/0 [list $T photopatch]
 check [::ess::photo_din_attach] $PDI "a box labels a line so: resolved"
-check $::subs [list $PDI ::ess::photo_din_edge] "  the line subscribed"
+check $::subs [list extio/boxes ::ess::din_boxes_changed $PDI ::ess::photo_din_edge] \
+    "  the box roster watched, and the line subscribed"
 ::ess::photo_din_attach
-check [llength $::subs] 2 "  once"
+check [llength $::subs] 4 "  once"
 dict set ::table extio/box/state/label/15 [list $T photopatch]
 set r [::ess::photo_din_resolve]
 check [list [dict get $r status] [string match "*2 lines (box pin 15, photo-sync pin 0)*" [dict get $r detail]]] \
@@ -263,7 +264,30 @@ check [list [dict get $r status] [string match "*2 lines (box pin 15, photo-sync
 check [list [::ess::photo_din_attach] $::removed] [list "" $PDI] "  the line let go"
 dict unset ::table extio/box/state/label/15
 check [::ess::photo_din_attach] $PDI "  relabelled: resolved again"
-set ::subs [lrange $::subs 0 1]
+# with a roster (extio/boxes), only a connected box's lines count: an
+# unplugged one leaves its labels behind in dserv
+proc dservExists { k } { dict exists $::table $k }
+dict set ::table extio/box/state/label/15 [list $T photopatch]
+dict set ::table extio/boxes [list $T photo-sync]
+check [dict get [::ess::photo_din_resolve] dp] $PDI "a disconnected box's same label is not counted"
+dict set ::table extio/boxes [list $T box]
+set r [::ess::photo_din_resolve]
+check [list [dict get $r dp] [dict get $r detail]] [list extio/box/state/di/15 "box pin 15, labelled photopatch"] \
+    "  ... and with only the other box connected, its line is the one"
+dict set ::table extio/boxes [list $T {}]
+set r [::ess::photo_din_resolve]
+check [list [dict get $r status] [string match "*box pin 15, photo-sync pin 0, but none of those boxes is connected" [dict get $r detail]]] \
+    {unresolved 1} "  no box connected: unresolved, naming where the label was ([dict get $r detail])"
+::ess::photo_health
+check [light] error "  the light, refreshed by hand: error"
+dict set ::table extio/boxes [list $T photo-sync]
+::ess::din_boxes_changed extio/boxes photo-sync
+check [list [light] $::ess::photo_din_dp] [list ok $PDI] \
+    "the roster changes: the line is attached again and the light refreshed"
+dict unset ::table extio/box/state/label/15
+dict unset ::table extio/boxes
+rename dservExists ""
+set ::subs [lrange $::subs 0 3]
 set ::removed {}
 dict set ::table extio/box01/state/group/lever/pins [list $T 1,2]
 ::ess::set_photo_din lever
