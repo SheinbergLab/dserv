@@ -183,6 +183,69 @@ int main(void)
               - (t0 + 5000000) + 2 <= 4, "stamp_at inverts unstamp_at");
     }
 
+    /* sw ticks over USB (box_clock_tick): the host's extio/clock, ~1 Hz,
+       each arriving 150-450 us after it was stamped, every 37th held up
+       5 ms by a busy host. Stamping error is measured at events between
+       ticks; transport latency is never negative, so stamps run early by
+       about the fastest frames' latency, and that is the floor. */
+    {
+        struct { const char *what; int ppm; } cases[] = {
+            { "RC timer, 1100 ppm slow (MCXN947 over USB)", -1100 },
+            { "crystal, 43 ppm fast (Teensy over USB)", 43 },
+        };
+        for (int k = 0; k < 2; k++) {
+            int ppm = cases[k].ppm;
+            printf("sw ticks, %s:\n", cases[k].what);
+            box_clock_reset(&c);
+            srand(11 + k);
+            uint64_t t = T0 + 1000000;
+            long long worst = 0, worst_early = 0;
+            for (int i = 0; i < 300; i++, t += 1000000) {
+                int lat = 150 + rand() % 301;
+                if (i % 37 == 36) lat += 5000;
+                box_clock_tick(&c, t, box_at(t + (uint64_t) lat, ppm));
+                if (i >= 120) {
+                    /* events through the second before the next tick */
+                    for (int ms = 50; ms < 1000; ms += 150) {
+                        long long e = stamp_err(&c, t + (uint64_t) ms * 1000, ppm);
+                        if (llabs(e) > llabs(worst)) worst = e;
+                    }
+                }
+                if (i == 60) {
+                    printf("       after 60 s: rate %d ppb, valid %d\n", c.rate_ppb, c.rate_valid);
+                    long long e = stamp_err(&c, t + 900000, ppm);
+                    if (llabs(e) > llabs(worst_early)) worst_early = e;
+                }
+            }
+            long long truth = -(long long) ppm * 1000;      /* ppb, near enough */
+            printf("       rate %d ppb (truth ~%lld), ticks %u, skipped %u, worst stamp %lld us\n",
+                   c.rate_ppb, truth, c.ticks, c.tick_skips, worst);
+            CHECK(c.rate_valid && llabs(c.rate_ppb - truth) < 20000, "rate within 20 ppm");
+            CHECK(c.tick_skips >= 6, "latency spikes skipped");
+            CHECK(llabs(worst) < 600, "between ticks: stamps within 600 us");
+            CHECK(llabs(worst_early) < 1500, "at 60 s: within 1.5 ms");
+            long long e26 = stamp_err(&c, t + 26000000, ppm);
+            printf("       ticks stop: 26 s on, %lld us\n", e26);
+            CHECK(llabs(e26) < 1000, "ticks stop: 26 s on, still within 1 ms");
+        }
+
+        printf("sw ticks: a real clock step is followed, not skipped:\n");
+        box_clock_reset(&c);
+        uint64_t t = T0 + 1000000;
+        for (int i = 0; i < 60; i++, t += 1000000) box_clock_tick(&c, t, box_at(t + 200, -1100));
+        uint32_t sk = c.tick_skips;
+        for (int i = 0; i < 4; i++, t += 1000000) box_clock_tick(&c, t - 10000, box_at(t + 200, -1100));
+        CHECK(c.tick_skips == sk + 2, "two skipped, the third re-anchors");
+        CHECK(llabs(stamp_err(&c, t - 500000, -1100) + 10000) < 600, "  then stamps follow the step");
+
+        printf("sw ticks with trusted anchors: the TTL keeps the rate:\n");
+        box_clock_reset(&c);
+        d = run(&c, T0, 20, 2000000, 43, 0);
+        int32_t r0 = c.rate_ppb;
+        for (int i = 0; i < 60; i++) { d += 1000000; box_clock_tick(&c, d, box_at(d + 300, 900)); }
+        CHECK(c.rate_ppb == r0, "ticks never teach a TTL-anchored rate");
+    }
+
     printf(fails ? "\n%d FAILED\n" : "\nall passed\n", fails);
     return fails ? 1 : 0;
 }

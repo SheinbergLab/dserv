@@ -1121,7 +1121,7 @@ static void publish_sync_rate(uint64_t ts, int event)
 		dserv_msg_int(f, nm, ts, boxclk.rate_ppb);
 		if (event) { box_pub_event(f); } else { box_pub_bulk(f); }
 	}
-	if (boxclk.have_trust) {
+	if (boxclk.have_trust || boxclk.ticks) {
 		dserv_state_name(&cfg, nm, sizeof nm, "sync/rate_sample_ppb");
 		dserv_msg_int(f, nm, ts, boxclk.rate_last_ppb);
 		if (event) { box_pub_event(f); } else { box_pub_bulk(f); }
@@ -1155,6 +1155,7 @@ static void publish_sync_rate(uint64_t ts, int event)
  * frame's transit lag measured against that edge (hw anchors only -- it is
  * exactly the error a hw anchor removes), and `rate_ppb` appears once enough
  * trusted pairs have taught the crystal rate. */
+static int clock_ticks_live(void);
 static void publish_sync(uint64_t dserv_us, uint64_t box_us, int64_t offset_us,
 			 int hw, int64_t transport_us)
 {
@@ -1174,7 +1175,7 @@ static void publish_sync(uint64_t dserv_us, uint64_t box_us, int64_t offset_us,
 	box_pub_event(f);
 
 	dserv_state_name(&cfg, nm, sizeof nm, "sync/source");
-	dserv_msg_string(f, nm, dserv_us, hw ? "hw" : "sw");
+	dserv_msg_string(f, nm, dserv_us, hw ? "hw" : clock_ticks_live() ? "tick" : "sw");
 	box_pub_event(f);
 
 	if (transport_us >= 0) {
@@ -1183,6 +1184,33 @@ static void publish_sync(uint64_t dserv_us, uint64_t box_us, int64_t offset_us,
 		box_pub_event(f);
 	}
 	publish_sync_rate(dserv_us, 1);
+}
+
+/* The tick discipline, every 10th tick (bulk: the next supersedes it).
+ * source "tick" = stamps follow the host's sw ticks; ticks / tick_skips
+ * count taken / skipped as latency spikes; tick_resid_us is the last
+ * tick's arrival against the mapping (negative = later than expected). */
+static void publish_tick(uint64_t ts)
+{
+	uint8_t f[DSERV_MSG_LEN];
+	char nm[80];
+
+	dserv_state_name(&cfg, nm, sizeof nm, "sync/source");
+	dserv_msg_string(f, nm, ts, "tick");
+	box_pub_bulk(f);
+	dserv_state_name(&cfg, nm, sizeof nm, "sync/offset_us");
+	dserv_msg_int64(f, nm, ts, boxclk.offset_us);
+	box_pub_bulk(f);
+	dserv_state_name(&cfg, nm, sizeof nm, "sync/ticks");
+	dserv_msg_int(f, nm, ts, (int32_t) boxclk.ticks);
+	box_pub_bulk(f);
+	dserv_state_name(&cfg, nm, sizeof nm, "sync/tick_skips");
+	dserv_msg_int(f, nm, ts, (int32_t) boxclk.tick_skips);
+	box_pub_bulk(f);
+	dserv_state_name(&cfg, nm, sizeof nm, "sync/tick_resid_us");
+	dserv_msg_int(f, nm, ts, boxclk.tick_resid_us);
+	box_pub_bulk(f);
+	publish_sync_rate(ts, 0);
 }
 
 /* (Re)seed every group from the pins' CURRENT logical levels, so a switch
@@ -1363,6 +1391,18 @@ static inline void loop_phase(uint8_t p)
  * never matches it and it must be handled before the dispatch, exactly as the
  * Pico's frame handler does. */
 #define BOX_SYNC_DP "ess/in_obs"
+/* The host's sw clock tick (extioconf, ~1 Hz, to USB boxes that advertise
+ * state/sync/ticks): stamped just before the write, anchored on arrival,
+ * folded in by box_clock_tick(). Value unused. */
+#define BOX_CLOCK_DP "extio/clock"
+/* uptime of the last tick taken; obs-edge sw anchors go through the tick
+ * filter while ticks are live (one discipline, not two) */
+static int64_t clock_tick_ms = -1;
+#define CLOCK_TICK_LIVE_MS 3000
+static int clock_ticks_live(void)
+{
+	return clock_tick_ms >= 0 && k_uptime_get() - clock_tick_ms < CLOCK_TICK_LIVE_MS;
+}
 
 /* One inbound 128-byte frame (config/cmd/ess-in_obs) from the host module:
  * dispatch it into the config, and run any GPIO command it produced. */
@@ -1668,6 +1708,24 @@ static int fast_msg(const dserv_msg_t *m, const char *leaf, uint64_t arr_us)
 		}
 	}
 
+	/* extio/clock -- the host's sw tick. Taken only by a box with nothing
+	 * better: a TTL sync input or a PTP-held clock owns the mapping. */
+	if (dserv_msg_name_eq(m, BOX_CLOCK_DP)) {
+		int better = sync_input_enabled(&cfg);
+#if defined(CONFIG_PTP_CLOCK)
+		better = better || clock_ptp_held;
+#endif
+		if (!better) {
+			box_clock_tick(&boxclk, m->timestamp,
+				       arr_us ? arr_us : box_gpio_now_us());
+			clock_tick_ms = k_uptime_get();
+			if (boxclk.ticks % 10 == 1) {
+				publish_tick(m->timestamp);
+			}
+		}
+		return 1;
+	}
+
 	/* ess/in_obs -- the obs epoch every `at` above anchors on, so it MUST be
 	 * handled on the same path at the same priority: a beginobs queued
 	 * behind a fat pass while its at-burst fast-pathed ahead would arm
@@ -1704,7 +1762,14 @@ static int fast_msg(const dserv_msg_t *m, const char *leaf, uint64_t arr_us)
 		ptp_held = clock_ptp_held && !hw;
 #endif
 		if (!ptp_held) {
-			box_clock_sync(&boxclk, m->timestamp, anchor_box, hw);
+			if (!hw && clock_ticks_live()) {
+				/* a sw anchor among live ticks is one more tick: a
+				 * raw snap here would throw the filter's estimate
+				 * away for one frame's latency at the obs start */
+				box_clock_tick(&boxclk, m->timestamp, anchor_box);
+			} else {
+				box_clock_sync(&boxclk, m->timestamp, anchor_box, hw);
+			}
 			if (hw) {
 				clock_ptp_held = 0;   /* hw anchors own the clock now */
 			}
@@ -3670,6 +3735,17 @@ int main(void)
 				box_pub_event(f0);
 			}
 #endif
+			/* "this box takes extio/clock": extioconf sends the sw
+			 * tick only to a port whose box has published this, so
+			 * older firmware never sees a frame it does not know */
+			{
+				uint8_t f1[DSERV_MSG_LEN];
+				char nm1[80];
+
+				dserv_state_name(&cfg, nm1, sizeof nm1, "sync/ticks");
+				dserv_msg_int(f1, nm1, 0, (int32_t) boxclk.ticks);
+				box_pub_event(f1);
+			}
 		} else if (kind == BOX_UPLINK_RX_BYTES && rlen > 0) {
 			/* Cost of turning received bytes into an executed command
 			 * (framer + dispatch + GPIO write). Completes the inbound

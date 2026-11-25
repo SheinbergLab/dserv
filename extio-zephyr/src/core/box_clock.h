@@ -70,6 +70,9 @@
 #define BOX_CLOCK_RATE_MAX_PPB   50000000   /* +/-5%: beyond this, not a clock rate */
 #define BOX_CLOCK_PAIR_MIN_US    500000     /* pairs closer than 0.5s: skip   */
 #define BOX_CLOCK_PAIR_MAX_US    600000000  /* pairs further than 600s: stale */
+#define BOX_CLOCK_TICK_PAIR_US   20000000   /* sw tick pairs this far apart teach the rate */
+#define BOX_CLOCK_TICK_SPIKE_US  2000       /* a tick this much later than expected: skip */
+#define BOX_CLOCK_TICK_SPIKES    3          /* ... unless this many in a row: re-anchor  */
 
 /* Compiler fence only. Single-core preemption is the concurrency model on
  * every target this runs on (one writer thread, readers on other threads or
@@ -91,6 +94,15 @@ typedef struct {
     int32_t  pend_ppb;        /* that sample                                 */
     int32_t  rate_last_ppb;   /* the last raw slope sample, taken or not     */
     uint32_t rate_rejects;    /* slope samples not folded in (far or absurd) */
+    /* sw ticks (box_clock_tick): the open end of the next slope pair, and
+     * the filter's bookkeeping */
+    uint64_t tick_base_dserv_us;
+    uint64_t tick_base_box_us;
+    uint8_t  have_tick_base;
+    uint8_t  tick_spikes;     /* consecutive ticks skipped as late           */
+    uint32_t ticks;           /* ticks taken                                 */
+    uint32_t tick_skips;      /* ticks skipped as latency spikes             */
+    int32_t  tick_resid_us;   /* the last tick's residual (see below)        */
     /* Seqlock, added with the +29 RX fast path: anchors are written on the
      * eth reader thread while event stamping keeps happening on the service
      * loop, and a preemption mid-64-bit-read must not hand a stamp half of
@@ -107,6 +119,8 @@ static inline void box_clock_reset(box_clock_t *c)
     c->trust_dserv_us = c->trust_box_us = 0;
     c->synced = 0; c->have_trust = 0; c->rate_valid = 0;
     c->have_pend = 0; c->pend_ppb = 0; c->rate_last_ppb = 0; c->rate_rejects = 0;
+    c->tick_base_dserv_us = c->tick_base_box_us = 0; c->have_tick_base = 0;
+    c->tick_spikes = 0; c->ticks = 0; c->tick_skips = 0; c->tick_resid_us = 0;
     BOX_CLOCK_FENCE(); c->seq++;
 }
 
@@ -166,6 +180,86 @@ static inline void box_clock_sync(box_clock_t *c, uint64_t dserv_us,
         c->trust_dserv_us = dserv_us;
         c->trust_box_us   = box_us;
         c->have_trust     = 1;
+    }
+    BOX_CLOCK_FENCE(); c->seq++;
+}
+
+/* ---- sw ticks: a USB box between (and during) obs ----------------------
+ *
+ * A box with no PTP and no TTL is anchored only by frame arrival, and the obs
+ * edges were the only such frames: between sessions nothing re-anchored it,
+ * and sw anchors never taught the rate. On an MCXN947 over USB (RC timer,
+ * ~1100 ppm off) that left the photo test's edges 600 ms from the patch
+ * changes after ten idle minutes (2026-11-25). The host now sends a tick
+ * (extio/clock, ~1 Hz, stamped just before the write) and the box folds each
+ * one in here. Frame arrival is still the box time, so each carries the
+ * transport's latency, but latency is never negative: the EARLIEST-arriving
+ * frames are the truest. So:
+ *
+ *   residual r = dserv_us - stamp(box_us)   (what the mapping says now)
+ *
+ *   - no rate yet, or r > 0 (this frame beat the estimate): re-anchor here;
+ *   - -SPIKE < r <= 0: later than the estimate -- latency, or a drift the
+ *     rate misses -- move a quarter of the way;
+ *   - r <= -SPIKE: a latency spike (a busy host), skipped; SPIKES of them in
+ *     a row is the clock, not the host, and re-anchors.
+ *
+ * RATE. Over a pair TICK_PAIR apart, a few hundred us of jitter is a few ppm
+ * -- the short-pair noise that keeps obs-edge sw anchors from teaching the
+ * rate is gone. Each pair is a slope sample through the same estimator as the
+ * trusted pairs (far samples need a second that agrees). Only when there is
+ * no trusted anchor: a TTL-anchored rate is better and keeps the job.
+ * Endpoints are ticks that were not spikes. */
+static inline void box_clock_tick(box_clock_t *c, uint64_t dserv_us, uint64_t box_us)
+{
+    c->seq++; BOX_CLOCK_FENCE();
+    int reanchor = 1;
+    int64_t r = 0;
+
+    if (c->synced) {
+        int64_t dt   = (int64_t) box_us - (int64_t) c->anchor_box_us;
+        int64_t pred = (int64_t) box_us + c->offset_us + (dt * (int64_t) c->rate_ppb) / 1000000000LL;
+        r = (int64_t) dserv_us - pred;
+        c->tick_resid_us = (int32_t)(r > 2000000000LL ? 2000000000LL :
+                                     r < -2000000000LL ? -2000000000LL : r);
+        if (c->rate_valid && r <= 0) {
+            if (r <= -BOX_CLOCK_TICK_SPIKE_US && ++c->tick_spikes < BOX_CLOCK_TICK_SPIKES) {
+                c->tick_skips++;
+                BOX_CLOCK_FENCE(); c->seq++;
+                return;
+            }
+            if (r > -BOX_CLOCK_TICK_SPIKE_US) {
+                /* re-anchor at this tick on a quarter of the residual */
+                c->offset_us = pred + r / 4 - (int64_t) box_us;
+                c->anchor_box_us = box_us;
+                reanchor = 0;
+            }
+        }
+    }
+    c->tick_spikes = 0;
+    if (reanchor) {
+        c->offset_us = (int64_t) dserv_us - (int64_t) box_us;
+        c->anchor_box_us = box_us;
+    }
+    c->synced = 1;
+    c->ticks++;
+
+    if (!c->have_trust) {
+        if (c->have_tick_base && box_us > c->tick_base_box_us) {
+            int64_t d_box = (int64_t)(box_us - c->tick_base_box_us);
+            if (d_box > BOX_CLOCK_PAIR_MAX_US) {
+                c->have_tick_base = 0;               /* stale: start over */
+            } else if (d_box >= BOX_CLOCK_TICK_PAIR_US) {
+                int64_t d_dserv = (int64_t)(dserv_us - c->tick_base_dserv_us);
+                box_clock_rate_sample(c, ((d_dserv - d_box) * 1000000000LL) / d_box);
+                c->have_tick_base = 0;               /* this tick opens the next */
+            }
+        }
+        if (!c->have_tick_base) {
+            c->tick_base_dserv_us = dserv_us;
+            c->tick_base_box_us   = box_us;
+            c->have_tick_base     = 1;
+        }
     }
     BOX_CLOCK_FENCE(); c->seq++;
 }

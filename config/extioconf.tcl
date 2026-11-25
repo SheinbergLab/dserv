@@ -3901,6 +3901,33 @@ proc extio_service {} {
 }
 proc extio_timer_cb {dpoint data} { extio_service }
 
+# ---- sw clock ticks: USB boxes between (and during) obs ----
+# A USB box has no PTP, and unless a TTL is wired its clock is anchored only
+# by the arrival of frames whose dserv stamp it knows. The obs edges were the
+# only such frames, so between sessions nothing re-anchored it and its rate
+# was never learned: an MCXN947 (RC timer, ~1100 ppm) had its photo edges
+# 600 ms from the patch changes after ten idle minutes (2026-11-25). So send
+# each USB box a tick every second, stamped [now] immediately before the
+# write so dserv's own dispatch delay is not in it; the box folds each into
+# its clock (box_clock_tick: a latency-aware offset and a rate from pairs
+# >= 20 s apart). Only to a port whose box has published state/sync/ticks --
+# firmware that takes it -- so older boxes and the RP2350s never see an
+# unknown frame. A box with a TTL or a PTP-held clock ignores it itself.
+set ::extio_clock_n 0
+proc extio_clock_wanted {h} {
+    foreach b [usbioBoxes $h] {
+        if { [dservExists $b/state/sync/ticks] } { return 1 }
+    }
+    return 0
+}
+proc extio_clock_tick {dpoint data} {
+    incr ::extio_clock_n
+    foreach h [usbioDevices] {
+        if { [catch { extio_clock_wanted $h } want] || !$want } continue
+        extio_fwd_send $h extio/clock [now] $::extio_clock_n
+    }
+}
+
 proc init {} {
     extio_wire_common                       ;# forward ess/in_obs (persists across re-opens)
     extio_service                           ;# open now if plugged in + discover
@@ -3908,6 +3935,9 @@ proc init {} {
     dservAddExactMatch extioTimer/0
     dpointSetScript extioTimer/0 extio_timer_cb
     timerTickInterval 2000 2000
+    dservAddExactMatch extioTimer/1         ;# the USB boxes' sw clock tick, 1 Hz
+    dpointSetScript extioTimer/1 extio_clock_tick
+    timerTickInterval 1 1000 1000
 }
 
 init
