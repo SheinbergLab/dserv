@@ -10,15 +10,17 @@
 # Needs extio firmware with PIN_MODE_CMP (2026-11-24 or later). Older firmware
 # reads `cmp` as `off`.
 #
-# THE THRESHOLD SETS ITSELF. The box watches ch 3 for plateaus (the light
-# still for 3 ms), keeps the latest dark and light level, and puts the DAC at
-# their midpoint -- moving it only while the light is still. No edges are
-# reported until it has seen both levels, so flip the patch a few times
+# THE THRESHOLD IS LEARNED, THEN LOCKED. The box watches ch 3 for plateaus
+# (the light still for 3 ms): one level, a second >= 100 counts away, and a
+# return to the first. Then it writes the DAC once, at their midpoint, arms
+# the comparator, and holds that threshold for the session, like a pot. No
+# edges are reported before it locks, so flip the patch a few times
 # (`photo_test aim`) after a boot or a config change. Hysteresis is 20 mV.
-# Box console `cmp` shows the learned levels, the DAC code and a mismatch
+# While locked, state/cmp reports `drift` (% of the step the levels' midpoint
+# has moved from the threshold). To learn again: console `cmp relearn`, or
+# publish to extio/<box>/cmd/cmp/relearn; it waits for the end of an obs.
+# Box console `cmp` shows the levels, the DAC code, the drift and a mismatch
 # count (nonzero = the DAC's reference is not the ADC's 3.3 V; try `cmp vref 1`).
-# Unlike a pot, the threshold follows room light, so the edge stays at the
-# middle of each transition.
 #
 # Polarity: written for an LM393 module's AO (falls with light), hence
 # active_low 1 and `photo invert 1`. The module's own comparator and DO are

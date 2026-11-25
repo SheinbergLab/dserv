@@ -3,10 +3,20 @@
  *
  * PROTOTYPE (2026-11-24). What is assumed rather than measured is marked
  * ASSUMED below; `cmp` on the console shows the numbers needed to check it.
+ *
+ * LEARN, THEN LOCK. The threshold is set ONCE, at the midpoint of the dark and
+ * light levels the ADC saw, and then held -- like a pot, but set by the box
+ * and reaching both rails. It moves again only when asked (`cmp relearn`,
+ * cmd/cmp/relearn), and never during an obs. A wandering threshold would give
+ * each edge its own offset; a locked one gives the whole session one. After
+ * locking the box keeps watching the levels, only to report how far their
+ * midpoint has DRIFTED from the threshold (state/cmp `drift`, % of the step),
+ * so a host can tell when a relearn is worth it.
  */
 #include "box_cmp.h"
 #include "box_gpio.h"
 #include "box_console.h"
+#include "box_obs.h"
 
 #include <zephyr/kernel.h>
 #include <zephyr/irq.h>
@@ -31,13 +41,22 @@
 #define CMP_IRQN      HSCMP1_IRQn     /* CMP1's vector, named HSCMP1 in the SDK */
 #define CMP_IRQ_PRIO  DT_IRQ(DT_NODELABEL(gpio0), priority)  /* same as DI edges */
 
-/* ---- the plateau tracker (ADC counts, 12-bit) ---- */
-#define TRK_BAND      32     /* a sample within this of the run's level is "still" (~26 mV) */
+/* ---- the plateau tracker (ADC counts, 12-bit) ----
+ *
+ * A PLATEAU is the signal still -- every sample within the band of the run's
+ * level -- for TRK_SETTLE_US; its value is the run's mean. Learning needs
+ * three: level A, then B at least TRK_MIN_STEP away, then A again (the RETURN
+ * is what says A and B are the two states of the patch and not a hand passing
+ * over). Readings in between the two levels are ignored throughout. */
+#define TRK_BAND      32     /* "still": within this of the run's level (~26 mV) while learning */
 #define TRK_SETTLE_US 3000   /* still this long = a plateau */
-#define TRK_MIN_STEP  100    /* two plateaus this far apart = dark and light (~80 mV) */
+#define TRK_MIN_STEP  100    /* two levels this far apart = dark and light (~80 mV) */
+#define TRK_NEAR_DIV  3      /* a reading within step/3 of a level IS that level */
+#define TRK_EMA_SHIFT 3      /* locked: a level moves 1/8 of the way to each reading of it */
 
 enum cmp_state { ST_OFF = 0, ST_UNSUPPORTED, ST_NO_ADC, ST_LEARNING, ST_ARMED };
 static const char *const st_name[] = { "off", "unsupported pin", "no samples", "learning", "armed" };
+static const char *const st_word[] = { "off", "unsupported", "no_samples", "learning", "armed" };
 
 static struct k_spinlock lock;
 static enum cmp_state state;
@@ -48,7 +67,7 @@ static bool     hw_up;
 
 /* runtime knobs (console only, not persisted) */
 static uint8_t  hyst = 2;            /* HYSTCTR level: 0/10/20/30 mV */
-static uint8_t  vref_sel;            /* DCR.VRSEL: VREFH0 / VREFH1 -- ASSUMED 0 = 3.3 V */
+static uint8_t  vref_sel;            /* DCR.VRSEL: VREFH0 / VREFH1 -- 0 matched the ADC on the bench */
 static int      dac_fixed = -1;      /* >= 0: fixed DAC code, armed at once */
 
 /* tracker */
@@ -56,15 +75,17 @@ static bool     run_on;
 static int32_t  run_ref;
 static uint64_t run_t0;
 static int32_t  run_sum, run_n;
-static bool     have_a, have_pair;
-static int32_t  lev_a, lev_lo, lev_hi;
+static int      n_seen;              /* learning: 0 none, 1 = A, 2 = A then B */
+static int32_t  lev_a, lev_b;        /* learning: first level, and the other one */
+static int32_t  lev_lo, lev_hi;      /* armed: the levels the threshold was set from, then tracked */
+static int32_t  thr_counts;          /* armed: the locked threshold, ADC counts */
 static uint8_t  dac_code;
-static uint64_t last_sample_us;
-static int64_t  last_sample_ms = -1;  /* uptime of the last scan that carried the channel */
+static int64_t  last_sample_ms = -1; /* uptime of the last scan that carried the channel */
+static bool     relearn_req;         /* asked for; applied outside an obs */
 
 /* counters */
 static volatile uint32_t n_isr;
-static uint32_t n_plateaus, n_mismatch, n_dac_writes;
+static uint32_t n_plateaus, n_mismatch, n_dac_writes, n_relearn;
 
 static inline int cout_now(void)
 {
@@ -85,9 +106,10 @@ static void cmp_isr(const void *arg)
 	box_gpio_cmp_edge(cmp_pin, (csr & LPCMP_CSR_COUT_MASK) ? 1 : 0, t);
 }
 
-/* ADC counts -> DAC code. The LPCMP DAC gives Vref * (code + 1) / 256.
- * ASSUMED: the DAC's reference (VREFH0) is the ADC's 3.3 V full scale. The
- * plateau check below counts disagreements (n_mismatch) if it is not. */
+/* ADC counts -> DAC code. The LPCMP DAC gives Vref * (code + 1) / 256. The
+ * DAC's reference (VREFH0) is taken to be the ADC's 3.3 V full scale; the
+ * plateau check counts disagreements (n_mismatch) if it is not -- 0 over a
+ * 90 s bench run, 2026-11-24. */
 static uint8_t counts_to_code(int32_t counts)
 {
 	int bits = box_adc_bits() ? box_adc_bits() : 12;
@@ -132,8 +154,21 @@ static void irq_disarm(void)
 static void tracker_reset(void)
 {
 	run_on = false;
-	have_a = have_pair = false;
 	run_sum = run_n = 0;
+	n_seen = 0;
+}
+
+/* Back to learning: edges stop until a new threshold is locked. */
+static void relearn_now(void)
+{
+	irq_disarm();
+	tracker_reset();
+	state = ST_LEARNING;
+	n_relearn++;
+	if (dac_fixed >= 0) {
+		dac_write((uint8_t) dac_fixed);
+		irq_arm();
+	}
 }
 
 static void hw_init_once(void)
@@ -168,6 +203,7 @@ static void hw_start(void)
 	CMP_BASE->CCR0 = LPCMP_CCR0_CMP_EN_MASK;
 	irq_enable(CMP_IRQN);
 	tracker_reset();
+	relearn_req = false;
 	state = ST_LEARNING;
 	if (dac_fixed >= 0) {
 		dac_write((uint8_t) dac_fixed);
@@ -205,7 +241,7 @@ void box_cmp_apply(const box_config_t *c)
 	k_spinlock_key_t k = k_spin_lock(&lock);
 
 	if (want == cmp_pin && state >= ST_NO_ADC) {
-		k_spin_unlock(&lock, k);          /* unrelated config edit: keep what was learned */
+		k_spin_unlock(&lock, k);          /* unrelated config edit: keep the lock */
 		return;
 	}
 	cmp_pin = want;
@@ -232,67 +268,82 @@ int box_cmp_level(void)
 	return (hw_up && cmp_pin >= 0) ? cout_now() : 0;
 }
 
-/* A plateau at level p: learn dark/light, check the comparator agrees, and
- * move the DAC to the midpoint. Runs only while the signal is still. */
+void box_cmp_relearn(void)
+{
+	k_spinlock_key_t k = k_spin_lock(&lock);
+
+	relearn_req = (cmp_pin >= 0);      /* applied by the feed, outside an obs */
+	k_spin_unlock(&lock, k);
+}
+
+/* Lock the threshold at the midpoint of lo..hi and arm. */
+static void lock_at(int32_t lo, int32_t hi)
+{
+	lev_lo = lo;
+	lev_hi = hi;
+	dac_write(counts_to_code((lo + hi) / 2));
+	thr_counts = code_to_counts(dac_code);
+	irq_arm();
+}
+
+/* A plateau at level p. Learning: A, B, then A again locks the threshold.
+ * Armed: check the comparator agrees, and track the levels for `drift` only. */
 static void plateau(int32_t p)
 {
 	n_plateaus++;
 
-	if (!have_pair) {
-		if (!have_a) {
-			lev_a = p;
-			have_a = true;
+	if (state == ST_ARMED) {
+		if (dac_fixed >= 0) {
 			return;
 		}
-		if (abs(p - lev_a) < TRK_MIN_STEP) {
-			lev_a = p;                /* same level, drifting */
-			return;
-		}
-		lev_lo = MIN(p, lev_a);
-		lev_hi = MAX(p, lev_a);
-		have_pair = true;
-	} else {
 		/* does the comparator agree with the ADC about which side p is on?
 		 * A steady disagreement means the DAC's reference is not the ADC's. */
-		if (state == ST_ARMED &&
-		    abs(p - code_to_counts(dac_code)) > TRK_MIN_STEP / 2 &&
-		    (p > code_to_counts(dac_code)) != cout_now()) {
+		if (abs(p - thr_counts) > TRK_MIN_STEP / 2 && (p > thr_counts) != cout_now()) {
 			n_mismatch++;
 		}
-		if (p >= (lev_lo + lev_hi) / 2) {
-			lev_hi = p;
+		int32_t near = (lev_hi - lev_lo) / TRK_NEAR_DIV;
+
+		if (abs(p - lev_lo) <= near) {
+			lev_lo += (p - lev_lo) >> TRK_EMA_SHIFT;
+		} else if (abs(p - lev_hi) <= near) {
+			lev_hi += (p - lev_hi) >> TRK_EMA_SHIFT;
+		}
+		/* anything else -- in between, or beyond both -- is not the patch */
+		return;
+	}
+
+	/* learning */
+	if (n_seen == 0) {
+		lev_a = p;
+		n_seen = 1;
+		return;
+	}
+	if (n_seen == 1) {
+		if (abs(p - lev_a) < TRK_MIN_STEP) {
+			lev_a = p;                    /* still A, drifting */
 		} else {
-			lev_lo = p;
+			lev_b = p;
+			n_seen = 2;
 		}
-		if (lev_hi - lev_lo < TRK_MIN_STEP) {
-			/* the two levels met: nothing to separate any more */
-			have_pair = false;
-			lev_a = p;
-			if (dac_fixed < 0) {
-				irq_disarm();
-				state = ST_LEARNING;
-			}
-			return;
-		}
+		return;
 	}
-	if (dac_fixed >= 0) {
-		return;                           /* learning still runs, for the console */
+	/* n_seen == 2: waiting for the return to A */
+	int32_t step = abs(lev_b - lev_a);
+	int32_t near = step / TRK_NEAR_DIV;
+
+	if (abs(p - lev_a) <= near) {
+		lock_at(MIN(p, lev_b), MAX(p, lev_b));
+	} else if (abs(p - lev_b) <= near) {
+		lev_b = p;                            /* still B */
+	} else if ((p - lev_a) * (lev_b - lev_a) > 0 && abs(p - lev_a) > step) {
+		lev_b = p;                            /* beyond B, away from A: B was a way-station */
 	}
-	dac_write(counts_to_code((lev_lo + lev_hi) / 2));
-	if (state != ST_ARMED) {
-		irq_arm();
-	}
+	/* in between, or beyond A: ignored */
 }
 
 void box_cmp_feed(const int16_t *scan, uint8_t mask, uint64_t t_us)
 {
-	if (cmp_pin < 0 || ain_ch < 0) {
-		return;
-	}
-	if (!((mask >> ain_ch) & 1u)) {
-		if (state == ST_LEARNING) {
-			state = ST_NO_ADC;
-		}
+	if (cmp_pin < 0 || ain_ch < 0 || !((mask >> ain_ch) & 1u)) {
 		return;
 	}
 
@@ -305,12 +356,18 @@ void box_cmp_feed(const int16_t *scan, uint8_t mask, uint64_t t_us)
 	if (state == ST_NO_ADC) {
 		state = ST_LEARNING;
 	}
-	last_sample_us = t_us;
 	last_sample_ms = k_uptime_get();
+	if (relearn_req && !box_obs_active()) {
+		relearn_req = false;
+		relearn_now();
+	}
 
 	int32_t x = scan[ain_ch];
+	/* armed, the band scales with the step, so ripple well inside it (a PWM
+	 * backlight, room light) does not stop the drift readings */
+	int32_t band = (state == ST_ARMED) ? MAX(TRK_BAND, (lev_hi - lev_lo) / 6) : TRK_BAND;
 
-	if (!run_on || abs(x - run_ref) > TRK_BAND) {
+	if (!run_on || abs(x - run_ref) > band) {
 		run_on = true;
 		run_ref = x;
 		run_t0 = t_us;
@@ -343,11 +400,24 @@ static int eff_state(void)
 	return (int) state;
 }
 
+/* How far the tracked levels' midpoint has moved from the locked threshold,
+ * in % of the step (signed; + = the midpoint is now above the threshold). */
+static int drift_pct(void)
+{
+	int32_t step = lev_hi - lev_lo;
+
+	if (state != ST_ARMED || dac_fixed >= 0 || step <= 0) {
+		return 0;
+	}
+	return (int) (((lev_lo + lev_hi) / 2 - thr_counts) * 100 / step);
+}
+
 /* what was last published as state/cmp */
 static bool     pub_ever;
 static int      pub_state = -1;
 static int      pub_dac = -1;
-static uint32_t pub_mismatch;
+static int      pub_drift;
+static uint32_t pub_mismatch, pub_relearn;
 static int64_t  pub_ms;
 
 int box_cmp_status(char *buf, int sz, int force)
@@ -355,41 +425,54 @@ int box_cmp_status(char *buf, int sz, int force)
 	int64_t now = k_uptime_get();
 	int st = eff_state();
 	int dac = (st == ST_ARMED) ? dac_code : -1;
+	int drift = drift_pct();
 	bool due;
 
-	if (force) {
-		due = pub_ever || st != ST_OFF;
-	} else if (st != pub_state || n_mismatch != pub_mismatch) {
-		due = pub_ever || st != ST_OFF;   /* a box that never had a cmp pin stays silent */
-	} else if (dac != pub_dac && now - pub_ms >= 250) {
-		due = abs(dac - pub_dac) >= 2 || now - pub_ms >= 10000;
+	if (!pub_ever && st == ST_OFF) {
+		return 0;                     /* a box that never had a cmp pin stays silent */
+	}
+	if (force || st != pub_state || dac != pub_dac || n_mismatch != pub_mismatch ||
+	    n_relearn != pub_relearn) {
+		due = true;
 	} else {
-		due = false;
+		/* drift is a slow thing: report a 5-point move, at most every 10 s */
+		due = abs(drift - pub_drift) >= 5 && now - pub_ms >= 10000;
 	}
 	if (!due) {
 		return 0;
 	}
 
 	k_spinlock_key_t k = k_spin_lock(&lock);
-	bool pair = have_pair;
-	int32_t lo = pair ? lev_lo : (have_a ? lev_a : 0);
-	int32_t hi = pair ? lev_hi : (have_a ? lev_a : 0);
+	int32_t lo, hi;
+
+	if (st == ST_ARMED) {
+		lo = lev_lo;
+		hi = lev_hi;
+	} else {
+		lo = n_seen >= 2 ? MIN(lev_a, lev_b) : (n_seen ? lev_a : 0);
+		hi = n_seen >= 2 ? MAX(lev_a, lev_b) : (n_seen ? lev_a : 0);
+	}
 	k_spin_unlock(&lock, k);
 
 	if (st <= ST_UNSUPPORTED) {
-		snprintf(buf, sz, "state %s", st == ST_OFF ? "off" : "unsupported");
+		snprintf(buf, sz, "state %s", st_word[st]);
 	} else {
-		/* No `thr`: it is (dac + 1) * 4096 / 256 counts, and a 128-byte
-		 * frame holds name + value <= 109 -- a 16-char box name leaves
-		 * ~77 here. */
-		snprintf(buf, sz, "state %s lo %d hi %d dac %u vref %u hyst %u mismatch %u",
-			 st == ST_ARMED ? "armed" : st == ST_NO_ADC ? "no_samples" : "learning",
-			 (int) lo, (int) hi, dac_code, vref_sel, hyst, n_mismatch);
+		/* A 128-byte frame holds name + value <= 109, and a 16-char box name
+		 * leaves ~77 here: the console-only knobs appear only when changed.
+		 * The threshold is (dac + 1) * 4096 / 256 counts. */
+		int n = snprintf(buf, sz, "state %s lo %d hi %d dac %u drift %d mismatch %u",
+				 st_word[st], (int) lo, (int) hi, dac_code, drift, n_mismatch);
+
+		if (n > 0 && n < sz && (vref_sel != 0 || hyst != 2)) {
+			snprintf(buf + n, sz - n, " vref %u hyst %u", vref_sel, hyst);
+		}
 	}
 	pub_ever = true;
 	pub_state = st;
 	pub_dac = dac;
+	pub_drift = drift;
 	pub_mismatch = n_mismatch;
+	pub_relearn = n_relearn;
 	pub_ms = now;
 	return 1;
 }
@@ -413,19 +496,23 @@ void box_cmp_console(const char *args)
 			dac_code = (uint8_t) ~c;  /* force the rewrite */
 			dac_write(c);
 		}
+	} else if (!strcmp(args, "relearn")) {
+		box_cmp_relearn();
+		if (box_obs_active()) {
+			box_console_printf("cmp: relearn at the end of this obs\n");
+		}
+		k_busy_wait(1000);                /* let the feed take it before showing */
 	} else if (!strncmp(args, "dac ", 4)) {
 		k_spinlock_key_t k = k_spin_lock(&lock);
 
 		if (!strncmp(args + 4, "auto", 4)) {
 			dac_fixed = -1;
-			if (hw_up && cmp_pin >= 0) {
-				irq_disarm();
-				hw_start();       /* relearn from scratch */
-			}
+			relearn_req = (cmp_pin >= 0);
 		} else {
 			dac_fixed = CLAMP(atoi(args + 4), 0, 255);
 			if (hw_up && cmp_pin >= 0) {
 				dac_write((uint8_t) dac_fixed);
+				thr_counts = code_to_counts(dac_code);
 				if (state != ST_ARMED) {
 					irq_arm();
 				}
@@ -433,13 +520,14 @@ void box_cmp_console(const char *args)
 		}
 		k_spin_unlock(&lock, k);
 	} else if (*args) {
-		box_console_printf("cmp: hyst <0-3> | vref <0|1> | dac <0-255>|auto\n");
+		box_console_printf("cmp: relearn | hyst <0-3> | vref <0|1> | dac <0-255>|auto\n");
 		return;
 	}
 
-	int32_t thr = code_to_counts(dac_code);
+	int st = eff_state();
 
-	box_console_printf("cmp  %s  pin %d  ain ch %d%s\n", st_name[eff_state()], cmp_pin, ain_ch,
+	box_console_printf("cmp  %s  pin %d  ain ch %d%s%s\n", st_name[st], cmp_pin, ain_ch,
+			   relearn_req ? "  (relearn pending)" : "",
 			   bad_pin >= 0 ? "  (a cmp pin this board cannot do is set)" : "");
 	if (bad_pin >= 0) {
 		box_console_printf("     pin %d: only box pin %d (A3) reaches a comparator here\n",
@@ -448,15 +536,28 @@ void box_cmp_console(const char *args)
 	if (cmp_pin < 0) {
 		return;
 	}
-	box_console_printf("     levels %s lo %d hi %d (counts)  threshold %d  dac %u%s  vref%u  hyst %u\n",
-			   have_pair ? "learned" : (have_a ? "one" : "none"),
-			   (int) (have_pair ? lev_lo : lev_a), (int) (have_pair ? lev_hi : lev_a),
-			   (int) thr, dac_code, dac_fixed >= 0 ? " (fixed)" : "", vref_sel, hyst);
-	box_console_printf("     out %d  edges %u  plateaus %u  dac writes %u  mismatches %u\n",
-			   cout_now(), n_isr, n_plateaus, n_dac_writes, n_mismatch);
-	if (eff_state() == ST_NO_ADC) {
+	if (st == ST_ARMED) {
+		box_console_printf("     locked at %d counts (dac %u%s)  levels lo %d hi %d  drift %d%%"
+				   "  vref%u  hyst %u\n",
+				   (int) code_to_counts(dac_code), dac_code,
+				   dac_fixed >= 0 ? ", fixed" : "", (int) lev_lo, (int) lev_hi,
+				   drift_pct(), vref_sel, hyst);
+	} else {
+		if (n_seen == 0) {
+			box_console_printf("     learning: no level yet  vref%u  hyst %u\n", vref_sel, hyst);
+		} else if (n_seen == 1) {
+			box_console_printf("     learning: A %d, waiting for the other level"
+					   "  vref%u  hyst %u\n", (int) lev_a, vref_sel, hyst);
+		} else {
+			box_console_printf("     learning: A %d, B %d, waiting for the return to A"
+					   "  vref%u  hyst %u\n", (int) lev_a, (int) lev_b, vref_sel, hyst);
+		}
+	}
+	box_console_printf("     out %d  edges %u  plateaus %u  dac writes %u  relearns %u  mismatches %u\n",
+			   cout_now(), n_isr, n_plateaus, n_dac_writes, n_relearn, n_mismatch);
+	if (st == ST_NO_ADC) {
 		box_console_printf("     ain ch %d is in no active ain group: add it so the "
-				   "threshold can follow the signal\n", ain_ch);
+				   "levels can be learned\n", ain_ch);
 	}
 }
 
@@ -464,6 +565,7 @@ void box_cmp_console(const char *args)
 
 void box_cmp_apply(const box_config_t *c) { ARG_UNUSED(c); }
 int  box_cmp_level(void) { return 0; }
+void box_cmp_relearn(void) { }
 void box_cmp_feed(const int16_t *scan, uint8_t mask, uint64_t t_us)
 {
 	ARG_UNUSED(scan); ARG_UNUSED(mask); ARG_UNUSED(t_us);

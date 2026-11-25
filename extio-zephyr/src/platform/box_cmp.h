@@ -7,14 +7,16 @@
  * through box_gpio's FIFO / debounce latch, stamped at ISR entry -- so on the
  * host side a cmp pin is just a labelled digital input (`photo din`).
  *
- * THE THRESHOLD FOLLOWS THE SIGNAL. box_cmp_feed() watches the channel's
- * samples for plateaus (the signal still for a few ms), keeps the latest dark
- * and light plateau, and sets the DAC to their midpoint -- only ever while the
- * signal is on a plateau, so the threshold never moves under an edge. Until it
- * has seen two plateaus at least a minimum step apart, the comparator's
- * interrupt stays off: no edges are reported from a threshold nobody chose.
- * The channel must therefore be in an active ain group, or there is nothing to
- * learn from (the console says so).
+ * THE THRESHOLD IS LEARNED, THEN LOCKED. box_cmp_feed() watches the
+ * channel's samples for plateaus (the signal still for a few ms). Once it has
+ * seen one level, a second at least a minimum step away, and a return to the
+ * first, it sets the DAC to their midpoint, arms the interrupt, and holds the
+ * threshold there -- for the session, like a pot. Before that no edges are
+ * reported from a threshold nobody chose. It moves again only on a relearn
+ * (box_cmp_relearn), which waits for the end of an obs. While locked the box
+ * keeps tracking the levels to report their `drift` from the threshold.
+ * The channel must be in an active ain group, or there is nothing to learn
+ * from (the console says so).
  *
  * Implemented for the FRDM-MCXN947 (A3 = box pin 15 = P0_22 = CMP1_IN2). On
  * every other board these are stubs and a cmp pin behaves as plain ain.
@@ -36,17 +38,24 @@ int box_cmp_level(void);
 /* One full ain scan (scan[ch] for ch in mask), from the sampling thread. */
 void box_cmp_feed(const int16_t *scan, uint8_t mask, uint64_t t_us);
 
+/* Forget the levels and learn again (console `cmp relearn`, cmd/cmp/relearn).
+ * Edges stop until the new threshold locks. Deferred to the end of an obs. */
+void box_cmp_relearn(void);
+
 /* state/cmp: the comparator's state as a Tcl-dict string,
- *   "state armed lo 812 hi 2960 dac 117 vref 0 hyst 2 mismatch 0"
- * (lo/hi in ADC counts; the threshold is (dac + 1) * 4096 / 256 counts).
- * state is off | unsupported | no_samples | learning | armed. Returns 1 and fills buf when it is due: at once
- * on a state or mismatch change, else when the DAC has moved 2+ codes, or
- * moved at all and 10 s have passed -- at most every 250 ms. `force` (the
- * announce) fills it whenever a cmp pin is or was configured. */
+ *   "state armed lo 812 hi 2960 dac 117 drift 3 mismatch 0"
+ * lo/hi in ADC counts (learning: the candidate levels); the threshold is
+ * (dac + 1) * 4096 / 256 counts; drift is how far the levels' midpoint has
+ * moved from it since it locked, % of the step. " vref V hyst H" is appended
+ * only when changed from 0 / 2. state is off | unsupported | no_samples |
+ * learning | armed. Returns 1 and fills buf when it is due: at once on a
+ * change of state, DAC, mismatch count or relearn count; a drift move of 5
+ * points at most every 10 s. `force` (the announce) fills it whenever a cmp
+ * pin is or was configured. */
 int box_cmp_status(char *buf, int sz, int force);
 
-/* Console: `cmp` shows state; `cmp hyst <0-3>`, `cmp vref <0|1>`,
- * `cmp dac <0-255>|auto` are runtime-only overrides. `args` is what followed
+/* Console: `cmp` shows state; `cmp relearn`; `cmp hyst <0-3>`,
+ * `cmp vref <0|1>`, `cmp dac <0-255>|auto` are runtime-only overrides. `args` is what followed
  * the verb ("" for bare `cmp`). */
 void box_cmp_console(const char *args);
 

@@ -307,29 +307,46 @@ the ADC and a comparator (box pin 15, CMP1_IN2).
 
 What it changes:
 - **No pot.** The box learns the dark and light levels from the samples
-  and puts the threshold at their midpoint. It moves the threshold only while
-  the light is still, so it follows room light and the edge stays at mid-transition.
+  and locks the threshold at their midpoint, then holds it there like a pot
+  you never have to touch. It does not follow room light; a relearn moves it.
 - **No low-light failure.** The LM393's inputs stop working within ~1.5 V of
   its supply, which a dim patch on its AO reaches. The MCU's comparator inputs
   work up to the rail.
 - **Hysteresis.** 20 mV, set by the comparator's hysteresis control.
 
-No edges are reported until both levels have been seen (two still periods at
-least ~80 mV apart). So after a boot or a config change, flip the patch a
-few times. The channel must be in an active ain group, which the model
-does. Box console `cmp` shows the state, the learned levels, the DAC code and
-a count of disagreements between the comparator and the ADC. That count
-should stay 0; if it doesn't, the DAC's reference is not the ADC's 3.3 V
-(`cmp vref 1` tries the other one). `cmp dac <0-255>` fixes the threshold
-and `cmp dac auto` goes back to learning; neither is saved.
+**Learn, then lock.** No edges are reported until the threshold locks. The box
+looks for still periods (the signal within a band for 3 ms): one level, a
+second at least 100 counts (~80 mV) away, then a return to the first. It then
+writes the DAC once, at their midpoint, and arms the comparator. In-between
+readings while learning (a half-covered sensor, a fade) are ignored, and a
+still period beyond the second level replaces it, so the learned step is the
+full one. So after a boot or a config change, flip the patch a few times
+(`photo_test aim`). The channel must be in an active ain group, which the
+model does.
+
+Once locked, the threshold stays put for the session. The box keeps watching
+the levels and reports how far their midpoint has moved from the threshold
+as `drift`, in % of the step: near 0 is a centred edge; past about ±30 the
+edge is off-centre enough to relearn. A **relearn** (console `cmp relearn`,
+or publish anything to `extio/<box>/cmd/cmp/relearn`) forgets the levels and
+learns again; it waits for the end of an obs, so it never moves the threshold
+mid-trial.
+
+Box console `cmp` shows the state, the levels, the DAC code, the drift, and a
+count of disagreements between the comparator and the ADC. That count should
+stay 0; if it doesn't, the DAC's reference is not the ADC's 3.3 V (`cmp vref
+1` tries the other one). `cmp dac <0-255>` fixes the threshold, `cmp dac auto`
+relearns, `cmp hyst <0-3>` sets the hysteresis; none of these is saved.
 
 The edges are `extio/<box>/state/di/15`, like any input on that pin. The
 comparator's state is `extio/<box>/state/cmp`, a dict string such as
-`state armed lo 812 hi 2960 dac 117 vref 0 hyst 2 mismatch 0` (levels in ADC
-counts; the threshold is (dac + 1) × 4096 / 256 counts). It is published
-when the state or the mismatch count changes, when the DAC moves 2 or more
-codes, or when it has moved at all and 10 s have passed, never faster than
-every 250 ms, and again at each announce. Until it reads `armed`, the value of
+`state armed lo 812 hi 2960 dac 117 drift 3 mismatch 0` (levels in ADC
+counts; the threshold is (dac + 1) × 4096 / 256 counts; ` vref V hyst H` is
+appended only when changed from 0 / 2). `state` is `off`, `unsupported`,
+`no_samples` (learning, but the channel is not being sampled), `learning` or
+`armed`. It is published at once when the state, the DAC, the mismatch count
+or the relearn count changes; a drift move of 5 points or more at most every
+10 s; and again at each announce. Until it reads `armed`, the value of
 `state/di/15` means nothing. With `photo din` on that line, `state/cmp` goes
 into every data file with the edges.
 

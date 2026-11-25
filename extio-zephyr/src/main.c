@@ -1833,6 +1833,17 @@ static void on_usb_frame(const uint8_t *frame, void *ud)
 	}
 #endif
 
+	/* <prefix>/cmd/cmp/relearn -- the comparator light detector forgets its
+	 * levels and learns again (box_cmp.h). Its threshold is otherwise locked
+	 * for the session; the relearn itself waits for the end of an obs. Handled
+	 * here, not in the shared core, like the other platform commands. */
+	if (leaf && strcmp(leaf, "cmd/cmp/relearn") == 0) {
+		box_cmp_relearn();
+		box_console_printf("cmd/cmp/relearn -> %s\n",
+				   box_obs_active() ? "at the end of this obs" : "learning");
+		return;
+	}
+
 #if defined(BOX_BLE_CENTRAL)
 	/* <prefix>/cmd/ble/pair <secs>  and  <prefix>/cmd/ble/release <name>
 	 * -- BLE adoption from the host (BLE_AFFINITY.md).
