@@ -256,6 +256,15 @@ check [::ess::photo_din_attach] $PDI "a box labels a line so: resolved"
 check $::subs [list $PDI ::ess::photo_din_edge] "  the line subscribed"
 ::ess::photo_din_attach
 check [llength $::subs] 2 "  once"
+dict set ::table extio/box/state/label/15 [list $T photopatch]
+set r [::ess::photo_din_resolve]
+check [list [dict get $r status] [string match "*2 lines (box pin 15, photo-sync pin 0)*" [dict get $r detail]]] \
+    {unresolved 1} "a second box with the same label: unresolved, naming both ([dict get $r detail])"
+check [list [::ess::photo_din_attach] $::removed] [list "" $PDI] "  the line let go"
+dict unset ::table extio/box/state/label/15
+check [::ess::photo_din_attach] $PDI "  relabelled: resolved again"
+set ::subs [lrange $::subs 0 1]
+set ::removed {}
 dict set ::table extio/box01/state/group/lever/pins [list $T 1,2]
 ::ess::set_photo_din lever
 check [list [dict get [::ess::photo_din_resolve] status] $::removed] [list unresolved $PDI] \

@@ -597,8 +597,9 @@ namespace eval ess {
     # `photo din` (photo_din_resolve).
     #
     #   label       the DI line labelled so, on whichever box announces it
-    #               (<io>/<dev>/state/di/<pin>); else the chord group of
-    #               that name (<io>/*/state/group/<label>)
+    #               (<io>/<dev>/state/di/<pin>); unresolved if more than one
+    #               line carries it; else the chord group of that name
+    #               (<io>/*/state/group/<label>)
     #   a/b...      a datapoint name, taken as written
     #   ""          none
     proc din_resolve { v } {
@@ -613,13 +614,28 @@ namespace eval ess {
         # a DI line labelled so: label datapoints are <io>/<dev>/state/label/<pin>
         set keys {}
         catch { set keys [dservKeys $io/*/state/label/*] }
+        set lines {}
         foreach k [lsort $keys] {
             set lab ""
             catch { set lab [string trim [lindex [split [dservGet $k] \x00] 0]] }
             if { $lab ne $v } continue
             set parts [split $k /]
-            set dev [lindex $parts 1]
-            set pin [lindex $parts end]
+            lappend lines [list [lindex $parts 1] [lindex $parts end]]
+        }
+        # Two lines with one label (two boxes, or two pins) is not a choice
+        # to make by sort order: the first name would win silently, and it
+        # may be the box without the sensor. Say so instead; a datapoint
+        # name (a/b...) picks one.
+        if { [llength $lines] > 1 } {
+            set where {}
+            foreach l $lines { lassign $l dev pin ; lappend where "$dev pin $pin" }
+            lassign [lindex $lines 0] dev pin
+            return [dict create status unresolved kind di dp "" \
+                        detail "$v labels [llength $lines] lines ([join $where {, }]):\
+ relabel all but one, or name the datapoint (e.g. $io/$dev/state/di/$pin)"]
+        }
+        if { [llength $lines] == 1 } {
+            lassign [lindex $lines 0] dev pin
             return [dict create status ok kind di dp $io/$dev/state/di/$pin \
                         detail "$dev pin $pin, labelled $v"]
         }
