@@ -4,6 +4,7 @@
 #include "box_announce.h"
 #include "box_boot.h"
 #include "box_gpio.h"
+#include "box_cmp.h"
 #include "box_uplink.h"                 /* box_uplink_active_name for "transport" */
 #include "box_pub.h"
 #include "platform/box_console.h"       /* box_console_bound (v34) */
@@ -374,7 +375,7 @@ void box_announce_manifest(const box_config_t *c)
 
 	in_csv[0] = out_csv[0] = '\0';
 	for (int i = 0; i < BOX_NPINS; i++) {
-		if (c->pin_mode[i] == 2 || c->pin_mode[i] == 3) {
+		if (pin_is_di(c, i)) {          /* a cmp pin reports edges like an input */
 			ki += snprintf(in_csv + ki, sizeof in_csv - ki, "%s%d", ki ? "," : "", i);
 		} else if (c->pin_mode[i] == 1) {
 			ko += snprintf(out_csv + ko, sizeof out_csv - ko, "%s%d", ko ? "," : "", i);
@@ -481,7 +482,7 @@ void box_announce_manifest(const box_config_t *c)
 			if (c->pin_mode[i] == 3) {
 				kP += snprintf(pup_csv + kP, sizeof pup_csv - kP, "%s%d", kP ? "," : "", i);
 			}
-			if (c->pin_mode[i] == PIN_MODE_AIN) {
+			if (pin_is_ain(c, i)) {      /* ain, and cmp (analog too) */
 				kA += snprintf(ain_csv + kA, sizeof ain_csv - kA, "%s%d", kA ? "," : "", i);
 			}
 			if (c->debounce_ms[i]) {
@@ -714,9 +715,19 @@ static void announce_levels(const box_config_t *c, const group_rt_t *groups)
 
 	box_gpio_read_di_levels(c, levels);
 	for (int i = 0; i < BOX_NPINS; i++) {
-		if (c->pin_mode[i] == 2 || c->pin_mode[i] == 3) {
+		if (pin_is_di(c, i)) {
 			snprintf(leaf, sizeof leaf, "di/%u", i);
 			pub_int(c, leaf, levels[i]);
+		}
+	}
+
+	/* the comparator's state, so a fresh host knows whether di/<cmp pin> is
+	 * armed yet (box_cmp.h); silent on a box that never had a cmp pin */
+	{
+		char cs[96];
+
+		if (box_cmp_status(cs, sizeof cs, 1)) {
+			pub_str(c, "cmp", cs);
 		}
 	}
 

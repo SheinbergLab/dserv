@@ -1701,7 +1701,9 @@ function syncBinds(root) {
 
 function modeOfPin(b, p) {
   if (csvNums(get(b, 'pins/reserved')).includes(p)) return 'reserved';
-  if (csvNums(get(b, 'pins/ain')).includes(p))      return 'ain';
+  /* a comparator pin is announced as BOTH analog and input */
+  if (csvNums(get(b, 'pins/ain')).includes(p))
+    return csvNums(get(b, 'pins/in')).includes(p) ? 'cmp' : 'ain';
   if (csvNums(get(b, 'pins/pullup')).includes(p))   return 'in_pullup';
   if (csvNums(get(b, 'pins/in')).includes(p))       return 'in';
   if (csvNums(get(b, 'pins/out')).includes(p))      return 'out';
@@ -2016,7 +2018,7 @@ function buildPanel(b) {
   const havePinsAll = !!(all && all.length);
 
   const modeOf = p => rsv.has(p) ? 'reserved'
-                    : pinsAin.includes(p) ? 'ain'
+                    : pinsAin.includes(p) ? (pinsIn.includes(p) ? 'cmp' : 'ain')
                     : pinsPup.includes(p) ? 'in_pullup'
                     : pinsIn.includes(p)  ? 'in'
                     : pinsOut.includes(p) ? 'out' : 'off';
@@ -2045,15 +2047,19 @@ function buildPanel(b) {
   const pinRows = pins.map(p => {
     const mode = modeOf(p), res = mode === 'reserved';
     const own = res ? null : ownedBy(p);
-    const opts = ['off', 'in', 'in_pullup', 'out', 'ain'].map(o =>
+    /* `cmp` (ain + on-chip comparator edges) works on one pin per board, so it
+     * is listed only where a pin already is one; set it from a model or the
+     * box console (`pin 15 mode cmp` on an FRDM-MCXN947). */
+    const opts = ['off', 'in', 'in_pullup', 'out', 'ain', ...(mode === 'cmp' ? ['cmp'] : [])].map(o =>
       `<option ${o === mode ? 'selected' : ''}>${o}</option>`).join('');
+    const isDi = mode === 'in' || mode === 'in_pullup' || mode === 'cmp';
     return `<tr class="row" ${(res || own) ? 'style="opacity:.5"' : ''}>
       <td><b>${p}</b>${sk && sk.pin(p) ? ` <span class="age">${sk.pin(p)}</span>` : ''}</td>
       <td>${res ? '<span class="age">reserved</span>'
                 : own ? `<span class="age" title="claimed by the obs/sync role — clear it above to free this pin">${own}</span>`
                 : `<select data-ctl="${esc(b)}|pin/${p}/mode" data-pin-mode="${p}" data-bind-box="${esc(b)}"
                      onchange="cfgSet('${b}','pin/${p}/mode',this.value,this)">${opts}</select>`}</td>
-      <td>${(mode === 'in' || mode === 'in_pullup')
+      <td>${isDi
             ? `<b><span data-val-box="${esc(b)}" data-val-leaf="di/${p}"></span></b> ${ageSpan(b, 'di/' + p)}`
             : (mode === 'out' && !res && !own)
             ? `<button data-ctl="${esc(b)}|btn/do/${p}/1" title="drive pin ${p} high" onclick="doSet('${esc(b)}',${p},1)">1</button>
@@ -2074,7 +2080,7 @@ function buildPanel(b) {
               data-ctl="${esc(b)}|pin/${p}/active_low" data-bind="pins/active_low"
               data-bind-box="${esc(b)}" data-csv-key="${p}"
               onchange="cfgSet('${b}','pin/${p}/active_low',this.checked?1:0,this)">`}</td>
-      <td>${(!res && !own && (mode === 'in' || mode === 'in_pullup')) ? recBox(b, { pin: p }) : ''}</td>
+      <td>${(!res && !own && isDi) ? recBox(b, { pin: p }) : ''}</td>
     </tr>`;
   }).join('') || '<tr><td colspan="8" class="age">no pins announced</td></tr>';
 

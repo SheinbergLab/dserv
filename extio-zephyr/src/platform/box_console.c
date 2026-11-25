@@ -4,6 +4,7 @@
 #include "box_console.h"
 #include "box_cli.h"
 #include "box_gpio.h"
+#include "box_cmp.h"
 #if defined(CONFIG_PTP_CLOCK)
 #include "box_ptp.h"
 #endif
@@ -779,6 +780,12 @@ static void run_line(box_config_t *cfg, const char *line)
 		return;
 	}
 #endif
+
+	/* the comparator light detector (box_cmp.h): runtime-only, not core CLI */
+	if (strcmp(line, "cmp") == 0 || strncmp(line, "cmp ", 4) == 0) {
+		box_cmp_console(line + 3);
+		return;
+	}
 
 	a = box_cli_exec(cfg, line, resp, sizeof resp, &cmd);
 

@@ -761,6 +761,14 @@ static inline void dserv_group_name(const box_config_t *c, int g, char *buf, int
 
 /* pin mode word -> value; -1 if not a recognized word (caller falls back to int) */
 #define PIN_MODE_AIN 4     /* pin is an ADC input, not digital I/O */
+/* An ain pin that ALSO feeds an on-chip comparator, whose edges are reported as
+ * this pin's DI events (state/di/<n>, labels, active_low, debounce all apply).
+ * The threshold follows the levels the ADC sees (box_cmp.c), so the channel
+ * must be in an active ain group. Only pins wired to a comparator input can do
+ * it -- on the FRDM-MCXN947 that is A3 (box pin 15, CMP1_IN2); elsewhere the
+ * pin behaves as plain ain and box_cmp reports why. Runtime-only knobs live on
+ * the console (`cmp`); nothing new is persisted beyond the mode byte. */
+#define PIN_MODE_CMP 5
 
 static inline int dserv_mode_val(const char *w)
 {
@@ -768,12 +776,13 @@ static inline int dserv_mode_val(const char *w)
     if (!strcmp(w, "in"))        return 2;
     if (!strcmp(w, "in_pullup")) return 3;
     if (!strcmp(w, "ain"))       return PIN_MODE_AIN;
+    if (!strcmp(w, "cmp"))       return PIN_MODE_CMP;
     if (!strcmp(w, "off") || !strcmp(w, "unset")) return 0;
     return -1;
 }
 static inline const char *dserv_mode_str(uint8_t m)
 { return m == 1 ? "out" : m == 2 ? "in" : m == 3 ? "in_pullup"
-       : m == PIN_MODE_AIN ? "ain" : "off"; }
+       : m == PIN_MODE_AIN ? "ain" : m == PIN_MODE_CMP ? "cmp" : "off"; }
 
 /* A pin handed to the ADC. The pad is muxed away from GPIO (on MCX that is
  * PCR[MUX]=0, kPORT_PinDisabledOrAnalog, which Zephyr reaches via
@@ -781,7 +790,14 @@ static inline const char *dserv_mode_str(uint8_t m)
  * Which pins CAN do this is a board property -- see zephyr,user/box-ain-pins --
  * but WHETHER they do is runtime config like every other setting on the box. */
 static inline int pin_is_ain(const box_config_t *c, int n)
-{ return (n >= 0 && n < BOX_NPINS && c->pin_mode[n] == PIN_MODE_AIN); }
+{ return (n >= 0 && n < BOX_NPINS &&
+          (c->pin_mode[n] == PIN_MODE_AIN || c->pin_mode[n] == PIN_MODE_CMP)); }
+
+/* A pin whose edges are reported as DI events: a digital input, or a
+ * comparator pin (whose "level" is the comparator output, not the pad). */
+static inline int pin_is_di(const box_config_t *c, int n)
+{ return (n >= 0 && n < BOX_NPINS &&
+          (c->pin_mode[n] == 2 || c->pin_mode[n] == 3 || c->pin_mode[n] == PIN_MODE_CMP)); }
 
 static inline const char *dserv_netmode_str(uint8_t mode)
 { return mode == NET_MODE_STATIC ? "static" : "dhcp"; }

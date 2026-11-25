@@ -115,4 +115,12 @@ void box_gpio_read_di_levels(const box_config_t *c, uint8_t levels[BOX_NPINS]);
  * rising=1 -> begin_obs edge, rising=0 -> end_obs edge. 0 if none seen. */
 uint64_t box_gpio_sync_edge_us(int rising);
 
+/* Comparator pins (PIN_MODE_CMP, box_cmp.c). An edge from the comparator's
+ * ISR enters the same FIFO / debounce latch as a GPIO edge, stamped by the
+ * caller with box_gpio_now_us() at ISR entry. resync adopts the comparator's
+ * current output as the published level WITHOUT emitting an event -- for when
+ * the comparator is (re)armed and its output is a fact, not an edge. */
+void box_gpio_cmp_edge(int pin, int level, uint64_t t_us);
+void box_gpio_cmp_resync(int pin, int level);
+
 #endif /* BOX_GPIO_H */

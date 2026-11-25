@@ -21,6 +21,7 @@
 #include "dserv_config.h"
 #include "box_persist.h"
 #include "box_gpio.h"
+#include "box_cmp.h"
 #include "box_sched.h"
 #include "box_group.h"
 #include "box_clock.h"
@@ -3734,6 +3735,20 @@ int main(void)
 			dserv_state_name(&cfg, name, sizeof name, leaf);   /* extio/<name>/state/di/<pin> */
 			dserv_msg_int(f, name, event_stamp(ev.t_us), lvl);
 			box_pub_event(f);
+		}
+
+		/* the comparator light detector's state, on change (box_cmp.h) */
+		{
+			char cs[96];
+
+			if (box_cmp_status(cs, sizeof cs, 0)) {
+				uint8_t f[DSERV_MSG_LEN];
+
+				dserv_state_name(&cfg, name, sizeof name, "cmp");
+				if (dserv_msg_string(f, name, event_stamp(box_gpio_now_us()), cs) > 0) {
+					box_pub_event(f);
+				}
+			}
 		}
 
 		/* Settle windows expire between edges, so poll them every pass --

@@ -199,6 +199,10 @@ namespace eval ess {
         if { [regexp {^(.+/state)/di/[^/]+$} $dp -> base] } {
             dservLoggerAddMatch $filename $base/sync/* 0 0 1
             dservLoggerAddMatch $filename $base/in_obs 0 0 1
+            # a line from the box's own comparator (pin mode cmp): its
+            # learned levels and threshold, on change. Absent on other boxes.
+            # (re-emitted at open with photo/din: ess-2.0.tm open_datafile)
+            dservLoggerAddMatch $filename $base/cmp 0 0 1
         }
         return 1
     }

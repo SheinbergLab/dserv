@@ -293,6 +293,46 @@ group logged (`extio record`) in a validation session to see it.
 A comparator cannot follow a strobed backlight: it would pulse with every
 flash. Use an analog diode and `strobe` on a Display++.
 
+### The box's own comparator
+
+The FRDM-MCXN947 has comparators of its own, with a DAC for the threshold.
+A pin in `cmp` mode is sampled by the ADC as usual and watched by a
+comparator at the same time. The comparator's edges are reported as the
+pin's DI events: stamped at the interrupt, through the same FIFO and
+debounce as any input. So to dserv it is the same labelled line as a
+module's DO, and everything above applies unchanged. The box model
+`photo-cmp` (`config/models/photo-cmp.tcl`) sets it up. The LM393
+module's AO alone (or any sensor) goes to A3, the one pin that reaches both
+the ADC and a comparator (box pin 15, CMP1_IN2).
+
+What it changes:
+- **No pot.** The box learns the dark and light levels from the samples
+  and puts the threshold at their midpoint. It moves the threshold only while
+  the light is still, so it follows room light and the edge stays at mid-transition.
+- **No low-light failure.** The LM393's inputs stop working within ~1.5 V of
+  its supply, which a dim patch on its AO reaches. The MCU's comparator inputs
+  work up to the rail.
+- **Hysteresis.** 20 mV, set by the comparator's hysteresis control.
+
+No edges are reported until both levels have been seen (two still periods at
+least ~80 mV apart). So after a boot or a config change, flip the patch a
+few times. The channel must be in an active ain group, which the model
+does. Box console `cmp` shows the state, the learned levels, the DAC code and
+a count of disagreements between the comparator and the ADC. That count
+should stay 0; if it doesn't, the DAC's reference is not the ADC's 3.3 V
+(`cmp vref 1` tries the other one). `cmp dac <0-255>` fixes the threshold
+and `cmp dac auto` goes back to learning; neither is saved.
+
+The edges are `extio/<box>/state/di/15`, like any input on that pin. The
+comparator's state is `extio/<box>/state/cmp`, a dict string such as
+`state armed lo 812 hi 2960 dac 117 vref 0 hyst 2 mismatch 0` (levels in ADC
+counts; the threshold is (dac + 1) × 4096 / 256 counts). It is published
+when the state or the mismatch count changes, when the DAC moves 2 or more
+codes, or when it has moved at all and 10 s have passed, never faster than
+every 250 ms, and again at each announce. Until it reads `armed`, the value of
+`state/di/15` means nothing. With `photo din` on that line, `state/cmp` goes
+into every data file with the edges.
+
 In the data file, the line's edges are logged with the box's clock records
 and `photo/din` (where the label resolved). The trials get them as
 `photo_din_t` / `photo_din` (ms from obs onset, 1 = light; left out when

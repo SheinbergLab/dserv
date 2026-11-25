@@ -4643,7 +4643,15 @@ namespace eval ess {
         if { $display_tlock && [dservExists tlock/din] } { dservTouch tlock/din }
         # ... and the photodiode's light line (photo_din_log_match)
         variable photo_din
-        if { $photo_din ne "" && [dservExists photo/din] } { dservTouch photo/din }
+        if { $photo_din ne "" && [dservExists photo/din] } {
+            dservTouch photo/din
+            # the line's comparator state, when it is a box's own comparator
+            catch {
+                set _pd [dict get [dservGet photo/din] dp]
+                if { [regexp {^(.+/state)/di/[^/]+$} $_pd -> _pb] &&
+                     [dservExists $_pb/cmp] } { dservTouch $_pb/cmp }
+            }
+        }
         variable stim_lib_names
         foreach _lib $stim_lib_names {
             if {[dservExists stim/lib/$_lib]} { dservTouch stim/lib/$_lib }

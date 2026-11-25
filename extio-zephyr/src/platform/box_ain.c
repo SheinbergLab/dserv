@@ -3,6 +3,7 @@
  */
 #include "box_ain.h"
 #include "box_adc.h"
+#include "box_cmp.h"
 #if defined(CONFIG_BOX_ADC_STREAM)
 #include "box_adc_stream.h"
 #endif
@@ -231,6 +232,9 @@ static void feed_scan(const int16_t *scan, uint64_t t_us)
 	 * from the t0 it was given. Same reason the model itself reads the
 	 * register instead of the request. */
 	uint32_t ivl = period_us;
+
+	/* a cmp pin's threshold follows its channel's plateaus (box_cmp.h) */
+	box_cmp_feed(scan, union_mask, t_us);
 
 #if defined(CONFIG_BOX_ADC_STREAM)
 	if (atomic_get(&streaming)) {

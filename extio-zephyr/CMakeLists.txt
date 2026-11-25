@@ -15,6 +15,7 @@ target_sources(app PRIVATE
 	src/box_boot.c                 # why we booted + which image (OTA step 5)
 	src/box_obs.c                  # obs-period state + idle-deferred work
 	src/platform/box_gpio.c        # block #3: GPIO + k_timer box-timed pulse
+	src/platform/box_cmp.c         # comparator light detector (stubs off MCXN947)
 	src/platform/box_sched.c       # scheduled events (fire at beginobs + N us)
 	src/platform/box_console.c     # two-way CLI over the USB console CDC
 	src/platform/box_usbd.c        # block #4: USB device (device_next) context

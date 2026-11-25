@@ -5,6 +5,7 @@
  */
 #include "box_gpio.h"
 #include "box_event.h"
+#include "box_cmp.h"
 
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
@@ -217,6 +218,8 @@ static uint8_t  di_use_fifo[BOX_NPINS];                /* poller-maintained */
 static uint8_t  di_pair_pending[BOX_NPINS];            /* count-parity slot  */
 static uint64_t di_pair_t[BOX_NPINS];
 static uint8_t  di_pair_lvl[BOX_NPINS];
+static volatile uint8_t di_resync[BOX_NPINS];          /* cmp: adopt level, no event */
+static volatile uint8_t di_resync_lvl[BOX_NPINS];
 
 /* ---- hardware obs-sync input: raw edge latch (clock anchor, unpublished) ---- */
 static volatile int      sync_pin = -1;
@@ -239,6 +242,32 @@ static volatile uint32_t    di_isr_n;      /* TEMP diagnostic: ISR entries */
  * BIT(i) test, and with several it is what keeps gpio1.2 from being mistaken
  * for gpio0.2. 64-bit fields are written here and read under irq_lock in the
  * poller (single-core CM33). */
+/* One edge on box pin i at t: into the FIFO (debounce 0) or the settle latch.
+ * ISR context. `level` is only consulted on the FIFO path. Shared by the GPIO
+ * ISR and the comparator ISR (box_gpio_cmp_edge). */
+static inline void di_record(int i, uint64_t t, uint8_t level)
+{
+	if (di_use_fifo[i]) {
+		uint16_t h = di_fifo_head;
+		uint16_t n = (uint16_t) ((h + 1) % DI_FIFO_DEPTH);
+
+		if (n == di_fifo_tail) {
+			di_fifo_drops++;         /* full: drop NEWEST, count */
+		} else {
+			di_fifo[h].t_us  = t;
+			di_fifo[h].pin   = (uint8_t) i;
+			di_fifo[h].level = level;
+			di_fifo_head = n;
+		}
+		return;
+	}
+	if (!di_unsettled[i]) {
+		di_first_edge_us[i] = t;
+		di_unsettled[i] = 1;
+	}
+	di_last_edge_us[i] = t;
+}
+
 static void di_isr(const struct device *dev, struct gpio_callback *cb,
 		   gpio_port_pins_t pins)
 {
@@ -257,31 +286,41 @@ static void di_isr(const struct device *dev, struct gpio_callback *cb,
 			sync_edge[lvl ? 1 : 0] = t;
 			continue;
 		}
-		if (di_use_fifo[i]) {
-			uint16_t h = di_fifo_head;
-			uint16_t n = (uint16_t) ((h + 1) % DI_FIFO_DEPTH);
-
-			if (n == di_fifo_tail) {
-				di_fifo_drops++;         /* full: drop NEWEST, count */
-			} else {
-				di_fifo[h].t_us  = t;
-				di_fifo[h].pin   = (uint8_t) i;
-				di_fifo[h].level = (uint8_t) gpio_pin_get_dt(&specs[i]);
-				di_fifo_head = n;
-			}
-			woke = true;
-			continue;
-		}
-		if (!di_unsettled[i]) {
-			di_first_edge_us[i] = t;
-			di_unsettled[i] = 1;
-		}
-		di_last_edge_us[i] = t;
+		di_record(i, t, di_use_fifo[i] ? (uint8_t) gpio_pin_get_dt(&specs[i]) : 0);
 		woke = true;
 	}
 	if (woke) {
 		box_event_signal();          /* wake the service loop now, don't wait for a poll */
 	}
+}
+
+void box_gpio_cmp_edge(int pin, int level, uint64_t t_us)
+{
+	if (pin < 0 || pin >= BOX_NPINS) {
+		return;
+	}
+	di_record(pin, t_us, (uint8_t) (level ? 1 : 0));
+	box_event_signal();
+}
+
+void box_gpio_cmp_resync(int pin, int level)
+{
+	if (pin >= 0 && pin < BOX_NPINS) {
+		di_resync_lvl[pin] = (uint8_t) (level ? 1 : 0);
+		di_resync[pin] = 1;
+		box_event_signal();
+	}
+}
+
+/* The raw level the poller compares against: the pad for a GPIO input, the
+ * comparator's output for a cmp pin (whose pad is muxed to analog and reads
+ * nothing useful). */
+static inline int di_read_raw(const box_config_t *c, int i)
+{
+	if (c->pin_mode[i] == PIN_MODE_CMP) {
+		return box_cmp_level();
+	}
+	return gpio_pin_get_dt(&specs[i]);
 }
 
 uint64_t box_gpio_sync_edge_us(int rising)
@@ -401,6 +440,15 @@ void box_gpio_apply_config(const box_config_t *c)
 			 * loading the pad. */
 			gpio_pin_configure_dt(&specs[i], GPIO_DISCONNECTED);
 			break;
+		case PIN_MODE_CMP:                       /* ADC + comparator, edges as DI */
+			/* Same analog mux as ain: the comparator's input and the
+			 * ADC's share the pad's analog function. No GPIO interrupt --
+			 * the edges come from box_cmp's ISR. Published level is
+			 * adopted from the comparator once box_cmp has armed it
+			 * (box_gpio_cmp_resync), never invented here. */
+			gpio_pin_configure_dt(&specs[i], GPIO_DISCONNECTED);
+			di_unsettled[i] = 0;
+			break;
 		default:                                 /* 0 = off: RELEASE the pad */
 			/* `off` used to mean "pad left alone", which made it an
 			 * absence rather than a state -- and the two only agreed
@@ -449,6 +497,9 @@ void box_gpio_apply_config(const box_config_t *c)
 		gpio_init_callback(&cb_obj[k], di_isr, cb_mask[k]);
 		gpio_add_callback(cb_dev[k], &cb_obj[k]);
 	}
+
+	/* after the pads are muxed: the comparator reads the analog function */
+	box_cmp_apply(c);
 }
 
 void box_gpio_exec(const box_config_t *c, const gpio_cmd_t *cmd)
@@ -508,6 +559,14 @@ int box_gpio_poll_di(const box_config_t *c, box_di_event_t *out)
 	for (int i = 0; i < BOX_NPINS; i++) {
 		di_use_fifo[i] = (c->debounce_ms[i] == 0) && !box_gpio_reserved(i)
 			&& (i != sync_pin);
+	}
+
+	/* a (re)armed comparator: its output is the published level, silently */
+	for (int i = 0; i < BOX_NPINS; i++) {
+		if (di_resync[i]) {
+			di_resync[i] = 0;
+			di_pub_level[i] = di_resync_lvl[i];   /* the output when it was armed */
+		}
 	}
 
 	/* count-parity completion from a merged same-stamp pair (see the FIFO
@@ -583,7 +642,7 @@ int box_gpio_poll_di(const box_config_t *c, box_di_event_t *out)
 		if (now - last < win) {
 			continue;                        /* still bouncing */
 		}
-		uint8_t lvl = (uint8_t) gpio_pin_get_dt(&specs[i]);
+		uint8_t lvl = (uint8_t) di_read_raw(c, i);
 		k = irq_lock();
 		di_unsettled[i] = 0;
 		irq_unlock(k);
@@ -695,8 +754,8 @@ void box_gpio_read_di_levels(const box_config_t *c, uint8_t levels[BOX_NPINS])
 		if (box_gpio_reserved(i)) {
 			continue;
 		}
-		if (c->pin_mode[i] == 2 || c->pin_mode[i] == 3) {
-			int raw = gpio_pin_get_dt(&specs[i]);
+		if (pin_is_di(c, i)) {
+			int raw = di_read_raw(c, i);
 
 			if (raw >= 0) {
 				levels[i] = (uint8_t) di_logical(c, i, raw);
