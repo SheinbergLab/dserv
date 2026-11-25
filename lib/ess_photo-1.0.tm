@@ -1032,6 +1032,7 @@ namespace eval ess {
     variable pt_relock ""         ;# aim on a cmp line: relock flips left; "" none
     variable pt_relock_dk {}      ;# edges back after each relock flip
     variable pt_cmp_min_step 100  ;# the box's TRK_MIN_STEP: it cannot learn below
+                                  ;# (pt_cmp_step_min: 192 on a Teensy's 6-bit DAC)
 
     # ---- hooks: everything outside this block ----
     proc pt_param { p } { processGetParam photo $p }
@@ -1113,6 +1114,15 @@ namespace eval ess {
         return $s
     }
     proc pt_cmp_relearn { box } { dservSet extio/$box/cmd/cmp/relearn 1 }
+    # the smallest step the box can learn (its TRK_MIN_STEP, counts): set by
+    # its comparator's DAC -- 8-bit on the MCXN947, 6-bit on a Teensy 4.x
+    proc pt_cmp_step_min { box } {
+        variable pt_cmp_min_step
+        set board ""
+        catch { set board [lindex [split [dservGet extio/$box/state/board] \x00] 0] }
+        if { [string match -nocase teensy4* $board] } { return 192 }
+        return $pt_cmp_min_step
+    }
 
     proc photo_test { {what run} args } {
         switch -- $what {
@@ -1293,7 +1303,7 @@ namespace eval ess {
         if { $pt_k == 0 } {
             if { [llength $pt_cmp] } {
                 set pt_noise 0
-                set pt_min_step $pt_cmp_min_step
+                set pt_min_step [pt_cmp_step_min [lindex $pt_cmp 0]]
                 set pt_sign [lindex $pt_cmp 2]
             } elseif { $pt_din ne "" } {
                 set pt_noise 0
@@ -1549,7 +1559,7 @@ namespace eval ess {
         set lt "line $pt_din"
         set step [expr {$dark eq "" || $light eq "" ? 0.0 : ($light - $dark) * $pt_sign}]
         set S [format %.0f $step]
-        set M $pt_cmp_min_step
+        set M [pt_cmp_step_min $box]
         set lv "step $S counts (dark [format %.0f $dark], light [format %.0f $light])"
         set cs [pt_cmp_state $box]
         set st ""

@@ -305,6 +305,15 @@ module's DO, and everything above applies unchanged. The box model
 module's AO alone (or any sensor) goes to A3, the one pin that reaches both
 the ADC and a comparator (box pin 15, CMP1_IN2).
 
+A **Teensy 4.0/4.1** (firmware 0.4.0+115) does the same over USB: model
+`photo-cmp-teensy`. The sensor goes to A0 (pin 14: ain ch 7, CMP1_IN3), VCC to
+3.3V. The line is still box pin 15, a pad with no Teensy pin, since that
+board's analog pads are not box pins. Its DAC is 6-bit, so the minimum step
+is 192 counts rather than 100, and `cmp dac` takes 0-63. `state/cmp` still
+reports `dac` on the 8-bit scale, so the threshold formula below holds, and
+it always shows ` vref 1 hyst 2`, because vref 1 is that board's default.
+Bench, 2026-11-25: dark ~4085, light ~3250, locked at dac 227, mismatch 0.
+
 What it changes:
 - **No pot.** The box learns the dark and light levels from the samples
   and locks the threshold at their midpoint, then holds it there like a pot
@@ -317,10 +326,13 @@ What it changes:
 **Learn, then lock.** No edges are reported until the threshold locks. The box
 looks for still periods (the signal within a band for 3 ms): one level, a
 second at least 100 counts (~80 mV) away, then a return to the first. It then
-writes the DAC once, at their midpoint, and arms the comparator. In-between
-readings while learning (a half-covered sensor, a fade) are ignored, and a
-still period beyond the second level replaces it, so the learned step is the
-full one. So after a boot or a config change, flip the patch a few times
+writes the DAC once, at their midpoint, and arms the comparator. A still
+period beyond the second level replaces it, so the learned step is the full
+one. Any other new level (at least the minimum step from the second) means
+the first is not coming back -- a pin read before the sensor was wired, a
+hand moving it -- so the last two levels become the pair and a return to the
+second locks (firmware +114; before that the box could stay `learning`
+until a relearn). So after a boot or a config change, flip the patch a few times
 (`photo_test aim`). An aim on a cmp line ends, done or stopped, by relearning
 where the detector now is and flipping three more times so it locks.
 

@@ -23,23 +23,182 @@
 #include <stdlib.h>
 #include <string.h>
 
-#if defined(CONFIG_SOC_MCXN947) && defined(BOX_HAVE_ADC)
+#if defined(BOX_HAVE_ADC) && (defined(CONFIG_SOC_MCXN947) || defined(CONFIG_SOC_MIMXRT1062))
 
 #include "box_adc.h"
 #include <fsl_clock.h>
 
-/* ---- the wiring: which box pin reaches which comparator input ----
+/* ==== THE HARDWARE: everything below this block is board-independent ====
  *
- * FRDM-MCXN947, Arduino A3 = P0_22, which is both ADC0_A14 (ain ch3) and
+ * Each board says which box pin carries the line, which ain channel feeds it,
+ * how many DAC levels it has, and supplies the handful of hw_* register
+ * accessors. The learning, locking, drift, level reports and console are
+ * shared. CMP_DAC_LEVELS sets the threshold's resolution, so a coarse DAC
+ * needs a bigger minimum step (CMP_MIN_STEP) for its midpoint to mean much. */
+
+#if defined(CONFIG_SOC_MCXN947)
+/* FRDM-MCXN947, Arduino A3 = P0_22, which is both ADC0_A14 (ain ch3) and
  * CMP1_IN2, in the same pad mode (MUX 0). A5 = P0_23 is CMP2_IN2 but is also
  * SW2 with a pull-up and is MCUboot's button, so it is not offered. Box pin 15
- * is A3 in this board's box-gpios map (boards/frdm_mcxn947_mcxn947_cpu0.overlay). */
-#define CMP_BOX_PIN   15
-#define CMP_BASE      CMP1
-#define CMP_PSEL      2u              /* IN2 */
-#define CMP_MSEL_DAC  7u              /* minus input = the internal 8-bit DAC */
-#define CMP_IRQN      HSCMP1_IRQn     /* CMP1's vector, named HSCMP1 in the SDK */
-#define CMP_IRQ_PRIO  DT_IRQ(DT_NODELABEL(gpio0), priority)  /* same as DI edges */
+ * is A3 in this board's box-gpios map (boards/frdm_mcxn947_mcxn947_cpu0.overlay),
+ * so the line and the analog are the same pad; its ain channel is looked up. */
+#define CMP_BOX_PIN    15
+#define CMP_PIN_NAME   "A3"
+#define CMP_AIN_CH     (-1)           /* the channel whose pad is CMP_BOX_PIN */
+#define CMP_DAC_LEVELS 256            /* LPCMP: Vref * (code + 1) / 256 */
+#define CMP_MIN_STEP   100            /* ~80 mV; the DAC steps 16 counts */
+#define CMP_VREF_DEF   0              /* DCR.VRSEL: VREFH0 / VREFH1 -- 0 matched the ADC on the bench */
+#define CMP_BASE       CMP1
+#define CMP_PSEL       2u             /* IN2 */
+#define CMP_MSEL_DAC   7u             /* minus input = the internal 8-bit DAC */
+#define CMP_IRQN       HSCMP1_IRQn    /* CMP1's vector, named HSCMP1 in the SDK */
+#define CMP_IRQ_PRIO   DT_IRQ(DT_NODELABEL(gpio0), priority)  /* same as DI edges */
+
+static inline int hw_cout(void) { return (CMP_BASE->CSR & LPCMP_CSR_COUT_MASK) ? 1 : 0; }
+/* clear the edge flags (w1c); returns the output as it was at the read */
+static inline int hw_flags_take(void)
+{
+	uint32_t csr = CMP_BASE->CSR;
+
+	CMP_BASE->CSR = csr & (LPCMP_CSR_CFR_MASK | LPCMP_CSR_CFF_MASK);
+	return (csr & LPCMP_CSR_COUT_MASK) ? 1 : 0;
+}
+static inline bool hw_dac_on(void) { return (CMP_BASE->DCR & LPCMP_DCR_DAC_EN_MASK) != 0; }
+static inline void hw_dac_set(uint8_t code, uint8_t vref)
+{
+	CMP_BASE->DCR = LPCMP_DCR_VRSEL(vref) | LPCMP_DCR_DAC_DATA(code) | LPCMP_DCR_DAC_EN_MASK;
+}
+static inline void hw_irq_on(void)
+{
+	CMP_BASE->CSR = LPCMP_CSR_CFR_MASK | LPCMP_CSR_CFF_MASK;
+	CMP_BASE->IER = LPCMP_IER_CFR_IE_MASK | LPCMP_IER_CFF_IE_MASK;
+}
+static inline void hw_irq_off(void)
+{
+	CMP_BASE->IER = 0;
+	CMP_BASE->CSR = LPCMP_CSR_CFR_MASK | LPCMP_CSR_CFF_MASK;
+}
+static inline void hw_hyst(uint8_t h)
+{
+	CMP_BASE->CCR2 = (CMP_BASE->CCR2 & ~LPCMP_CCR2_HYSTCTR_MASK) | LPCMP_CCR2_HYSTCTR(h);
+}
+static void hw_clock_init(void)
+{
+	/* CMP1 has no AHB gate on this part (LPCMP_CLOCKS lists kCLOCK_None for
+	 * CMP0/1); it needs its functional clock and its analog power. */
+	CLOCK_SetClkDiv(kCLOCK_DivCmp1FClk, 1U);
+	CLOCK_AttachClk(kFRO12M_to_CMP1F);
+	SPC0->ACTIVE_CFG1 |= SPC_ACTIVE_CFG1_SOC_CNTRL((1UL << 17) | (1UL << 21)); /* CMP1, CMP1_DAC */
+	k_busy_wait(50);
+}
+/* comparator configured (input, DAC as minus, hysteresis), disabled, no IRQ */
+static void hw_config(uint8_t h)
+{
+	CMP_BASE->CCR0 = 0;
+	CMP_BASE->IER = 0;
+	CMP_BASE->CCR1 = 0;                   /* filter bypassed, no pin out */
+	CMP_BASE->CCR2 = LPCMP_CCR2_CMP_HPMD(1) | LPCMP_CCR2_HYSTCTR(h) |
+			 LPCMP_CCR2_PSEL(CMP_PSEL) | LPCMP_CCR2_MSEL(CMP_MSEL_DAC);
+	CMP_BASE->DCR = 0;
+}
+static inline void hw_enable(void)
+{
+	CMP_BASE->CSR = LPCMP_CSR_CFR_MASK | LPCMP_CSR_CFF_MASK;
+	CMP_BASE->CCR0 = LPCMP_CCR0_CMP_EN_MASK;
+}
+static void hw_off(void)
+{
+	CMP_BASE->IER = 0;
+	CMP_BASE->CCR0 = 0;
+	CMP_BASE->DCR = 0;
+}
+
+#elif defined(CONFIG_SOC_MIMXRT1062)
+/* Teensy 4.0 / 4.1 (i.MX RT1062). Its comparators are the Kinetis-style CMP
+ * (CR0/CR1/FPR/SCR/DACCR/MUXCR, 8-bit registers) with a 6-bit DAC. Nearly
+ * every ADC pad is also a comparator input; the one wired here is Teensy A0
+ * (T14) = GPIO_AD_B1_02 = ADC1_IN7 (ain ch 7 in boards/teensy4x.overlay) =
+ * CMP1_IN3. On this board the analog pads are NOT box pins (box pins are
+ * gpio2 bits), so the line needs a box pin of its own: box pin 15 =
+ * GPIO_B0_15, which is not bonded out on either Teensy (its silk is "") --
+ * the same number as the MCXN947's, so `pin 15 mode cmp` means the same
+ * thing on both. Its pad is set disconnected in cmp mode like any cmp pin.
+ * Other comparator-capable ain channels on the 4.0's edge pins, for later:
+ * ch6 A4/T18 (CMPx_IN0), ch5 A5/T19 (CMP4_IN2), ch0 A7/T21 (CMP1_IN6). */
+#define CMP_BOX_PIN    15
+#define CMP_PIN_NAME   "A0 (T14)"
+#define CMP_AIN_CH     7
+#define CMP_DAC_LEVELS 64             /* VOSEL: Vin * (code + 1) / 64, ~52 mV a step */
+#define CMP_MIN_STEP   192            /* three DAC steps: a midpoint off by <= 32 counts still sits well inside */
+/* ASSUMED: VRSEL 1 = Vin2 = the 3.3 V supply, as on the Kinetis parts this
+ * block comes from; the reference manual's chip-specific CMP section was not
+ * at hand. A nonzero mismatch count says otherwise -- `cmp vref 0` tries Vin1. */
+#define CMP_VREF_DEF   1
+#define CMP_BASE       CMP1
+#define CMP_PSEL       3u             /* IN3 */
+#define CMP_MSEL_DAC   7u             /* IN7 = the internal 6-bit DAC */
+#define CMP_IRQN       ACMP1_IRQn
+#define CMP_IRQ_PRIO   DT_IRQ_BY_IDX(DT_NODELABEL(gpio2), 0, priority)  /* as DI edges */
+
+static inline int hw_cout(void) { return (CMP_BASE->SCR & CMP_SCR_COUT_MASK) ? 1 : 0; }
+/* SCR holds both the w1c edge flags and the interrupt enables: write back the
+ * enables as they are, with 1s in the flags that were set */
+static inline int hw_flags_take(void)
+{
+	uint8_t scr = CMP_BASE->SCR;
+
+	CMP_BASE->SCR = (uint8_t) ((scr & (CMP_SCR_IER_MASK | CMP_SCR_IEF_MASK)) |
+				   (scr & (CMP_SCR_CFR_MASK | CMP_SCR_CFF_MASK)));
+	return (scr & CMP_SCR_COUT_MASK) ? 1 : 0;
+}
+static inline bool hw_dac_on(void) { return (CMP_BASE->DACCR & CMP_DACCR_DACEN_MASK) != 0; }
+static inline void hw_dac_set(uint8_t code, uint8_t vref)
+{
+	CMP_BASE->DACCR = (uint8_t) (CMP_DACCR_DACEN_MASK | CMP_DACCR_VRSEL(vref) |
+				     CMP_DACCR_VOSEL(code));
+}
+static inline void hw_irq_on(void)
+{
+	CMP_BASE->SCR = CMP_SCR_CFR_MASK | CMP_SCR_CFF_MASK | CMP_SCR_IER_MASK | CMP_SCR_IEF_MASK;
+}
+static inline void hw_irq_off(void)
+{
+	CMP_BASE->SCR = CMP_SCR_CFR_MASK | CMP_SCR_CFF_MASK;
+}
+static inline void hw_hyst(uint8_t h)
+{
+	CMP_BASE->CR0 = (uint8_t) ((CMP_BASE->CR0 & ~CMP_CR0_HYSTCTR_MASK) | CMP_CR0_HYSTCTR(h));
+}
+static void hw_clock_init(void)
+{
+	CLOCK_EnableClock(kCLOCK_Acmp1);      /* CCGR3 CG10: the IPG clock is all it needs */
+	k_busy_wait(10);
+}
+static void hw_config(uint8_t h)
+{
+	CMP_BASE->CR1 = 0;                    /* off while it is set up */
+	CMP_BASE->SCR = CMP_SCR_CFR_MASK | CMP_SCR_CFF_MASK;
+	CMP_BASE->CR0 = (uint8_t) CMP_CR0_HYSTCTR(h);   /* FILTER_CNT 0: filter bypassed */
+	CMP_BASE->FPR = 0;
+	CMP_BASE->MUXCR = (uint8_t) (CMP_MUXCR_PSEL(CMP_PSEL) | CMP_MUXCR_MSEL(CMP_MSEL_DAC));
+	CMP_BASE->DACCR = 0;
+}
+static inline void hw_enable(void)
+{
+	CMP_BASE->SCR = CMP_SCR_CFR_MASK | CMP_SCR_CFF_MASK;
+	CMP_BASE->CR1 = CMP_CR1_EN_MASK | CMP_CR1_PMODE_MASK;   /* high-speed, no pin out */
+}
+static void hw_off(void)
+{
+	CMP_BASE->SCR = 0;
+	CMP_BASE->CR1 = 0;
+	CMP_BASE->DACCR = 0;
+}
+#endif
+
+/* state/cmp's `dac` is an 8-bit-equivalent code, so the host's threshold
+ * (dac + 1) * 4096 / 256 holds on every board */
+#define CMP_DAC_TO_8BIT(c) ((uint8_t) (((c) + 1) * (256 / CMP_DAC_LEVELS) - 1))
 
 /* ---- the plateau tracker (ADC counts, 12-bit) ----
  *
@@ -50,7 +209,7 @@
  * over). Readings in between the two levels are ignored throughout. */
 #define TRK_BAND      32     /* "still": within this of the run's level (~26 mV) while learning */
 #define TRK_SETTLE_US 3000   /* still this long = a plateau */
-#define TRK_MIN_STEP  100    /* two levels this far apart = dark and light (~80 mV) */
+#define TRK_MIN_STEP  CMP_MIN_STEP  /* two levels this far apart = dark and light (per board, above) */
 #define TRK_NEAR_DIV  3      /* a reading within step/3 of a level IS that level */
 #define TRK_EMA_SHIFT 3      /* locked: a level moves 1/8 of the way to each reading of it */
 
@@ -67,7 +226,7 @@ static bool     hw_up;
 
 /* runtime knobs (console only, not persisted) */
 static uint8_t  hyst = 2;            /* HYSTCTR level: 0/10/20/30 mV */
-static uint8_t  vref_sel;            /* DCR.VRSEL: VREFH0 / VREFH1 -- 0 matched the ADC on the bench */
+static uint8_t  vref_sel = CMP_VREF_DEF;  /* the DAC's reference select (per board, above) */
 static int      dac_fixed = -1;      /* >= 0: fixed DAC code, armed at once */
 
 /* tracker */
@@ -89,66 +248,62 @@ static uint32_t n_plateaus, n_mismatch, n_dac_writes, n_relearn;
 
 static inline int cout_now(void)
 {
-	return (CMP_BASE->CSR & LPCMP_CSR_COUT_MASK) ? 1 : 0;
+	return hw_cout();
 }
 
 static void cmp_isr(const void *arg)
 {
 	ARG_UNUSED(arg);
 	uint64_t t = box_gpio_now_us();       /* stamp first, like the GPIO ISR */
-	uint32_t csr = CMP_BASE->CSR;
+	int out = hw_flags_take();
 
-	CMP_BASE->CSR = csr & (LPCMP_CSR_CFR_MASK | LPCMP_CSR_CFF_MASK);   /* w1c */
 	n_isr++;
 	/* Level read AFTER the flags: two edges inside one ISR latency leave the
 	 * output where it started, and box_gpio's FIFO turns "same level as
 	 * published" into a same-stamp pair -- the GPIO path's rule, unchanged. */
-	box_gpio_cmp_edge(cmp_pin, (csr & LPCMP_CSR_COUT_MASK) ? 1 : 0, t);
+	box_gpio_cmp_edge(cmp_pin, out, t);
 }
 
-/* ADC counts -> DAC code. The LPCMP DAC gives Vref * (code + 1) / 256. The
- * DAC's reference (VREFH0) is taken to be the ADC's 3.3 V full scale; the
- * plateau check counts disagreements (n_mismatch) if it is not -- 0 over a
- * 90 s bench run, 2026-11-24. */
+/* ADC counts -> DAC code. The DAC gives Vref * (code + 1) / CMP_DAC_LEVELS,
+ * and its reference is taken to be the ADC's 3.3 V full scale; the plateau
+ * check counts disagreements (n_mismatch) if it is not -- 0 over a 90 s
+ * MCXN947 bench run, 2026-11-24. */
 static uint8_t counts_to_code(int32_t counts)
 {
 	int bits = box_adc_bits() ? box_adc_bits() : 12;
-	int32_t code = (int32_t) (((int64_t) counts * 256 + (1 << (bits - 1))) >> bits) - 1;
+	int32_t code = (int32_t) (((int64_t) counts * CMP_DAC_LEVELS + (1 << (bits - 1))) >> bits) - 1;
 
-	return (uint8_t) CLAMP(code, 0, 255);
+	return (uint8_t) CLAMP(code, 0, CMP_DAC_LEVELS - 1);
 }
 
 static int32_t code_to_counts(uint8_t code)
 {
 	int bits = box_adc_bits() ? box_adc_bits() : 12;
 
-	return (int32_t) (((int64_t) (code + 1) << bits) / 256);
+	return (int32_t) (((int64_t) (code + 1) << bits) / CMP_DAC_LEVELS);
 }
 
 static void dac_write(uint8_t code)
 {
-	if (code == dac_code && (CMP_BASE->DCR & LPCMP_DCR_DAC_EN_MASK)) {
+	if (code == dac_code && hw_dac_on()) {
 		return;
 	}
 	dac_code = code;
-	CMP_BASE->DCR = LPCMP_DCR_VRSEL(vref_sel) | LPCMP_DCR_DAC_DATA(code) |
-			LPCMP_DCR_DAC_EN_MASK;
+	hw_dac_set(code, vref_sel);
 	n_dac_writes++;
 }
 
 static void irq_arm(void)
 {
 	k_busy_wait(5);                       /* let the DAC settle before trusting COUT */
-	CMP_BASE->CSR = LPCMP_CSR_CFR_MASK | LPCMP_CSR_CFF_MASK;
 	box_gpio_cmp_resync(cmp_pin, cout_now());
-	CMP_BASE->IER = LPCMP_IER_CFR_IE_MASK | LPCMP_IER_CFF_IE_MASK;
+	hw_irq_on();                          /* clears the flags, then enables */
 	state = ST_ARMED;
 }
 
 static void irq_disarm(void)
 {
-	CMP_BASE->IER = 0;
-	CMP_BASE->CSR = LPCMP_CSR_CFR_MASK | LPCMP_CSR_CFF_MASK;
+	hw_irq_off();
 }
 
 static void tracker_reset(void)
@@ -176,13 +331,7 @@ static void hw_init_once(void)
 	if (hw_up) {
 		return;
 	}
-	/* CMP1 has no AHB gate on this part (LPCMP_CLOCKS lists kCLOCK_None for
-	 * CMP0/1); it needs its functional clock and its analog power. */
-	CLOCK_SetClkDiv(kCLOCK_DivCmp1FClk, 1U);
-	CLOCK_AttachClk(kFRO12M_to_CMP1F);
-	SPC0->ACTIVE_CFG1 |= SPC_ACTIVE_CFG1_SOC_CNTRL((1UL << 17) | (1UL << 21)); /* CMP1, CMP1_DAC */
-	k_busy_wait(50);
-
+	hw_clock_init();
 	IRQ_CONNECT(CMP_IRQN, CMP_IRQ_PRIO, cmp_isr, NULL, 0);
 	hw_up = true;
 }
@@ -191,16 +340,10 @@ static void hw_start(void)
 {
 	hw_init_once();
 	irq_disable(CMP_IRQN);
-	CMP_BASE->CCR0 = 0;
-	CMP_BASE->IER = 0;
-	CMP_BASE->CCR1 = 0;                   /* filter bypassed, no pin out */
-	CMP_BASE->CCR2 = LPCMP_CCR2_CMP_HPMD(1) | LPCMP_CCR2_HYSTCTR(hyst) |
-			 LPCMP_CCR2_PSEL(CMP_PSEL) | LPCMP_CCR2_MSEL(CMP_MSEL_DAC);
+	hw_config(hyst);
 	dac_code = 0;
-	CMP_BASE->DCR = 0;
-	dac_write(128);                       /* parked mid-rail; no edges reported yet */
-	CMP_BASE->CSR = LPCMP_CSR_CFR_MASK | LPCMP_CSR_CFF_MASK;
-	CMP_BASE->CCR0 = LPCMP_CCR0_CMP_EN_MASK;
+	dac_write(CMP_DAC_LEVELS / 2);        /* parked mid-rail; no edges reported yet */
+	hw_enable();
 	irq_enable(CMP_IRQN);
 	tracker_reset();
 	relearn_req = false;
@@ -217,9 +360,22 @@ static void hw_stop(void)
 		return;
 	}
 	irq_disable(CMP_IRQN);
-	CMP_BASE->IER = 0;
-	CMP_BASE->CCR0 = 0;
-	CMP_BASE->DCR = 0;
+	hw_off();
+}
+
+/* the ain channel that feeds the comparator: fixed by the board, or the one
+ * whose pad is the cmp box pin (MCXN947: pin 15 = A3 = ch 3) */
+static int cmp_ain_ch(void)
+{
+	if (CMP_AIN_CH >= 0) {
+		return CMP_AIN_CH < box_adc_channels() ? CMP_AIN_CH : -1;
+	}
+	for (uint8_t ch = 0; ch < AIN_MAX_CH; ch++) {
+		if (box_adc_pin_of(ch) == CMP_BOX_PIN) {
+			return ch;
+		}
+	}
+	return -1;
 }
 
 uint8_t box_cmp_ain_mask(const box_config_t *c)
@@ -227,12 +383,9 @@ uint8_t box_cmp_ain_mask(const box_config_t *c)
 	if (!c || c->pin_mode[CMP_BOX_PIN] != PIN_MODE_CMP) {
 		return 0;
 	}
-	for (uint8_t ch = 0; ch < AIN_MAX_CH && ch < 8; ch++) {
-		if (box_adc_pin_of(ch) == CMP_BOX_PIN) {
-			return (uint8_t) (1u << ch);
-		}
-	}
-	return 0;
+	int ch = cmp_ain_ch();
+
+	return (ch >= 0 && ch < 8) ? (uint8_t) (1u << ch) : 0;
 }
 
 void box_cmp_apply(const box_config_t *c)
@@ -265,13 +418,7 @@ void box_cmp_apply(const box_config_t *c)
 		k_spin_unlock(&lock, k);
 		return;
 	}
-	ain_ch = -1;
-	for (uint8_t ch = 0; ch < AIN_MAX_CH; ch++) {
-		if (box_adc_pin_of(ch) == want) {
-			ain_ch = ch;
-			break;
-		}
-	}
+	ain_ch = cmp_ain_ch();
 	hw_start();
 	k_spin_unlock(&lock, k);
 }
@@ -350,8 +497,15 @@ static void plateau(int32_t p)
 		lev_b = p;                            /* still B */
 	} else if ((p - lev_a) * (lev_b - lev_a) > 0 && abs(p - lev_a) > step) {
 		lev_b = p;                            /* beyond B, away from A: B was a way-station */
+	} else if (abs(p - lev_b) >= TRK_MIN_STEP) {
+		/* in between, or beyond A: A is not coming back. It may have been a
+		 * level from before the sensor was placed (a floating pin, a hand
+		 * moving it), and waiting for it would leave the box learning
+		 * forever. The last two levels are the pair now: B, then p, and a
+		 * return to B locks. */
+		lev_a = lev_b;
+		lev_b = p;
 	}
-	/* in between, or beyond A: ignored */
 }
 
 /* state/cmp/level: each NEW settled level, so the host sees the light in
@@ -396,7 +550,22 @@ int box_cmp_settled(int32_t *counts, uint64_t *t_us)
 
 void box_cmp_feed(const int16_t *scan, uint8_t mask, uint64_t t_us)
 {
-	if (cmp_pin < 0 || ain_ch < 0 || !((mask >> ain_ch) & 1u)) {
+	if (cmp_pin < 0) {
+		return;
+	}
+	if (ain_ch < 0) {
+		/* At boot box_cmp_apply() runs from box_gpio_apply_config(), BEFORE
+		 * box_ain_init() brings the converter up, so a channel checked
+		 * against box_adc_channels() (Teensy) resolved to none. Scans
+		 * arriving means the converter is up: resolve it now. */
+		k_spinlock_key_t k0 = k_spin_lock(&lock);
+
+		if (cmp_pin >= 0 && ain_ch < 0) {
+			ain_ch = cmp_ain_ch();
+		}
+		k_spin_unlock(&lock, k0);
+	}
+	if (ain_ch < 0 || !((mask >> ain_ch) & 1u)) {
 		return;
 	}
 
@@ -479,7 +648,7 @@ int box_cmp_status(char *buf, int sz, int force)
 {
 	int64_t now = k_uptime_get();
 	int st = eff_state();
-	int dac = (st == ST_ARMED) ? dac_code : -1;
+	int dac = (st == ST_ARMED) ? CMP_DAC_TO_8BIT(dac_code) : -1;
 	int drift = drift_pct();
 	bool due;
 
@@ -523,7 +692,7 @@ int box_cmp_status(char *buf, int sz, int force)
 		 * leaves ~77 here: the console-only knobs appear only when changed.
 		 * The threshold is (dac + 1) * 4096 / 256 counts. */
 		int n = snprintf(buf, sz, "state %s lo %d hi %d dac %u drift %d mismatch %u",
-				 st_word[st], (int) lo, (int) hi, dac_code, drift, n_mismatch);
+				 st_word[st], (int) lo, (int) hi, CMP_DAC_TO_8BIT(dac_code), drift, n_mismatch);
 
 		if (n > 0 && n < sz && (vref_sel != 0 || hyst != 2)) {
 			snprintf(buf + n, sz - n, " vref %u hyst %u", vref_sel, hyst);
@@ -547,8 +716,7 @@ void box_cmp_console(const char *args)
 	if (!strncmp(args, "hyst ", 5)) {
 		hyst = (uint8_t) CLAMP(atoi(args + 5), 0, 3);
 		if (hw_up && cmp_pin >= 0) {
-			CMP_BASE->CCR2 = (CMP_BASE->CCR2 & ~LPCMP_CCR2_HYSTCTR_MASK) |
-					 LPCMP_CCR2_HYSTCTR(hyst);
+			hw_hyst(hyst);
 		}
 	} else if (!strncmp(args, "vref ", 5)) {
 		vref_sel = (uint8_t) (atoi(args + 5) ? 1 : 0);
@@ -571,7 +739,7 @@ void box_cmp_console(const char *args)
 			dac_fixed = -1;
 			relearn_req = (cmp_pin >= 0);
 		} else {
-			dac_fixed = CLAMP(atoi(args + 4), 0, 255);
+			dac_fixed = CLAMP(atoi(args + 4), 0, CMP_DAC_LEVELS - 1);
 			if (hw_up && cmp_pin >= 0) {
 				dac_write((uint8_t) dac_fixed);
 				thr_counts = code_to_counts(dac_code);
@@ -582,7 +750,8 @@ void box_cmp_console(const char *args)
 		}
 		k_spin_unlock(&lock, k);
 	} else if (*args) {
-		box_console_printf("cmp: relearn | hyst <0-3> | vref <0|1> | dac <0-255>|auto\n");
+		box_console_printf("cmp: relearn | hyst <0-3> | vref <0|1> | dac <0-%d>|auto\n",
+				   CMP_DAC_LEVELS - 1);
 		return;
 	}
 
@@ -592,8 +761,8 @@ void box_cmp_console(const char *args)
 			   relearn_req ? "  (relearn pending)" : "",
 			   bad_pin >= 0 ? "  (a cmp pin this board cannot do is set)" : "");
 	if (bad_pin >= 0) {
-		box_console_printf("     pin %d: only box pin %d (A3) reaches a comparator here\n",
-				   bad_pin, CMP_BOX_PIN);
+		box_console_printf("     pin %d: only box pin %d (%s) reaches a comparator here\n",
+				   bad_pin, CMP_BOX_PIN, CMP_PIN_NAME);
 	}
 	if (cmp_pin < 0) {
 		return;

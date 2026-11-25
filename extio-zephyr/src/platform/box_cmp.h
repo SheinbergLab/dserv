@@ -19,8 +19,12 @@
  * enabled, so no ain group is needed: the edges and state/cmp are all that
  * cross the wire. A group on the channel is only for SEEING the analog.
  *
- * Implemented for the FRDM-MCXN947 (A3 = box pin 15 = P0_22 = CMP1_IN2). On
- * every other board these are stubs and a cmp pin behaves as plain ain.
+ * Implemented, always as box pin 15, for:
+ *   FRDM-MCXN947  A3 = P0_22 = ain ch 3 = CMP1_IN2 (the line's own pad); 8-bit DAC
+ *   Teensy 4.0/4.1  A0 (T14) = GPIO_AD_B1_02 = ain ch 7 = CMP1_IN3; the line is
+ *                 box pin 15, a pad not bonded out, since analog pads are not
+ *                 box pins there; 6-bit DAC, so a 192-count minimum step
+ * On every other board these are stubs and a cmp pin behaves as plain ain.
  */
 #ifndef BOX_CMP_H
 #define BOX_CMP_H
@@ -69,8 +73,9 @@ int box_cmp_status(char *buf, int sz, int force);
 int box_cmp_settled(int32_t *counts, uint64_t *t_us);
 
 /* Console: `cmp` shows state; `cmp relearn`; `cmp hyst <0-3>`,
- * `cmp vref <0|1>`, `cmp dac <0-255>|auto` are runtime-only overrides. `args` is what followed
- * the verb ("" for bare `cmp`). */
+ * `cmp vref <0|1>`, `cmp dac <code>|auto` (code 0-255 on the MCXN947, 0-63
+ * on a Teensy) are runtime-only overrides. `args` is what followed the verb
+ * ("" for bare `cmp`). */
 void box_cmp_console(const char *args);
 
 #endif /* BOX_CMP_H */
