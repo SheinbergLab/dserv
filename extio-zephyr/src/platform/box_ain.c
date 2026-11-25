@@ -191,6 +191,11 @@ static void recompute(void)
 		union_mask |= cfg->ain_group_chans[g];
 		ain_group_reset(&rt[g]);
 	}
+	/* A cmp pin's channel is sampled for the comparator's own sake (it learns
+	 * and tracks its levels from it) whether or not a group streams it: the
+	 * line then needs no analog on the wire. Groups pick their channels out of
+	 * the scan by number, so an extra one costs them nothing. */
+	union_mask |= box_cmp_ain_mask(cfg);
 	/* Only sample channels the part actually has -- a mask bit for a channel
 	 * that is not fitted would make every sweep fail with -EINVAL rather than
 	 * quietly sampling fewer, which is right, but there is no reason to ask. */

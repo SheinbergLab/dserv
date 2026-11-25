@@ -300,8 +300,9 @@ check [list [light] [string match "*3.0 s older*detector over the patch*" [why]]
 set ::matches {}
 ::ess::photo_log_match g.ess
 check [lrange $::matches 4 end] [list {g.ess photo/din 0 0 1} [list g.ess $PDI 0 0 1] \
-    {g.ess extio/photo-sync/state/sync/* 0 0 1} {g.ess extio/photo-sync/state/in_obs 0 0 1}] \
-    "the resolution, the line's edges, the box clock's records"
+    {g.ess extio/photo-sync/state/sync/* 0 0 1} {g.ess extio/photo-sync/state/in_obs 0 0 1} \
+    {g.ess extio/photo-sync/state/cmp 0 0 1} {g.ess extio/photo-sync/state/cmp/level 0 0 1}] \
+    "the resolution, the line's edges, the box clock's records, a cmp line's state and levels"
 check [dict get $::dp photo/din dp] $PDI "  photo/din says which datapoint"
 ::ess::set_photo_din ""
 check [lindex $::removed end] $PDI "cleared: the line let go"

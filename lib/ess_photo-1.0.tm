@@ -200,9 +200,12 @@ namespace eval ess {
             dservLoggerAddMatch $filename $base/sync/* 0 0 1
             dservLoggerAddMatch $filename $base/in_obs 0 0 1
             # a line from the box's own comparator (pin mode cmp): its
-            # learned levels and threshold, on change. Absent on other boxes.
+            # learned levels and threshold, on change, and each settled
+            # level of the light in counts (about one per patch change: the
+            # analog's summary, with no stream). Absent on other boxes.
             # (re-emitted at open with photo/din: ess-2.0.tm open_datafile)
             dservLoggerAddMatch $filename $base/cmp 0 0 1
+            dservLoggerAddMatch $filename $base/cmp/level 0 0 1
         }
         return 1
     }
@@ -456,7 +459,8 @@ namespace eval ess {
             }
             no_samples {
                 return "$where The box's comparator has no samples to learn from:\
- turn ain on and put the line's channel in a group"
+ turn ain on (ain/enable 1; firmware before 0.4.0+110 also needs the line's\
+ channel in an ain group)"
             }
             "" -
             off -
@@ -992,6 +996,14 @@ namespace eval ess {
     # {level edges step lat_ms} (level shown, edges back, the change in
     # counts toward that level, lat_ms null without an edge or flip time).
     #
+    # A light line (photo din) has no level, only edges -- except a line
+    # from the box's own comparator (pin mode cmp), whose box reports each
+    # settled level in counts (state/cmp/level): dark, light and step are
+    # measured from those (source "cmp"), with no analog stream, and the
+    # verdict reads the threshold from state/cmp. An aim on such a line ends
+    # (done or `stop`) by relearning the threshold where the detector now is
+    # and flipping three more times so it locks.
+    #
     # Self-contained: tests/test_ess_photo_test.tcl evaluates this block
     # and photo_verify's (pv_median, pv_stats), with the pt_* hooks below
     # stood in.
@@ -1015,6 +1027,11 @@ namespace eval ess {
     variable pt_corner ""
     variable pt_last ""           ;# the last photo/test published
     variable pt_aim_w 2           ;# aim: levels from each level's last 2 flips
+    variable pt_cmp {}            ;# {box pin sign} when the line is a box's own
+                                  ;# comparator (levels in counts); {} otherwise
+    variable pt_relock ""         ;# aim on a cmp line: relock flips left; "" none
+    variable pt_relock_dk {}      ;# edges back after each relock flip
+    variable pt_cmp_min_step 100  ;# the box's TRK_MIN_STEP: it cannot learn below
 
     # ---- hooks: everything outside this block ----
     proc pt_param { p } { processGetParam photo $p }
@@ -1059,6 +1076,43 @@ namespace eval ess {
     }
     proc pt_din_count {} { variable photo_din_n ; set photo_din_n }
     proc pt_din_last {} { variable photo_din_last ; set photo_din_last }
+    # A light line from the box's OWN comparator (pin mode cmp) is more than
+    # a line: the box reports each settled level in counts
+    # (extio/<box>/state/cmp/level), so the test measures dark, light and
+    # step as it does for the processor -- with no analog on the wire.
+    # {box pin sign} for such a line ({} otherwise, or on firmware without
+    # cmp/level); sign -1 when the pin is active-low, which is exactly when
+    # light reads lower (an LM393 module's AO).
+    proc pt_cmp_line {} {
+        if { [catch {
+            set out {}
+            set r [photo_din_resolve]
+            if { [dict get $r status] eq "ok" &&
+                 [regexp {^extio/([^/]+)/state/di/([0-9]+)$} [dict get $r dp] -> box pin] &&
+                 [dservExists extio/$box/state/cmp/level] &&
+                 [dict get [dservGet extio/$box/state/cmp] state] in {learning armed} } {
+                set sign 1
+                foreach part [split [dservGet extio/$box/state/pins/active_low] ", "] {
+                    if { [regexp {^([0-9]+)-([0-9]+)$} $part -> a b] } {
+                        if { $pin >= $a && $pin <= $b } { set sign -1 }
+                    } elseif { $part eq $pin } { set sign -1 }
+                }
+                set out [list $box $pin $sign]
+            }
+            set out
+        } out] } { return {} }
+        return $out
+    }
+    proc pt_cmp_level { box } {
+        if { [catch { dservGet extio/$box/state/cmp/level } v] } { return "" }
+        return $v
+    }
+    proc pt_cmp_state { box } {
+        set s {}
+        catch { set s [dservGet extio/$box/state/cmp] }
+        return $s
+    }
+    proc pt_cmp_relearn { box } { dservSet extio/$box/cmd/cmp/relearn 1 }
 
     proc photo_test { {what run} args } {
         switch -- $what {
@@ -1072,7 +1126,21 @@ namespace eval ess {
                        error "photo_test aim: seconds, more than 0"
                    }
                    return [pt_start aim [expr {int(ceil($s * 1000.0 / 300))}] 300] }
-            stop { return [pt_finish stopped "stopped"] }
+            stop { variable pt_on
+                   variable pt_mode
+                   variable pt_cmp
+                   variable pt_relock
+                   variable pt_n
+                   variable pt_k
+                   # an aim on a cmp line ends by locking the threshold where
+                   # the diode now is: the next tick starts the relock
+                   if { $pt_on && $pt_mode eq "aim" && [llength $pt_cmp] &&
+                        $pt_relock eq "" } {
+                       set pt_n $pt_k
+                       return "stopping: relearning the threshold where the\
+ detector is now (3 more flips)"
+                   }
+                   return [pt_finish stopped "stopped"] }
             default { error "photo_test ?run ?n? ?gap_ms?? | aim ?s? | stop" }
         }
     }
@@ -1092,6 +1160,8 @@ namespace eval ess {
         variable pt_base
         variable pt_corner
         variable pt_din
+        variable pt_cmp
+        variable pt_relock
         if { $pt_on } { error "photo_test: a test is already running (photo_test stop)" }
         if { ![string is integer -strict $n] || $n < 1 || $n > 1000 } {
             error "photo_test: flips, 1 to 1000"
@@ -1108,6 +1178,9 @@ namespace eval ess {
         set pt_levels {}
         set pt_restore {}
         set pt_base {}
+        set pt_cmp {}
+        set pt_relock ""
+        variable pt_relock_dk {}
 
         set why ""
         set busy [pt_busy]
@@ -1117,6 +1190,7 @@ namespace eval ess {
             set why "photo is not enabled on this rig (gear: photo enabled)"
         } elseif { [set pt_din [pt_din_line]] ne "" } {
             set why [pt_din_check]
+            if { $why eq "" } { set pt_cmp [pt_cmp_line] }
         } elseif { [pt_param n_edges] eq "" } {
             set why "this dserv has no photo processor"
         } else {
@@ -1185,6 +1259,10 @@ namespace eval ess {
         variable pt_off
         variable pt_base
         variable pt_din
+        variable pt_cmp
+        variable pt_relock
+        variable pt_mode
+        variable pt_cmp_min_step
         if { !$pt_on || $id != $pt_id } return
         set pt_timer ""
         set busy [pt_busy]
@@ -1197,9 +1275,15 @@ namespace eval ess {
         }
         set changes [dict get $st changes]
         if { $pt_din ne "" } {
-            # the line's value is the level: 1 light, 0 dark
-            set level_now [lindex [pt_din_last] 0]
-            if { $level_now eq "" } { set level_now 0 }
+            if { [llength $pt_cmp] } {
+                # the box's newest settled level, in counts
+                set level_now [pt_cmp_level [lindex $pt_cmp 0]]
+                if { ![string is double -strict $level_now] } { set level_now 0 }
+            } else {
+                # the line's value is the level: 1 light, 0 dark
+                set level_now [lindex [pt_din_last] 0]
+                if { $level_now eq "" } { set level_now 0 }
+            }
             set edges_now [pt_din_count]
         } else {
             set level_now [pt_param level]
@@ -1207,7 +1291,11 @@ namespace eval ess {
         }
 
         if { $pt_k == 0 } {
-            if { $pt_din ne "" } {
+            if { [llength $pt_cmp] } {
+                set pt_noise 0
+                set pt_min_step $pt_cmp_min_step
+                set pt_sign [lindex $pt_cmp 2]
+            } elseif { $pt_din ne "" } {
                 set pt_noise 0
                 set pt_min_step 0
                 set pt_sign 1
@@ -1220,7 +1308,9 @@ namespace eval ess {
                 set pt_sign [expr {[string is true -strict $inv] ? -1 : 1}]
             }
             lappend pt_levels [list [dict get $st level] $level_now]
-        } else {
+        } elseif { $pt_relock eq "" } {
+            # (a relock flip is not part of the test: the comparator is
+            # learning again and reports no edge for it)
             lassign $pt_base changes0 edges0 level0 target
             set flipped [expr {$changes > $changes0}]
             set dk [expr {$edges_now - $edges0}]
@@ -1252,9 +1342,24 @@ namespace eval ess {
             set step [expr {($level_now - $level0) * $expdir * $pt_sign}]
             lappend pt_flips [list $target $flipped $dk $step $lat $dir]
             lappend pt_levels [list $target $level_now]
+        } else {
+            # a relock flip: only whether its edge came back
+            variable pt_relock_dk
+            lappend pt_relock_dk [expr {$edges_now - [lindex $pt_base 1]}]
         }
 
-        if { $pt_k >= $pt_n } { pt_finish done "" ; return }
+        if { $pt_k >= $pt_n } {
+            # An aim on a cmp line: the detector moved, so the threshold the
+            # box locked before is stale. Relearn and flip three more times --
+            # it locks on the return to the first level and the third shows
+            # an edge (box_cmp.h).
+            if { $pt_relock eq "" && $pt_mode eq "aim" && [llength $pt_cmp] } {
+                catch { pt_cmp_relearn [lindex $pt_cmp 0] }
+                set pt_relock 3
+            }
+            if { $pt_relock eq "" || $pt_relock <= 0 } { pt_finish done "" ; return }
+            incr pt_relock -1
+        }
 
         set target [expr {[dict get $st level] ? 0 : 1}]
         set r [pt_stim "photopatch flip $target"]
@@ -1263,7 +1368,7 @@ namespace eval ess {
             return
         }
         set pt_base [list $changes $edges_now $level_now $target]
-        incr pt_k
+        if { $pt_relock eq "" } { incr pt_k }
         pt_publish running "" ""
         set pt_timer [dservAfter $pt_gap [list ::ess::pt_tick $id]]
     }
@@ -1342,12 +1447,14 @@ namespace eval ess {
         variable pt_corner
         variable pt_flips
         variable pt_din
+        variable pt_cmp
         lassign [pt_counts] f a r
         lassign [pt_dark_light] dark light
         if { !$f } {
             if { ![llength $pt_flips] } { return [list none "no flips"] }
             return [list error "stim2 never changed the patch"]
         }
+        if { [llength $pt_cmp] } { return [pt_cmp_verdict $f $a $r $dark $light] }
         if { $pt_din ne "" } { return [pt_din_verdict $f $a $r] }
         set step [expr {$dark eq "" || $light eq "" ? 0.0 : ($light - $dark) * $pt_sign}]
         set S [format %.0f $step]
@@ -1428,6 +1535,117 @@ namespace eval ess {
  should follow the patch)"]
     }
 
+    # A line from the box's own comparator: the edges as for any line, and
+    # the levels in counts (state/cmp/level), so the advice can say WHY a
+    # flip went unanswered -- a step the box cannot learn from, or a
+    # threshold (state/cmp's dac) that is not between the patch's levels.
+    proc pt_cmp_verdict { f a r dark light } {
+        variable pt_din
+        variable pt_cmp
+        variable pt_corner
+        variable pt_sign
+        variable pt_cmp_min_step
+        lassign $pt_cmp box
+        set lt "line $pt_din"
+        set step [expr {$dark eq "" || $light eq "" ? 0.0 : ($light - $dark) * $pt_sign}]
+        set S [format %.0f $step]
+        set M $pt_cmp_min_step
+        set lv "step $S counts (dark [format %.0f $dark], light [format %.0f $light])"
+        set cs [pt_cmp_state $box]
+        set st ""
+        set thr ""
+        catch { set st [dict get $cs state] }
+        if { $st eq "armed" } { catch { set thr [expr {([dict get $cs dac] + 1) * 16}] } }
+        set relearn "relearn (photo_test aim relearns as it ends, or\
+ dservSet extio/$box/cmd/cmp/relearn 1)"
+        set lo [expr {min($dark, $light)}]
+        set hi [expr {max($dark, $light)}]
+
+        # An aim that relocked is judged by the relock, not by its flips:
+        # those came while the detector was being moved, against the
+        # threshold from before, which the relock has replaced.
+        variable pt_mode
+        variable pt_relock
+        variable pt_relock_dk
+        if { $pt_mode eq "aim" && $pt_relock ne "" } {
+            if { abs($step) < 3 } {
+                return [list none "none: no change under the detector ($lv): it\
+ is not over the patch ($pt_corner)"]
+            }
+            if { $step < $M } {
+                return [list below_min_step "below min_step: the detector sees the\
+ patch ($lv), but the box needs a step of $M to learn its threshold: centre\
+ the detector or raise the brightness"]
+            }
+            set aimed "aimed: $lv ($a of $f changes answered while aiming)"
+            if { $pt_relock > 0 } {
+                return [list partial "$aimed; the relearn was cut short: flip the\
+ patch until the comparator locks (photo_test run 4)"]
+            }
+            if { $st ne "armed" } {
+                return [list no_edges "$aimed; but the relearn did not lock (the\
+ comparator is $st): hold the detector still and flip the patch (photo_test run 4)"]
+            }
+            if { $thr eq "" || $thr <= $lo || $thr >= $hi } {
+                return [list partial "$aimed; relearned at $thr counts, which is\
+ not between those levels: the detector moved during the relearn. Hold it still\
+ and aim again"]
+            }
+            if { [lindex $pt_relock_dk end] > 0 } {
+                if { $step < 2 * $M } {
+                    return [list small "$aimed; relearned and locked at $thr counts,\
+ and the change after it answered, but the step is under 2x the $M the box\
+ needs: centre the detector on the patch or raise the brightness"]
+                }
+                return [list aligned "$aimed; relearned and locked at $thr counts,\
+ between them, and the change after it answered"]
+            }
+            return [list partial "$aimed; relearned at $thr counts, but the change\
+ after it went unanswered: hold the detector still and aim again"]
+        }
+
+        if { $a == $f } {
+            if { $step >= 2 * $M } {
+                set s "aligned: $a of $f changes answered on $lt; $lv"
+                if { $thr ne "" } { append s ", threshold $thr" }
+                foreach { name d } { rise 1 fall -1 } {
+                    lassign [pv_stats [pt_lats $d]] n med sd
+                    if { $n } { append s "; $name $med ms (sd $sd)" }
+                }
+                return [list aligned $s]
+            }
+            return [list small "small: every change answered on $lt, but the $lv\
+ is under 2x the $M the box needs to learn from: centre the detector on the\
+ patch or raise the brightness"]
+        }
+        if { ($r > $a && 2 * $r >= $f) || ($a == 0 && $step <= -$M) } {
+            return [list reversed "reversed: $lt goes to 1 when the patch\
+ darkens ($lv): flip the pin's active_low on the box"]
+        }
+        if { abs($step) < 3 } {
+            return [list none "none: no change under the detector ($lv): it is\
+ not over the patch ($pt_corner)"]
+        }
+        if { $step < $M } {
+            return [list below_min_step "below min_step: the detector sees the\
+ patch ($lv), but the box needs a step of $M to learn its threshold: centre\
+ the detector or raise the brightness"]
+        }
+        set word [expr {$a > 0 ? "partial: $a of $f changes answered" : "no_edges: no edge"}]
+        set verdict [expr {$a > 0 ? "partial" : "no_edges"}]
+        if { $st ne "armed" } {
+            return [list $verdict "$word on $lt: the detector sees the patch ($lv),\
+ but the box's comparator is $st: flip the patch until it locks, or $relearn"]
+        }
+        if { $thr ne "" && ($thr <= $lo || $thr >= $hi) } {
+            return [list $verdict "$word on $lt: its threshold ($thr counts) is\
+ not between the patch's levels ($lv) -- it locked before the detector was\
+ where it is: $relearn"]
+        }
+        return [list $verdict "$word on $lt: $lv, threshold $thr: close to one\
+ level, or the light is not settling: $relearn"]
+    }
+
     # lat50s of the answered flips to a direction, us
     proc pt_lats { d } {
         variable pt_flips
@@ -1464,16 +1682,24 @@ namespace eval ess {
             set s [lindex $x 3]
             if { $best eq "" || $s > $best } { set best $s }
         }
-        # a line is 0 or 1: no levels to report
-        if { $pt_din ne "" } { lassign {} dark light step best }
-        if { $summary eq "" && $state eq "running" } {
+        # a line is 0 or 1: no levels to report -- unless it is a box's own
+        # comparator, which reports them in counts (pt_cmp_line)
+        variable pt_cmp
+        variable pt_relock
+        if { $pt_din ne "" && ![llength $pt_cmp] } { lassign {} dark light step best }
+        if { $summary eq "" && $state eq "running" && $pt_relock ne "" } {
+            set summary "relearning the threshold: flip [expr {3 - $pt_relock}] of 3"
+        } elseif { $summary eq "" && $state eq "running" } {
             set summary "flip $pt_k of $pt_n"
-            if { $step ne "" } { append summary ": step [format %.0f $step] counts" }
+            # signed as the verdict's and each flip's are: + = the light
+            # reads brighter (an inverted detector's counts fall)
+            variable pt_sign
+            if { $step ne "" } { append summary ": step [format %.0f [expr {$step * $pt_sign}]] counts" }
             if { $best ne "" } { append summary " (best one flip [format %.0f $best])" }
         }
         set json "\{\"id\":$pt_id,\"mode\":\"$pt_mode\",\"state\":\"$state\""
         append json ",\"n\":$pt_n,\"flipped\":$f,\"answered\":$a,\"reversed\":$r"
-        append json ",\"source\":\"[expr {$pt_din ne "" ? "din" : "analog"}]\""
+        append json ",\"source\":\"[expr {[llength $pt_cmp] ? "cmp" : ($pt_din ne "" ? "din" : "analog")}]\""
         append json ",\"verdict\":\"$verdict\",\"summary\":\"[pt_js $summary]\""
         append json ",\"dark\":[pt_num $dark],\"light\":[pt_num $light]"
         append json ",\"step\":[pt_num $step],\"best\":[pt_num $best]"

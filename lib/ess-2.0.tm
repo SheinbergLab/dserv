@@ -4648,8 +4648,12 @@ namespace eval ess {
             # the line's comparator state, when it is a box's own comparator
             catch {
                 set _pd [dict get [dservGet photo/din] dp]
-                if { [regexp {^(.+/state)/di/[^/]+$} $_pd -> _pb] &&
-                     [dservExists $_pb/cmp] } { dservTouch $_pb/cmp }
+                if { [regexp {^(.+/state)/di/[^/]+$} $_pd -> _pb] } {
+                    # and the light's level now, so the file starts with one
+                    foreach _c [list $_pb/cmp $_pb/cmp/level] {
+                        if { [dservExists $_c] } { dservTouch $_c }
+                    }
+                }
             }
         }
         variable stim_lib_names

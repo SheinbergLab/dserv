@@ -3760,6 +3760,19 @@ int main(void)
 					box_pub_event(f);
 				}
 			}
+
+			/* each new settled level, in counts: the light without the stream */
+			int32_t lv;
+			uint64_t lt;
+
+			if (box_cmp_settled(&lv, &lt)) {
+				uint8_t f[DSERV_MSG_LEN];
+
+				dserv_state_name(&cfg, name, sizeof name, "cmp/level");
+				if (dserv_msg_int(f, name, event_stamp(lt), lv) > 0) {
+					box_pub_event(f);
+				}
+			}
 		}
 
 		/* Settle windows expire between edges, so poll them every pass --

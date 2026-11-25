@@ -321,8 +321,19 @@ writes the DAC once, at their midpoint, and arms the comparator. In-between
 readings while learning (a half-covered sensor, a fade) are ignored, and a
 still period beyond the second level replaces it, so the learned step is the
 full one. So after a boot or a config change, flip the patch a few times
-(`photo_test aim`). The channel must be in an active ain group, which the
-model does.
+(`photo_test aim`). An aim on a cmp line ends, done or stopped, by relearning
+where the detector now is and flipping three more times so it locks.
+
+**No analog on the wire.** The box samples the channel for the comparator
+itself (firmware 0.4.0+110; `ain enable 1` is all it needs, no group), so a
+cmp line sends only its edges, `state/cmp`, and `state/cmp/level`: each new
+settled level of the light in counts, stamped when the light got there. That
+is about one value per patch change and nothing while the light stays put,
+against 250 frames/s for a 5 kHz group. `photo_test` measures dark, light and
+step from it as it does for an analog group (`source` `cmp`), and data files
+log it. To look at the analog itself (a transition's shape, an odd edge),
+add a group on the channel live from the config page, and remove it after.
+On +108/+109 firmware the channel must also be in a group.
 
 Once locked, the threshold stays put for the session. The box keeps watching
 the levels and reports how far their midpoint has moved from the threshold
@@ -343,12 +354,12 @@ comparator's state is `extio/<box>/state/cmp`, a dict string such as
 `state armed lo 812 hi 2960 dac 117 drift 3 mismatch 0` (levels in ADC
 counts; the threshold is (dac + 1) × 4096 / 256 counts; ` vref V hyst H` is
 appended only when changed from 0 / 2). `state` is `off`, `unsupported`,
-`no_samples` (learning, but the channel is not being sampled), `learning` or
+`no_samples` (learning, but the channel is not being sampled: ain is off), `learning` or
 `armed`. It is published at once when the state, the DAC, the mismatch count
 or the relearn count changes; a drift move of 5 points or more at most every
 10 s; and again at each announce. Until it reads `armed`, the value of
-`state/di/15` means nothing. With `photo din` on that line, `state/cmp` goes
-into every data file with the edges.
+`state/di/15` means nothing. With `photo din` on that line, `state/cmp` and
+`state/cmp/level` go into every data file with the edges.
 
 In the data file, the line's edges are logged with the box's clock records
 and `photo/din` (where the label resolved). The trials get them as

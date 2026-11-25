@@ -15,8 +15,9 @@
  * reported from a threshold nobody chose. It moves again only on a relearn
  * (box_cmp_relearn), which waits for the end of an obs. While locked the box
  * keeps tracking the levels to report their `drift` from the threshold.
- * The channel must be in an active ain group, or there is nothing to learn
- * from (the console says so).
+ * The box samples the channel for this itself (box_cmp_ain_mask) with ain
+ * enabled, so no ain group is needed: the edges and state/cmp are all that
+ * cross the wire. A group on the channel is only for SEEING the analog.
  *
  * Implemented for the FRDM-MCXN947 (A3 = box pin 15 = P0_22 = CMP1_IN2). On
  * every other board these are stubs and a cmp pin behaves as plain ain.
@@ -30,6 +31,11 @@
 /* Re-read the config: arm/disarm the comparator for the cmp pin, if any.
  * Called at the end of box_gpio_apply_config(), after the pads are muxed. */
 void box_cmp_apply(const box_config_t *c);
+
+/* The ain channel(s) a cmp pin in `c` needs sampled, as a channel mask: the
+ * sampler adds them to what the groups ask for, so a cmp pin needs no group
+ * (box_ain.c recompute). 0 on boards without comparator support. */
+uint8_t box_cmp_ain_mask(const box_config_t *c);
 
 /* The comparator's output right now (1 = signal above threshold), or 0 when
  * no comparator is running. */
@@ -53,6 +59,13 @@ void box_cmp_relearn(void);
  * points at most every 10 s. `force` (the announce) fills it whenever a cmp
  * pin is or was configured. */
 int box_cmp_status(char *buf, int sz, int force);
+
+/* state/cmp/level: a new settled level of the channel (ADC counts), stamped
+ * when the light reached it. Returns 1 and fills both when one is due: when
+ * a still period lands more than 32 counts from the last level reported, at
+ * most 20/s (the newest wins). About one per patch change; nothing while the
+ * light stays put. */
+int box_cmp_settled(int32_t *counts, uint64_t *t_us);
 
 /* Console: `cmp` shows state; `cmp relearn`; `cmp hyst <0-3>`,
  * `cmp vref <0|1>`, `cmp dac <0-255>|auto` are runtime-only overrides. `args` is what followed

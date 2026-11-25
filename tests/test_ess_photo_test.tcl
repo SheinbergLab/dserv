@@ -137,6 +137,8 @@ proc ::ess::pt_stim { cmd } {
             set dir [expr {$step > 0 ? 1 : -1}]
             # the processor negates an inverted detector: dir is "brighter"
             if { [info exists ::sc(invert)] && $::sc(invert) } { set dir [expr {-$dir}] }
+            # ...and so does an active-low pin on the box (1 = light)
+            if { [info exists ::sc(active_low)] } { set dir [expr {-$dir}] }
             if { abs($step) >= $::sc(min_step) && $dir != $::sc(lose) && !$::sc(slow) } {
                 incr ::edges
                 set lat [expr {$lv ? $::sc(rise_us) : $::sc(fall_us)}]
@@ -264,6 +266,120 @@ puts "a light line that does not resolve:"
 rig din photopatch din_bad "photo din: no box announces a line or a group labelled photopatch"
 check [catch { ::ess::photo_test } err] 1 "refused"
 check [string match "*no box announces*" $err] 1 "  says why"
+
+# A line from the box's own comparator (pin mode cmp): sc(cmp) set. The box
+# reports each settled level in counts (state/cmp/level, pt_cmp_level) and
+# its state/cmp; sc(thr) is the locked threshold (counts), sc(cmp_st) its
+# state. A relearn sets sc(relearned). sc(active_low) an inverted pin.
+proc ::ess::pt_cmp_line {} {
+    if { ![info exists ::sc(cmp)] } { return {} }
+    list box 15 [expr {[info exists ::sc(active_low)] ? -1 : 1}]
+}
+proc ::ess::pt_cmp_level { box } { reading }
+proc ::ess::pt_cmp_state { box } {
+    set st [expr {[info exists ::sc(cmp_st)] ? $::sc(cmp_st) : "armed"}]
+    set thr [expr {[info exists ::sc(thr)] ? $::sc(thr) : 464}]
+    list state $st lo $::sc(dark) hi $::sc(light) dac [expr {$thr / 16 - 1}] drift 0 mismatch 0
+}
+proc ::ess::pt_cmp_relearn { box } { incr ::sc(relearned) ; set ::sc(cmp_st) armed }
+
+puts "a cmp line, over the patch:"
+rig din photopatch cmp 1
+::ess::photo_test
+run
+check [list [jget verdict] [jget answered] [jget source]] {aligned 10 cmp} "aligned, source cmp"
+check [list [jget dark] [jget light] [jget step] [jget min_step]] {30.0 900.0 870.0 100.0} "  the box's levels, its min step"
+check [string match "aligned: 10 of 10 changes answered on line photopatch; step 870 counts*threshold 464*" [jget summary]] 1 "  levels and threshold"
+check [info exists ::sc(relearned)] 0 "  a run does not relearn"
+
+puts "a cmp line, the threshold outside the levels:"
+rig din photopatch cmp 1 thr 1200
+set ::sc(min_step) 100000   ;# the pretend comparator reports no edge
+::ess::photo_test
+run
+set ::sc(min_step) 100
+check [list [jget verdict] [jget answered]] {no_edges 0} "no_edges"
+check [string match "*threshold (1200 counts) is not between*relearn*" [jget summary]] 1 "  says the threshold is off, relearn"
+
+puts "a cmp line, a step the box cannot learn from:"
+rig din photopatch cmp 1 light 90
+::ess::photo_test
+run
+check [jget verdict] below_min_step "below_min_step"
+check [string match "*box needs a step of 100*" [jget summary]] 1 "  the box's minimum"
+
+puts "a cmp line, still learning:"
+rig din photopatch cmp 1 cmp_st learning
+set ::sc(min_step) 100000
+::ess::photo_test
+run
+set ::sc(min_step) 100
+check [string match "no_edges*comparator is learning*" [jget summary]] 1 "says it is learning"
+
+puts "a cmp line, an active-low pin (light reads lower):"
+rig din photopatch cmp 1 dark 4050 light 3200 active_low 1
+::ess::photo_test
+run
+check [list [jget verdict] [jget answered]] {aligned 10} "aligned"
+check [string match "*step 850 counts (dark 4050, light 3200)*" [jget summary]] 1 "  a positive step"
+
+puts "a cmp line, aim ends by relearning:"
+rig din photopatch cmp 1 cmp_st learning
+::ess::photo_test aim 1
+run
+check [list [jget state] [jget flipped]] {done 4} "done after the 4 aim flips"
+check [info exists ::sc(relearned)] 1 "  relearned"
+check [llength [lsearch -all $::sent "photopatch flip *"]] 7 "  then 3 relock flips"
+check [jget verdict] aligned "  judged by the relock: aligned"
+check [string match "aimed: step 870 counts*relearned and locked at 464 counts, between them, and the change after it answered" [jget summary]] 1 "  says where it locked"
+
+puts "a cmp line, aim with early flips missed (positioning), then a good relock:"
+rig din photopatch cmp 1
+set ::sc(min_step) 100000      ;# while aiming: no edges
+::ess::photo_test aim 1
+for { set i 0 } { $i < 5 } { incr i } {
+    set id [lindex [dict keys $::timers] 0]
+    lassign [dict get $::timers $id] ms s
+    dict unset ::timers $id
+    set ::clk [expr {$::clk + $ms * 1000}]
+    uplevel #0 $s
+}
+set ::sc(min_step) 100         ;# the relock: edges again
+run
+check [list [jget verdict] [jget answered]] {aligned 0} "aligned though no aim flip answered"
+check [string match "aimed: *(0 of 4 changes answered while aiming)*" [jget summary]] 1 "  the aim's count said, not judged"
+
+puts "a cmp line, aim whose relock lands outside the levels:"
+rig din photopatch cmp 1 thr 2000
+::ess::photo_test aim 1
+run
+check [jget verdict] partial "partial"
+check [string match "*relearned at 2000 counts, which is not between*" [jget summary]] 1 "  says the detector moved"
+
+puts "a cmp line, running summaries are signed (active-low):"
+rig din photopatch cmp 1 dark 4050 light 3200 active_low 1
+::ess::photo_test run 4
+for { set i 0 } { $i < 3 } { incr i } {
+    set id [lindex [dict keys $::timers] 0]
+    lassign [dict get $::timers $id] ms s
+    dict unset ::timers $id
+    set ::clk [expr {$::clk + $ms * 1000}]
+    uplevel #0 $s
+}
+check [string match "flip * of 4: step 850 counts*" [jget summary]] 1 "  + step while running"
+run
+
+puts "a cmp line, aim stopped: relearns first:"
+rig din photopatch cmp 1
+::ess::photo_test aim 10
+set id [lindex [dict keys $::timers] 0]
+lassign [dict get $::timers $id] ms s
+dict unset ::timers $id
+uplevel #0 $s
+check [string match "stopping: relearning*" [::ess::photo_test stop]] 1 "stop says it relearns"
+run
+check [list [jget state] [info exists ::sc(relearned)]] {done 1} "  done, relearned"
+check [llength [lsearch -all $::sent "photopatch flip *"]] 4 "  1 aim flip + 3 relock flips"
 
 puts "only the rises come back:"
 rig lose -1

@@ -1,14 +1,21 @@
 # photo-cmp -- FRDM-MCXN947 with a light sensor on A3, detected by the
 # MCU's own comparator: the screen's light as a DIGITAL line for `photo din`,
-# with the analog kept alongside (docs/photo_processor.md, "The box's own
+# all of its processing on the box (docs/photo_processor.md, "The box's own
 # comparator").
 #
 #   A3  sensor out      box pin 15 in `cmp` mode, label `photopatch`: ain ch 3
-#                       (group `photodiode`) AND CMP1_IN2 against the internal
+#                       sampled on the box AND CMP1_IN2 against the internal
 #                       DAC; the comparator's edges are pin 15's DI events
 #
-# Needs extio firmware with PIN_MODE_CMP (2026-11-24 or later). Older firmware
-# reads `cmp` as `off`.
+# NO ANALOG ON THE WIRE. The box samples ch 3 for the comparator itself and
+# sends only the edges, state/cmp, and state/cmp/level (each settled level in
+# counts, about one per patch change -- photo_test reads dark/light/step from
+# it, and data files log it). To SEE the analog (a transition's shape, an odd
+# edge), add a group on ch 3 live from the config page and remove it after.
+#
+# Needs extio firmware 0.4.0+110 or later (a cmp pin samples its own
+# channel; state/cmp/level). On +108/+109 the channel must also be in an ain
+# group; before +108 `cmp` reads as `off`.
 #
 # THE THRESHOLD IS LEARNED, THEN LOCKED. The box watches ch 3 for plateaus
 # (the light still for 3 ms): one level, a second >= 100 counts away, and a
@@ -23,9 +30,10 @@
 # count (nonzero = the DAC's reference is not the ADC's 3.3 V; try `cmp vref 1`).
 #
 # Polarity: written for an LM393 module's AO (falls with light), hence
-# active_low 1 and `photo invert 1`. The module's own comparator and DO are
-# unused -- wire AO only, VCC to 3.3 V. For a sensor that RISES with light
-# (an OPT101), set pin/15/active_low 0 and drop `photo invert`.
+# active_low 1 (the line reads 1 in light). The module's own comparator and DO
+# are unused -- wire AO only, VCC to 3.3 V. For a sensor that RISES with light
+# (an OPT101), set pin/15/active_low 0. `photo invert` is the processor's,
+# for an analog group: a din line does not use it.
 #
 # Debounce 2 ms, as for the module: the box stamps the FIRST edge of a window.
 #
@@ -45,15 +53,9 @@ model photo-cmp {
         ain/enable 1
         ain/rate 5000
         ain/label/3 light
-        ain/group/0/channels 3
-        ain/group/0/label photodiode
-        ain/group/0/mode continuous
-        ain/group/0/batch 20
     }
     rig {
         photo enabled 1
         photo din photopatch
-        photo group photodiode
-        photo invert 1
     }
 }

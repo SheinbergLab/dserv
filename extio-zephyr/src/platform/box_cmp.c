@@ -222,6 +222,19 @@ static void hw_stop(void)
 	CMP_BASE->DCR = 0;
 }
 
+uint8_t box_cmp_ain_mask(const box_config_t *c)
+{
+	if (!c || c->pin_mode[CMP_BOX_PIN] != PIN_MODE_CMP) {
+		return 0;
+	}
+	for (uint8_t ch = 0; ch < AIN_MAX_CH && ch < 8; ch++) {
+		if (box_adc_pin_of(ch) == CMP_BOX_PIN) {
+			return (uint8_t) (1u << ch);
+		}
+	}
+	return 0;
+}
+
 void box_cmp_apply(const box_config_t *c)
 {
 	int want = -1;
@@ -341,6 +354,46 @@ static void plateau(int32_t p)
 	/* in between, or beyond A: ignored */
 }
 
+/* state/cmp/level: each NEW settled level, so the host sees the light in
+ * counts without the stream -- one value per still period, about one per
+ * patch change (photo_test reads it for dark/light/step). "New" = more than
+ * TRK_BAND from the last one reported, so a level that stays put is
+ * reported once and a fade's way-stations each replace the pending one.
+ * Called with the lock held. */
+static int32_t  lvl_last = INT32_MIN;  /* the newest level taken (reported or pending) */
+static int32_t  lvl_val;
+static uint64_t lvl_t_us;
+static bool     lvl_due;
+static int64_t  lvl_ms;
+
+static void level_seen(int32_t p, uint64_t t_us)
+{
+	if (lvl_last != INT32_MIN && abs(p - lvl_last) <= TRK_BAND) {
+		return;
+	}
+	lvl_last = p;
+	lvl_val = p;
+	lvl_t_us = t_us;                      /* when the light got there: the run's start */
+	lvl_due = true;
+}
+
+int box_cmp_settled(int32_t *counts, uint64_t *t_us)
+{
+	int64_t now = k_uptime_get();
+
+	if (!lvl_due || now - lvl_ms < 50) {   /* at most 20/s, the newest wins */
+		return 0;
+	}
+	k_spinlock_key_t k = k_spin_lock(&lock);
+
+	*counts = lvl_val;
+	*t_us = lvl_t_us;
+	lvl_due = false;
+	k_spin_unlock(&lock, k);
+	lvl_ms = now;
+	return 1;
+}
+
 void box_cmp_feed(const int16_t *scan, uint8_t mask, uint64_t t_us)
 {
 	if (cmp_pin < 0 || ain_ch < 0 || !((mask >> ain_ch) & 1u)) {
@@ -380,6 +433,7 @@ void box_cmp_feed(const int16_t *scan, uint8_t mask, uint64_t t_us)
 		int32_t p = run_sum / run_n;
 
 		plateau(p);
+		level_seen(p, run_t0);
 		run_ref = p;                      /* follow slow drift within a plateau */
 		run_t0 = t_us;
 		run_sum = 0;
@@ -389,8 +443,9 @@ void box_cmp_feed(const int16_t *scan, uint8_t mask, uint64_t t_us)
 }
 
 /* The state as reported. Learning with no scan of the channel in the last
- * half second is "no samples": with ain off, or the channel in no group,
- * box_cmp_feed() is never called at all, so the feed cannot say so itself. */
+ * half second is "no samples": with ain off (the sampler's master switch;
+ * the cmp channel itself needs no group, box_cmp_ain_mask) box_cmp_feed()
+ * is never called at all, so the feed cannot say so itself. */
 static int eff_state(void)
 {
 	if (state == ST_LEARNING &&
@@ -556,7 +611,7 @@ void box_cmp_console(const char *args)
 	box_console_printf("     out %d  edges %u  plateaus %u  dac writes %u  relearns %u  mismatches %u\n",
 			   cout_now(), n_isr, n_plateaus, n_dac_writes, n_relearn, n_mismatch);
 	if (st == ST_NO_ADC) {
-		box_console_printf("     ain ch %d is in no active ain group: add it so the "
+		box_console_printf("     ain ch %d is not being sampled: `ain enable 1` so the "
 				   "levels can be learned\n", ain_ch);
 	}
 }
@@ -564,6 +619,7 @@ void box_cmp_console(const char *args)
 #else  /* ---- no comparator on this board ---- */
 
 void box_cmp_apply(const box_config_t *c) { ARG_UNUSED(c); }
+uint8_t box_cmp_ain_mask(const box_config_t *c) { ARG_UNUSED(c); return 0; }
 int  box_cmp_level(void) { return 0; }
 void box_cmp_relearn(void) { }
 void box_cmp_feed(const int16_t *scan, uint8_t mask, uint64_t t_us)
@@ -573,6 +629,11 @@ void box_cmp_feed(const int16_t *scan, uint8_t mask, uint64_t t_us)
 int box_cmp_status(char *buf, int sz, int force)
 {
 	ARG_UNUSED(buf); ARG_UNUSED(sz); ARG_UNUSED(force);
+	return 0;
+}
+int box_cmp_settled(int32_t *counts, uint64_t *t_us)
+{
+	ARG_UNUSED(counts); ARG_UNUSED(t_us);
 	return 0;
 }
 void box_cmp_console(const char *args)
