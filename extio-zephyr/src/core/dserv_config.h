@@ -689,13 +689,29 @@ static inline void dserv_ain_group_name(const box_config_t *c, int g, char *buf,
 { if (c->ain_group_label[g][0]) snprintf(buf, sz, "%s", c->ain_group_label[g]);
   else                          snprintf(buf, sz, "a%d", g); }
 
+#define PIN_MODE_AIN 4     /* pin is an ADC input, not digital I/O */
+/* An ain pin that ALSO feeds an on-chip comparator, whose edges are reported as
+ * this pin's DI events (state/di/<n>, labels, active_low, debounce all apply).
+ * The box samples the channel itself and learns, then locks, the threshold from
+ * it (box_cmp.c) -- no ain group needed. Only pins wired to a comparator input
+ * can do it -- on the FRDM-MCXN947 that is A3 (box pin 15, CMP1_IN2); elsewhere
+ * the pin behaves as plain ain and box_cmp reports why. Runtime-only knobs live
+ * on the console (`cmp`); nothing new is persisted beyond the mode byte. */
+#define PIN_MODE_CMP 5
+
 /* If the ADC is enabled but no group is configured, synthesize group 0 as the
  * 2-axis joystick ({0,1}, on-change, deadband 8) so the stick works out of the
  * box. RAM-only default (a later `save` persists it, which is fine); a box that
- * has ANY group defined is left untouched. Call once after config load. */
+ * has ANY group defined is left untouched. Call once after config load.
+ * NOT on a box with a cmp pin: there ain_en is on for the comparator, and no
+ * group is the point (the analog stays on the box) -- a synthesized stick
+ * group would stream two unconnected inputs. */
 static inline void dserv_cfg_ain_default(box_config_t *c)
 {
     if (!c->ain_en || dserv_ain_active_count(c)) return;
+    for (int i = 0; i < BOX_NPINS; i++) {
+        if (c->pin_mode[i] == PIN_MODE_CMP) return;
+    }
     c->ain_group_chans[0]    = 0x03;   /* ch0 = X, ch1 = Y */
     c->ain_group_mode[0]     = 0;      /* on-change */
     c->ain_group_deadband[0] = 8;
@@ -759,17 +775,8 @@ static inline void dserv_group_name(const box_config_t *c, int g, char *buf, int
     else                      snprintf(buf, sz, "g%d", g);
 }
 
-/* pin mode word -> value; -1 if not a recognized word (caller falls back to int) */
-#define PIN_MODE_AIN 4     /* pin is an ADC input, not digital I/O */
-/* An ain pin that ALSO feeds an on-chip comparator, whose edges are reported as
- * this pin's DI events (state/di/<n>, labels, active_low, debounce all apply).
- * The threshold follows the levels the ADC sees (box_cmp.c), so the channel
- * must be in an active ain group. Only pins wired to a comparator input can do
- * it -- on the FRDM-MCXN947 that is A3 (box pin 15, CMP1_IN2); elsewhere the
- * pin behaves as plain ain and box_cmp reports why. Runtime-only knobs live on
- * the console (`cmp`); nothing new is persisted beyond the mode byte. */
-#define PIN_MODE_CMP 5
-
+/* pin mode word -> value; -1 if not a recognized word (caller falls back to int)
+ * (PIN_MODE_AIN / PIN_MODE_CMP are defined above dserv_cfg_ain_default) */
 static inline int dserv_mode_val(const char *w)
 {
     if (!strcmp(w, "out"))       return 1;

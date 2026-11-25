@@ -325,7 +325,7 @@ full one. So after a boot or a config change, flip the patch a few times
 where the detector now is and flipping three more times so it locks.
 
 **No analog on the wire.** The box samples the channel for the comparator
-itself (firmware 0.4.0+110; `ain enable 1` is all it needs, no group), so a
+itself (firmware 0.4.0+112; `ain enable 1` is all it needs, no group), so a
 cmp line sends only its edges, `state/cmp`, and `state/cmp/level`: each new
 settled level of the light in counts, stamped when the light got there. That
 is about one value per patch change and nothing while the light stays put,

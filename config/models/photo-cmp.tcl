@@ -13,9 +13,12 @@
 # it, and data files log it). To SEE the analog (a transition's shape, an odd
 # edge), add a group on ch 3 live from the config page and remove it after.
 #
-# Needs extio firmware 0.4.0+110 or later (a cmp pin samples its own
-# channel; state/cmp/level). On +108/+109 the channel must also be in an ain
-# group; before +108 `cmp` reads as `off`.
+# Needs extio firmware 0.4.0+112 or later: +110 has a cmp pin sample its own
+# channel and adds state/cmp/level, +111 re-sends the level at each announce
+# (a restarted dserv has it), and +112 stops a boot from synthesizing the
+# stick's "joystick" group on ch0/ch1 for a box whose only analog is the cmp
+# pin (on +110/+111 that group streams two unconnected inputs). On +108/+109
+# the channel must also be in an ain group; before +108 `cmp` reads as `off`.
 #
 # THE THRESHOLD IS LEARNED, THEN LOCKED. The box watches ch 3 for plateaus
 # (the light still for 3 ms): one level, a second >= 100 counts away, and a

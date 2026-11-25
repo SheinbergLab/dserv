@@ -64,7 +64,8 @@ int box_cmp_status(char *buf, int sz, int force);
  * when the light reached it. Returns 1 and fills both when one is due: when
  * a still period lands more than 32 counts from the last level reported, at
  * most 20/s (the newest wins). About one per patch change; nothing while the
- * light stays put. */
+ * light stays put, except that each announce (box_cmp_status force) sends the
+ * last one again, so a host that just connected has it. */
 int box_cmp_settled(int32_t *counts, uint64_t *t_us);
 
 /* Console: `cmp` shows state; `cmp relearn`; `cmp hyst <0-3>`,

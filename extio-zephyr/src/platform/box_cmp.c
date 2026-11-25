@@ -486,6 +486,13 @@ int box_cmp_status(char *buf, int sz, int force)
 	if (!pub_ever && st == ST_OFF) {
 		return 0;                     /* a box that never had a cmp pin stays silent */
 	}
+	/* The announce (a host that just (re)connected) gets the light's level
+	 * again too: state/cmp/level is otherwise sent only when the light moves,
+	 * so a restarted dserv would not have it until the next patch change. */
+	if (force && lvl_last != INT32_MIN) {
+		lvl_due = true;
+		lvl_ms = 0;
+	}
 	if (force || st != pub_state || dac != pub_dac || n_mismatch != pub_mismatch ||
 	    n_relearn != pub_relearn) {
 		due = true;
