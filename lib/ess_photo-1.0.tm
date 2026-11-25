@@ -430,6 +430,45 @@ namespace eval ess {
         return "ok reading $src, $n edges; the patch's changes answered"
     }
 
+    # What to check when a din line's edges don't answer the patch. The
+    # first sentence (to the "?") stands alone: photo_patch_health quotes
+    # only that much when edges did come, just late. A module's comparator
+    # has a pot; the box's own (pin mode cmp, docs/photo_processor.md "The
+    # box's own comparator") learns its threshold and then locks it, so the
+    # advice there is its state/cmp: still learning, or locked to levels
+    # from before the detector was where it is now.
+    proc photo_din_hint { dp } {
+        set where "is the detector over the patch?"
+        set st ""
+        if { [regexp {^extio/([^/]+)/state/di/[^/]+$} $dp -> box] } {
+            catch { set st [dict get [dservGet extio/$box/state/cmp] state] }
+        }
+        switch -- $st {
+            armed {
+                return "$where The box's comparator locked its threshold to the\
+ levels it saw then: if the detector has moved since, relearn\
+ (dservSet extio/$box/cmd/cmp/relearn 1) and flip the patch a few times"
+            }
+            learning {
+                return "$where The box's comparator is still learning and reports\
+ no edges until it has seen the patch dark, light and dark again: flip it a\
+ few times (photo_test aim)"
+            }
+            no_samples {
+                return "$where The box's comparator has no samples to learn from:\
+ turn ain on and put the line's channel in a group"
+            }
+            "" -
+            off -
+            unsupported {}
+            default {
+                return "$where The box's comparator reads '$st' (extio/$box/state/cmp)"
+            }
+        }
+        return "is the detector over the patch, its pot between the patch's\
+ dark and light?"
+    }
+
     proc photo_health {} {
         variable photo_enabled
         variable photo_health_last
@@ -449,8 +488,7 @@ namespace eval ess {
                 photo_din_attach
                 set h [photo_patch_health "line $photo_din" $photo_din_n \
                            [photo_newest [dict get $r dp]] \
-                           "is the detector over the patch, its pot between\
- the patch's dark and light?"]
+                           [photo_din_hint [dict get $r dp]]]
             }
         } else {
             set n_edges [processGetParam photo n_edges]
